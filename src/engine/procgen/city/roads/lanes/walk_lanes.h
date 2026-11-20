@@ -3,7 +3,7 @@
 
 // THE WALKS THE BUILDER LAYS (ADR-0465, #306 task 4 piece 2): where people on foot walk, laid by the road build into the
 // same centre lines as the car lanes (road_model_parts.h LaneCurves) and taken into the road model's built layer
-// (RoadModel::walks, ModelCorner::walk). Nothing reads them yet but the tests; piece 3 lays them as lane-level paths.
+// (RoadModel::walks, ModelCorner::walk). The lane level lays them as its walks and joins them (lane_level.h, ADR-0466).
 //
 // Words used here:
 //   - a SIDEWALK LANE is the middle line of one kerb's sidewalk along a road: laid as a car lane is (the builder's own

@@ -3283,3 +3283,438 @@ TEST_CASE(road_model_31_the_shipped_levels_walks) {
         CHECK(endsAway == 0u);
     }
 }
+
+// ---- 32. the walks in the lane level: one table of paths for walkers and drivers (ADR-0466) ----------------------------
+
+namespace {
+// The lane level's walks counted by kind (the model's answer: RoadModel::walkKind).
+std::map<std::string, uint32_t> walkKinds(const RoadModel& m) {
+    std::map<std::string, uint32_t> out;
+    for (uint32_t w = 0; w < m.laneLevel.walks.size(); ++w) ++out[m.walkKind(WalkId(w))];
+    return out;
+}
+// Whether walk end `a` lists walk end `b` among those that meet it.
+bool walkEndsMeet(const LaneGraph& G, const WalkEnd& a, const WalkEnd& b) {
+    if (a.walk.index >= G.walks.size()) return false;
+    const Range r = G.walks[a.walk.index].joins(a.end);
+    for (uint32_t k = r.first; k < r.end() && k < G.walkJoins.size(); ++k)
+        if (G.walkJoins[k] == b) return true;
+    return false;
+}
+// THE WALK ENDS AT A JUNCTION'S KERB END, found by the model's ids alone: the end of the arm's street's sidewalk on that
+// kerb nearer the junction (its stretch's stations), each corner walk's end on that arm and kerb (its arm A end is its
+// start), and the crossing's end on that kerb (end 0 on the +1 kerb). True when every one meets every other; `found`
+// counts them.
+bool kerbEndJoined(const RoadModel& m, ModelJunctionId J, uint32_t arm, int kerb, uint32_t& found) {
+    const LaneGraph& G = m.laneLevel;
+    const ModelArm& A = m.junctions[J.index].arms[arm];
+    const Real at = kerbEndStation(m, J, arm);
+    const ModelCrosswalk* cw = m.crosswalkAcross(J, arm);
+    const uint32_t cwId = cw ? static_cast<uint32_t>(cw - m.crosswalks.data()) : kNoIndex;
+    std::vector<WalkEnd> ends;
+    for (uint32_t w = 0; w < G.walks.size(); ++w) {
+        const Walk& k = G.walks[w];
+        if (k.modelWalk < m.walks.size() && m.walks[k.modelWalk].onRoad()) {
+            if (k.street == A.street.index && m.walks[k.modelWalk].dir == kerb)
+                if (std::fabs(k.stationFrom - at) < 0.01 || std::fabs(k.stationTo - at) < 0.01)
+                    ends.push_back(WalkEnd{WalkId(w), static_cast<uint8_t>(std::fabs(k.stationFrom - at) < 0.01 ? 0 : 1)});
+        } else if (k.modelWalk < m.walks.size()) {
+            for (const ModelCorner& c : m.corners) {
+                if (c.walk != k.modelWalk || c.junction != J) continue;
+                if (c.armA == arm && c.kerbA == kerb) ends.push_back(WalkEnd{WalkId(w), 0});
+                if (c.armB == arm && c.kerbB == kerb) ends.push_back(WalkEnd{WalkId(w), 1});
+            }
+        } else if (k.modelCrosswalk != kNoIndex && k.modelCrosswalk == cwId) {
+            ends.push_back(WalkEnd{WalkId(w), static_cast<uint8_t>(kerb > 0 ? 0 : 1)});
+        }
+    }
+    found = static_cast<uint32_t>(ends.size());
+    for (const WalkEnd& a : ends)
+        for (const WalkEnd& b : ends)
+            if (!(a == b) && !walkEndsMeet(G, a, b)) return false;
+    return true;
+}
+// A path users' table: the shipped movers, with a `pedestrian` who may use only the kinds named.
+PathUsers usersWithPedestrian(const std::vector<std::string>& kinds) {
+    nlohmann::json doc = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/data/path_users.json"));
+    doc["movers"]["pedestrian"] = nlohmann::json::object();
+    for (const std::string& k : kinds) doc["kinds"][k].push_back("pedestrian");
+    PathUsers u;
+    std::string why;
+    CHECK(parsePathUsers(doc, u, &why));
+    return u;
+}
+uint32_t openCount(const std::vector<uint8_t>& v) {
+    uint32_t n = 0;
+    for (const uint8_t x : v) n += x ? 1u : 0u;
+    return n;
+}
+// Does a person who may use `open` get from walk a to walk b?
+bool walksReach(const LaneGraph& G, const std::vector<uint8_t>& open, uint32_t a, uint32_t b) {
+    const ReachableParts parts = reachableWalks(G, open);
+    return a < parts.partOf.size() && b < parts.partOf.size() && parts.partOf[a] == parts.partOf[b] && open[a] && open[b];
+}
+// The model of a scene with the lane level's facts, built.
+struct BuiltScene {
+    std::unique_ptr<Result> r;
+    RoadModel m;
+    LaneGraphBuild report;
+};
+BuiltScene builtScene(const nlohmann::json& file) {
+    BuiltScene s;
+    s.r = build(RoadLabGraph::fromJson(lane_level_test::withLaneLevelFacts(file)));
+    s.m = assembleRoadModel(*s.r, oneCar(), &s.report);
+    return s;
+}
+// No walk's curve lies among the car paths' (they come after every path's), and no car path leads to a walk.
+bool walksAfterThePaths(const LaneGraph& G) {
+    uint32_t pathsEnd = 0;
+    for (const Path& p : G.paths) pathsEnd = std::max(pathsEnd, p.curve.end());
+    for (const Walk& k : G.walks)
+        if (k.curve.first < pathsEnd) return false;
+    return true;
+}
+}  // namespace
+
+TEST_CASE(road_model_32_the_lane_level_lays_the_walks_and_joins_them) {
+    // STRAIGHT STREETS AND DEAD ENDS: two straight roads crossing, each running on through the junction (a road file with
+    // no junction at all gets no lane level, as before). Each road's sidewalk lane is cut at the kerb ends into one walk
+    // per street; the four far ends are dead ends, each joined across by a turn-round from the +1 kerb's sidewalk end to
+    // the -1 kerb's
+    {
+        nlohmann::json f;
+        f["name"] = "walk_cross";
+        auto road = [](const std::string& id, const Vec2& a, const Vec2& b) {
+            return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}};
+        };
+        f["edges"] = nlohmann::json::array({road("ew", Vec2(-100, 0), Vec2(100, 0)), road("ns", Vec2(0, -100), Vec2(0, 100))});
+        writeLayout(f, deriveLayout(RoadLabGraph::fromJson(f), LayoutSource::Inferred));
+        BuiltScene s = builtScene(f);
+        CHECK(s.report.error.empty());
+        const LaneGraph& G = s.m.laneLevel;
+        std::map<std::string, uint32_t> kinds = walkKinds(s.m);
+        std::printf("      straight streets crossing: %zu streets; %u sidewalks, %u corners, %u crossings, %u turn-rounds; %zu ends alone\n",
+                    s.m.streets.size(), kinds["sidewalk"], kinds["corner"], kinds["crossing"], kinds["turn_round"], s.report.walkEndsAlone.size());
+        for (const LaneGraphBuild::WalkEndAlone& a : s.report.walkEndsAlone) std::printf("        alone: %s: %s\n", a.where.c_str(), a.why.c_str());
+        CHECK(s.m.streets.size() == 4u && s.m.walks.size() == 4u + 4u);   // (two lanes along each road, four corners)
+        CHECK(kinds["sidewalk"] == 8u && kinds["corner"] == 4u && kinds["crossing"] == 4u && kinds["turn_round"] == 4u);
+        CHECK(s.report.walkEndsAlone.empty());
+        CHECK(validate(G).empty());
+        // each sidewalk's stretch runs from the kerb end at the junction to its street's far end, on its street
+        for (const Walk& k : G.walks) {
+            if (k.street == kNoIndex) continue;
+            const ModelStreet& S = s.m.streets[k.street];
+            CHECK(k.stationFrom >= S.from - kWrittenStation && k.stationTo <= S.to + kWrittenStation && k.stationTo > k.stationFrom);
+        }
+        // a turn-round: from the +1 kerb's sidewalk end to the -1 kerb's, each meeting just it
+        uint32_t turnRounds = 0;
+        for (uint32_t w = 0; w < G.walks.size(); ++w) {
+            if (G.walks[w].modelDeadEnd == kNoIndex) continue;
+            ++turnRounds;
+            for (int end = 0; end < 2; ++end) {
+                const Range r = G.walks[w].joins(end);
+                CHECK(r.count == 1u);
+                if (r.count != 1u) continue;
+                const Walk& side = G.walks[G.walkJoins[r.first].walk.index];
+                CHECK(side.modelWalk < s.m.walks.size() && s.m.walks[side.modelWalk].dir == (end == 0 ? 1 : -1));
+            }
+        }
+        CHECK(turnRounds == 4u);
+        for (uint32_t a = 0; a < s.m.junctions[0].arms.size(); ++a)
+            for (const int kerb : {+1, -1}) {
+                uint32_t found = 0;
+                CHECK(kerbEndJoined(s.m, ModelJunctionId(0), a, kerb, found) && found == 3u);
+            }
+        CHECK(reachableWalks(G, s.m.openTo("walker").walks).sizes.size() == 1u);
+        // NOT JOINED ACROSS (the model's dead ends told so, the lane level laid again): no turn-round, eight lone ends that
+        // say why
+        for (ModelDeadEnd& d : s.m.deadEnds) d.turnRound = false;
+        const LaneGraphBuild again = buildLaneLevel(*s.r, s.m, oneCar());
+        kinds = walkKinds(s.m);
+        CHECK(kinds["turn_round"] == 0u && again.walkEndsAlone.size() == 8u);
+        for (const LaneGraphBuild::WalkEndAlone& a : again.walkEndsAlone) CHECK(a.why == "a dead end not joined across");
+    }
+    // WHERE A STREET CARRIES ON AS ANOTHER (the signed scene's bend at (0, 150), no junction): each kerb's sidewalk ends
+    // there meet, the kerb running on
+    {
+        BuiltScene s = builtScene(laneLevelGraph());
+        CHECK(s.report.error.empty());
+        const LaneGraph& G = s.m.laneLevel;
+        uint32_t carryOns = 0, met = 0;
+        for (uint32_t si = 0; si < s.m.streets.size(); ++si)
+            for (int end = 0; end < 2; ++end) {
+                if (!s.m.streets[si].carriesOn[static_cast<std::size_t>(end)].valid()) continue;
+                ++carryOns;
+                // this street's sidewalk ends there (by stations), each meeting one sidewalk end of the next street
+                const Real at = end == 0 ? s.m.streets[si].from : s.m.streets[si].to;
+                for (uint32_t w = 0; w < G.walks.size(); ++w) {
+                    const Walk& k = G.walks[w];
+                    if (k.street != si) continue;
+                    const int e = std::fabs((end == 0 ? k.stationFrom : k.stationTo) - at) < 0.01 ? end : -1;
+                    if (e < 0) continue;
+                    const Range r = k.joins(e);
+                    if (r.count == 1u && G.walks[G.walkJoins[r.first].walk.index].street ==
+                                             s.m.streets[si].carriesOn[static_cast<std::size_t>(end)].index)
+                        ++met;
+                }
+            }
+        std::printf("      carry-ons: %u street ends carry on; %u sidewalk ends there meet the next street's\n", carryOns, met);
+        for (const LaneGraphBuild::WalkEndAlone& a : s.report.walkEndsAlone) std::printf("        alone: %s: %s\n", a.where.c_str(), a.why.c_str());
+        CHECK(carryOns >= 2u && met == carryOns * 2u);
+        CHECK(validate(G).empty());
+    }
+    // A T: every walk there with its kind; at every kerb end its sidewalk, corner and crossing meet; across a crosswalk
+    // to the corner on the arm's far kerb by walker paths alone; a car sees none of it
+    {
+        BuiltScene s = builtScene(walkTee());
+        CHECK(s.report.error.empty());
+        const LaneGraph& G = s.m.laneLevel;
+        std::map<std::string, uint32_t> kinds = walkKinds(s.m);
+        std::printf("      T: %u sidewalks, %u corners, %u crossings, %u turn-rounds; %zu joins; %zu ends alone\n", kinds["sidewalk"],
+                    kinds["corner"], kinds["crossing"], kinds["turn_round"], G.walkJoins.size(), s.report.walkEndsAlone.size());
+        for (const LaneGraphBuild::WalkEndAlone& a : s.report.walkEndsAlone) std::printf("        alone: %s: %s\n", a.where.c_str(), a.why.c_str());
+        CHECK(kinds["sidewalk"] == 6u && kinds["corner"] == 3u && kinds["crossing"] == 3u && kinds["turn_round"] == 3u);
+        CHECK(G.walks.size() == 15u && s.report.walkEndsAlone.empty());
+        CHECK(validate(G).empty());
+        CHECK(walksAfterThePaths(G));
+        uint32_t kerbEnds = 0;
+        for (uint32_t a = 0; a < 3; ++a)
+            for (const int kerb : {+1, -1}) {
+                uint32_t found = 0;
+                CHECK(kerbEndJoined(s.m, ModelJunctionId(0), a, kerb, found));
+                CHECK(found == 3u);   // its sidewalk, one corner, the crossing
+                kerbEnds += found == 3u ? 1u : 0u;
+            }
+        CHECK(kerbEnds == 6u);
+        // A JOIN TAKEN AWAY IS CAUGHT: the kerb-end check and the lane level's own check both bite
+        {
+            RoadModel cut = s.m;
+            uint32_t corner = kNoIndex;
+            for (uint32_t w = 0; w < cut.laneLevel.walks.size() && corner == kNoIndex; ++w)
+                if (cut.walkKind(WalkId(w)) == "corner") corner = w;
+            CHECK(corner != kNoIndex);
+            if (corner == kNoIndex) return;
+            cut.laneLevel.walks[corner].atStart.count = 0;
+            bool any = false;
+            for (uint32_t a = 0; a < 3; ++a)
+                for (const int kerb : {+1, -1}) {
+                    uint32_t found = 0;
+                    any = any || !kerbEndJoined(cut, ModelJunctionId(0), a, kerb, found);
+                }
+            CHECK(any);
+            CHECK(!validate(cut.laneLevel).empty());
+        }
+        // ACROSS A CROSSWALK: from the east road's +1 sidewalk to the corner on its -1 kerb, by a person who may use the
+        // sidewalks, corners and crossings (not the turn-rounds, which would go round by the dead ends); not without crossings
+        uint32_t eastArm = kNoIndex, eastWalk = kNoIndex, farCorner = kNoIndex;
+        for (uint32_t a = 0; a < s.m.junctions[0].arms.size(); ++a)
+            if (s.m.junctions[0].arms[a].road == "east") eastArm = a;
+        CHECK(eastArm != kNoIndex);
+        if (eastArm == kNoIndex) return;
+        for (uint32_t w = 0; w < G.walks.size(); ++w) {
+            const Walk& k = G.walks[w];
+            if (k.modelWalk >= s.m.walks.size()) continue;
+            const ModelLane& W = s.m.walks[k.modelWalk];
+            if (W.onRoad() && k.street == s.m.junctions[0].arms[eastArm].street.index && W.dir == 1) eastWalk = w;
+            for (const ModelCorner& c : s.m.corners)
+                if (!W.onRoad() && c.walk == k.modelWalk && ((c.armA == eastArm && c.kerbA == -1) || (c.armB == eastArm && c.kerbB == -1)))
+                    farCorner = w;
+        }
+        CHECK(eastWalk != kNoIndex && farCorner != kNoIndex);
+        const RoadModel::OpenPaths onFoot = s.m.openTo("pedestrian", usersWithPedestrian({"sidewalk", "corner", "crossing"}));
+        const RoadModel::OpenPaths noCrossing = s.m.openTo("pedestrian", usersWithPedestrian({"sidewalk", "corner"}));
+        CHECK(openCount(onFoot.walks) == 12u && openCount(onFoot.paths) == 0u);
+        CHECK(walksReach(G, onFoot.walks, eastWalk, farCorner));
+        CHECK(!walksReach(G, noCrossing.walks, eastWalk, farCorner));
+        // the shipped walker may use every walk, and the whole T is one part to them
+        const RoadModel::OpenPaths walker = s.m.openTo("walker");
+        CHECK(openCount(walker.walks) == G.walks.size() && openCount(walker.paths) == 0u);
+        CHECK(reachableWalks(G, walker.walks).sizes.size() == 1u);
+        // A CAR SEES NONE OF THEM: the vehicles' filter opens every lane path and connector, and no walk; it bites (a
+        // table opening the sidewalks to the vehicles opens six walks)
+        const RoadModel::OpenPaths cars = s.m.openTo("vehicles");
+        CHECK(openCount(cars.walks) == 0u && openCount(cars.paths) == G.paths.size() && !G.paths.empty());
+        nlohmann::json loose = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/data/path_users.json"));
+        loose["kinds"]["sidewalk"].push_back("vehicles");
+        PathUsers looseUsers;
+        CHECK(parsePathUsers(loose, looseUsers));
+        CHECK(openCount(s.m.openTo("vehicles", looseUsers).walks) == 6u);
+        // saved and read back whole, walks, joins and all
+        bundle::BinWriter wr;
+        putRoadModel(wr, s.m);
+        bundle::BinReader rd(wr.bytes.data(), wr.bytes.size());
+        RoadModel back;
+        std::string why;
+        CHECK(getRoadModel(rd, back, &why) && back == s.m && back.laneLevel.walks.size() == G.walks.size());
+        CHECK(dumpText(back.laneLevel) == dumpText(G));
+    }
+    // A FOOTWAY ARM: the T's south road a footway. Its walk meets both corners at its one kerb end (its middle); it has
+    // no crossing and no turn-round (its far end is a dead end nobody joins across)
+    {
+        nlohmann::json f = walkTee();
+        f["edges"][2]["class"] = "footway";
+        BuiltScene s = builtScene(f);
+        CHECK(s.report.error.empty());
+        const LaneGraph& G = s.m.laneLevel;
+        std::map<std::string, uint32_t> kinds = walkKinds(s.m);
+        std::printf("      T with a footway: %u footways, %u sidewalks, %u corners, %u crossings, %u turn-rounds; %zu ends alone\n",
+                    kinds["footway"], kinds["sidewalk"], kinds["corner"], kinds["crossing"], kinds["turn_round"], s.report.walkEndsAlone.size());
+        for (const LaneGraphBuild::WalkEndAlone& a : s.report.walkEndsAlone) std::printf("        alone: %s: %s\n", a.where.c_str(), a.why.c_str());
+        CHECK(kinds["footway"] == 1u && kinds["sidewalk"] == 4u && kinds["corner"] == 3u && kinds["crossing"] == 2u && kinds["turn_round"] == 2u);
+        CHECK(validate(G).empty());
+        uint32_t footway = kNoIndex, south = kNoIndex;
+        for (uint32_t w = 0; w < G.walks.size(); ++w)
+            if (s.m.walkKind(WalkId(w)) == "footway") footway = w;
+        for (uint32_t a = 0; a < s.m.junctions[0].arms.size(); ++a)
+            if (s.m.junctions[0].arms[a].road == "south") south = a;
+        CHECK(footway != kNoIndex && south != kNoIndex);
+        if (footway == kNoIndex || south == kNoIndex) return;
+        // (the footway runs north into the junction: its end there)
+        uint32_t cornersMet = 0;
+        const Range atJunction = G.walks[footway].atEnd;
+        for (uint32_t k = atJunction.first; k < atJunction.end(); ++k) cornersMet += s.m.walkKind(G.walkJoins[k].walk) == "corner" ? 1u : 0u;
+        CHECK(cornersMet == 2u && atJunction.count == 2u);
+        CHECK(s.report.walkEndsAlone.size() == 1u);
+        if (!s.report.walkEndsAlone.empty()) CHECK(s.report.walkEndsAlone[0].walk == footway && s.report.walkEndsAlone[0].end == 0);
+        CHECK(reachableWalks(G, s.m.openTo("walker").walks).sizes.size() == 1u);
+    }
+    // A SPREAD JUNCTION: the corners across its two points join the street's sidewalks at their kerb ends, so a person
+    // walks round it, every walk one part
+    {
+        BuiltScene s = builtScene(walkSpread());
+        CHECK(s.report.error.empty());
+        const LaneGraph& G = s.m.laneLevel;
+        std::map<std::string, uint32_t> kinds = walkKinds(s.m);
+        std::printf("      spread junction: %u sidewalks, %u corners, %u crossings, %u turn-rounds; %zu ends alone\n", kinds["sidewalk"],
+                    kinds["corner"], kinds["crossing"], kinds["turn_round"], s.report.walkEndsAlone.size());
+        for (const LaneGraphBuild::WalkEndAlone& a : s.report.walkEndsAlone) std::printf("        alone: %s: %s\n", a.where.c_str(), a.why.c_str());
+        CHECK(kinds["corner"] == 6u && kinds["sidewalk"] == 2u * 2u + 4u * 2u);   // (the street's two stretches, the four one-ways)
+        CHECK(kinds["crossing"] == 6u && kinds["turn_round"] == 6u && s.report.walkEndsAlone.empty());
+        CHECK(validate(G).empty());
+        uint32_t spreadJoined = 0;
+        for (const ModelCorner& c : s.m.corners) {
+            if (!c.spread) continue;
+            uint32_t found = 0;
+            bool joined = kerbEndJoined(s.m, c.junction, c.armA, c.kerbA, found);
+            joined = kerbEndJoined(s.m, c.junction, c.armB, c.kerbB, found) && joined;
+            spreadJoined += joined ? 1u : 0u;
+        }
+        CHECK(spreadJoined == 2u);
+        for (uint32_t a = 0; a < s.m.junctions[0].arms.size(); ++a)
+            for (const int kerb : {+1, -1}) {
+                uint32_t found = 0;
+                CHECK(kerbEndJoined(s.m, ModelJunctionId(0), a, kerb, found));
+                CHECK(found >= 2u);
+            }
+        CHECK(reachableWalks(G, s.m.openTo("walker").walks).sizes.size() == 1u);
+        CHECK(openCount(s.m.openTo("vehicles").walks) == 0u);
+    }
+}
+
+// THE SHIPPED LEVELS' WALKS IN THE LANE LEVEL (ADR-0466): the walks by kind, the joins, every walk end alone with why, and
+// how much of the sidewalks a person on foot can get round.
+TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
+    for (const char* level : {"traffic_lab", "river_town"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const std::unique_ptr<Result> r =
+            build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+        LaneGraphBuild report;
+        const RoadModel m = assembleRoadModel(*r, oneCar(), &report);
+        CHECK(report.error.empty());
+        const LaneGraph& G = m.laneLevel;
+        const std::map<std::string, uint32_t> kinds = walkKinds(m);
+        std::printf("      %s: %zu walks:", level, G.walks.size());
+        for (const std::pair<const std::string, uint32_t>& k : kinds) std::printf(" %u %s,", k.second, k.first.c_str());
+        std::printf(" %zu joins (walk end to walk end, each counted from both ends); %zu car paths\n", G.walkJoins.size(), G.paths.size());
+        CHECK(validate(G).empty());
+        CHECK(walksAfterThePaths(G));
+        // the filters: a car sees no walk and every path; a walker every walk and no path
+        const RoadModel::OpenPaths cars = m.openTo("vehicles"), walker = m.openTo("walker");
+        std::printf("        open to the vehicles: %u of %zu paths, %u walks; to the walker: %u paths, %u of %zu walks\n", openCount(cars.paths),
+                    G.paths.size(), openCount(cars.walks), openCount(walker.paths), openCount(walker.walks), G.walks.size());
+        CHECK(openCount(cars.walks) == 0u && openCount(walker.paths) == 0u && openCount(walker.walks) == G.walks.size());
+        // the model's sidewalk lanes the lane level made no walk of, and why
+        {
+            std::vector<uint32_t> piecesOf(m.walks.size(), 0);
+            for (const Walk& k : G.walks)
+                if (k.modelWalk < m.walks.size()) ++piecesOf[k.modelWalk];
+            std::map<std::string, uint32_t> none;
+            uint32_t lanes = 0;
+            for (uint32_t wi = 0; wi < m.walks.size(); ++wi) {
+                const ModelLane& W = m.walks[wi];
+                if (!W.onRoad()) continue;
+                ++lanes;
+                if (piecesOf[wi] > 0) continue;
+                bool laid = true;
+                for (uint32_t k = W.curve.first; k < W.curve.end(); ++k) laid = laid && stated(m.spineStations[k]);
+                ++none[W.streets.empty() ? "its road has no street (a ramp, or a stretch inside a junction)"
+                       : !laid           ? "not laid beside its spine"
+                                         : "no room between its kerb ends"];
+            }
+            std::printf("        %u sidewalk lanes in the model; walks made of them:", lanes);
+            for (const std::pair<const std::string, uint32_t>& n : none) std::printf(" %u none (%s);", n.second, n.first.c_str());
+            std::printf("\n");
+        }
+        // every walk end alone, by why
+        std::map<std::string, uint32_t> alone;
+        for (const LaneGraphBuild::WalkEndAlone& a : report.walkEndsAlone) ++alone[a.why];
+        std::printf("        %zu walk ends meet nothing:\n", report.walkEndsAlone.size());
+        for (const std::pair<const std::string, uint32_t>& a : alone) std::printf("          %u: %s\n", a.second, a.first.c_str());
+        for (const LaneGraphBuild::WalkEndAlone& a : report.walkEndsAlone)
+            if (a.why.find("carries on") != std::string::npos || a.why.find("stops short") != std::string::npos)
+                std::printf("            %s at (%.1f, %.1f): %s\n", a.where.c_str(), a.at.x, a.at.y, a.why.c_str());
+        // how far apart the ends of two walks that meet lie, by the pair of kinds: the step off a kerb, a seam
+        std::map<std::string, Real> widest;
+        const auto endAt = [&](const WalkEnd& e) {
+            const Walk& k = G.walks[e.walk.index];
+            return G.points[e.end == 0 ? k.curve.first : k.curve.end() - 1];
+        };
+        for (uint32_t w = 0; w < G.walks.size(); ++w)
+            for (uint8_t end = 0; end < 2; ++end) {
+                const Range r = G.walks[w].joins(end);
+                for (uint32_t j = r.first; j < r.end(); ++j) {
+                    const WalkEnd other = G.walkJoins[j];
+                    const std::string a = m.walkKind(WalkId(w)), b = m.walkKind(other.walk);
+                    Real& wide = widest[a < b ? a + "-" + b : b + "-" + a];
+                    const Real gap = distance(endAt(WalkEnd{WalkId(w), end}), endAt(other));
+                    wide = std::max(wide, gap);
+                    if (a == "sidewalk" && b == "sidewalk" && gap > 2.0 && w < other.walk.index)
+                        std::printf("            a carry-on's sidewalks joined across a gap (the planner's): %s (kerb %d) - %s (kerb %d), %.2f m\n", m.streets[G.walks[w].street].id.c_str(),
+                                    m.walks[G.walks[w].modelWalk].dir, m.streets[G.walks[other.walk.index].street].id.c_str(),
+                                    m.walks[G.walks[other.walk.index].modelWalk].dir, gap);
+                }
+            }
+        std::printf("        the widest gap between two walk ends that meet:");
+        for (const std::pair<const std::string, Real>& w : widest) std::printf(" %s %.2f m;", w.first.c_str(), w.second);
+        std::printf("\n");
+        // the sidewalks a person on foot can get round: the largest part's share, and the rest by the lone ends of their parts
+        const ReachableParts parts = reachableWalks(G, walker.walks);
+        std::vector<uint32_t> sidewalksIn(parts.sizes.size(), 0);
+        uint32_t sidewalks = 0;
+        for (uint32_t w = 0; w < G.walks.size(); ++w)
+            if (m.walkKind(WalkId(w)) == "sidewalk") {
+                ++sidewalks;
+                ++sidewalksIn[parts.partOf[w]];
+            }
+        uint32_t best = 0;
+        for (uint32_t p = 0; p < sidewalksIn.size(); ++p)
+            if (sidewalksIn[p] > sidewalksIn[best]) best = p;
+        const uint32_t inLargest = sidewalksIn.empty() ? 0u : sidewalksIn[best];
+        std::printf("        %zu parts; the largest holds %u of %u sidewalks (%.1f%%); %u sidewalks outside it\n", parts.sizes.size(), inLargest,
+                    sidewalks, sidewalks ? 100.0 * inLargest / sidewalks : 0.0, sidewalks - inLargest);
+        std::map<uint32_t, std::set<std::string>> whyOfPart;
+        for (const LaneGraphBuild::WalkEndAlone& a : report.walkEndsAlone) whyOfPart[parts.partOf[a.walk]].insert(a.why);
+        std::map<std::string, std::pair<uint32_t, uint32_t>> outside;   // why -> (parts, sidewalks)
+        for (uint32_t p = 0; p < sidewalksIn.size(); ++p) {
+            if (p == best || sidewalksIn[p] == 0) continue;
+            std::string why;
+            for (const std::string& w : whyOfPart[p]) why += (why.empty() ? "" : "; ") + w;
+            if (why.empty()) why = "no lone end: every way out is a missing crossing or corner";
+            ++outside[why].first;
+            outside[why].second += sidewalksIn[p];
+        }
+        for (const std::pair<const std::string, std::pair<uint32_t, uint32_t>>& o : outside)
+            std::printf("          %u sidewalks in %u parts bounded by: %s\n", o.second.second, o.second.first, o.first.c_str());
+        CHECK(sidewalks > 0u && inLargest * 2 > sidewalks);
+    }
+}

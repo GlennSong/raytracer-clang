@@ -22608,3 +22608,80 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** piece 3 lays these as lane-level paths; when the stated crosswalks' kerb ends or the junction drawing are fixed for the junctions listed above (their corners then get walks); or when the build paves one kerb only.
+
+## ADR-0466 — The lane level holds where people walk: each sidewalk, corner, crossing, turn-round and footway as a walk, joined at the places the model states, and one filter says who may use which (#306 task 4, piece 3)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: the lane level (the table of paths the new driving drives on) now also holds the paths people on foot take, as **walks**, and says which walk ends meet. A person can be routed over them, and a mover filter read from `assets/data/path_users.json` says who may use each path and each walk. Nothing routes over the walks yet: piece 4 makes the one route-finder for walkers and drivers, piece 6 puts people on it.
+
+Words:
+- **Walk:** a path a person on foot can take, either way. One of: a sidewalk's stretch along one kerb of one street; a corner walk round a junction's kerb (ADR-0465); a **crossing** over a crosswalk, from one kerb end to the other; a **turn-round** across a dead end's road end, from one sidewalk to the other; a footway's stretch along one street.
+- **Kerb end:** where a person steps off the kerb at a junction's arm: its crosswalk's end on that kerb (ADR-0465). The station along the road where that is, is `kerbEndStation` (the middle of the crosswalk's band; with no crosswalk, or on a footway, the arm's stated box edge).
+- **Walk end / join:** each walk has two ends. A join says that a person at one walk end may go on along another walk from its end. Joins are listed both ways.
+- **Mover:** anyone who moves along the roads' paths (ADR-0464): the vehicles, or a walker.
+- **Part:** a set of walks a person can get between, going from walk to walk by joins (graph theory: a connected component).
+
+**Added:**
+- **The walks** (`LaneGraph::walks`, `Walk`), laid by `layWalkPaths` (lanes/lane_level.cpp) as the lane level's last step:
+  - A list of their own beside `paths`, sharing the curve arrays after every path's points. So nothing that reads the car paths (their count, their ids, their `next` lists, the crossing finder) meets a walk, and no car path's points move.
+  - A walk holds where it is, how wide, its joins, and one id of the model: its walk (`modelWalk`: a sidewalk lane or corner walk in `RoadModel::walks`), its footway lane (`modelLane`), its crosswalk (`modelCrosswalk`) or its dead end (`modelDeadEnd`). A sidewalk or footway stretch also holds its street and its stations. It holds no kind: the model answers (`RoadModel::walkKind`).
+  - **Sidewalks and footways** are cut per street (`ModelLane::streets`) at the kerb ends of the junctions at its ends. A stretch of a road with no street (a stretch inside a spread junction, whose walk is the spread corner's) gets no walk.
+  - **Corners:** each `ModelCorner` with a walk, whole, from arm A's kerb end to arm B's.
+  - **Crossings:** one over each crosswalk people use (`ModelCrosswalk::pavements`), from kerb end 0 (the +1 kerb's) to kerb end 1.
+  - **Turn-rounds:** one across each dead end the model joins (`ModelDeadEnd::turnRound`), from the +1 kerb's sidewalk end to the -1 kerb's.
+- **The joins** (`Walk::atStart`, `atEnd` into `LaneGraph::walkJoins`). Walk ends meet only at places the model states, never by distance:
+  - a junction arm's kerb end on one kerb: the sidewalk's end there, the corner walk(s) on that arm and kerb, the crossing's end on that kerb. A footway arm has one place (its walk is its middle), so both its corners meet the footway's end;
+  - a street that carries on as another (`ModelStreet::carriesOn`): its sidewalk ends meet the next street's, on the same kerb, or on the other kerb where the two spines meet head to head;
+  - a joined dead end: each sidewalk's end meets its turn-round.
+  - An end that meets nothing is listed with why and where (`LaneGraphBuild::walkEndsAlone`), not as a road problem: the corners with no walk are ADR-0465's junction-drawing faults.
+- **The mover filter** (`RoadModel::openTo(mover, users)`, `pathKind`, `walkKind`): per lane path and per walk, whether the mover may use it, from its kind and the path users' table. A lane path's kind is its model lane's (connectors: `connector`); a crossing's is `crossing`; a turn-round's is the table's dead-end join. The vehicles see every lane path and no walk, the walker every walk and no lane path.
+- **The parts on foot** (`reachableWalks(g, open)`, lane_graph.h): walks joined end to end, walked either way.
+- `kerbEndStation(m, junction, arm)` (road_model.h): the one statement of where a kerb end lies along the road. The corner walks' ends (walk_lanes.cpp, which had it written out) and the lane level's cuts both use it.
+
+**The shipped levels** (`road_model_33`; built with one car size, as the lane-level unit tests are):
+
+| | traffic_lab | river_town |
+|---|---|---|
+| Walks | 1565 | 1640 |
+| ...sidewalk / corner / crossing / turn-round / footway | 562 / 523 / 480 / 0 / 0 | 618 / 527 / 488 / 7 / 0 |
+| Joins (each counted from both ends) | 5898 | 6004 |
+| Car paths (unchanged; open to the vehicles) | 3338 (all) | 4046 (all) |
+| Sidewalk lanes of the model with no walk: their road has no street (a ramp, or a stretch inside a junction) | 72 of 634 | 102 of 716 |
+| Walk ends that meet nothing | 61 | 126 |
+| ...a street end meeting another road where no junction is stated (ADR-0464's 17 and 24 street ends, two kerbs each) | 34 | 48 |
+| ...its corner has no walk, and no crosswalk people use there (ADR-0465's corners with no walk) | 23 | 40 |
+| ...no corner stated on that kerb, and no crosswalk (freeway and ramp arms) | 4 | 22 |
+| ...the street it carries on into has no walk on that kerb (tn0, tn1, bv0_in/out, bv1_in/out) | 0 | 16 |
+| Parts on foot | 5 | 16 |
+| Sidewalks in the largest part | 558 of 562 (99.3%) | 590 of 618 (95.5%) |
+| Sidewalks outside it | 4 | 28 |
+
+- **Left disconnected, and why** (each part outside the largest, by the lone ends that bound it):
+  - traffic_lab: 4 sidewalks in 4 parts, each bounded by a corner with no walk where no crosswalk is used (one also by a street end meeting another road, one also by an unstated corner).
+  - river_town: 9 sidewalks in 5 parts bounded by corners with no walk and unstated corners; 6 in 1 part bounded by unstated corners; 4 in 4 parts bounded by carry-ons into streets with no walk; 3 in 2 parts by corners with no walk and street ends meeting another road; 2 in 2 parts by unstated corners and carry-ons; 4 in 1 part with no lone end at all (every way out of it is a missing corner or crossing).
+  - Every one follows from ADR-0464's and ADR-0465's listed faults (junction drawing, unstated junctions, unstated corners at freeway arms). None is guessed round.
+- **How far apart joined ends lie** (they meet by statement, so this is a check, not a rule): sidewalk to crossing at most 2.6 m (the step from the sidewalk's middle to the kerb), corner to sidewalk at most 4.7 m (traffic_lab) and 5.3 m (river_town), corner to crossing at most 2.6 m and 4.9 m. Four carry-ons in river_town join sidewalks across a wider gap, the planner's faults already listed in the orientation page: s277-s337 18.7 m (the 159-degree hairpin), s325-s344 16.2 m, s346-s347 4.3 m, s287-s320 3.5 m. The car lanes there are joined the same way.
+
+**Tests:**
+- `road_model_32_the_lane_level_lays_the_walks_and_joins_them`:
+  - Two straight roads crossing, each running on through the junction: 8 sidewalk stretches (each within its street), 4 corners, 4 crossings, 4 turn-rounds, every end joined; each turn-round from the +1 sidewalk to the -1; at every kerb end its sidewalk, corner and crossing meet. With the dead ends unjoined (the model told so, the lane level laid again): no turn-round, 8 lone ends, each "a dead end not joined across".
+  - A carry-on (the signed scene's bend): each kerb's sidewalk end meets the next street's.
+  - A T: 6 / 3 / 3 / 3 walks; at all 6 kerb ends the three ends meet. A join taken away is caught by that check and by `validate`. From the east road's +1 sidewalk to the corner on its -1 kerb is reachable for a mover who may use sidewalks, corners and crossings, and not for one who may not use crossings. The vehicles' filter opens every lane path and no walk; a table opening sidewalks to the vehicles opens 6 walks (the filter bites). Saved and read back whole.
+  - The T with a footway for its south road: its footway walk meets both corners at its one kerb end; no crossing over it, no turn-round; its far end the one lone end.
+  - The spread junction: 12 sidewalks, 6 corners (2 across its points), 6 crossings, 6 turn-rounds; the spread corners joined at their kerb ends; one part.
+  - Checked to bite by breaking the code on purpose (one crosswalk left out; carry-ons not joined; a footway arm's two kerbs kept apart): 15 checks failed across the five scenes. Put back, all pass.
+- `road_model_33_the_shipped_levels_walks_in_the_lane_level`: the table above.
+
+**Car routing and driving unchanged:** `LaneGraph::paths` and everything about them is as before (the walks are a list of their own, after the paths' points). The driving's state hash reads the path count, which did not move. Hashes held: brain_crowd 0xf0003605a4cb6ba2, river_town crowd 0x83b99189cfc16fbd, traffic_lab v2 five minutes 0x55109fe9a8e247b1, near crowd 0x59168988decd4c99.
+
+**Format and caches:** LGRF 16 (the walks and their joins), `kRoadModelFormat` 17, `kLaneGraphBuildVersion` 17. Each level's saved road model (`cache/roadmodel`) is made again once. The path users' table's comment changed, which is part of the saved road model's key only. No bake key moved and no lots tag was bumped. `lanes_tool build` gives byte-identical `.glb` and `.svg` for traffic_lab and river_town against the tool at c6bb1d9e (built apart, from `git archive`).
+
+**One model:**
+- Concepts touched: roads (walks, where they meet, kerb ends), paths' users.
+- The walks are laid once, in the one lane level, from the model's walks, crosswalks, dead ends and footway lanes, by their ids. Their kind is asked of the model, not copied.
+- One second statement removed: the kerb end's station, written out in walk_lanes.cpp, is now `kerbEndStation`, which the lane level uses too.
+- No second graph: the walks are the lane level's own, beside its paths. No road fact is computed outside `roads/`.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** piece 4 makes the one route-finder over paths and walks by mover; when ADR-0465's corners with no walk, the unstated junctions or the gapped carry-ons are fixed (their lone ends then join); or when a level states footways meeting roads.

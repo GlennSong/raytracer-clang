@@ -4,7 +4,8 @@
 // THE LANE GRAPH (driving-model-design.md 5.2, issue #236): the road as the driving model reads it. Every curve a car
 // can be on (a PATH: a lane, or a CONNECTOR, the path through a junction from an arriving lane to a leaving lane),
 // how lanes lie side by side (SECTIONS), the junctions, and where two paths or a path and a crosswalk or rail track
-// meet (CROSSING POINTS).
+// meet (CROSSING POINTS). Beside the paths, in a list of their own so nothing that reads the car paths meets them, the
+// WALKS people on foot take and where their ends meet (ADR-0466; see Walk below).
 //
 // This file holds the types, the save and load (one bundle section), a structural check and a text dump. The lane
 // level (lanes/lane_level.h) fills it from the road model's built layer; the driving model reads it through the model
@@ -230,6 +231,44 @@ struct Junction {
     uint32_t modelJunction = kNoIndex;   // the road model's junction it is (road_model.h; ADR-0426); kNoIndex: none
 };
 
+// ---- WHERE PEOPLE WALK (ADR-0466, #306 task 4 piece 3) ---------------------------------------------------------------
+// A WALK is a path a person on foot can take, either way: a stretch of a sidewalk along one kerb of one street, a corner
+// walk round a junction's kerb, a crossing over a crosswalk, a turn-round across a dead end's road end, or a stretch of a
+// footway. Walks are a list of their own beside `paths` (the curves a car can be on), sharing the curve arrays, so
+// nothing that reads the car paths meets one. Who may use a walk is its kind, the road model's (RoadModel::walkKind), and
+// the path users' table (RoadModel::openTo): no kind is copied here.
+//
+// HOW WALKS MEET: at their ends. Every walk end lists the other walk ends that meet it (`atStart`, `atEnd` into
+// walkJoins), always both ways: a person reaching that end of one may go on along any of the others. Where they meet is
+// stated, never measured: the kerb end of a junction's arm (its sidewalk, its corner walks and its crossing on that
+// kerb), a street carrying on as another, a dead end's turn-round.
+struct WalkTag {};
+using WalkId = GraphIndex<WalkTag>;
+// ONE END OF A WALK: the walk and which end (0 its start, 1 its end).
+struct WalkEnd {
+    WalkId walk;
+    uint8_t end = 0;
+};
+struct Walk {
+    Range curve;                         // its centre line: into LaneGraph::points / along / heights
+    Real length = 0;
+    Real width = 0;
+    Range atStart, atEnd;                // into LaneGraph::walkJoins: the walk ends that meet its start, its end
+    // WHAT IT IS ON THE ROAD MODEL (road_model.h), by the model's ids; one of the four is set. A sidewalk or a corner
+    // walk: its walk (RoadModel::walks). A footway: its lane (RoadModel::lanes). A crossing: its crosswalk
+    // (RoadModel::crosswalks; the walk starts at the crosswalk's kerb end 0). A turn-round: its dead end
+    // (RoadModel::deadEnds; it starts on the +1 kerb's sidewalk).
+    uint32_t modelWalk = kNoIndex;
+    uint32_t modelLane = kNoIndex;
+    uint32_t modelCrosswalk = kNoIndex;
+    uint32_t modelDeadEnd = kNoIndex;
+    // A sidewalk's or a footway's stretch: its street, and the stations along that street's road's spine at its start
+    // and its end (kNoIndex: none, a corner, crossing or turn-round).
+    uint32_t street = kNoIndex;
+    Real stationFrom = 0, stationTo = 0;
+    Range joins(int end) const { return end == 0 ? atStart : atEnd; }
+};
+
 // (PLACES TO LEAVE A CAR are not here. The kerb parking spaces are the road model's, stated on its streets
 // (road_model.h RoadModel::kerbRuns, ADR-0439); the kerb lane path beside a space is asked of the model:
 // RoadModel::kerbLaneBeside. The `CarSpace` list this table once declared was never filled and is deleted.)
@@ -245,9 +284,10 @@ struct LaneGraph {
                                             // other, aFrom)
     std::vector<Crosswalk> crosswalks;      // junction by junction (those on no junction last)
     std::vector<Track> tracks;
+    std::vector<Walk> walks;            // where people walk (ADR-0466), after every path's curve in the shared arrays
 
     // The shared arrays the ranges point into.
-    std::vector<Vec2> points;           // path centre lines, plan position
+    std::vector<Vec2> points;           // path and walk centre lines, plan position
     std::vector<Real> along;            // ... each point's distance along its path (0 at the first)
     std::vector<Real> heights;          // ... each point's height, off the road deck
     std::vector<PathId> nextPaths;
@@ -258,6 +298,7 @@ struct LaneGraph {
     std::vector<CrossingId> pathCrossings;   // each path's crossing points (Path::crossings)
     std::vector<Vec2> planPoints;       // junction boxes, crosswalk outlines, track lines
     std::vector<BendPiece> bendPieces;  // each path's bend profile (Path::bends)
+    std::vector<WalkEnd> walkJoins;     // the walk ends each walk end meets (Walk::atStart, atEnd), in walk then end order
 
     // A name's index in a table, or kNoName.
     static NameIndex nameIndex(const std::vector<std::string>& table, const std::string& name);
@@ -302,6 +343,8 @@ bool operator==(const CrossingPoint& a, const CrossingPoint& b);
 bool operator==(const Crosswalk& a, const Crosswalk& b);
 bool operator==(const Track& a, const Track& b);
 bool operator==(const Junction& a, const Junction& b);
+bool operator==(const Walk& a, const Walk& b);
+bool operator==(const WalkEnd& a, const WalkEnd& b);
 bool operator==(const LaneGraph& a, const LaneGraph& b);   // field for field, exactly
 inline bool operator!=(const LaneGraph& a, const LaneGraph& b) { return !(a == b); }
 
@@ -368,6 +411,10 @@ ReachableParts reachableParts(const LaneGraph& g, const ReachRules& rules);
 // paths (and none from a closed one).
 std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from);
 std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from, const ReachRules& rules);
+// THE PARTS OF THE WALKS A PERSON ON FOOT CAN GO ROUND (ADR-0466): sets of walks joined end to end, each walked either
+// way, over the walks `open` names (per walk, non-zero: open; RoadModel::openTo gives a mover's). A closed walk is a part
+// of its own. Numbered by their lowest walk, as reachableParts numbers paths.
+ReachableParts reachableWalks(const LaneGraph& g, const std::vector<uint8_t>& open);
 
 // THE WHOLE GRAPH AS TEXT, in id order, with the names from the name tables: for a person checking a junction by
 // hand, and for tests to compare. Same graph, same text, every run.

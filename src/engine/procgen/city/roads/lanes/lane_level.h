@@ -44,7 +44,12 @@
 //   - the junction's OUTLINE (the area that must not be blocked) runs across each arm's lanes at its stop line, the
 //     arms' lines joined in the junction's stated ring order (its arms' list, road_layout.h armRing, ADR-0427: nothing
 //     sorted here); an outline that still crosses itself, where two arms' stop lines overlap, is reported (corners for
-//     step 9). A road file whose arms are not in ring order gets no lane level (`error` names the command).
+//     step 9). A road file whose arms are not in ring order gets no lane level (`error` names the command);
+//   - the WALKS people take (lane_graph.h Walk, ADR-0466), laid last so no car path's points move: each sidewalk lane
+//     and footway lane the build laid, cut per street at the kerb ends of its junctions (road_model.h kerbEndStation);
+//     each corner's walk; a crossing over each crosswalk people use (its two kerb ends); a turn-round across each dead end
+//     the model joins. Their ends meet where the model states it -- a junction arm's kerb end, a street carrying on, a
+//     dead end -- never by distance; an end that meets nothing is listed with why (LaneGraphBuild::walkEndsAlone).
 // Tidying, in the table only (the builder's lanes are not touched): a lane on the inside of a corner sharper than its
 // offset folds back on itself; the fold is cut out (cutFolds) and reported.
 //

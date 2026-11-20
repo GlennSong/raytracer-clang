@@ -486,7 +486,7 @@ struct RoadModel {
     // beside; its streets and the junction at each end as a car lane's) and every corner's walk (no road; named by its
     // corner), as the road build laid them into the same centre lines (`curves`, with their heights and spine stations
     // beside them). A list of its own, beside `lanes`: nothing that reads the car lanes meets them. A footway's lane is a
-    // car lane's record of kind "footway" in `lanes`, laid by expand. Nothing reads the walks yet but the tests.
+    // car lane's record of kind "footway" in `lanes`, laid by expand. The lane level lays them as its walks (ADR-0466).
     std::vector<ModelLane> walks;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
@@ -678,7 +678,31 @@ struct RoadModel {
     // passed over. The kerb side is the one statement of it (lane_turns.h kerbSideCounterClockwise). Empty: a turn round
     // the corner, an arm out of range, or a junction with no crosswalk on the way.
     std::vector<WalkCrossing> crosswalksOnWalk(ModelJunctionId junction, int armIn, int armOut) const;
+
+    // ---- WHO MAY USE WHICH PATH OF THE LANE LEVEL (ADR-0466) -------------------------------------------------------------
+    // THE KIND OF A LANE PATH, as the path users' table names it: a lane's, its model lane's kind (through, turn, ramp...);
+    // a connector's, kConnectorKind. Empty: none stated (a hand-made table).
+    const std::string& pathKind(PathId path) const;
+    // THE KIND OF A WALK: a sidewalk's or corner's, its model walk's; a footway's, its lane's; a crossing, kCrossingKind;
+    // a turn-round, the path users' dead-end join (pathUsers().deadEndJoin). Empty: none stated.
+    const std::string& walkKind(WalkId walk) const;
+    // EVERY LANE PATH AND WALK MOVER `mover` MAY USE, by its kind and the path users' table `users` (per lane path and per
+    // walk, 1: open). A mover or kind the table does not name: closed. The one mover filter: a car's route sees no walk
+    // unless the table opens a walk's kind to the vehicles, and a person's no lane path unless one is opened to walkers.
+    struct OpenPaths {
+        std::vector<uint8_t> paths, walks;
+    };
+    OpenPaths openTo(const std::string& mover, const PathUsers& users = pathUsers()) const;
 };
+// The kinds of path the lane level names that are not a lane's (assets/data/path_users.json lists who may use each): a
+// connector through a junction, and a crossing over a crosswalk (ADR-0466).
+extern const std::string kConnectorKind;
+extern const std::string kCrossingKind;
+// WHERE A PERSON STEPS OFF THE KERB AT A JUNCTION'S ARM, along its road's spine (ADR-0465, ADR-0466): the middle of its
+// crosswalk's band, where the crosswalk's kerb ends lie (ModelCrosswalk::ends); with none, or on a footway (whose
+// middle a person walks on), the arm's stated box edge, else its mouth. kNotStated: no such arm. The one statement: a
+// corner walk ends there (lanes/walk_lanes.cpp) and the lane level cuts a sidewalk or footway there (lane_level.cpp).
+Real kerbEndStation(const RoadModel& m, ModelJunctionId junction, uint32_t arm);
 
 // STATES A CROSSWALK on the model by hand (a test's lane table, which has no road file): refused (false, why in `err`)
 // when it names no junction of the model or an arm the junction does not list. Appended to `crosswalks`; returns its id
@@ -823,7 +847,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 16;   // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)
+constexpr uint32_t kRoadModelFormat = 17;   // 17: the lane level's walks and their joins (LGRF 16, ADR-0466)
+                                            // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)
                                             // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)
                                             // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)
                                             // 13:the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)

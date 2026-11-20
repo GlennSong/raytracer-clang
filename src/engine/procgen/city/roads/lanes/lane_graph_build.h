@@ -128,7 +128,8 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 16;  // 16: a crosswalk's level is its junction's whole span of lane-end
+constexpr uint32_t kLaneGraphBuildVersion = 17;  // 17: the walks laid in and joined at their stated ends (ADR-0466)
+                                                 // 16: a crosswalk's level is its junction's whole span of lane-end
                                                  //     heights, so a path falling across a sloping junction crosses it
                                                  //     once (ADR-0458)
                                                  // 14, 15: the road model's crosswalks laid in, and the paths crossing
@@ -292,6 +293,16 @@ struct LaneGraphBuild {
     double reachableShare = 0;
     std::vector<std::pair<std::string, std::vector<uint32_t>>> outside;
     CrossingReport crossings;              // the crossing points (their problems are in `problems` too)
+    // THE WALKS (ADR-0466): every walk end that meets no other walk, with why in words and where (not problems: the
+    // corners with no walk are ADR-0465's junction-drawing faults, listed there).
+    struct WalkEndAlone {
+        uint32_t walk = 0;
+        int end = 0;
+        std::string why;
+        std::string where;
+        Vec2 at;
+    };
+    std::vector<WalkEndAlone> walkEndsAlone;
     ControlPlanReport controlPlan;         // the stated controls and signs, carried through
     double milliseconds = 0;               // the whole of buildLaneLevel
     double connectMilliseconds = 0;        // ... of which the connectors (the crossing points: crossings.milliseconds)

@@ -131,6 +131,253 @@ std::vector<Vec2> drivenLanePoints(const RoadLabGraph& g, const RoadModel& m, ui
     return out;
 }
 
+namespace {
+
+// ---- THE WALKS (ADR-0466) ---------------------------------------------------------------------------------------------
+// WHERE WALK ENDS MEET, each a stated place: the kerb end of a junction's arm on one kerb (junction, arm, kerb; a
+// footway arm has one, kerb 0: its walk is its middle); a street's end on one kerb where no junction is (street, end,
+// kerb: where it carries on as another, the lower of the two streets' ends names the place); a dead end's kerb (dead end,
+// kerb), where its turn-round begins or ends.
+enum class MeetAt : uint8_t { Kerb, StreetEnd, DeadEnd };
+using MeetKey = std::tuple<uint8_t, uint32_t, uint32_t, int>;
+
+// LAYS THE WALKS INTO THE LANE LEVEL and joins them at their stated places (lane_graph.h Walk): each sidewalk lane and
+// footway lane cut into its streets between the kerb ends at its junctions (kerbEndStation), each corner's walk whole,
+// a crossing over each crosswalk people use (kerb end 0 to kerb end 1), and a turn-round across each dead end the model
+// joins. After every path's curve, so no car path's points move. Every walk end that meets nothing is listed with why.
+void layWalkPaths(const Result& r, RoadModel& model, LaneGraphBuild& out) {
+    LaneGraph& G = model.laneLevel;
+    const RoadModel& m = model;
+    const RoadLabGraph& g = r.graph;
+    const DeckHeight& H = *r.heights;
+    G.walks.clear();
+    G.walkJoins.clear();
+    out.walkEndsAlone.clear();
+    std::map<MeetKey, std::vector<WalkEnd>> meets;
+    std::map<MeetKey, std::string> whyAlone;   // what a lone end at a place not at a junction says (the first said)
+    const auto footwayArm = [&](ModelJunctionId j, uint32_t arm) {
+        const ModelStreet* s = m.streetOf(m.junctions[j.index].arms[arm]);
+        return s && s->section.footway;
+    };
+    const auto kerbKey = [&](ModelJunctionId j, uint32_t arm, int kerb) {
+        return MeetKey(static_cast<uint8_t>(MeetAt::Kerb), j.index, arm, footwayArm(j, arm) ? 0 : kerb);
+    };
+    const auto ownEnd = [](uint32_t street, int end, int kerb) {
+        return MeetKey(static_cast<uint8_t>(MeetAt::StreetEnd), street, static_cast<uint32_t>(end), kerb);
+    };
+    // where a street carries on as another (ModelStreet::carriesOn): its end and the end of the next street that names it
+    // back are one place; the kerb runs on, unless the two spines meet head to head (both `to`, or both `from`)
+    const auto carryOnKey = [&](uint32_t street, int end, int kerb) {
+        const ModelStreet& S = m.streets[street];
+        const ModelStreetId T = S.carriesOn[static_cast<std::size_t>(end)];
+        if (!T.valid()) return ownEnd(street, end, kerb);
+        const ModelStreet& TS = m.streets[T.index];
+        int back = -1, named = 0;
+        for (int e = 0; e < 2; ++e)
+            if (TS.carriesOn[static_cast<std::size_t>(e)].index == street) {
+                ++named;
+                // (a ring of two streets on one road names its partner at both ends: the end at the same station)
+                if (named == 1 || (TS.road == S.road && sameWrittenStation(e == 0 ? TS.from : TS.to, end == 0 ? S.from : S.to))) back = e;
+            }
+        if (back < 0 || (named == 2 && TS.road != S.road)) return ownEnd(street, end, kerb);
+        return std::min(ownEnd(street, end, kerb), ownEnd(T.index, back, back != end ? kerb : -kerb));
+    };
+    std::map<std::pair<uint32_t, int>, uint32_t> deadEndAt;   // (street, end) -> its dead end
+    for (uint32_t d = 0; d < m.deadEnds.size(); ++d) deadEndAt[std::make_pair(m.deadEnds[d].street.index, m.deadEnds[d].end)] = d;
+
+    const auto addWalk = [&](const std::vector<Vec2>& pts, const std::vector<double>& z, double width, Walk k) {
+        k.curve = G.addCurve(pts, z);
+        k.length = G.along[k.curve.end() - 1];
+        k.width = width;
+        G.walks.push_back(k);
+        return static_cast<uint32_t>(G.walks.size() - 1);
+    };
+    const auto meet = [&](const MeetKey& key, uint32_t walk, int end, const std::string& why) {
+        meets[key].push_back(WalkEnd{WalkId(walk), static_cast<uint8_t>(end)});
+        if (!why.empty()) whyAlone.emplace(key, why);
+    };
+
+    // ---- along the roads: each sidewalk lane (its kerb) and footway lane (kerb 0), street by street ------------------------
+    const auto layAlong = [&](const ModelLane& L, Walk ids, int kerb, int deckLane) {
+        if (!L.onRoad() || L.curve.count < 2) return;
+        std::vector<Vec2> xy(m.lanePoints().begin() + L.curve.first, m.lanePoints().begin() + L.curve.end());
+        std::vector<double> st(m.spineStations.begin() + L.curve.first, m.spineStations.begin() + L.curve.end());
+        for (const double v : st)
+            if (!stated(v)) return;   // (not laid beside its spine: the lane level leaves it out, as it would a car lane)
+        if (st.front() > st.back()) {
+            std::reverse(xy.begin(), xy.end());
+            std::reverse(st.begin(), st.end());
+        }
+        const std::vector<double> s = stations(xy);
+        for (const ModelLaneSpan& sp : L.streets) {
+            const ModelStreet& S = m.streets[sp.street.index];
+            double lo = sp.from, hi = sp.to;
+            MeetKey keys[2];
+            std::string why[2];
+            for (int end = 0; end < 2; ++end) {
+                keys[end] = ownEnd(sp.street.index, end, kerb);
+                const LaneSpanEnd at = laneSpanEnd(m, sp, end);
+                if (!at.reaches) {
+                    why[end] = "the walk stops short of its street's end";
+                    continue;
+                }
+                if (at.junction.valid()) {
+                    if (at.arm < 0) {
+                        why[end] = "its street's junction lists no arm for it";
+                        continue;
+                    }
+                    const double cut = kerbEndStation(m, at.junction, static_cast<uint32_t>(at.arm));
+                    if (end == 0) lo = std::max(lo, cut);
+                    else hi = std::min(hi, cut);
+                    keys[end] = kerbKey(at.junction, static_cast<uint32_t>(at.arm), kerb);
+                    continue;
+                }
+                const StreetEndKind kind = streetEndKind(g, S, end);
+                if (kind == StreetEndKind::CarriesOn) {
+                    keys[end] = carryOnKey(sp.street.index, end, kerb);
+                    why[end] = "the street it carries on into has no walk on that kerb";
+                } else if (kind == StreetEndKind::DeadEnd) {
+                    const std::map<std::pair<uint32_t, int>, uint32_t>::const_iterator d = deadEndAt.find(std::make_pair(sp.street.index, end));
+                    const bool joined = d != deadEndAt.end() && m.deadEnds[d->second].turnRound;
+                    if (joined) keys[end] = MeetKey(static_cast<uint8_t>(MeetAt::DeadEnd), d->second, 0, kerb);
+                    why[end] = joined ? "a dead end with a sidewalk on one kerb only" : "a dead end not joined across";
+                } else {
+                    why[end] = streetEndKindWord(kind);
+                }
+            }
+            if (!(hi - lo > kCutTolerance)) continue;
+            const std::vector<Vec2> pts = sliceAtStations(xy, s, interp(st, s, lo), interp(st, s, hi), kSliceGap);
+            if (pts.size() < 2) continue;
+            std::vector<double> z;
+            for (const Vec2& q : pts) z.push_back(deckLane >= 0 ? H.deck(deckLane, q) : H.deckRoad(static_cast<int>(L.edge), q));
+            Walk k = ids;
+            k.street = sp.street.index;
+            k.stationFrom = lo;
+            k.stationTo = hi;
+            const uint32_t w = addWalk(pts, z, L.width, k);
+            meet(keys[0], w, 0, why[0]);
+            meet(keys[1], w, 1, why[1]);
+        }
+    };
+    for (uint32_t wi = 0; wi < m.walks.size(); ++wi) {
+        if (!m.walks[wi].onRoad()) continue;   // (a corner's walk: below)
+        Walk ids;
+        ids.modelWalk = wi;
+        layAlong(m.walks[wi], ids, m.walks[wi].dir, -1);
+    }
+    for (uint32_t li = 0; li < m.lanes.size(); ++li) {
+        const ModelLane& L = m.lanes[li];
+        if (!L.onRoad() || !g.cls(g.edges[L.edge]).footway) continue;
+        Walk ids;
+        ids.modelLane = li;
+        layAlong(L, ids, 0, static_cast<int>(li));
+    }
+    // ---- round the corners: each corner's walk whole, from arm A's kerb end to arm B's -------------------------------------
+    for (const ModelCorner& c : m.corners) {
+        if (c.walk >= m.walks.size()) continue;
+        const ModelLane& W = m.walks[c.walk];
+        const std::vector<Vec2> pts(m.lanePoints().begin() + W.curve.first, m.lanePoints().begin() + W.curve.end());
+        const std::vector<double> z(m.heights.begin() + W.curve.first, m.heights.begin() + W.curve.end());
+        if (pts.size() < 2) continue;
+        Walk k;
+        k.modelWalk = c.walk;
+        const uint32_t w = addWalk(pts, z, W.width, k);
+        meet(kerbKey(c.junction, c.armA, c.kerbA), w, 0, std::string());
+        meet(kerbKey(c.junction, c.armB, c.kerbB), w, 1, std::string());
+    }
+    // ---- over the crosswalks people use: kerb end 0 (the +1 kerb's) to kerb end 1 -----------------------------------------
+    for (uint32_t ci = 0; ci < m.crosswalks.size(); ++ci) {
+        const ModelCrosswalk& c = m.crosswalks[ci];
+        const std::map<std::string, int>::const_iterator road = g.index.find(c.road);
+        if (!c.pavements || !c.junction.valid() || road == g.index.end()) continue;
+        const std::vector<Vec2> pts = {c.ends[0], c.ends[1]};
+        const std::vector<double> z = {H.deckRoad(road->second, c.ends[0]), H.deckRoad(road->second, c.ends[1])};
+        Walk k;
+        k.modelCrosswalk = ci;
+        const uint32_t w = addWalk(pts, z, c.bandWidth(), k);
+        meet(kerbKey(c.junction, c.arm, +1), w, 0, std::string());
+        meet(kerbKey(c.junction, c.arm, -1), w, 1, std::string());
+    }
+    // ---- across the dead ends the model joins: from the +1 kerb's sidewalk end to the -1 kerb's ------------------------
+    const auto endPoint = [&](const WalkEnd& e, double* z) {
+        const Walk& k = G.walks[e.walk.index];
+        const uint32_t i = e.end == 0 ? k.curve.first : k.curve.end() - 1;
+        *z = G.heights[i];
+        return G.points[i];
+    };
+    for (uint32_t d = 0; d < m.deadEnds.size(); ++d) {
+        if (!m.deadEnds[d].turnRound) continue;
+        const MeetKey a(static_cast<uint8_t>(MeetAt::DeadEnd), d, 0, +1), b(static_cast<uint8_t>(MeetAt::DeadEnd), d, 0, -1);
+        const std::map<MeetKey, std::vector<WalkEnd>>::const_iterator ia = meets.find(a), ib = meets.find(b);
+        if (ia == meets.end() || ib == meets.end()) continue;   // (one kerb's sidewalk alone: said below)
+        std::vector<double> z(2, 0.0);
+        const std::vector<Vec2> pts = {endPoint(ia->second.front(), &z[0]), endPoint(ib->second.front(), &z[1])};
+        const ModelStreet& S = m.streets[m.deadEnds[d].street.index];
+        Walk k;
+        k.modelDeadEnd = d;
+        const uint32_t w = addWalk(pts, z, S.section.sidewalk, k);
+        meet(a, w, 0, std::string());
+        meet(b, w, 1, std::string());
+    }
+
+    // ---- the joins: every walk end at a place meets every other there; a lone end is listed with why -----------------
+    std::vector<std::vector<WalkEnd>> joins(G.walks.size() * 2);
+    for (const std::pair<const MeetKey, std::vector<WalkEnd>>& place : meets) {
+        const std::vector<WalkEnd>& ends = place.second;
+        if (ends.size() == 1) {
+            LaneGraphBuild::WalkEndAlone alone;
+            alone.walk = ends.front().walk.index;
+            alone.end = ends.front().end;
+            double z = 0;
+            alone.at = endPoint(ends.front(), &z);
+            const MeetKey& key = place.first;
+            if (std::get<0>(key) == static_cast<uint8_t>(MeetAt::Kerb)) {
+                // at a junction's kerb end: what is missing there (a corner's walk the build could not lay is ADR-0465's)
+                const ModelJunctionId J(std::get<1>(key));
+                const uint32_t arm = std::get<2>(key);
+                const int kerb = std::get<3>(key);
+                bool cornerStated = false;
+                for (const ModelCorner& c : m.corners)
+                    if (c.junction == J && ((c.armA == arm && kerbKey(J, arm, c.kerbA) == key) || (c.armB == arm && kerbKey(J, arm, c.kerbB) == key)))
+                        cornerStated = true;
+                const ModelCrosswalk* cw = m.crosswalkAcross(J, arm);
+                const bool crossed = cw && cw->pavements;
+                const Walk& k = G.walks[alone.walk];
+                if (k.modelCrosswalk != kNoIndex) {
+                    alone.why = "a crosswalk's kerb end with no other walk on its kerb";
+                } else if (k.modelWalk != kNoIndex && !m.walks[k.modelWalk].onRoad()) {
+                    alone.why = "a corner walk's end with no sidewalk or crossing there";
+                } else {
+                    alone.why = cornerStated ? "its corner has no walk (the build could not lay one)" : "no corner is stated on this kerb";
+                    if (!crossed) alone.why += ", and no crosswalk people use";
+                }
+                alone.where = kerb == 0 ? fmt("junction %s, arm %u (a footway)", m.junctions[J.index].id.c_str(), arm)
+                                        : fmt("junction %s, arm %u, kerb %+d", m.junctions[J.index].id.c_str(), arm, kerb);
+            } else {
+                const std::map<MeetKey, std::string>::const_iterator why = whyAlone.find(key);
+                alone.why = why != whyAlone.end() ? why->second : std::string("nothing else is stated there");
+                const uint32_t street = G.walks[alone.walk].street;
+                alone.where = street < m.streets.size() ? fmt("street %s, its %s", m.streets[street].id.c_str(), alone.end == 0 ? "start" : "end")
+                                                        : std::string();
+            }
+            out.walkEndsAlone.push_back(alone);
+            continue;
+        }
+        for (const WalkEnd& a : ends)
+            for (const WalkEnd& b : ends)
+                if (!(a == b)) joins[a.walk.index * 2 + a.end].push_back(b);
+    }
+    for (uint32_t w = 0; w < G.walks.size(); ++w)
+        for (int end = 0; end < 2; ++end) {
+            const std::vector<WalkEnd>& j = joins[w * 2 + static_cast<uint32_t>(end)];
+            const Range r{static_cast<uint32_t>(G.walkJoins.size()), static_cast<uint32_t>(j.size())};
+            G.walkJoins.insert(G.walkJoins.end(), j.begin(), j.end());
+            (end == 0 ? G.walks[w].atStart : G.walks[w].atEnd) = r;
+        }
+}
+
+}  // namespace
+
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraphOptions& opts) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     LaneGraphBuild out;
@@ -1035,6 +1282,9 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         }
     }
     std::sort(out.controlPlan.regulations.begin(), out.controlPlan.regulations.end());
+
+    // ---- where people walk (ADR-0466): last, so no car path's points move ------------------------------------------------
+    layWalkPaths(r, model, out);
 
     for (const std::string& p : validate(G)) out.problems.push_back(RoadProblem(RoadProblemKind::LaneGraphCheck).word(p));
     reachReport(G, out);

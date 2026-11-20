@@ -2192,6 +2192,54 @@ void layLaneCrosswalks(RoadModel& m) {
     }
 }
 
+// ---- who may use which path of the lane level (ADR-0466) ----------------------------------------------------------------
+
+const std::string kConnectorKind = "connector";
+const std::string kCrossingKind = "crossing";
+
+Real kerbEndStation(const RoadModel& m, ModelJunctionId junction, uint32_t arm) {
+    if (junction.index >= m.junctions.size() || arm >= m.junctions[junction.index].arms.size()) return kNotStated;
+    const ModelArm& A = m.junctions[junction.index].arms[arm];
+    const ModelStreet* street = m.streetOf(A);
+    const ModelCrosswalk* c = m.crosswalkAcross(junction, arm);
+    if (c && !(street && street->section.footway)) return (c->nearStation + c->farStation) * Real(0.5);
+    return stated(A.boxEdge) ? A.boxEdge : A.station;
+}
+
+const std::string& RoadModel::pathKind(PathId path) const {
+    if (path.index >= laneLevel.paths.size()) return kNoneStated;
+    const Path& p = laneLevel.paths[path.index];
+    if (p.kind == PathKind::Connector) return kConnectorKind;
+    return p.modelLane < lanes.size() ? lanes[p.modelLane].kind : kNoneStated;
+}
+
+const std::string& RoadModel::walkKind(WalkId walk) const {
+    if (walk.index >= laneLevel.walks.size()) return kNoneStated;
+    const Walk& k = laneLevel.walks[walk.index];
+    if (k.modelWalk < walks.size()) return walks[k.modelWalk].kind;
+    if (k.modelLane < lanes.size()) return lanes[k.modelLane].kind;
+    if (k.modelCrosswalk < crosswalks.size()) return kCrossingKind;
+    if (k.modelDeadEnd < deadEnds.size()) return pathUsers().deadEndJoin;
+    return kNoneStated;
+}
+
+RoadModel::OpenPaths RoadModel::openTo(const std::string& mover, const PathUsers& users) const {
+    OpenPaths out;
+    out.paths.assign(laneLevel.paths.size(), 0);
+    out.walks.assign(laneLevel.walks.size(), 0);
+    std::map<std::string, uint8_t> asked;   // (each kind asked of the table once)
+    const auto open = [&](const std::string& kind) {
+        const std::map<std::string, uint8_t>::const_iterator it = asked.find(kind);
+        if (it != asked.end()) return it->second;
+        const uint8_t may = users.mayUse(mover, kind) ? 1 : 0;
+        asked.emplace(kind, may);
+        return may;
+    };
+    for (uint32_t p = 0; p < out.paths.size(); ++p) out.paths[p] = open(pathKind(PathId(p)));
+    for (uint32_t w = 0; w < out.walks.size(); ++w) out.walks[w] = open(walkKind(WalkId(w)));
+    return out;
+}
+
 bool operator==(const RoadModel& a, const RoadModel& b) {
     bundle::BinWriter wa, wb;
     putRoadModel(wa, a);

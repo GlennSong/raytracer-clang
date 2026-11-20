@@ -41,7 +41,7 @@ bool armWalk(const RoadModel& m, const RoadLabGraph& g, ModelJunctionId j, uint3
         out.anchor = c->ends[kerb > 0 ? 0 : 1];
         return true;
     }
-    const double station = stated(A.boxEdge) ? A.boxEdge : A.station;
+    const double station = kerbEndStation(m, j, arm);   // (the one statement: the lane level cuts the walks there too)
     const Vec2 at = pointAt(e.xy, e.s, station);
     out.anchor = s.footway ? at : at + towardKerb(tangentAtStation(e.xy, e.s, station), kerb) * s.carriagewayHalfWidth();
     return true;

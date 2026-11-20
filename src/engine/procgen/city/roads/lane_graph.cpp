@@ -23,7 +23,8 @@ namespace {
 // and answers which approaches face each other, ADR-0438; 14: no car spaces: the list was never filled, and the kerb
 // parking spaces are stated in the road model, ADR-0439).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 15;   // 15: a crosswalk names the road model's (Crosswalk::modelCrosswalk, ADR-0452)
+constexpr uint32_t kVersion = 16;   // 16: the walks and their joins (ADR-0466)
+                                    // 15: a crosswalk names the road model's (Crosswalk::modelCrosswalk, ADR-0452)
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
 // A closed outline (a junction's box, a crosswalk) has at least this many corners; a track's line two points.
@@ -174,6 +175,24 @@ void putItem(BinWriter& w, const BendPiece& b) {
     w.put(b.from);
     w.put(b.radius);
 }
+void putItem(BinWriter& w, const WalkEnd& e) {
+    putItem(w, e.walk);
+    w.put(e.end);
+}
+void putItem(BinWriter& w, const Walk& k) {
+    putItem(w, k.curve);
+    w.put(k.length);
+    w.put(k.width);
+    putItem(w, k.atStart);
+    putItem(w, k.atEnd);
+    w.put(k.modelWalk);
+    w.put(k.modelLane);
+    w.put(k.modelCrosswalk);
+    w.put(k.modelDeadEnd);
+    w.put(k.street);
+    w.put(k.stationFrom);
+    w.put(k.stationTo);
+}
 
 bool getItem(BinReader& r, std::string& s) { return r.getStr(s); }
 bool getItem(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -218,6 +237,12 @@ bool getItem(BinReader& r, CrossingPoint& c) {
 bool getItem(BinReader& r, Crosswalk& c) { return getItem(r, c.outline) && getItem(r, c.junction) && r.get(c.modelCrosswalk); }
 bool getItem(BinReader& r, Track& t) { return getItem(r, t.line) && r.get(t.railTrack); }
 bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radius); }
+bool getItem(BinReader& r, WalkEnd& e) { return getItem(r, e.walk) && r.get(e.end); }
+bool getItem(BinReader& r, Walk& k) {
+    return getItem(r, k.curve) && r.get(k.length) && r.get(k.width) && getItem(r, k.atStart) && getItem(r, k.atEnd) &&
+           r.get(k.modelWalk) && r.get(k.modelLane) && r.get(k.modelCrosswalk) && r.get(k.modelDeadEnd) && r.get(k.street) &&
+           r.get(k.stationFrom) && r.get(k.stationTo);
+}
 
 // The fewest bytes one element of a list takes on disk (a default one, written): how a count read from a damaged file
 // is caught before it asks for more memory than the file could fill.
@@ -506,8 +531,14 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
            a.nextPaths == b.nextPaths && a.sectionLanes == b.sectionLanes && a.laneLines == b.laneLines &&
            a.junctionConnectors == b.junctionConnectors && a.junctionLanes == b.junctionLanes &&
            a.pathCrossings == b.pathCrossings && sameVec2s(a.planPoints, b.planPoints) &&
-           sameBends(a.bendPieces, b.bendPieces);
+           sameBends(a.bendPieces, b.bendPieces) && a.walks == b.walks && a.walkJoins == b.walkJoins;
 }
+bool operator==(const Walk& a, const Walk& b) {
+    return a.curve == b.curve && a.length == b.length && a.width == b.width && a.atStart == b.atStart && a.atEnd == b.atEnd &&
+           a.modelWalk == b.modelWalk && a.modelLane == b.modelLane && a.modelCrosswalk == b.modelCrosswalk &&
+           a.modelDeadEnd == b.modelDeadEnd && a.street == b.street && a.stationFrom == b.stationFrom && a.stationTo == b.stationTo;
+}
+bool operator==(const WalkEnd& a, const WalkEnd& b) { return a.walk == b.walk && a.end == b.end; }
 
 // ---- validate ---------------------------------------------------------------------------------------------------
 
@@ -978,6 +1009,44 @@ std::vector<std::string> validate(const LaneGraph& g) {
         if (!inRange(g.tracks[t].line, g.planPoints.size()) || g.tracks[t].line.count < kMinLinePoints)
             out.push_back(fmt("track %u: its line (%u points from %u) is out of range or too short (%zu plan points)", t,
                               g.tracks[t].line.count, g.tracks[t].line.first, g.planPoints.size()));
+
+    // Walks (ADR-0466): each curve whole (a corner walk where two crosswalks meet at the kerb's corner has no length),
+    // each end's joins in range, naming another walk end, and named back by it.
+    const auto lists = [&](const WalkEnd& at, const WalkEnd& other) {
+        if (at.walk.index >= g.walks.size() || at.end > 1) return false;
+        const Range r = g.walks[at.walk.index].joins(at.end);
+        if (!inRange(r, g.walkJoins.size())) return false;
+        for (uint32_t k = r.first; k < r.end(); ++k)
+            if (g.walkJoins[k] == other) return true;
+        return false;
+    };
+    for (uint32_t w = 0; w < g.walks.size(); ++w) {
+        const Walk& k = g.walks[w];
+        if (!inRange(k.curve, curvePoints) || k.curve.count < kMinCurvePoints) {
+            out.push_back(fmt("walk %u: its curve (%u points from %u) is out of range or too short (%zu points)", w, k.curve.count,
+                              k.curve.first, curvePoints));
+            continue;
+        }
+        if (!(std::fabs(g.along[k.curve.end() - 1] - k.length) <= kLengthTolerance) || g.along[k.curve.first] != 0)
+            out.push_back(fmt("walk %u: its length %.2f m is not its curve's %.2f m", w, k.length, g.along[k.curve.end() - 1]));
+        const int set = (k.modelWalk != kNoIndex) + (k.modelLane != kNoIndex) + (k.modelCrosswalk != kNoIndex) + (k.modelDeadEnd != kNoIndex);
+        if (set != 1) out.push_back(fmt("walk %u: names %d things of the road model, not one", w, set));
+        for (uint8_t end = 0; end < 2; ++end) {
+            const Range r = k.joins(end);
+            if (!inRange(r, g.walkJoins.size())) {
+                out.push_back(fmt("walk %u: the joins at its end %u are out of range (%zu joins)", w, end, g.walkJoins.size()));
+                continue;
+            }
+            for (uint32_t j = r.first; j < r.end(); ++j) {
+                const WalkEnd& o = g.walkJoins[j];
+                if (o.walk.index >= g.walks.size() || o.end > 1 || (o.walk.index == w && o.end == end))
+                    out.push_back(fmt("walk %u: its end %u is joined to walk %u end %u, no other walk end", w, end, o.walk.index, o.end));
+                else if (!lists(o, WalkEnd{WalkId(w), end}))
+                    out.push_back(fmt("walk %u: its end %u is joined to walk %u end %u, which does not name it back", w, end,
+                                      o.walk.index, o.end));
+            }
+        }
+    }
     return out;
 }
 
@@ -1069,6 +1138,40 @@ ReachableParts reachableParts(const LaneGraph& g, const ReachRules& rules) {
         }
         out.partOf[p] = id;
         ++out.sizes[id];
+    }
+    for (uint32_t i = 0; i < out.sizes.size(); ++i)
+        if (out.sizes[i] > out.sizes[out.largest]) out.largest = i;
+    return out;
+}
+
+ReachableParts reachableWalks(const LaneGraph& g, const std::vector<uint8_t>& open) {
+    // walked either way, so a part is everything joined to it: a flood from each walk not yet in a part, lowest first
+    const uint32_t n = static_cast<uint32_t>(g.walks.size());
+    const auto isOpen = [&](uint32_t w) { return w < open.size() && open[w] != 0; };
+    ReachableParts out;
+    out.partOf.assign(n, kNoIndex);
+    std::vector<uint32_t> stack;
+    for (uint32_t root = 0; root < n; ++root) {
+        if (out.partOf[root] != kNoIndex) continue;
+        const uint32_t part = static_cast<uint32_t>(out.sizes.size());
+        out.sizes.push_back(0);
+        out.partOf[root] = part;
+        stack.assign(1, root);
+        while (!stack.empty()) {
+            const uint32_t w = stack.back();
+            stack.pop_back();
+            ++out.sizes[part];
+            if (!isOpen(w)) continue;
+            for (int end = 0; end < 2; ++end) {
+                const Range r = g.walks[w].joins(end);
+                for (uint32_t j = r.first; j < safeEnd(r, g.walkJoins.size()); ++j) {
+                    const uint32_t q = g.walkJoins[j].walk.index;
+                    if (q >= n || !isOpen(q) || out.partOf[q] != kNoIndex) continue;
+                    out.partOf[q] = part;
+                    stack.push_back(q);
+                }
+            }
+        }
     }
     for (uint32_t i = 0; i < out.sizes.size(); ++i)
         if (out.sizes[i] > out.sizes[out.largest]) out.largest = i;
@@ -1252,6 +1355,23 @@ std::string dumpText(const LaneGraph& g) {
     }
     for (uint32_t t = 0; t < g.tracks.size(); ++t)
         out += fmt("track %u: rail track %u, line %s\n", t, g.tracks[t].railTrack, planPointsText(g, g.tracks[t].line).c_str());
+    for (uint32_t w = 0; w < g.walks.size(); ++w) {
+        const Walk& k = g.walks[w];
+        const std::string what = k.modelWalk != kNoIndex       ? fmt("the road model's walk %u", k.modelWalk)
+                                 : k.modelLane != kNoIndex      ? fmt("the road model's lane %u", k.modelLane)
+                                 : k.modelCrosswalk != kNoIndex ? fmt("over the road model's crosswalk %u", k.modelCrosswalk)
+                                                                : fmt("round the road model's dead end %u", k.modelDeadEnd);
+        out += fmt("walk %u: %s, %.1f m long, %.1f m wide", w, what.c_str(), k.length, k.width);
+        if (k.street != kNoIndex) out += fmt(", street %u from %.1f to %.1f", k.street, k.stationFrom, k.stationTo);
+        for (int end = 0; end < 2; ++end) {
+            out += end == 0 ? "; its start meets" : "; its end meets";
+            const Range r = k.joins(end);
+            if (r.count == 0) out += " nothing";
+            for (uint32_t j = r.first; j < safeEnd(r, g.walkJoins.size()); ++j)
+                out += fmt(" %u.%u", g.walkJoins[j].walk.index, static_cast<unsigned>(g.walkJoins[j].end));
+        }
+        out += "\n";
+    }
     return out;
 }
 
@@ -1277,6 +1397,8 @@ void putLaneGraph(bundle::BinWriter& w, const LaneGraph& g) {
     putList(w, g.pathCrossings);
     putList(w, g.planPoints);
     putList(w, g.bendPieces);
+    putList(w, g.walks);
+    putList(w, g.walkJoins);
 }
 
 bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
@@ -1303,7 +1425,8 @@ bool getLaneGraph(bundle::BinReader& r, LaneGraph& g, std::string* err) {
                     getList(r, in.junctionConnectors, "junction connectors", err) &&
                     getList(r, in.junctionLanes, "junction lanes", err) &&
                     getList(r, in.pathCrossings, "path crossing points", err) &&
-                    getList(r, in.planPoints, "plan points", err) && getList(r, in.bendPieces, "bend pieces", err);
+                    getList(r, in.planPoints, "plan points", err) && getList(r, in.bendPieces, "bend pieces", err) &&
+                    getList(r, in.walks, "walks", err) && getList(r, in.walkJoins, "walk joins", err);
     if (!ok) return false;
     if (r.remaining() != 0) {
         if (err) *err = fmt("lane graph: %zu stray bytes after the last list", r.remaining());
