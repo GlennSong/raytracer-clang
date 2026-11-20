@@ -318,3 +318,121 @@ TEST_CASE(polymesh_bevel_cuts_every_sharp_edge_to_a_strip_and_closes_the_corners
     CHECK(open.pts.size() == before);      // every point is on the border: none split
     CHECK(walls.empty() || !walls.empty()); // (it may add nothing; it must not crash or tear)
 }
+
+TEST_CASE(polymesh_loop_cut_runs_a_ring_of_edges_through_the_quads) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    // across an edge that runs along z (between the two square sections): the ring goes round the four side faces
+    const int a = nearestPoint(c, Vec3(0.5, 0.5, -0.5)), b = nearestPoint(c, Vec3(0.5, 0.5, 0.5));
+    const std::vector<int> ring = loopCut(c, a, b, 0.25);
+    CHECK(ring.size() == 4);
+    CHECK(c.faces.size() == 10);            // four sides each in two; the two ends untouched
+    CHECK(c.pts.size() == 12);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 1.0, 1e-9);
+    for (int p : ring) CHECK_APPROX(c.pts[static_cast<std::size_t>(p)].z, -0.25, 1e-9);   // a quarter from a's side, all the way round
+    // again nearer the other end, by its mirror
+    CHECK(loopCut(c, b, nearestPoint(c, Vec3(0.5, 0.5, -0.25)), 0.25).size() == 4);
+    CHECK(c.faces.size() == 14);
+    CHECK(isClosed(c));
+    // two points that are not an edge's ends cut nothing
+    CHECK(loopCut(c, nearestPoint(c, Vec3(0.5, 0.5, 0.5)), nearestPoint(c, Vec3(-0.5, -0.5, -0.5))).empty());
+    CHECK(c.faces.size() == 14);
+
+    // a crease on a crossed edge carries on over both halves
+    PolyMesh k = cube();
+    k.creases.clear();
+    k.setCrease(a, b, 2.0f);
+    const std::vector<int> r2 = loopCut(k, a, b);
+    CHECK(k.crease(a, b) == 0.0f);
+    bool carried = false;
+    for (int p : r2)
+        if (k.crease(a, p) == 2.0f && k.crease(p, b) == 2.0f) carried = true;
+    CHECK(carried);
+
+    // on an open tube the ring still closes; where the cut meets a face that is not a quad it stops, and that face
+    // gains the point (the mesh stays closed)
+    PolyMesh b3 = cube();
+    b3.creases.clear();
+    bevel(b3, 0.1);                           // corner triangles now sit between the strips
+    const std::size_t before = b3.faces.size();
+    const int s0 = nearestPoint(b3, Vec3(0.4, 0.5, 0.4)), s1 = nearestPoint(b3, Vec3(0.5, 0.4, 0.4));
+    const std::vector<int> along = loopCut(b3, s0, s1);     // along one strip, end to end
+    CHECK(along.size() == 2);
+    CHECK(b3.faces.size() == before + 1);
+    CHECK(isClosed(b3));
+}
+
+TEST_CASE(polymesh_slice_cuts_along_a_plane_and_moves_nothing) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    const std::vector<int> cut = slice(c, Vec3(0, 0.2, 0), Vec3(0, 1, 0));
+    CHECK(cut.size() == 4);
+    CHECK(c.faces.size() == 10);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 1.0, 1e-9);
+    for (int p : cut) CHECK_APPROX(c.pts[static_cast<std::size_t>(p)].y, 0.2, 1e-9);
+    // a plane through corners passes through points already there: the two faces it crosses corner to corner split
+    PolyMesh d = cube();
+    d.creases.clear();
+    const std::vector<int> diag = slice(d, Vec3(0, 0, 0), Vec3(1, -1, 0));
+    CHECK(diag.size() == 4);
+    CHECK(d.pts.size() == 8);                 // no new point
+    CHECK(d.faces.size() == 8);               // the two end squares each in two triangles
+    CHECK(isClosed(d));
+    // a plane that misses changes nothing
+    CHECK(slice(d, Vec3(0, 5, 0), Vec3(0, 1, 0)).empty());
+    CHECK(d.faces.size() == 8);
+    // a slanted plane through a bevelled cube: still closed, same volume
+    PolyMesh e = cube();
+    e.creases.clear();
+    bevel(e, 0.1);
+    const double v = signedVolume(e);
+    CHECK(!slice(e, Vec3(0.03, 0.02, 0.01), Vec3(0.3, 1, 0.2)).empty());
+    CHECK(isClosed(e));
+    CHECK_APPROX(signedVolume(e), v, 1e-9);
+}
+
+TEST_CASE(polymesh_bridge_joins_two_solids_or_makes_a_hole_through_one) {
+    // two unit cubes a metre apart along z: bridge the faces that look at each other
+    PolyMesh two = cube();
+    two.creases.clear();
+    PolyMesh other = cube();
+    other.creases.clear();
+    for (Vec3& p : other.pts) p.z += 2.0;
+    two.append(other);
+    const std::vector<int> front = selectWhere(two, [](const Vec3& c, const Vec3& n) { return n.z > 0.9 && c.z < 1.0; });
+    const std::vector<int> back = selectWhere(two, [](const Vec3& c, const Vec3& n) { return n.z < -0.9 && c.z > 1.0; });
+    CHECK(front.size() == 1 && back.size() == 1);
+    const std::vector<int> tube = bridge(two, front, back);
+    CHECK(tube.size() == 4);
+    CHECK(two.faces.size() == 14);            // 12 less the two taken away, and four joining
+    CHECK(isClosed(two));
+    CHECK_APPROX(signedVolume(two), 3.0, 1e-9);   // the two cubes and the metre between them
+
+    // a hole through a block: inset the top and the bottom, bridge the two inner faces
+    PolyMesh block = cube();
+    block.creases.clear();
+    const std::vector<int> top = inset(block, selectWhere(block, [](const Vec3&, const Vec3& n) { return n.y > 0.9; }), 0.25);
+    const std::vector<int> bottom = inset(block, selectWhere(block, [](const Vec3&, const Vec3& n) { return n.y < -0.9; }), 0.25);
+    CHECK(top.size() == 1 && bottom.size() == 1);
+    CHECK(bridge(block, top, bottom).size() == 4);
+    CHECK(isClosed(block));
+    const double v = signedVolume(block);
+    CHECK(v > 0.5 && v < 0.95);               // the cube less a hole about half a metre square
+
+    // rims that do not match are refused and nothing changes
+    PolyMesh odd = cube();
+    odd.creases.clear();
+    bevel(odd, 0.1);
+    const std::size_t faces = odd.faces.size();
+    const std::vector<int> square = selectWhere(odd, [](const Vec3&, const Vec3& n) { return n.y > 0.99; });
+    const std::vector<int> triangle = {20 + 0};   // (set below to a real corner face)
+    std::vector<int> corner;
+    for (std::size_t f = 0; f < odd.faces.size(); ++f)
+        if (odd.faces[f].v.size() == 3) { corner.push_back(static_cast<int>(f)); break; }
+    (void)triangle;
+    CHECK(bridge(odd, square, corner).empty());
+    CHECK(odd.faces.size() == faces);
+    CHECK(bridge(odd, square, square).empty());
+}

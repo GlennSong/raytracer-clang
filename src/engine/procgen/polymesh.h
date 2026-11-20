@@ -146,6 +146,30 @@ PolyMesh subdivide(const PolyMesh& m, int levels);
 // cuts (they are gone with the edge). An edge on the open border of a mesh is left alone.
 std::vector<int> bevel(PolyMesh& m, double width, double angleDeg = 30.0, const std::vector<int>& sel = {});
 
+// LOOP CUT (#191): a new ring of edges through a run of quads. Starting at the edge between points `a` and `b`, the
+// cut crosses each quad to the edge opposite, on and on, until it comes back round, reaches the mesh's open border,
+// or meets a face that is not a quad. Each crossed edge gets a new point `t` of the way along it (0.5: the middle;
+// measured from a's side all the way round) and each crossed quad becomes two. A face the cut stops at gains the
+// new point on its edge, so a closed mesh stays closed. A crease on a crossed edge carries on over both halves.
+// Returns the new points in order; empty when a and b are not the two ends of an edge.
+std::vector<int> loopCut(PolyMesh& m, int a, int b, double t = 0.5);
+
+// SLICE: cut every face a plane passes through, along the plane. Each edge crossing the plane gets a point where it
+// crosses and each face crossed from one edge to another becomes two; nothing moves, so the shape is the same with
+// a ring of edges where the plane cuts it. (A loop cut follows the quads; a slice follows a plane, whatever the
+// faces.) A point within `eps` of the plane counts as on it. Returns the points on the cut, new and old.
+std::vector<int> slice(PolyMesh& m, Vec3 point, Vec3 normal, double eps = 1e-7);
+
+// BRIDGE: join two regions of faces by a tube. The faces of `a` and of `b` are taken away and the two holes' rims
+// joined by quads, rim point to rim point: two boxes facing each other become one solid, and a region on the top of
+// a block bridged to one on its underside is a hole through it. Each region must have one rim, the two with the
+// same number of points; the pairing is the one with the least twist. Returns the new quads (faces are renumbered:
+// selections made before are stale). Empty, and nothing changed, when the rims do not match.
+std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vector<int>& b);
+
+// The point nearest to `at` (for naming an edge to loopCut by where its ends are).
+int nearestPoint(const PolyMesh& m, Vec3 at);
+
 std::vector<int> selectAll(const PolyMesh& m);
 std::vector<int> selectGroup(const PolyMesh& m, const std::string& group);
 std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const Vec3& centroid, const Vec3& normal)>& pred);

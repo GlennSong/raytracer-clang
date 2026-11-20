@@ -786,7 +786,13 @@ proposed to him:
    face. Bevel twice (a second, smaller width) for a rounder edge. It does not round in one go, does not stop a
    width wider than a face from folding it, and leaves the open border of a mesh alone.
 2. **Loop cut and bridge** on the quad mesh: add a ring of edges; join two open rings. Also what would let the car
-   cage's hood be more than one quad across.
+   cage's hood be more than one quad across. BUILT 2026-11-20, in `procgen/polymesh.{h,cpp}`:
+   - `P:loop_cut(at_a, at_b [, t])`: a ring of edges through the quads, starting across the edge whose ends are
+     nearest two places; it stops at the open border or a face that is not a quad, and that face gains the point.
+   - `P:slice(point, normal)`: the same kind of cut along a plane, whatever the faces. Nothing moves.
+   - `P:bridge(sel_a, sel_b)`: the two regions' faces go and their rims are joined by quads: two solids become one,
+     or a block gets a hole through it. The rims must have the same number of points.
+   The car cage has not been changed with them.
 3. **Opening with a frame:** cut a hole in a wall or panel and get the frame and the pane back as parts.
 4. **Truss:** chords and diagonals along a path, the section free to taper.
 5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses.

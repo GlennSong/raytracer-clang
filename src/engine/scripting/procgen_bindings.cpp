@@ -5056,6 +5056,40 @@ int l_poly_bevel(lua_State* L) {
     pushSel(L, bevel(m, width, luaL_optnumber(L, 3, 30.0), sel));
     return 1;
 }
+// P:loop_cut(at_a, at_b [, t = 0.5]) -> count: a new ring of edges through the quads, starting across the edge whose
+// ends are the points nearest the positions at_a and at_b, `t` of the way from a's side (procgen/polymesh.h loopCut).
+// Returns how many points the ring has; errors when those two points are not the ends of one edge.
+int l_poly_loop_cut(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const int a = nearestPoint(m, checkVec3(L, 2)), b = nearestPoint(m, checkVec3(L, 3));
+    const std::vector<int> ring = loopCut(m, a, b, luaL_optnumber(L, 4, 0.5));
+    if (ring.empty()) return luaL_error(L, "loop_cut: the points nearest those two places are not the two ends of an edge");
+    lua_pushinteger(L, static_cast<lua_Integer>(ring.size()));
+    return 1;
+}
+// P:slice(point, normal) -> count: cut every face the plane passes through, along the plane; nothing moves
+// (procgen/polymesh.h slice). Returns how many points lie on the cut.
+int l_poly_slice(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const Vec3 normal = checkVec3(L, 3);
+    if (normal.lengthSquared() < 1e-20) return luaL_error(L, "slice: the plane's normal has no length");
+    lua_pushinteger(L, static_cast<lua_Integer>(slice(m, checkVec3(L, 2), normal).size()));
+    return 1;
+}
+// P:bridge(sel_a, sel_b) -> sel: take the two regions' faces away and join their rims with quads: two solids
+// become one, or a block gets a hole through it (procgen/polymesh.h bridge). Faces are renumbered: select again
+// afterwards. Errors when the regions do not each have one rim, or the rims differ in their number of points.
+int l_poly_bridge(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const std::vector<int> a = checkSel(L, 2), b = checkSel(L, 3);
+    checkSelRange(L, m, a);
+    checkSelRange(L, m, b);
+    if (a.empty() || b.empty()) return luaL_error(L, "bridge: both selections need faces");
+    const std::vector<int> made = bridge(m, a, b);
+    if (made.empty()) return luaL_error(L, "bridge: each region needs one rim, and the two rims the same number of points");
+    pushSel(L, made);
+    return 1;
+}
 int l_poly_crease_faces(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
@@ -5252,7 +5286,7 @@ void registerPolyMetatable(lua_State* L) {
             {"extract", l_poly_extract},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
-            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel},
+            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel}, {"loop_cut", l_poly_loop_cut}, {"slice", l_poly_slice}, {"bridge", l_poly_bridge},
             {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
