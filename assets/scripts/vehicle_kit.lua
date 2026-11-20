@@ -1226,8 +1226,9 @@ function kit.build(P, level, opts)
   local cz = 0.5 * (lo[3] + hi[3])
   S:translate{ 0, -cy, -cz }
   -- FACETED (Glenn: "I do like how the city bus's low poly style looks"): at level 0 every facet is flat
-  -- shaded; a subdivided body smooths within 40 degrees
-  local smoothing = level > 0 and 40 or 8
+  -- shaded; a subdivided body smooths within 40 degrees. opts.autosmooth (degrees) overrides: a level-0 build drawn
+  -- as a rounded car's middle level of detail wants the smooth shading without the subdivision
+  local smoothing = opts.autosmooth or (level > 0 and 40 or 8)
   local parts, panels = nil, nil
   if opts.panels then
     -- THE MOVING PANELS (ADR-0352), each its own meshes and its hinge; the body is what is left. Glenn: "some doors

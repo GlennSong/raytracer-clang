@@ -470,9 +470,10 @@ What the rig makes possible that the cars do not do today (ideas, none built):
 ### Model step 5: levels of detail (2026-11-19)
 
 ```lua
-tire:level(40, { simplify = 0.3 })                  -- a level made from the full one: each mesh at 30%
-car:level(40, { simplify = 0.3 })
-local far = car:level(150)                          -- a level the recipe fills itself
+rock:level(40, { simplify = 0.3 })                  -- a level made from the full one: each mesh at 30%
+local mid = car:level(40)                           -- a level the recipe fills itself
+door:add(low_poly_door, "body", { level = mid })    -- the same joints, lower builds of the same pieces
+local far = car:level(150)
 car:add(low_poly_body, "body", { level = far })     -- simpler in structure: one mesh on the root
 car:use(tire, wheel_places, { level = far })        -- (the tire has its own levels, by its own distances)
 ```
@@ -485,12 +486,25 @@ car:use(tire, wheel_places, { level = far })        -- (the tire has its own lev
   of the car says which uses it draws at all (the far car places four plain discs and no bolts).
 - **Two ways to make a level:**
   - *From the full one*, by the toolkit's simplify: `m:level(distance, { simplify = ratio })`. Each part becomes a
-    simpler copy on the same node in the same material; each use is drawn again. Good for a middle level.
-  - *By the recipe*: `m:level(distance)` and then `{ level = n }` on what belongs to it. Needed for a far level.
+    simpler copy on the same node in the same material; each use is drawn again. For things with no recipe to
+    build them lower (a rock, a scanned model).
+  - *By the recipe*: `m:level(distance)` and then `{ level = n }` on what belongs to it. The first choice whenever
+    the recipe can build the thing at a lower detail, and needed for a far level.
 - **What the car lab showed about far levels.** Simplifying is not enough far away. Crushing the whole car (interior
   and all) into one mesh loses the wheels first; simplifying the outside alone to 12% crumples the panels, which
   are thin solids with back faces. The far level that reads well is the kit's own low-poly build of the same car
-  plus plain discs for wheels: 34,625 triangles near, 10,580 from 40 m, 4,681 from 150 m.
+  plus plain discs for wheels.
+- **And about middle levels (2026-11-20, Glenn looked at the file in Blender: "crazy looking, not in a good way").**
+  The car's middle level was `simplify = 0.3` of the full one. Measured, it was worse than both neighbours: on the
+  hood 46% of triangles thinner than 10:1 (26% on the full hood), an edge the length of the panel beside ones of
+  0.2 mm, and none of the kit's lines left. The simplifier weighs only how far the surface moves, so on a flat
+  panel it removes edges in no order. Glenn's call: build the middle level with the tools too. It is now the kit's
+  body before subdivision, shaded smooth, with its panels on the same joints and the tire's 16-sided build. The
+  sedan: 34,625 triangles near, 9,528 from 40 m, 3,912 from 150 m. A level that is built beats one that is derived.
+- **Still owed from that measurement:** the kit's full mesh has thin triangles of its own (59% of the full hood's
+  have a corner under 10 degrees, most of them the long narrow quads of the cage, some slivers under a tenth of a
+  millimetre) and 480 edges shared by three or more faces on the body; the model sheet's audit does not measure
+  triangle shape; and `simplify` has no guard on triangle shape. None is fixed here.
 - **One simplify.** `MeshBuilder::simplifiedSurface` is the weld, simplify, weld and creasing that `mesh.simplify`
   did in the Lua binding; the binding and the model's levels both call it now.
 - **The one walk takes a distance:** `placedUses`, `drawnPieces`, `flattenModel` and `bakeProcModel` draw what is

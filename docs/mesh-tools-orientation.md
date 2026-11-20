@@ -45,7 +45,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 268ba601 | model step 6, first piece, collision shapes on nodes: `ProcCollider` gains a name, a node, a rotation and the hull kind; `shapeMesh`; Lua `m:shape` / `n:shape`; the sheet's `--shapes`; `tests/test_model_shapes.cpp` |
 | b0e9dcb7 | second merge of `claude/island8-batch`, up to 23a20eeb (ADR-0468, where a place joins the sidewalks) |
 | d6c798a6 | model step 6, second piece, a model to a glTF file and back: `procgen/model_file.{h,cpp}`, `writeGlbTree`, `ModelImporter::loadCpuTree`; Lua `model.from_file`, `model.from_files`; the sheet's `--glb` and a `.glb` as input; AGENTS.md "Model file names" brought up to what is built; `tests/test_model_file.cpp` |
-| (this commit) | model step 6, last piece, the model store: `procgen/model_store.{h,cpp}`, `scripting/model_recipes.{h,cpp}` (`obtainModel`), the list `assets/scripts/models.lua`, Lua `model.get`, `ProcModel::frozen`; the sheet takes a model's name; `tests/test_model_store.cpp`. THE MODEL HALF OF THE DESIGN NOTE IS DONE |
+| 6fc7cf5a | model step 6, last piece, the model store: `procgen/model_store.{h,cpp}`, `scripting/model_recipes.{h,cpp}` (`obtainModel`), the list `assets/scripts/models.lua`, Lua `model.get`, `ProcModel::frozen`; the sheet takes a model's name; `tests/test_model_store.cpp`. THE MODEL HALF OF THE DESIGN NOTE IS DONE |
+| (this commit) | the car lab's middle level is built by the kit, not simplified (Glenn's call after looking at the file); `kit.build` takes `autosmooth`; `n:use(piece, nil, opts)` keeps its options |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -78,8 +79,14 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   fingerprint never repeats. Run it many times and look for the old number among the results.
 - A Lua word that takes optional arguments must not read a stack slot it was not given: slot 0 is not "nothing",
   it crashes. Test every word with its shortest call.
-- `mesh.simplify` makes a good middle level and a bad far one: it eats small separate shells first and crumples thin
-  solids. A far level wants its own low-poly build (the car kit has one) and plain stand-ins for small pieces.
+- `mesh.simplify` makes a poor level of anything a recipe can build lower. It weighs only how far the surface moves:
+  flat panels come out as long thin triangles in no order, and far away it eats small separate shells first and
+  crumples thin solids. Build each level with the recipe (the car kit builds low; `car_rig_lab.lua` shows three
+  levels made that way) and keep `simplify` for things with no recipe. To measure a mesh rather than judge it by
+  eye: `build-viewer/sheets/mesh_quality.py` over a `--glb` file, in Blender (not tracked; the sheet should grow
+  these numbers).
+- `n:use(piece, nil, { level = n })` once dropped its options, and the use went to the full level without a word.
+  Fixed; the sheet's "copies of used pieces" per level is where it showed.
 - A test that reads a recipe's model must stop when the recipe fails, or it reads parts that are not there and the
   whole test binary dies with no message (its output is buffered when piped: `stdbuf -o0 ./build-viewer/run_tests`
   shows the script error). When running several `RT_TEST_FILTER`s in a loop, check each one printed its own "cases

@@ -257,6 +257,8 @@ TEST_CASE(a_recipe_adds_levels_and_says_what_belongs_to_each) {
         {R"LUA(local m = model.new() m:add(mesh.box{1,1,1}, { level = 2 }) return m)LUA", "the model has no level 2"},
         {R"LUA(local m = model.new() m:level(40) m:add(mesh.box{1,1,1}, nil, { level = 0 }) return m)LUA", "the model has no level 0"},
         {R"LUA(local m = model.new() m:use(mesh.box{1,1,1}, { level = 3 }) return m)LUA", "the model has no level 3"},
+        // no placements, then the options: the options are still read (they were dropped once, and the use went to level 1)
+        {R"LUA(local m = model.new() m:use(mesh.box{1,1,1}, nil, { level = 3 }) return m)LUA", "the model has no level 3"},
         {R"LUA(local m = model.new() m:add(mesh.box{1,1,1}) m:level(40, { simplify = 1.5 }) return m)LUA", "0 to 1"},
     };
     for (const Wrong& w : wrongs) {

@@ -4291,6 +4291,7 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
     int placements = 0, opts = 0;
     if (lua_istable(L, 3) && (luaL_len(L, 3) > 0 || lua_istable(L, 4))) { placements = 3; opts = 4; }
     else if (lua_istable(L, 3)) opts = 3;
+    else if (lua_isnoneornil(L, 3) && lua_istable(L, 4)) opts = 4;   // use(piece, nil, opts): no placements, opts kept
     const int level = levelOpt(L, opts, m);
     ProcUse use;
     use.piece = pieceArg(L, 2, opts, m);
