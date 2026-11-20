@@ -1,6 +1,6 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model steps 1 to 3 (nodes; markers and named materials; uses) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model steps 1 to 4 (nodes; markers and named materials; uses; motion, poses and rig tables) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -209,7 +209,6 @@ Left as they were, on purpose, for the steps that own them:
 
 - **Colliders and flatten footprints** are in the root's space. Collision shapes on nodes come with the model's
   `shapes` (used first in step 7).
-- **A node cannot be moved after it is made.** Motion is step 4.
 - **A textured part's tiling** is laid in its node's space in the game (so the pattern stays with the piece) and in
   the world's space in the path tracer. The two differ only for a textured part on a node that is not the root. The
   game and the path tracer lay a tiled map by two separate pieces of code today, so making them one is materials
@@ -353,3 +352,84 @@ Written down here so step 4 builds them in.
   data for a kind (car, crane, door): the joints' names, how each moves (turn or slide), about which axis, and its
   default limits. A recipe applies the table and gives only what is its own: where each joint is, and any limit
   that differs. So every car has a `door_fl` that opens the same way, and one script drives them all.
+
+### Model step 4: motion, poses and rig tables (2026-11-19)
+
+```lua
+local rigs = require "rigs"
+local joint = rigs.apply(car, "car", {
+  door_fl = { pos = { 0.775, 0.4, 0.75 } },      -- the hinge line; the rig says how a door moves
+  door_fr = { pos = { -0.775, 0.4, 0.75 } },
+  susp_fl = { pos = { 0.8, 0.33, 1.3 } },        -- steer_fl and spin_fl follow, under it
+  hood    = { pos = { 0, 0.86, 0.8 }, max = 55 },   -- this car's hood opens less far than the table's
+})
+joint.door_fl:use(door)
+joint.door_fr:use(door:mirrored())
+joint.spin_fl:use(tire)
+local ajar = car:posed{ door_fl = 40, steer_fl = 20, susp_fl = 0.03 }   -- a still, for a picture or a prop
+```
+
+- **Motion on a node** (`ProcMotion`): none, a turn about an axis, or a slide along one, in the node's own space.
+  - A turn's limits are degrees in Lua (radians inside) and may be left out: a wheel turns without end.
+  - A slide's limits are metres and must be given.
+  - The node as the recipe placed it is value 0, so the limits must have 0 between them. A door is built closed.
+  - A value past a limit stops at the limit.
+- **A pose** (`ProcPose`) gives values to moving nodes by name; every other node is at 0. A moving node inside a used
+  piece is named through the node that uses it (`door_fl/window`). `ProcModel::nodeFrame(node, pose)` is where a node
+  stands in a pose.
+- **The model holds no current value.** That is the entity's (step 7). What exists now for anything that draws a
+  still is `posedModel` / `m:posed{...}`: a new model held in the pose, whose posed nodes no longer move. A used
+  piece is held apart from its other copies only where the pose reaches into it.
+- **Rig tables** (`assets/scripts/rigs.lua`) are Lua data, one per kind: each joint's name, its parent joint, how it
+  moves and its default limits. `rigs.apply(model, kind, places)` makes the nodes and returns them by name.
+  - The recipe gives each joint's place, and may give its own `min` / `max`.
+  - A joint given no place is left out (a two-door car has no rear doors). A joint under another follows it without
+    a place of its own (`steer_fl` sits at `susp_fl`).
+  - A place for a name the table lacks is an error.
+  - There are two tables so far: `car` (four doors, hood, trunk, and for each wheel a suspension slide, a steering
+    turn on the fronts, and a spin) and `crane` (cabin, boom, hook line).
+  - A new kind is a new table. No C++ changes.
+- **The rules above hold in the car table and are tested:** the same steer value swings both front wheels the same
+  way, the same spin rolls every wheel forward with the right-hand tires flipped under their spin nodes, and the same
+  door value opens both doors outward by the same amount.
+- **The mirrored twin moves the mirrored way:** the same value gives the mirror image of what it gave. (So a door
+  with a sliding window inside it, mirrored, still lowers its window with the same value.)
+- **The model sheet** takes `--set NAME=VALUE` (repeatable) to draw a pose, and its text lists every moving node,
+  its axis, its limits and what it was drawn at.
+
+Left as they were, on purpose:
+
+- **Nothing moves in the game.** The loader draws every model at value 0. A value per copy, and the script, physics
+  or clip that changes it, are the model instance (steps 7 and 8) and motion clips (#310).
+- **One motion per node.** A joint that both slides and turns is two nodes, one under the other, as the wheel is.
+- **The crane's hook line leans with the boom.** A line that hangs plumb and swings needs a real joint (#311).
+
+### Damage and deformation on the model record (Glenn asked, 2026-11-19)
+
+Not built. Written down so steps 7, 10 and 11 and the breaking work (#312) build it in.
+
+**Today** (ADR-0352, ADR-0353) a drivable car keeps this on its own `Vehicle` component:
+
+- A knock pushes the vertices near the contact inward (`dentMesh` in `engine/vehicle_damage.h`) and recomputes the
+  normals.
+- Cars share their body mesh until one is hit; that car then gets its own copy of the body and of each panel near
+  the hit ("copied on the first dent"). A repair puts the built mesh back.
+- A panel is dented in its own hinged frame, and comes off as a loose box at zero health. Its glass and trim are
+  dropped.
+- The component has a private rig for this: `Vehicle::Panel` (a pivot, an axis, an open angle, a slide), with lamp
+  places and a driver's seat point read from the recipe.
+
+**On the model record:**
+
+- **The model never deforms.** A dent is one copy's state, like its door angle, so it is the model instance's
+  (step 7).
+- **The model instance can hold its own mesh for a part.** It is made on the first dent, for the part that was hit
+  only, in that part's node's space. Everything else stays shared: the other parts, the tires, every other car.
+  A dented door swings on its hinge because the dent is in the door's own space.
+- **A part with its own mesh leaves the shared draw** and is drawn alone for that copy: the same way out of the
+  group as step 10's "one copy made full when touched".
+- **A piece coming off is a node leaving the tree.** Its subtree becomes an entity of its own that uses the same
+  piece model (a door keeps its window and handle).
+- **A repair** drops the instance's own meshes.
+- **`Vehicle::Panel` is the same thing as motion on a node, written a second time.** The car port (step 11) moves the
+  car onto the car rig table and retires it; the lamp places and the seat point become markers.

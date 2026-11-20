@@ -1089,6 +1089,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_model_nodes.cpp      # a model's tree of nodes: the record, Lua, the bake and the loader (#191)
         tests/test_model_markers.cpp    # a model's markers and its table of materials (#191)
         tests/test_model_uses.cpp       # one model placed inside another, stored once (#191)
+        tests/test_model_motion.cpp     # how a node may move, poses, and the rig tables (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

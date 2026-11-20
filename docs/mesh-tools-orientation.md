@@ -34,14 +34,16 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 664eb630 | model step 1, nodes: `ProcNode` and `ProcFrame` in `procgen/proc_model.h`, Lua `m:node` and the node words, read by the bake, the loader, `m:flatten` and the model sheet; `tests/test_model_nodes.cpp` |
 | dc9bda04 | model step 2, markers and named materials: `ProcMarker`, the model's material table (`ProcPart::material` is an index), Lua `m:marker`, `m:material`, `m:add(mesh, "paint")`; `tests/test_model_markers.cpp` |
 | b8d4fb81 | model step 3, uses: `ProcUse` replaces the instance group; the one walk in `procgen/proc_model.cpp` (`placedUses`, `drawnPieces`, `flattenModel`); Lua `n:use`, `m:use`; `tests/test_model_uses.cpp` |
-| (this commit) | the mirrored twin: `mirroredModel` in `procgen/proc_model.cpp`, Lua `m:mirrored()`, left to right only |
+| 9e36e21c | the mirrored twin: `mirroredModel` in `procgen/proc_model.cpp`, Lua `m:mirrored()`, left to right only |
+| (this commit) | model step 4, motion and rigs: `ProcMotion`, `ProcPose`, `posedModel`; Lua `n:motion`, `m:posed`, `m:joints`; the rig tables in `assets/scripts/rigs.lua`; the sheet's `--set`; `tests/test_model_motion.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
 ## How to check your work
 
 - **Look at it:** `./build-viewer/rt_model_sheet RECIPE.lua --out build-viewer/sheets/x.png`, then open the PNG. The
-  `.txt` beside it has the audit. Scratch recipes live in `build-viewer/sheets/` (not tracked).
+  `.txt` beside it has the audit. `--set NODE=VALUE` (repeatable) draws a pose: `--set door_fl=50 --set hood=40`.
+  `build-viewer/sheets/uses.lua` (a car on the car rig) and `nodes.lua` (a crane) are worked examples. Scratch recipes live in `build-viewer/sheets/` (not tracked).
 - **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles and what
   each is made of, whatever their order. The same number before and after a change means the same triangles. Take it for every recipe before
   you start (a loop over `assets/scripts/*.lua` with `--size 64 --spp 1` takes about 20 seconds; the scripts that are
@@ -66,10 +68,11 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 ## What is next
 
-**Model step 4 in the design note: motion limits and poses.** Turn and slide on nodes, with limits; the model sheet
-takes `--set cabin=90` to draw a pose. Before building, read the design note's "Rules for a rig" section: it holds
-what Glenn's car example settled (motion sits above any flip, the same value means the same action on both sides)
-and his call that a kind of thing has ONE rig table in Lua which each recipe applies.
+**Model step 5 in the design note: levels of detail.** Several versions of a model's meshes, the high one drawn close
+up and lower ones farther away, by recipe or by `mesh.simplify`. One rig, one set of markers and one set of collision
+shapes serve every level; a lower level may be simpler in structure (a far crane can be one mesh on the root). Look
+first at how the engine already picks a level by distance (the tree recipes' levels and `recipeTreeParts` in
+`level_loader.cpp`, the building tiers) so this joins that and is not a second way.
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 

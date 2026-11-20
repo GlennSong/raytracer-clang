@@ -3766,7 +3766,44 @@ int nodeGc(lua_State* L) {
     return 0;
 }
 
-// The shared body of m:node and n:node: (name [, { parent = "name", pos = {x,y,z}, turn = {x,y,z} }]) from stack
+// How a node may move, from the table at `idx`: { turn = {x,y,z} [, min =, max =] } or
+// { slide = {x,y,z}, min =, max = }. The vector is the axis in the node's own space. A turn's limits are DEGREES
+// and may be left out (a wheel turns without end); a slide's are metres and must be given. The node as placed is
+// value 0, so the limits must have 0 between them. Raises a Lua error for anything else; `who` names the node.
+ProcMotion readMotion(lua_State* L, int idx, const char* who) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    idx = lua_absindex(L, idx);
+    ProcMotion motion;
+    lua_getfield(L, idx, "turn");
+    const bool turn = lua_istable(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "slide");
+    const bool slide = lua_istable(L, -1);
+    lua_pop(L, 1);
+    if (turn == slide) { luaL_error(L, "node '%s': a motion is { turn = {x,y,z} } or { slide = {x,y,z} }, one of them", who); return motion; }
+    const Vec3 axis = optVec3Field(L, idx, turn ? "turn" : "slide", Vec3(0, 1, 0));
+    if (axis.length() < 1e-9) { luaL_error(L, "node '%s': the motion's axis has no length", who); return motion; }
+    lua_getfield(L, idx, "min");
+    lua_getfield(L, idx, "max");
+    const bool hasMin = !lua_isnil(L, -2), hasMax = !lua_isnil(L, -1);
+    lua_pop(L, 2);
+    if (hasMin != hasMax) { luaL_error(L, "node '%s': give both min and max, or neither", who); return motion; }
+    if (slide && !hasMin) { luaL_error(L, "node '%s': a slide needs min and max", who); return motion; }
+    const double unit = turn ? DEG_TO_RAD : 1.0;
+    const double lo = optField(L, idx, "min", 0.0) * unit, hi = optField(L, idx, "max", 0.0) * unit;
+    if (hasMin && !(lo <= 0.0 && 0.0 <= hi)) {
+        luaL_error(L, "node '%s': the node as placed is value 0, so min..max must have 0 between them", who);
+        return motion;
+    }
+    motion.kind = turn ? ProcMotion::Kind::Turn : ProcMotion::Kind::Slide;
+    motion.axis = normalize(axis);
+    motion.limited = hasMin;
+    motion.min = lo;
+    motion.max = hi;
+    return motion;
+}
+
+// The shared body of m:node and n:node: (name [, { parent = "name", pos = {x,y,z}, turn = {x,y,z}, motion = {...} }]) from stack
 // slot 2, under `parent` unless the table names another. `turn` is in DEGREES (Glenn's call: degrees in Lua, radians
 // in the engine), about x, then y, then z. A name already used, or a parent the model lacks, is an error in the
 // recipe, raised here and not found later in the game.
@@ -3788,7 +3825,15 @@ int addNodeFromLua(lua_State* L, const ModelPtr& model, int parent) {
     }
     if (name[0] == '\0') return luaL_error(L, "a node needs a name");
     if (model->findNode(name) >= 0) return luaL_error(L, "the model already has a node named '%s'", name);
-    pushNode(L, model, model->addNode(name, parent, frame));
+    ProcMotion motion;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "motion");
+        if (!lua_isnil(L, -1)) motion = readMotion(L, -1, name);
+        lua_pop(L, 1);
+    }
+    const int index = model->addNode(name, parent, frame);
+    model->nodes[static_cast<std::size_t>(index)].motion = motion;
+    pushNode(L, model, index);
     return 1;
 }
 
@@ -3906,6 +3951,20 @@ int l_node_parent(lua_State* L) {
     return 1;
 }
 
+// n:motion{ turn = {x,y,z} [, min =, max =] } | n:motion{ slide = {x,y,z}, min =, max = } -> n : how this node may
+// move (see readMotion). The root does not move. Chainable.
+int l_node_motion(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    if (n.index == 0) return luaL_error(L, "the root does not move: put what moves on a node");
+    // The name is copied to Lua's stack, so no C++ string is alive if readMotion raises.
+    lua_pushstring(L, n.model->nodes[static_cast<std::size_t>(n.index)].name.c_str());
+    const ProcMotion motion = readMotion(L, 2, lua_tostring(L, -1));
+    lua_pop(L, 1);
+    n.model->nodes[static_cast<std::size_t>(n.index)].motion = motion;
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
 // n:point({x,y,z}) -> {x,y,z} : a point given in this node's space, in the model's space. Where a child's corner
 // really is, for a recipe that has to line something up with it.
 int l_node_point(lua_State* L) {
@@ -4001,6 +4060,60 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
     else use.placements.push_back(ProcPlacement{});
     readUseCollision(L, opts, use);
     m.uses.push_back(std::move(use));
+}
+
+// m:posed{ name = value, ... } -> model : the model held in a pose, as a new model; `m` is not changed. A value is
+// DEGREES for a node that turns and metres for one that slides, and stops at the node's limits. A moving node inside
+// a used piece is named through the node that uses it: m:posed{ ["door_fl/window"] = -0.2 }.
+int l_model_posed(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    ModelPtr held;
+    {
+        ProcPose pose;
+        std::string why;
+        lua_pushnil(L);
+        while (why.empty() && lua_next(L, 2) != 0) {
+            if (lua_type(L, -2) != LUA_TSTRING || !lua_isnumber(L, -1)) {
+                why = "a pose is { name = number, ... }";
+            } else {
+                const std::string name = lua_tostring(L, -2);
+                const ProcNode* joint = m.jointAt(name);
+                if (joint == nullptr) why = "the model has no moving node named '" + name + "'";
+                else pose.values[name] = lua_tonumber(L, -1) * (joint->motion.kind == ProcMotion::Kind::Turn ? DEG_TO_RAD : 1.0);
+            }
+            lua_pop(L, 1);
+        }
+        if (why.empty()) held = posedModel(m, pose, &why);
+        if (held == nullptr) { lua_settop(L, 2); lua_pushstring(L, why.c_str()); }   // the reason outlives these strings
+    }
+    if (held == nullptr) return luaL_error(L, "posed: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(held));
+    return 1;
+}
+
+// m:joints() -> { { name =, kind = "turn" | "slide", axis = {x,y,z}, min =, max = }, ... } : the model's own moving
+// nodes, in the order they were made. min and max are degrees for a turn, metres for a slide, and absent for a turn
+// with no end.
+int l_model_joints(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    lua_newtable(L);
+    lua_Integer count = 0;
+    for (const ProcNode& n : m.nodes) {
+        if (n.motion.kind == ProcMotion::Kind::None) continue;
+        const bool turn = n.motion.kind == ProcMotion::Kind::Turn;
+        lua_newtable(L);
+        lua_pushstring(L, n.name.c_str()); lua_setfield(L, -2, "name");
+        lua_pushstring(L, turn ? "turn" : "slide"); lua_setfield(L, -2, "kind");
+        pushVec3(L, n.motion.axis); lua_setfield(L, -2, "axis");
+        if (n.motion.limited) {
+            const double unit = turn ? RAD_TO_DEG : 1.0;
+            lua_pushnumber(L, n.motion.min * unit); lua_setfield(L, -2, "min");
+            lua_pushnumber(L, n.motion.max * unit); lua_setfield(L, -2, "max");
+        }
+        lua_seti(L, -2, ++count);
+    }
+    return 1;
 }
 
 // m:mirrored() -> model : the model's mirrored twin, left to right (across x = 0 through its origin). A right door
@@ -4974,6 +5087,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
         lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
         lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
+        lua_pushcfunction(L, l_model_posed);          lua_setfield(L, -2, "posed");
+        lua_pushcfunction(L, l_model_joints);         lua_setfield(L, -2, "joints");
         lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
         lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");
         lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
@@ -5007,6 +5122,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_node_point);  lua_setfield(L, -2, "point");
         lua_pushcfunction(L, l_node_marker); lua_setfield(L, -2, "marker");
         lua_pushcfunction(L, l_node_use);    lua_setfield(L, -2, "use");
+        lua_pushcfunction(L, l_node_motion); lua_setfield(L, -2, "motion");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

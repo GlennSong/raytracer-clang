@@ -5,6 +5,8 @@
 #include "../../rt_math.h"             // Mat4
 #include "terrain.h"                   // TerrainFlatten
 #include "tree.h"                      // TextureData
+#include <algorithm>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +65,44 @@ struct ProcMarker {
     Real size = 0;                // metres; 0 when the recipe gave none
 };
 
+// HOW A NODE MAY MOVE (#191, model step 4): the rig of a machine. A door turns about its hinge between closed and
+// 70 degrees; a suspension slides up and down a little; a wheel turns about its axle without end. This says only
+// what MAY move. The model holds no current value: each copy in the world holds its own, and a script or the
+// physics changes it. The node as the recipe placed it is value 0.
+struct ProcMotion {
+    enum class Kind { None, Turn, Slide };
+    Kind kind = Kind::None;
+    Vec3 axis{0, 1, 0};        // unit, in the node's own space: what it turns about, or slides along
+    bool limited = false;      // false: a turn with no end (a wheel). A slide is always limited.
+    Real min = 0, max = 0;     // radians for a turn, metres for a slide; 0 lies between them
+
+    Real clamped(Real value) const { return limited ? std::clamp(value, min, max) : value; }
+    // The move itself at `value`, stopped at the limits: applied after the node's own frame.
+    ProcFrame frame(Real value) const {
+        const Real v = clamped(value);
+        if (kind == Kind::Turn) return ProcFrame{Vec3(0, 0, 0), Quat::fromAxisAngle(axis, v)};
+        if (kind == Kind::Slide) return ProcFrame{axis * v, Quat()};
+        return ProcFrame{};
+    }
+};
+
+// A POSE: a value for some of a model's moving nodes, by name; every other node is at 0. Radians for a turn, metres
+// for a slide. A moving node inside a used piece is named through the node that uses the piece
+// ("door_fl/window").
+struct ProcPose {
+    std::map<std::string, Real> values;
+
+    Real of(const std::string& path) const {
+        const std::map<std::string, Real>::const_iterator it = values.find(path);
+        return it == values.end() ? 0 : it->second;
+    }
+    // Is any value given for something under this prefix ("door_fl/")?
+    bool anyUnder(const std::string& prefix) const {
+        const std::map<std::string, Real>::const_iterator it = values.lower_bound(prefix);
+        return it != values.end() && it->first.compare(0, prefix.size(), prefix) == 0;
+    }
+};
+
 // One named piece of a model (#191, model step 1): a car's door is a node under the car, the handle a node under the
 // door. A node holds no geometry itself; a part says which node it hangs on, and is drawn at that node's frame.
 struct ProcNode {
@@ -70,6 +110,7 @@ struct ProcNode {
     int parent = -1;       // an index into ProcModel::nodes, always lower than this node's own; -1 for the root only
     ProcFrame frame;       // relative to the parent
     std::vector<ProcMarker> markers;
+    ProcMotion motion;     // how it may move, if it may
 };
 
 // One material of a model, in the model's table (#191, model step 2). A part says which one it is made of, so forty
@@ -155,7 +196,7 @@ struct ProcModel {
     // The model's pieces as a tree. There is always a root, node 0, whose frame is the model's own space and never
     // changes; a model that adds no node is the flat model every recipe built before nodes existed. Colliders and
     // flatten footprints are in the root's space.
-    std::vector<ProcNode> nodes = {ProcNode{"root", -1, ProcFrame{}, {}}};
+    std::vector<ProcNode> nodes = {ProcNode{"root", -1, ProcFrame{}, {}, ProcMotion{}}};
     // The model's materials. There is always entry 0, the plain material (untextured, vertex-coloured, no name),
     // which a part is made of unless it says otherwise.
     std::vector<ProcModelMaterial> materials = {ProcModelMaterial{"", std::make_shared<const ProcMaterial>()}};
@@ -182,7 +223,7 @@ struct ProcModel {
     int addNode(const std::string& name, int parent, const ProcFrame& frame) {
         if (name.empty() || findNode(name) >= 0) return -1;
         if (parent < 0 || parent >= static_cast<int>(nodes.size())) return -1;
-        nodes.push_back(ProcNode{name, parent, frame, {}});
+        nodes.push_back(ProcNode{name, parent, frame, {}, ProcMotion{}});
         return static_cast<int>(nodes.size()) - 1;
     }
 
@@ -275,6 +316,25 @@ struct ProcModel {
         return n;
     }
 
+    // A node's frame relative to the model in a pose: each moving node on the way up is moved by its value first.
+    // `prefix` is the path this model is reached by when it is a used piece ("door_fl/"); empty for the model asked.
+    ProcFrame nodeFrame(int node, const ProcPose& pose, const std::string& prefix = std::string()) const {
+        ProcFrame f;
+        bool first = true;
+        for (int i = node; i >= 0; i = nodes[static_cast<std::size_t>(i)].parent) {
+            const ProcNode& n = nodes[static_cast<std::size_t>(i)];
+            ProcFrame local = n.frame;
+            if (n.motion.kind != ProcMotion::Kind::None) local = local * n.motion.frame(pose.of(prefix + n.name));
+            f = first ? local : local * f;
+            first = false;
+        }
+        return f;
+    }
+
+    // The moving node a pose's name means, through used pieces ("door_fl/window"), or null: no such node, or one
+    // that does not move.
+    const ProcNode* jointAt(const std::string& path) const;
+
     // Fold another model into this one (composition). The other model's root becomes this model's root, so its flat
     // parts land where they did; its other nodes come across with their parts and markers, keeping their tree, and
     // its materials join this model's table (one entry where both hold the same material). Returns false and changes
@@ -355,6 +415,12 @@ std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m);
 // used piece. Bridges a model to single-mesh consumers.
 RenderMesh flattenModel(const ProcModel& m);
 
+// A model HELD IN A POSE: a new model whose nodes stand where the pose puts them, for everything that draws a still
+// (the model sheet, a recipe that wants a door ajar). Its posed nodes no longer move. A used piece is posed, and so
+// held apart from its other copies, only where the pose names something inside it. Values past a limit stop at the
+// limit. Returns null, with `why` when given, when the pose names something that is not a moving node.
+std::shared_ptr<ProcModel> posedModel(const ProcModel& m, const ProcPose& pose, std::string* why = nullptr);
+
 // THE MIRRORED TWIN of a model, left to right (across the plane x = 0 through its origin): a right door from the
 // left door, authored once. Every mesh is mirrored and wound to face out again (MeshBuilder::mirrored), and every
 // node, marker and copy is put where the mirror puts it, so the twin is an ordinary model that any renderer draws
@@ -363,6 +429,7 @@ RenderMesh flattenModel(const ProcModel& m);
 // Names are kept.
 //   - A frame keeps its up (y) and its facing (z), mirrored; its own x swaps sides, as it must for the frame to stay
 //     a rotation. So a marker that faced out of the left door faces out of the right one.
+//   - A moving node moves the mirrored way: the same value gives the mirror image of what it gave.
 //   - Left to right only. For another plane, hang the twin on a turned node.
 // Returns null, with `why` when given, for a model that grades terrain: that has no mirror here.
 std::shared_ptr<ProcModel> mirroredModel(const ProcModel& m, std::string* why = nullptr);

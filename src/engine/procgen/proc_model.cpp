@@ -92,6 +92,47 @@ std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m) {
     return out;
 }
 
+const ProcNode* ProcModel::jointAt(const std::string& path) const {
+    const std::size_t slash = path.find('/');
+    const int node = findNode(path.substr(0, slash));
+    if (node < 0) return nullptr;
+    if (slash == std::string::npos)
+        return nodes[static_cast<std::size_t>(node)].motion.kind == ProcMotion::Kind::None ? nullptr : &nodes[static_cast<std::size_t>(node)];
+    for (const ProcUse& use : uses) {
+        if (use.node != node || use.piece == nullptr) continue;
+        if (const ProcNode* inner = use.piece->jointAt(path.substr(slash + 1))) return inner;
+    }
+    return nullptr;
+}
+
+namespace {
+
+std::shared_ptr<ProcModel> posedInto(const ProcModel& m, const ProcPose& pose, const std::string& prefix) {
+    std::shared_ptr<ProcModel> out = std::make_shared<ProcModel>(m);
+    for (ProcNode& n : out->nodes) {
+        if (n.motion.kind == ProcMotion::Kind::None) continue;
+        n.frame = n.frame * n.motion.frame(pose.of(prefix + n.name));
+        n.motion = ProcMotion{};   // held: a still does not move
+    }
+    for (ProcUse& use : out->uses) {
+        if (use.node == 0 || use.piece == nullptr) continue;   // a piece on the root has no node's name to be reached by
+        const std::string inside = prefix + m.nodes[static_cast<std::size_t>(use.node)].name + "/";
+        if (pose.anyUnder(inside)) use.piece = posedInto(*use.piece, pose, inside);
+    }
+    return out;
+}
+
+}  // namespace
+
+std::shared_ptr<ProcModel> posedModel(const ProcModel& m, const ProcPose& pose, std::string* why) {
+    for (const std::pair<const std::string, Real>& value : pose.values)
+        if (m.jointAt(value.first) == nullptr) {
+            if (why != nullptr) *why = "the model has no moving node named '" + value.first + "'";
+            return nullptr;
+        }
+    return posedInto(m, pose, std::string());
+}
+
 RenderMesh flattenModel(const ProcModel& m) {
     RenderMesh out;
     for (const ProcPart& p : m.parts) {
@@ -130,6 +171,10 @@ std::shared_ptr<ProcModel> mirrorInto(const ProcModel& m, MirrorMemo& memo, std:
     for (ProcNode& node : out->nodes) {
         node.frame = reflectFrame(node.frame);
         for (ProcMarker& mk : node.markers) mk.frame = reflectFrame(mk.frame);
+        // The mirror image of a move, in the node's own (mirrored) space: a slide runs along the reflected axis; a
+        // turn by the same amount runs the other way round the reflected axis, which is a turn about its opposite.
+        const Vec3 axis = reflect(node.motion.axis, kLeftRight);
+        node.motion.axis = node.motion.kind == ProcMotion::Kind::Turn ? axis * -1.0 : axis;
     }
     for (const ProcPart& part : m.parts) {
         ProcPart twin = part;

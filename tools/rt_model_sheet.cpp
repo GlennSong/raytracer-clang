@@ -1,6 +1,9 @@
 // rt_model_sheet -- THE MODEL SHEET (#191 step 1): one command that shows what a Lua recipe builds.
 //
-//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--size 512] [--spp 48]
+//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--size 512] [--spp 48]
+//
+// `--set` draws the model in a pose: a moving node's value, in degrees for a node that turns and metres for one
+// that slides (`--set boom=40 --set door_fl/window=-0.2`). The text lists every moving node and its limits.
 //
 // Runs the recipe (a chunk that returns a Mesh or a `model`; a model's nodes are drawn where the tree puts them and
 // listed in the text, with its named materials, its markers (also drawn) and the pieces it uses), and writes
@@ -51,12 +54,14 @@ struct Options {
     std::string argsJson;
     int size = 512;
     int samples = 48;
+    std::vector<std::pair<std::string, double>> set;   // --set name=value: the pose to draw
 };
 
 const char* kUsage =
-    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--size N] [--spp N]\n"
+    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--size N] [--spp N]\n"
     "  runs a Lua recipe that returns a mesh or a model and writes four views of it in one PNG,\n"
-    "  with its size, triangle counts and mesh audit beside it as a .txt\n";
+    "  with its size, triangle counts and mesh audit beside it as a .txt\n"
+    "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n";
 
 bool parse(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; ++i) {
@@ -66,6 +71,12 @@ bool parse(int argc, char** argv, Options& o) {
         if (a == "-h" || a == "--help") return false;
         else if (a == "--out") { if (!value(o.out)) return false; }
         else if (a == "--args") { if (!value(o.argsJson)) return false; }
+        else if (a == "--set") {
+            if (!value(v)) return false;
+            const std::size_t eq = v.find('=');
+            if (eq == std::string::npos || eq == 0) return false;
+            o.set.emplace_back(v.substr(0, eq), std::atof(v.c_str() + eq + 1));
+        }
         else if (a == "--size") { if (!value(v)) return false; o.size = std::atoi(v.c_str()); }
         else if (a == "--spp") { if (!value(v)) return false; o.samples = std::atoi(v.c_str()); }
         else if (!a.empty() && a[0] == '-') return false;
@@ -231,7 +242,34 @@ Image renderView(const Scene& scene, const Bounds& b, const View& v, const Optio
     return renderImage(scene, camera, cfg, jobs);
 }
 
-std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64_t print) {
+// The model's moving nodes, through used pieces, each under the name a pose calls it by.
+void listJoints(const ProcModel& m, const std::string& prefix, const Options& o, std::ostringstream& s) {
+    char line[512];
+    for (const ProcNode& n : m.nodes) {
+        if (n.motion.kind == ProcMotion::Kind::None) continue;
+        const bool turn = n.motion.kind == ProcMotion::Kind::Turn;
+        const double unit = turn ? RAD_TO_DEG : 1.0;
+        const std::string name = prefix + n.name;
+        std::snprintf(line, sizeof line, "  %s: %s (%.2f, %.2f, %.2f)", name.c_str(), turn ? "turns about" : "slides along", n.motion.axis.x,
+                      n.motion.axis.y, n.motion.axis.z);
+        s << line;
+        if (n.motion.limited) std::snprintf(line, sizeof line, ", %.3g to %.3g %s", n.motion.min * unit, n.motion.max * unit, turn ? "degrees" : "m");
+        else std::snprintf(line, sizeof line, ", no limits");
+        s << line;
+        for (const std::pair<std::string, double>& set : o.set) {
+            if (set.first != name) continue;
+            const double held = n.motion.clamped(set.second / unit) * unit;
+            std::snprintf(line, sizeof line, "; drawn at %.3g%s", held, std::abs(held - set.second) > 1e-9 ? " (stopped at its limit)" : "");
+            s << line;
+        }
+        s << "\n";
+    }
+    for (const ProcUse& use : m.uses)
+        if (use.node != 0 && use.piece != nullptr) listJoints(*use.piece, prefix + m.nodes[static_cast<std::size_t>(use.node)].name + "/", o, s);
+}
+
+// `m` is the model as drawn (held in the pose asked for); `built` is the recipe's own, which still says what moves.
+std::string report(const Options& o, const ProcModel& m, const ProcModel& built, const Bounds& b, uint64_t print) {
     std::ostringstream s;
     char line[512];
     s << "model sheet: " << o.recipe << "\n";
@@ -262,6 +300,11 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
             if (copies > 0) { std::snprintf(line, sizeof line, ", %ld cop%s of a used piece", copies, copies == 1 ? "y" : "ies"); s << line; }
             s << "\n";
         }
+    }
+    {
+        std::ostringstream joints;
+        listJoints(built, std::string(), o, joints);
+        if (!joints.str().empty()) s << "moving nodes (a pose names them: --set NAME=VALUE):\n" << joints.str();
     }
     // The materials, when the recipe named any, and the markers.
     bool named = false;
@@ -366,6 +409,21 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "rt_model_sheet: %s: %s\n", o.recipe.c_str(), error.c_str());
         return 1;
     }
+    // The recipe's model as built is what the text lists (its moving nodes and their limits); what is measured and
+    // drawn is that model held in the pose asked for.
+    const ProcModel built = model;
+    if (!o.set.empty()) {
+        ProcPose pose;
+        for (const std::pair<std::string, double>& set : o.set) {
+            const ProcNode* joint = built.jointAt(set.first);
+            if (joint == nullptr) {
+                std::fprintf(stderr, "rt_model_sheet: --set %s: the model has no moving node of that name\n", set.first.c_str());
+                return 1;
+            }
+            pose.values[set.first] = set.second * (joint->motion.kind == ProcMotion::Kind::Turn ? DEG_TO_RAD : 1.0);
+        }
+        model = *posedModel(built, pose);
+    }
     const Bounds bounds = boundsOf(model);
     if (!bounds.valid()) { std::fprintf(stderr, "rt_model_sheet: %s built no geometry\n", o.recipe.c_str()); return 1; }
 
@@ -398,7 +456,7 @@ int main(int argc, char** argv) {
     }
     sheet.writePng(o.out);
 
-    const std::string text = report(o, model, bounds, print) + "pictures: front | side  over  top | three-quarter; floor squares are 1 m\n";
+    const std::string text = report(o, model, built, bounds, print) + "pictures: front | side  over  top | three-quarter; floor squares are 1 m\n";
     std::string textPath = o.out;
     const std::size_t dot = textPath.rfind('.');
     textPath = (dot == std::string::npos ? textPath : textPath.substr(0, dot)) + ".txt";
