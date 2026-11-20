@@ -2,7 +2,7 @@
 //
 // A node may move: turn about an axis or slide along one, between limits (a wheel turns without end). The model says
 // only what MAY move; a pose gives values, and everything under a moved node goes with it. A rig table (rigs.lua)
-// lists a kind's joints so every car has a `door_fl` that opens the same way.
+// lists a kind's joints so every car has a `door_front_l` that opens the same way.
 //
 // What is held here:
 //   - the record: a move stops at its limits; a child, a marker and a used piece follow a moved node; the model with
@@ -152,7 +152,7 @@ TEST_CASE(a_pose_reaches_into_a_used_piece_and_holds_only_that_copy_apart) {
     door->addMarker(window, top);
 
     ProcModel car;
-    for (const char* name : {"door_fl", "door_rl"}) {
+    for (const char* name : {"door_front_l", "door_rear_l"}) {
         ProcUse use;
         use.piece = door;
         use.node = car.addNode(name, 0, ProcFrame{Vec3(0.8, 0, name[5] == 'f' ? 1.0 : -1.0), Quat()});
@@ -160,25 +160,25 @@ TEST_CASE(a_pose_reaches_into_a_used_piece_and_holds_only_that_copy_apart) {
         use.placements.push_back(ProcPlacement{});
         car.uses.push_back(use);
     }
-    CHECK(car.jointAt("door_fl/window") != nullptr);
-    CHECK(car.jointAt("door_fl/glass") == nullptr);
+    CHECK(car.jointAt("door_front_l/window") != nullptr);
+    CHECK(car.jointAt("door_front_l/glass") == nullptr);
     CHECK(car.jointAt("window") == nullptr);                // the car itself has no window
 
     ProcPose pose;
-    pose.values["door_fl/window"] = -0.3;                    // the front window down; the rear left alone
+    pose.values["door_front_l/window"] = -0.3;                    // the front window down; the rear left alone
     const std::shared_ptr<ProcModel> held = posedModel(car, pose);
     CHECK(held != nullptr);
     if (held == nullptr) return;
     CHECK(held->uses[0].piece != door);                      // held apart, posed
     CHECK(held->uses[1].piece == door);                      // still the shared door
     ProcFrame front, rear;
-    CHECK(held->markerFrame("door_fl/glass_top", front) && held->markerFrame("door_rl/glass_top", rear));
+    CHECK(held->markerFrame("door_front_l/glass_top", front) && held->markerFrame("door_rear_l/glass_top", rear));
     CHECK(near(front.position, Vec3(0.8, 0.9, 1.0)));
     CHECK(near(rear.position, Vec3(0.8, 1.2, -1.0)));
     // The copy goes with its own hinge, too: open the front door and its window swings out with it.
-    pose.values["door_fl"] = 90 * DEG_TO_RAD;                // asked past the limit: held at 70
+    pose.values["door_front_l"] = 90 * DEG_TO_RAD;                // asked past the limit: held at 70
     const std::shared_ptr<ProcModel> open = posedModel(car, pose);
-    CHECK(open != nullptr && open->markerFrame("door_fl/glass_top", front));
+    CHECK(open != nullptr && open->markerFrame("door_front_l/glass_top", front));
     CHECK(near(front.position, Vec3(0.8, 0.9, 1.0)));        // the marker is ON the hinge line here, so it stays
     const std::vector<ProcDrawnPiece> drawn = drawnPieces(*open);
     CHECK(drawn.size() == 2);                                // two doors now differ, so two draws of one copy each
@@ -288,21 +288,21 @@ TEST_CASE(the_car_rig_means_the_same_action_on_both_sides) {
         local car = model.new()
         car:add(mesh.box{ 1.5, 0.5, 4 })
         local joint = rigs.apply(car, "car", {
-            door_fl = { pos = { 0.78, 0.4, 0.5 } }, door_fr = { pos = { -0.78, 0.4, 0.5 } },
-            susp_fl = { pos = { 0.8, 0.3, 1.3 } }, susp_fr = { pos = { -0.8, 0.3, 1.3 } },
-            susp_rl = { pos = { 0.8, 0.3, -1.3 } }, susp_rr = { pos = { -0.8, 0.3, -1.3 } },
+            door_front_l = { pos = { 0.78, 0.4, 0.5 } }, door_front_r = { pos = { -0.78, 0.4, 0.5 } },
+            susp_front_l = { pos = { 0.8, 0.3, 1.3 } }, susp_front_r = { pos = { -0.8, 0.3, 1.3 } },
+            susp_rear_l = { pos = { 0.8, 0.3, -1.3 } }, susp_rear_r = { pos = { -0.8, 0.3, -1.3 } },
             hood = { pos = { 0, 0.85, 0.9 }, max = 55 },    -- this car's hood opens less far than the table's
         })
-        assert(joint.steer_fl and joint.spin_fl and joint.spin_rl)   -- they follow their suspension
-        assert(joint.steer_rl == nil)                                -- the rear does not steer
-        assert(joint.door_rl == nil and joint.trunk == nil)          -- given no place: left out
-        joint.spin_fl:use(tire)
-        joint.spin_rl:use(tire)
+        assert(joint.steer_front_l and joint.spin_front_l and joint.spin_rear_l)   -- they follow their suspension
+        assert(joint.steer_rear_l == nil)                                -- the rear does not steer
+        assert(joint.door_rear_l == nil and joint.trunk == nil)          -- given no place: left out
+        joint.spin_front_l:use(tire)
+        joint.spin_rear_l:use(tire)
         -- MOTION SITS ABOVE THE FLIP: the right-hand tires are the same tire turned half a turn, under the spin.
-        joint.spin_fr:node("tire_fr", { turn = { 0, 180, 0 } }):use(tire)
-        joint.spin_rr:node("tire_rr", { turn = { 0, 180, 0 } }):use(tire)
-        joint.door_fl:marker("handle_fl", { pos = { 0.02, 0.3, -0.9 } })   -- toward each door's rear edge
-        joint.door_fr:marker("handle_fr", { pos = { -0.02, 0.3, -0.9 } })
+        joint.spin_front_r:node("tire_front_r", { turn = { 0, 180, 0 } }):use(tire)
+        joint.spin_rear_r:node("tire_rear_r", { turn = { 0, 180, 0 } }):use(tire)
+        joint.door_front_l:marker("handle_front_l", { pos = { 0.02, 0.3, -0.9 } })   -- toward each door's rear edge
+        joint.door_front_r:marker("handle_front_r", { pos = { -0.02, 0.3, -0.9 } })
 
         return car
     )LUA", car, &err));
@@ -319,45 +319,45 @@ TEST_CASE(the_car_rig_means_the_same_action_on_both_sides) {
         }
         return posedModel(car, pose);
     };
-    CHECK(car.jointAt("steer_fl") != nullptr && car.jointAt("steer_rl") == nullptr && car.jointAt("door_rl") == nullptr);
+    CHECK(car.jointAt("steer_front_l") != nullptr && car.jointAt("steer_rear_l") == nullptr && car.jointAt("door_rear_l") == nullptr);
 
     // Outer faces face out on both sides.
-    CHECK(at(car, "spin_fl/face").x > 0.8 && at(car, "tire_fr/face").x < -0.8);
+    CHECK(at(car, "spin_front_l/face").x > 0.8 && at(car, "tire_front_r/face").x < -0.8);
 
     // Steering: the front of the LEFT wheel and the front of the RIGHT wheel both move toward +x. The right tire is
     // flipped, so the front of that wheel is where its "tread_front" marker is NOT: use the wheel centre + 0.3 z.
-    const std::shared_ptr<ProcModel> steered = posed({{"steer_fl", 20}, {"steer_fr", 20}});
+    const std::shared_ptr<ProcModel> steered = posed({{"steer_front_l", 20}, {"steer_front_r", 20}});
     CHECK(steered != nullptr);
     if (steered != nullptr) {
-        const Real leftFront = at(*steered, "spin_fl/tread_front").x - at(car, "spin_fl/tread_front").x;
-        const Real rightRear = at(*steered, "tire_fr/tread_front").x - at(car, "tire_fr/tread_front").x;   // its marker sits at the rear
+        const Real leftFront = at(*steered, "spin_front_l/tread_front").x - at(car, "spin_front_l/tread_front").x;
+        const Real rightRear = at(*steered, "tire_front_r/tread_front").x - at(car, "tire_front_r/tread_front").x;   // its marker sits at the rear
         CHECK(leftFront > 0.05);
         CHECK(rightRear < -0.05);          // the rear of the right wheel goes to -x, so its front goes to +x too
         CHECK_APPROX(leftFront, -rightRear, 1e-9);
     }
     // Spin: the top of every tire moves forward by the same amount, flipped or not.
-    const std::shared_ptr<ProcModel> rolled = posed({{"spin_fl", 30}, {"spin_fr", 30}, {"spin_rl", 30}, {"spin_rr", 30}});
+    const std::shared_ptr<ProcModel> rolled = posed({{"spin_front_l", 30}, {"spin_front_r", 30}, {"spin_rear_l", 30}, {"spin_rear_r", 30}});
     CHECK(rolled != nullptr);
     if (rolled != nullptr) {
-        const Real fl = at(*rolled, "spin_fl/tread_top").z - at(car, "spin_fl/tread_top").z;
-        const Real fr = at(*rolled, "tire_fr/tread_top").z - at(car, "tire_fr/tread_top").z;
-        const Real rr = at(*rolled, "tire_rr/tread_top").z - at(car, "tire_rr/tread_top").z;
+        const Real fl = at(*rolled, "spin_front_l/tread_top").z - at(car, "spin_front_l/tread_top").z;
+        const Real fr = at(*rolled, "tire_front_r/tread_top").z - at(car, "tire_front_r/tread_top").z;
+        const Real rr = at(*rolled, "tire_rear_r/tread_top").z - at(car, "tire_rear_r/tread_top").z;
         CHECK(fl > 0.1);
         CHECK_APPROX(fr, fl, 1e-9);
         CHECK_APPROX(rr, fl, 1e-9);
     }
     // Doors: the same value swings both handles outward by the same amount.
-    const std::shared_ptr<ProcModel> open = posed({{"door_fl", 40}, {"door_fr", 40}});
+    const std::shared_ptr<ProcModel> open = posed({{"door_front_l", 40}, {"door_front_r", 40}});
     CHECK(open != nullptr);
     if (open != nullptr) {
-        const Real l = at(*open, "handle_fl").x - at(car, "handle_fl").x, r = at(*open, "handle_fr").x - at(car, "handle_fr").x;
+        const Real l = at(*open, "handle_front_l").x - at(car, "handle_front_l").x, r = at(*open, "handle_front_r").x - at(car, "handle_front_r").x;
         CHECK(l > 0.3);
         CHECK_APPROX(r, -l, 1e-9);
     }
     // The suspension carries the wheel, and stops at its travel.
-    const std::shared_ptr<ProcModel> bumped = posed({{"susp_fl", 0.5}});
+    const std::shared_ptr<ProcModel> bumped = posed({{"susp_front_l", 0.5}});
     CHECK(bumped != nullptr);
-    if (bumped != nullptr) CHECK_APPROX(at(*bumped, "spin_fl/face").y - at(car, "spin_fl/face").y, 0.08, 1e-9);
+    if (bumped != nullptr) CHECK_APPROX(at(*bumped, "spin_front_l/face").y - at(car, "spin_front_l/face").y, 0.08, 1e-9);
     // The recipe's own limit for the hood replaced the table's.
     const ProcNode* hood = car.jointAt("hood");
     CHECK(hood != nullptr);

@@ -42,7 +42,7 @@ The model answers "what is its shape and what can move". The prefab answers "wha
 Model
   name, size
   nodes[]            the rig for a machine; the root is node 1
-    name             unique in the model: "body", "door_fl", "boom_2"
+    name             unique in the model: "body", "door_front_l", "boom_2"
     parent, frame    where it hangs and how it sits, relative to its parent
     motion           none | turn{axis, min, max} | slide{axis, min, max}     (what MAY move; nothing moves it here)
     markers[]        name, role, frame, size
@@ -317,8 +317,8 @@ Left as they were, on purpose:
 ### The mirrored twin (2026-11-19)
 
 ```lua
-car:node("door_fl"):use(door)
-car:node("door_fr"):use(door:mirrored())     -- the right door is the left door, mirrored; authored once
+car:node("door_front_l"):use(door)
+car:node("door_front_r"):use(door:mirrored())     -- the right door is the left door, mirrored; authored once
 ```
 
 - **`m:mirrored()` gives a new model that is `m` mirrored left to right** (across x = 0 through its origin). `m` is
@@ -342,7 +342,7 @@ Written down here so step 4 builds them in.
 - **Limits belong to the rig, and the rig is part of the model.** A node that may move says how (turn or slide),
   about which axis and between which limits. They depend on that model's geometry. The current value is on the
   entity; what drives it is a component.
-- **Motion sits above any flip or mirror.** For a wheel: `susp_fr -> steer_fr -> spin_fr -> the tire (turned half a
+- **Motion sits above any flip or mirror.** For a wheel: `susp_front_r -> steer_front_r -> spin_front_r -> the tire (turned half a
   turn)`. The moving nodes are in the car's space, so the same steer value turns both front wheels the same way and
   the same spin rolls both forward.
 - **The same value means the same action on both sides.** A right door's hinge axis points the other way, so "open
@@ -351,22 +351,22 @@ Written down here so step 4 builds them in.
 - **One rig table per kind of thing** (Glenn, 2026-11-19: "I think a rig table makes sense"). A rig table is Lua
   data for a kind (car, crane, door): the joints' names, how each moves (turn or slide), about which axis, and its
   default limits. A recipe applies the table and gives only what is its own: where each joint is, and any limit
-  that differs. So every car has a `door_fl` that opens the same way, and one script drives them all.
+  that differs. So every car has a `door_front_l` that opens the same way, and one script drives them all.
 
 ### Model step 4: motion, poses and rig tables (2026-11-19)
 
 ```lua
 local rigs = require "rigs"
 local joint = rigs.apply(car, "car", {
-  door_fl = { pos = { 0.775, 0.4, 0.75 } },      -- the hinge line; the rig says how a door moves
-  door_fr = { pos = { -0.775, 0.4, 0.75 } },
-  susp_fl = { pos = { 0.8, 0.33, 1.3 } },        -- steer_fl and spin_fl follow, under it
+  door_front_l = { pos = { 0.775, 0.4, 0.75 } },      -- the hinge line; the rig says how a door moves
+  door_front_r = { pos = { -0.775, 0.4, 0.75 } },
+  susp_front_l = { pos = { 0.8, 0.33, 1.3 } },        -- steer_front_l and spin_front_l follow, under it
   hood    = { pos = { 0, 0.86, 0.8 }, max = 55 },   -- this car's hood opens less far than the table's
 })
-joint.door_fl:use(door)
-joint.door_fr:use(door:mirrored())
-joint.spin_fl:use(tire)
-local ajar = car:posed{ door_fl = 40, steer_fl = 20, susp_fl = 0.03 }   -- a still, for a picture or a prop
+joint.door_front_l:use(door)
+joint.door_front_r:use(door:mirrored())
+joint.spin_front_l:use(tire)
+local ajar = car:posed{ door_front_l = 40, steer_front_l = 20, susp_front_l = 0.03 }   -- a still, for a picture or a prop
 ```
 
 - **Motion on a node** (`ProcMotion`): none, a turn about an axis, or a slide along one, in the node's own space.
@@ -375,7 +375,7 @@ local ajar = car:posed{ door_fl = 40, steer_fl = 20, susp_fl = 0.03 }   -- a sti
   - The node as the recipe placed it is value 0, so the limits must have 0 between them. A door is built closed.
   - A value past a limit stops at the limit.
 - **A pose** (`ProcPose`) gives values to moving nodes by name; every other node is at 0. A moving node inside a used
-  piece is named through the node that uses it (`door_fl/window`). `ProcModel::nodeFrame(node, pose)` is where a node
+  piece is named through the node that uses it (`door_front_l/window`). `ProcModel::nodeFrame(node, pose)` is where a node
   stands in a pose.
 - **The model holds no current value.** That is the entity's (step 7). What exists now for anything that draws a
   still is `posedModel` / `m:posed{...}`: a new model held in the pose, whose posed nodes no longer move. A used
@@ -384,7 +384,7 @@ local ajar = car:posed{ door_fl = 40, steer_fl = 20, susp_fl = 0.03 }   -- a sti
   moves and its default limits. `rigs.apply(model, kind, places)` makes the nodes and returns them by name.
   - The recipe gives each joint's place, and may give its own `min` / `max`.
   - A joint given no place is left out (a two-door car has no rear doors). A joint under another follows it without
-    a place of its own (`steer_fl` sits at `susp_fl`).
+    a place of its own (`steer_front_l` sits at `susp_front_l`).
   - A place for a name the table lacks is an error.
   - There are two tables so far: `car` (four doors, hood, trunk, and for each wheel a suspension slide, a steering
     turn on the fronts, and a spin) and `crane` (cabin, boom, hook line).
@@ -433,3 +433,36 @@ Not built. Written down so steps 7, 10 and 11 and the breaking work (#312) build
 - **A repair** drops the instance's own meshes.
 - **`Vehicle::Panel` is the same thing as motion on a node, written a second time.** The car port (step 11) moves the
   car onto the car rig table and retires it; the lamp places and the seat point become markers.
+
+### An existing kit car on the car rig (2026-11-19)
+
+`assets/scripts/car_rig_lab.lua` builds any car of `vehicle_kit.lua` as a model on the car rig, for the model sheet
+only. Nothing in the game reads it. It is the first look at what the car port (step 11) will make.
+
+```
+./build-viewer/rt_model_sheet assets/scripts/car_rig_lab.lua --out build-viewer/sheets/car.png \
+    --set door_front_l=50 --set door_rear_r=40 --set hood=45 --set trunk=50 --set steer_front_l=25 --set steer_front_r=25
+./build-viewer/rt_model_sheet assets/scripts/car_rig_lab.lua --args '{"name":"pickup"}' --set tailgate=90
+```
+
+What it showed:
+
+- **The kit needed no change.** It already gives each panel as its own meshes with a hinge point, the wheels' places,
+  the lamps and the driver's hip point. The sedan comes out as 19 nodes: six panels, and for each wheel a
+  suspension, a steering turn (fronts) and a spin, with ONE tire model used four times.
+- **The rig's joints are named as the kit and the game already name a car's panels** (`door_front_l`, `hood`,
+  `trunk`, `tailgate`), and the wheels follow (`susp_front_l`, `steer_front_l`, `spin_front_l`).
+- **The kit's hinge axes agree with the rig table's** for every panel tried. They are still written twice:
+  `kit.hinge` gives a pivot, an axis and an opening, and the rig table gives the axis again. At the port `kit.hinge`
+  keeps the pivot and this car's own opening, and the axis is the rig's alone.
+- **A bus's plug door slides and turns at once** (ADR-0356). The rig has one motion per node, so it is two joints,
+  one under the other. Not in the table yet.
+
+What the rig makes possible that the cars do not do today (ideas, none built):
+
+- Wheels that turn with the steering and spin with the speed, and bodies that ride on their suspension travel,
+  drawn from the same joints the physics writes.
+- A steering wheel joint that follows the front wheels.
+- Windows that lower: a slide joint under each door.
+- A door that comes off keeps its glass, liner and handle, because it is a subtree and not a re-centred skin.
+- Traffic cars (drawn in groups, not physics bodies) can share the rig, so a parked car can have a door open.

@@ -2,25 +2,28 @@
 --
 -- A rig table lists a kind's joints: each one's name, what it hangs under, how it moves (turn or slide), about which
 -- axis, and between which limits. A recipe applies the table to its model and gives only what is its own: where each
--- joint is, and any limit that differs. So every car has a `door_fl` that opens the same way, and one script drives
+-- joint is, and any limit that differs. So every car has a `door_front_l` that opens the same way, and one script drives
 -- them all. (Glenn, 2026-11-19: one rig table per kind.)
 --
 --   local rigs = require "rigs"
 --   local joint = rigs.apply(car, "car", {
---     door_fl = { pos = { 0.78, 0.4, 0.55 } },             -- the hinge line
---     susp_fl = { pos = { 0.8, 0.33, 1.3 } },              -- steer_fl and spin_fl follow, at the same place
+--     door_front_l = { pos = { 0.78, 0.4, 0.55 } },             -- the hinge line
+--     susp_front_l = { pos = { 0.8, 0.33, 1.3 } },              -- steer_front_l and spin_front_l follow, at the same place
 --     hood    = { pos = { 0, 0.85, 0.9 }, max = 55 },      -- this car's hood opens less far
 --   })
---   joint.spin_fl:use(tire)                                -- a joint is a node: hang meshes and pieces on it
+--   joint.spin_front_l:use(tire)                                -- a joint is a node: hang meshes and pieces on it
 --
 -- The rules a table follows:
 --   * Axes are in the model's own space as the model is built: +x is the left side, +y up, +z the front.
 --   * THE SAME VALUE MEANS THE SAME ACTION ON BOTH SIDES. "door open 40" opens a left or a right door, so the two
 --     hinge axes point opposite ways. "steer 20" swings both front wheels the same way, so their axes agree.
 --   * MOTION SITS ABOVE ANY FLIP. A right-hand tire is the left one turned half a turn; that turn goes on the piece
---     under `spin_fr`, never on the joint, or the same spin would roll the two sides opposite ways.
+--     under `spin_front_r`, never on the joint, or the same spin would roll the two sides opposite ways.
 --   * Turn limits are degrees, slide limits metres, and 0 (the joint as placed) lies between them. A turn with no
 --     limits has no end.
+--
+-- Joint names are the ones the car kit and the game already use for a car's panels (vehicle_kit.lua: door_front_l,
+-- door_rear_r, hood, trunk, hatch, tailgate), carried on to the wheels (susp_front_l, steer_front_l, spin_front_l).
 --
 -- A joint a recipe gives no place for is left out (a two-door car has no rear doors), and a joint under it goes with
 -- it. A place for a name the table lacks is an error.
@@ -30,25 +33,28 @@ local rigs = {}
 rigs.kinds = {
   car = {
     -- doors: hinged at the front edge, opening outward
-    { name = "door_fl", motion = { turn = { 0, -1, 0 }, min = 0, max = 70 } },
-    { name = "door_fr", motion = { turn = { 0, 1, 0 }, min = 0, max = 70 } },
-    { name = "door_rl", motion = { turn = { 0, -1, 0 }, min = 0, max = 65 } },
-    { name = "door_rr", motion = { turn = { 0, 1, 0 }, min = 0, max = 65 } },
+    { name = "door_front_l", motion = { turn = { 0, -1, 0 }, min = 0, max = 70 } },
+    { name = "door_front_r", motion = { turn = { 0, 1, 0 }, min = 0, max = 70 } },
+    { name = "door_rear_l", motion = { turn = { 0, -1, 0 }, min = 0, max = 65 } },
+    { name = "door_rear_r", motion = { turn = { 0, 1, 0 }, min = 0, max = 65 } },
     -- lids: the hood hinged at its rear edge, the trunk at its front edge, both lifting
     { name = "hood", motion = { turn = { -1, 0, 0 }, min = 0, max = 60 } },
     { name = "trunk", motion = { turn = { 1, 0, 0 }, min = 0, max = 80 } },
+    { name = "hatch", motion = { turn = { 1, 0, 0 }, min = 0, max = 80 } },
+    -- a pickup's tailgate: on its foot, the top dropping back to lie flat
+    { name = "tailgate", motion = { turn = { -1, 0, 0 }, min = 0, max = 90 } },
     -- a wheel: the suspension slides, the steering turns under it (fronts only), the spin turns under that.
     -- Positive steer swings the front of the wheel toward +x (left). Positive spin rolls the car forward.
-    { name = "susp_fl", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
-    { name = "steer_fl", parent = "susp_fl", motion = { turn = { 0, 1, 0 }, min = -35, max = 35 } },
-    { name = "spin_fl", parent = "steer_fl", motion = { turn = { 1, 0, 0 } } },
-    { name = "susp_fr", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
-    { name = "steer_fr", parent = "susp_fr", motion = { turn = { 0, 1, 0 }, min = -35, max = 35 } },
-    { name = "spin_fr", parent = "steer_fr", motion = { turn = { 1, 0, 0 } } },
-    { name = "susp_rl", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
-    { name = "spin_rl", parent = "susp_rl", motion = { turn = { 1, 0, 0 } } },
-    { name = "susp_rr", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
-    { name = "spin_rr", parent = "susp_rr", motion = { turn = { 1, 0, 0 } } },
+    { name = "susp_front_l", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
+    { name = "steer_front_l", parent = "susp_front_l", motion = { turn = { 0, 1, 0 }, min = -35, max = 35 } },
+    { name = "spin_front_l", parent = "steer_front_l", motion = { turn = { 1, 0, 0 } } },
+    { name = "susp_front_r", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
+    { name = "steer_front_r", parent = "susp_front_r", motion = { turn = { 0, 1, 0 }, min = -35, max = 35 } },
+    { name = "spin_front_r", parent = "steer_front_r", motion = { turn = { 1, 0, 0 } } },
+    { name = "susp_rear_l", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
+    { name = "spin_rear_l", parent = "susp_rear_l", motion = { turn = { 1, 0, 0 } } },
+    { name = "susp_rear_r", motion = { slide = { 0, 1, 0 }, min = -0.10, max = 0.08 } },
+    { name = "spin_rear_r", parent = "susp_rear_r", motion = { turn = { 1, 0, 0 } } },
   },
 
   crane = {

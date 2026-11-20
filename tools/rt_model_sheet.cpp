@@ -285,7 +285,17 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
     if (tree) {
         std::snprintf(line, sizeof line, "nodes: %zu\n", m.nodes.size());
         s << line;
-        for (std::size_t i = 0; i < m.nodes.size(); ++i) {
+        // In the tree's own order (a node, then everything under it), not the order the recipe made them in.
+        std::vector<std::size_t> order;
+        std::vector<std::size_t> open = {0};
+        while (!open.empty()) {
+            const std::size_t at = open.back();
+            open.pop_back();
+            order.push_back(at);
+            for (std::size_t c = m.nodes.size(); c-- > 1;)
+                if (m.nodes[c].parent == static_cast<int>(at)) open.push_back(c);
+        }
+        for (const std::size_t i : order) {
             const ProcNode& n = m.nodes[i];
             int depth = 0;
             for (int p = n.parent; p >= 0; p = m.nodes[static_cast<std::size_t>(p)].parent) ++depth;
