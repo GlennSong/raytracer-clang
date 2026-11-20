@@ -164,7 +164,9 @@ std::vector<int> slice(PolyMesh& m, Vec3 point, Vec3 normal, double eps = 1e-7);
 // joined by quads, rim point to rim point: two boxes facing each other become one solid, and a region on the top of
 // a block bridged to one on its underside is a hole through it. Each region must have one rim, the two with the
 // same number of points; the pairing is the one with the least twist. Returns the new quads (faces are renumbered:
-// selections made before are stale). Empty, and nothing changed, when the rims do not match.
+// selections made before are stale). Empty, and nothing changed, when the rims do not match. Where a new quad
+// would lie back to back with a face already there (a hole reaching the mesh's edge: a doorway down to the floor),
+// both go and the hole is open on that side.
 std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vector<int>& b);
 
 // The point nearest to `at` (for naming an edge to loopCut by where its ends are).

@@ -1002,6 +1002,37 @@ std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vecto
         made.push_back(static_cast<int>(m.faces.size()));
         m.faces.push_back(std::move(q));
     }
+    // A HOLE THAT OPENS ONTO AN EDGE (a doorway down to the floor): there a new quad lies back to back with a face
+    // already there (the wall's underside between the same four points). The two cancel: both go, and the hole is
+    // open on that side.
+    std::map<std::vector<int>, int> bySorted;
+    for (std::size_t f = 0; f + made.size() < m.faces.size(); ++f) {
+        if (m.faces[f].v.size() != 4) continue;
+        std::vector<int> key = m.faces[f].v;
+        std::sort(key.begin(), key.end());
+        bySorted[key] = static_cast<int>(f);
+    }
+    std::unordered_set<int> cancel;
+    for (int f : made) {
+        std::vector<int> key = m.faces[static_cast<std::size_t>(f)].v;
+        std::sort(key.begin(), key.end());
+        const std::map<std::vector<int>, int>::const_iterator it = bySorted.find(key);
+        if (it == bySorted.end()) continue;
+        cancel.insert(f);
+        cancel.insert(it->second);
+    }
+    if (!cancel.empty()) {
+        std::vector<PolyMesh::Face> left;
+        std::vector<int> stillMade;
+        const std::unordered_set<int> madeSet(made.begin(), made.end());
+        for (std::size_t f = 0; f < m.faces.size(); ++f) {
+            if (cancel.count(static_cast<int>(f))) continue;
+            if (madeSet.count(static_cast<int>(f))) stillMade.push_back(static_cast<int>(left.size()));
+            left.push_back(std::move(m.faces[f]));
+        }
+        m.faces = std::move(left);
+        made = stillMade;
+    }
     return made;
 }
 

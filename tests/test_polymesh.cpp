@@ -421,6 +421,22 @@ TEST_CASE(polymesh_bridge_joins_two_solids_or_makes_a_hole_through_one) {
     const double v = signedVolume(block);
     CHECK(v > 0.5 && v < 0.95);               // the cube less a hole about half a metre square
 
+    // a hole that reaches the solid's edge is open on that side: a slot cut down from the top of a slab. The region
+    // on the front touches the top edge, so one new quad would lie back to back with the top face's middle piece.
+    PolyMesh slab = cube();
+    slab.creases.clear();
+    slice(slab, Vec3(-0.2, 0, 0), Vec3(1, 0, 0));
+    slice(slab, Vec3(0.2, 0, 0), Vec3(1, 0, 0));
+    slice(slab, Vec3(0, 0.1, 0), Vec3(0, 1, 0));
+    auto notch = [&](double facing) {
+        return selectWhere(slab, [facing](const Vec3& c, const Vec3& n) { return n.z * facing > 0.9 && std::fabs(c.x) < 0.2 && c.y > 0.1; });
+    };
+    const std::vector<int> nf = notch(1), nb = notch(-1);
+    CHECK(nf.size() == 1 && nb.size() == 1);
+    CHECK(bridge(slab, nf, nb).size() == 3);      // two sides and the floor of the slot; its top is open
+    CHECK(isClosed(slab));
+    CHECK_APPROX(signedVolume(slab), 1.0 - 0.4 * 0.4 * 1.0, 1e-9);
+
     // rims that do not match are refused and nothing changes
     PolyMesh odd = cube();
     odd.creases.clear();

@@ -57,7 +57,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 1e90ad41 | PREFAB STEP 8, motion on the entity and the script: `engine/model_motion.{h,cpp}`, `systems/model_motion_system.{h,cpp}`, a pose through the model's walks, kinematic bodies for shapes on moving nodes (`ModelShape`), a prefab's `script`, Lua `entity.model_set` / `model_get` / `model_marker`; `crane_swing.lua`; `tests/test_prefab_motion_physics.cpp` |
 | 67f89f0c | six more models through prefabs (`assets/scripts/prop_models.lua`): furniture, a hydrant, a lamp, an oak, a boulder |
 | 10c99851 | edge bevel, the first of the modelling tools: `bevel` in `procgen/polymesh.{h,cpp}`, Lua `P:bevel(width [, angle [, sel]])` |
-| (this) | loop cut, slice and bridge: `loopCut`, `slice`, `bridge` in `procgen/polymesh.{h,cpp}`, Lua `P:loop_cut`, `P:slice`, `P:bridge` |
+| e4d21119 | loop cut, slice and bridge: `loopCut`, `slice`, `bridge` in `procgen/polymesh.{h,cpp}`, Lua `P:loop_cut`, `P:slice`, `P:bridge` |
+| (this) | openings: `assets/scripts/openings.lua` (`openings.window`, `openings.hole`), a hole through a wall with a frame and a pane; `bridge` lets a hole reach the solid's edge; `tests/test_openings.cpp` |
 
 The unit suite passed 1594 of 1594 on 1e90ad41. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -130,8 +131,8 @@ models, then modelling tools.**
    `prefab_lab.json`). Nothing broke. Still to try: a building part, a model from a `.glb`, something with
    textures baked by the recipe.
 3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"). Edge bevel, loop
-   cut, slice and bridge are built; the opening with a frame is next. Scratch recipes that show them:
-   `build-viewer/sheets/bevel.lua`, `cuts.lua` (not tracked).
+   cut, slice, bridge and openings are built; the truss is next. Scratch recipes that show them:
+   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua` (not tracked).
 
 The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 

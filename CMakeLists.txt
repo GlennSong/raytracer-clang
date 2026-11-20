@@ -1106,6 +1106,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_model_file.cpp       # a model written to a glTF file and read back (#191)
         tests/test_model_store.cpp      # the model store and the list of named models (#191)
         tests/test_prefab.cpp           # the prefab list, a model's draws by distance, stamping one entity (#191)
+        tests/test_openings.cpp         # openings.lua: a hole through a wall with a frame and a pane (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

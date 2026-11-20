@@ -793,7 +793,13 @@ proposed to him:
    - `P:bridge(sel_a, sel_b)`: the two regions' faces go and their rims are joined by quads: two solids become one,
      or a block gets a hole through it. The rims must have the same number of points.
    The car cage has not been changed with them.
-3. **Opening with a frame:** cut a hole in a wall or panel and get the frame and the pane back as parts.
+3. **Opening with a frame:** cut a hole in a wall or panel and get the frame and the pane back as parts. BUILT
+   2026-11-20 as a Lua library over the quad mesh words, `assets/scripts/openings.lua`:
+   `openings.window(wall, { at, normal, width, height, thickness, frame, set_back, bars, pane })` cuts the wall in
+   place (four slices, then a bridge front to back) and returns `{ frame, pane }`; `openings.hole` cuts only. The
+   wall stays one closed solid. A doorway down to the floor is open at the bottom: `bridge` drops a new quad that
+   would lie back to back with a face already there. Rectangular openings in a flat wall only; an arched head or a
+   curved wall is not built.
 4. **Truss:** chords and diagonals along a path, the section free to taper.
 5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses.
 6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path.
