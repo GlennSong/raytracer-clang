@@ -24,6 +24,13 @@ struct Projection { double station = 0, distance = 0; size_t segment = 0; double
 Projection project(Span<Vec2> xy, Span<double> s, const Vec2& p);
 Vec2 pointAt(Span<Vec2> xy, Span<double> s, double station);
 Vec2 tangentAtStation(Span<Vec2> xy, Span<double> s, double station);
+// THE LINE'S DIRECTION TURNING SMOOTHLY (ADR-0473): the direction of the smooth curve through the points (a Catmull-Rom
+// spline, whose direction at each point is the chord across it, tangentAt), so it turns at a rate that runs on from one
+// segment into the next. tangentAtStation is the segment's own direction
+// (turning within half a metre of each point), so a frame built on it -- a point set out sideways from the line by an
+// offset -- jumps sideways by offset x the turn at every point: 2-5 m at a loop ramp's far side, 90-150 m out from a
+// freeway turning 1.4-2 degrees every 20 m. A frame built on this one moves continuously.
+Vec2 smoothTangentAtStation(Span<Vec2> xy, Span<double> s, double station);
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x);   // np.interp, clamped
 
 // THE STRETCH OF A POLYLINE between two stations (clamped to its ends; `to` below `from` reads as `from`): the points at

@@ -177,8 +177,8 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/walk_lanes.h/.cpp` | The walks for people on foot (ADR-0465): `layWalks`, the build's last step, lays each kerb's sidewalk lane and each ring pair's corner walk along the drawn sidewalk (`Pavement::sidewalk` and footways' paving, kept `kWalkFromKerb` in from its edges, seams up to `kSeamBridge` closed) into the build's `LaneCurves`, as `LaneSet::walks`; `Result::walkCorners` says which pairs got none and why. Nothing is drawn from them; the lane level lays them as walks (ADR-0466). |
 | `lanes/deck_mesh.h/.cpp` | Meshes and paint. `junctionAreas` gives each stated arm's box edge and stop line (`kStopLineBack`, 5.2 m, outside the box) by the one rule, `boxEdgeBack` in `road_model_parts.h`. The rule is the square rule, or at a sharp angle the arm's kerbs clear of the crossing road, within the room to the next junction's facing arm; `findJunctions` asks the same rule with the same room, so the grouping never moves (ADR-0471). The arms the room stops short are `ArmStop::squeeze`, said as model problems. The paint's lane lines, stop bars and arrows are read off `builtRoadModel` and listed in `RoadPaint` (ADR-0431). `paintFactsKey` is what the paint reads, for the bake key. **Open in step 9**: draw corners to a stated radius. |
 | `lanes/deck_height.*`, `vertical_profile.*`, `road_design.*`, `terrain_conform.*`, `terrain_recipe.*` | Heights: profiles along spines, blended decks, the planner-shared vertical design, cut and fill. |
-| `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. `buildFootprints` draws each road's bands (asphalt, shoulder, sidewalk) from its spine and mitres them where the road file states two ends meet at a kink, at one level (`bandKinks`, `mitrePieces`, `kMitreLimit`; ADR-0472): the outside of a bend is paved to the bisector, not cut square. |
-| `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
+| `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. `buildFootprints` draws each road's bands (asphalt, shoulder, sidewalk) from its spine and mitres them where the road file states two ends meet at a kink, at one level (`bandKinks`, `mitrePieces`, `kMitreLimit`; ADR-0472): the outside of a bend is paved to the bisector, not cut square. `smoothTangentAtStation` (polyline_ops.h, ADR-0473) is a line's direction turning smoothly between its points (a Catmull-Rom spline's), for setting points out sideways from a line without a jump at each of its points. |
+| `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses), and system interchanges (`systemInterchange`: a freeway crossing a freeway, its loop ramps of 60 m and corner links of 80 m set out in the through freeway's frame). That frame turns smoothly since ADR-0473 (`Frame::at` on `smoothTangentAtStation`); before, a ramp 90-150 m out jumped 2-5 m sideways at each point of a curving freeway (river_town's eight interchange ramps; its file was set right with `lanes_tool reframe`). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
 | `vehicle_size.h/.cpp` | The body a road is checked against per vehicle tag (`VehicleSize`, `addVehicleSize`), and how a wheelbase and a tightest turn follow from the vehicle data. The driving library derives its classes with the same functions. |
 | `lanes/lane_level.h/.cpp` | **The lane level as a table built from the model** (`buildLaneLevel`, ADR-0426): the last step of `assembleRoadModel`, which fills `RoadModel::laneLevel` (ADR-0429). The header lists where each part comes from. |
 | `lanes/lane_graph_build.h/.cpp` | What is left of the old builder: report types (`LaneGraphBuild`, `CornerFault`), `cutFolds`, bend profiles, kinks, the vehicle sizes. Has the `kLaneGraphBuildVersion` cache version. `LaneGraphBuild::problems` is a list of records (`RoadProblem`), not sentences (ADR-0438). |
@@ -191,7 +191,11 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/lanes_export.*` | glTF, plan SVG, stats JSON, lane graph plan pictures. |
 
 Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, with every `layout` flag since ADR-0438)
-and `city_plan` (the planner; `city_plan controls`). `lanes_tool lanegraph` prints the lane level's problems counted
+and `city_plan` (the planner; `city_plan controls`). One-off edits to a frozen road file (ADR-0473), each writing only what it names, in place, through
+road_layout.h's text writers: `layout <file> --state-arm J ROAD --write` (a road's end at a junction's point stated as
+one of its arms, in its ring, with the through pairs the rule gives it; then the layout), `reclass <file> <class> <road>
+... --write`, and `reframe <file> <carriageway a> <carriageway b> <ramp> ... --write` (a system interchange's ramps set
+out again in the freeway's frame turning smoothly). `lanes_tool lanegraph` prints the lane level's problems counted
 by kind, each kind with what it means.
 
 Tests:
@@ -443,10 +447,10 @@ data rows.
 - **Corner faults = step 9's work list**: `docs/road-model-compare/<level>_corner_faults.txt`. traffic_lab 2219 over
   540 turns; river_town 3332 over 835 (its 31 turns with no lane path, on s228 and s287, are refusals of their own
   kind since the review, not corner faults). traffic_lab j5's four near turns (6.0 m) are too tight even for a car.
-- **Street ends that meet another road with no junction stated** (problem lines since the review): traffic_lab 1, the
-  planner's to state: s208 is the fourth arm of j95, drawn as a crossroads but not in its ring. The other 16 (traffic_lab,
-  the spokes at its ring) and 24 (river_town) end 8 m under the freeway: dead ends since ADR-0469, each joined across by a
-  turn-round.
+- **Street ends that meet another road with no junction stated** (problem lines since the review): none since ADR-0473
+  (traffic_lab's s208 stopped 15 m short of j95's point; it now reaches it and j95 states it as its fourth arm). The 16
+  (traffic_lab, the spokes at its ring) and 24 (river_town) that end 8 m under the freeway are dead ends since ADR-0469,
+  each joined across by a turn-round.
 - **Walks cut off by the junction drawing** (ADR-0469, ADR-0471): a corner gets no walk where a crosswalk's kerb end
   stands out in a sharp-angled junction's asphalt. `boxEdgeBack` now sets each arm back at the angle the arms meet, so
   this is down to traffic_lab 4 corners and river_town 13 (was 13 and 27): the junctions too close for their angle,
@@ -455,8 +459,8 @@ data rows.
   the bands. Three river_town corners still read "two pieces", none at a kink: j0 6-0 and j14 5-0 (their kerb ends
   stand 37-48 m out since ADR-0471 and the walk round the block leaves the 30 m `kCornerWindow`), and j90 0-1 (arm 0's
   kerb end on a scrap of s228's sidewalk inside s227's carriageway). Sidewalks cut off from the largest part on foot:
-  traffic_lab 0, river_town 14. The s337/s277 hairpin's open end is now paved over by the capped mitre.
-  river_town's tn0/tn1 (the freeway's turn-round loops, classed boulevard) have sidewalks nobody can reach.
+  traffic_lab 0, river_town 10 (14 until ADR-0473 made the freeway's turn-round loops tn0/tn1 ramps, with no
+  sidewalks). The s337/s277 hairpin's open end is now paved over by the capped mitre.
 - **Two traffic_lab ramps carry no car** (d0_0_a_on, d1_0_a_off). Their hosts' kerb lanes end at freeway joints
   j153/j154, whose stated turns all leave the paved road (since ADR-0472 the freeway's own straight on across those
   joints fits; the ramps' turns still do not).
@@ -464,6 +468,14 @@ data rows.
   and x1_outR_link state a merge past the host lane's end. s320 carries on into s287 where no lane leaves. Dead-end
   spokes under the freeway ring (dead ends, ADR-0469). The planner no longer reproduces river_town's road file (ADR-0423). Car reach 41%
   without lane changes, 81% with: lane changes come first.
+- **river_town j103 stands 21 m in the air** (ADR-0473, not fixed): the design stage's height agreement lifts the
+  junction from 6.5 m to 27.3 m over 30 rounds while the ground is 5-7 m, so every street leaving it is far too steep
+  (s192 42 %, s334 41 %, s193 30 %, s335 23.7 %). The pump is at j90, 82 m away along s334: s334's end lies inside
+  s195's band at j90's spread points, so the "tee" rule (crossingConsistency) holds it to s195's height while the node
+  rule averages the ends, and the two never agree. Skipping tees between two arms of one stated junction (tried, not
+  kept) brings s335 to 8.9 % and s192/s193/s334 to 12.3/3.3/14.0 %, but doubles river_town's deck cracks (316 -> 643)
+  and step edges (102 -> 258). A design-stage sitting of its own; s335's file profile cannot fix it (at 12 % from j103
+  it would meet the freeway's underside).
 - **Outlines that still cross themselves**: traffic_lab none; river_town and agent_lab j75 (problem lines). Since
   ADR-0471 sharp-angled arms' stop lines stand back far enough not to overlap. It was 5 and 11.
 - **The side rule** (lane_turns.cpp, `turnKindsFrom`): an arm with no through pair stated calls a turn near or far by

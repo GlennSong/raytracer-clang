@@ -1187,5 +1187,183 @@ std::string insertArmOrderText(const std::string& text, const RoadLabGraph& g, s
     return out;
 }
 
+std::string insertArmText(const std::string& text, const RoadLabGraph& g, const std::string& junction, const std::string& road,
+                          std::string* added, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    const ComposedRoads roads(g);
+    const RoadLabGraph& cg = roads.graph();
+    std::size_t j = 0;
+    while (j < g.junctions.size() && g.junctions[j].id != junction) ++j;
+    if (j == g.junctions.size()) return fail("the file lists no junction " + junction);
+    ModelJunction pj = g.junctions[j];
+    const EdgeSpec* e = cg.find(road);
+    if (!e || e->xy.size() < 2) return fail("the file has no road " + road + " with a centre line");
+    // the road's end at the junction: at its point, or at one of its points where it is spread
+    std::vector<Vec2> places{pj.at};
+    for (const ModelNode& n : pj.nodes) places.push_back(n.at);
+    double nearest = std::numeric_limits<double>::infinity();
+    int end = 0;
+    for (int k = 0; k < 2; ++k)
+        for (const Vec2& p : places) {
+            const double d = distance(k ? e->xy.back() : e->xy.front(), p);
+            if (d < nearest) {
+                nearest = d;
+                end = k;
+            }
+        }
+    if (nearest > cg.rules.endpointTol) {
+        char b[256];
+        std::snprintf(b, sizeof b, "road %s ends %.2f m from junction %s's nearest point, more than the endpoint tolerance (%.2f m): "
+                      "its centre line must reach the junction first", road.c_str(), nearest, junction.c_str(), cg.rules.endpointTol);
+        return fail(b);
+    }
+    ModelArm arm;
+    arm.road = road;
+    arm.spineIn = end == 1;
+    arm.station = end == 1 ? written(e->s.back()) : 0.0;
+    arm.heading = degreesOf(armDirection(*e, arm.station, arm.spineIn));
+    for (const ModelArm& a : pj.arms)
+        if (a.road == road && a.spineIn == arm.spineIn) return fail("junction " + junction + " already states that end of " + road + " as an arm");
+    const std::size_t fresh = pj.arms.size();
+    pj.arms.push_back(arm);
+    // its place in the ring: the stated arms keep their order, the new one goes where the measure puts it
+    const std::vector<std::size_t> order = armRing(pj, roads);
+    std::size_t place = 0;
+    std::vector<uint32_t> newIndex(pj.arms.size(), kNoIndex);
+    for (std::size_t k = 0, next = 0; k < order.size(); ++k) {
+        newIndex[order[k]] = static_cast<uint32_t>(k);
+        if (order[k] == fresh) {
+            place = k;
+            continue;
+        }
+        if (order[k] != next++) return fail("junction " + junction + "'s stated arms are not in the measure's ring order (" + kArmOrderCommand + ")");
+    }
+    // the through pairs: the one rule over the arms' headings in ring order; the stated pairs must be among them
+    std::vector<Vec2> dirs(pj.arms.size());
+    for (std::size_t k = 0; k < pj.arms.size(); ++k) {
+        const ModelArm& a = pj.arms[k];
+        const EdgeSpec* ae = cg.find(a.road);
+        dirs[newIndex[k]] = stated(a.heading) ? directionOf(a.heading) : ae ? armDirection(*ae, a.station, a.spineIn) : Vec2(1, 0);
+    }
+    const ThroughPairs rule = throughPairs(dirs);
+    auto ruleHas = [&](uint32_t a, uint32_t b) {
+        for (const std::array<uint32_t, 2>& p : rule)
+            if ((p[0] == a && p[1] == b) || (p[0] == b && p[1] == a)) return true;
+        return false;
+    };
+    ThroughPairs through;
+    for (const std::array<uint32_t, 2>& p : pj.through) {
+        if (p[0] >= fresh || p[1] >= fresh) return fail("junction " + junction + " states a through pair naming no arm");
+        through.push_back({newIndex[p[0]], newIndex[p[1]]});
+        if (!ruleHas(through.back()[0], through.back()[1]))
+            return fail("junction " + junction + "'s stated through pair " + std::to_string(p[0]) + "-" + std::to_string(p[1]) +
+                        " is not one the rule gives over the arms' headings");
+    }
+    std::string pairsAdded;
+    for (const std::array<uint32_t, 2>& p : rule)
+        if (p[0] == place || p[1] == place) {
+            through.push_back(p);
+            pairsAdded += " " + std::to_string(p[0]) + "-" + std::to_string(p[1]);
+        }
+    // the text: the arm's own text at its place in the junction's "arms", and its "through" written again
+    const Text t(text);
+    std::vector<Member> top, jm, am;
+    std::vector<std::size_t> elems, arms;
+    const Member* listed = t.members(t.ws(0), top) ? memberNamed(top, "junctions") : nullptr;
+    if (!listed || !t.elements(listed->valueBegin, elems) || elems.size() != g.junctions.size())
+        return fail("the file's \"junctions\" list does not fit the graph read from it");
+    if (!t.members(elems[j], jm)) return fail("junction " + junction + " is not an object in the file");
+    const Member* armList = memberNamed(jm, "arms");
+    if (!armList || !t.elements(armList->valueBegin, arms) || arms.size() != fresh || arms.empty() || !t.members(arms.front(), am) || am.empty())
+        return fail("junction " + junction + ": its \"arms\" list does not fit the graph read from the file");
+    // laid out as its neighbours are: the whitespace before an arm, and its members one indent step further in
+    std::size_t leadStart = arms.front();
+    while (leadStart > 0 && (text[leadStart - 1] == ' ' || text[leadStart - 1] == '\n' || text[leadStart - 1] == '\r' || text[leadStart - 1] == '\t')) --leadStart;
+    const std::string elemLead = text.substr(leadStart, arms.front() - leadStart);
+    const std::string elemIndent = elemLead.substr(elemLead.rfind('\n') == std::string::npos ? 0 : elemLead.rfind('\n') + 1);
+    const std::string memberLead = leadOf(text, am.front());
+    const std::size_t nl = memberLead.rfind('\n');
+    const int step = nl == std::string::npos ? -1 : static_cast<int>(memberLead.size() - nl - 1) - static_cast<int>(elemIndent.size());
+    const nlohmann::json armJson = {{"road", arm.road}, {"at", arm.station}, {"spine", arm.spineIn ? "in" : "out"}};
+    std::string armText;
+    for (char c : armJson.dump(step)) {
+        armText += c;
+        if (c == '\n') armText += elemIndent;
+    }
+    std::vector<std::pair<std::pair<std::size_t, std::size_t>, std::string>> edits;
+    if (place < arms.size()) edits.push_back({{arms[place], arms[place]}, armText + "," + elemLead});
+    else edits.push_back({{t.end(arms.back()), t.end(arms.back())}, "," + elemLead + armText});
+    if (const Member* tm = memberNamed(jm, "through")) edits.push_back({{tm->valueBegin, tm->valueEnd}, nlohmann::json(through).dump()});
+    else {
+        const Member& after = jm.back().key == "nodes" && jm.size() > 1 ? jm[jm.size() - 2] : jm.back();
+        edits.push_back({{after.valueEnd, after.valueEnd}, "," + leadOf(text, jm.back()) + "\"through\": " + nlohmann::json(through).dump()});
+    }
+    std::sort(edits.begin(), edits.end());
+    std::string out;
+    std::size_t at = 0;
+    for (const std::pair<std::pair<std::size_t, std::size_t>, std::string>& ed : edits) {
+        out.append(text, at, ed.first.first - at);
+        out += ed.second;
+        at = ed.first.second;
+    }
+    out.append(text, at, kNone);
+    if (added) {
+        char b[256];
+        std::snprintf(b, sizeof b, "junction %s: the %s of %s (station %.2f, heading %.2f) is arm %zu of its %zu; through pairs added:%s",
+                      junction.c_str(), arm.spineIn ? "end" : "start", road.c_str(), arm.station, arm.heading, place, pj.arms.size(),
+                      pairsAdded.empty() ? " none" : pairsAdded.c_str());
+        *added = b;
+    }
+    return out;
+}
+
+std::string setEdgeMemberText(const std::string& text, const std::string& edge, const std::vector<std::string>& keyPath,
+                              const nlohmann::json& value, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    if (keyPath.empty()) return fail("no member named");
+    const Text t(text);
+    std::vector<Member> top, ms;
+    std::vector<std::size_t> elems;
+    if (!t.members(t.ws(0), top) || top.empty()) return fail("the file is not a JSON object with members");
+    const Member* edges = memberNamed(top, "edges");
+    if (!edges || !t.elements(edges->valueBegin, elems)) return fail("the file has no \"edges\" list");
+    const std::string id = nlohmann::json(edge).dump();
+    std::size_t open = kNone;
+    for (std::size_t e : elems) {
+        if (!t.members(e, ms)) continue;
+        const Member* m = memberNamed(ms, "id");
+        if (m && text.compare(m->valueBegin, m->valueEnd - m->valueBegin, id) == 0) {
+            open = e;
+            break;
+        }
+    }
+    if (open == kNone) return fail("the file has no edge " + edge);
+    const Member* m = nullptr;
+    for (std::size_t k = 0; k < keyPath.size(); ++k) {
+        if (!t.members(open, ms) || !(m = memberNamed(ms, keyPath[k]))) return fail("edge " + edge + " has no member " + keyPath[k]);
+        open = m->valueBegin;
+    }
+    // laid out as the file lays out its own: one indent step is the top level's indent, each line after the first moved in
+    // by the member's own indent (on one line in a file written on one line)
+    const std::string lead = leadOf(text, *m), topLead = leadOf(text, top.front());
+    const std::size_t nl = lead.rfind('\n'), topNl = topLead.rfind('\n');
+    std::string valueText;
+    if (nl == std::string::npos || topNl == std::string::npos) valueText = value.dump();
+    else {
+        const std::string indent = lead.substr(nl + 1);
+        for (char c : value.dump(std::max<int>(1, static_cast<int>(topLead.size() - topNl - 1)))) {
+            valueText += c;
+            if (c == '\n') valueText += indent;
+        }
+    }
+    return text.substr(0, m->valueBegin) + valueText + text.substr(m->valueEnd);
+}
+
 }  // namespace roads::lanes
 }  // namespace engine

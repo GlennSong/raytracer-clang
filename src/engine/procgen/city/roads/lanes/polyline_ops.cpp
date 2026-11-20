@@ -39,6 +39,20 @@ Vec2 tangentAtStation(Span<Vec2> xy, Span<double> s, double station) {
     return d.length() > kShortestStationSpan ? normalize(d) : tangentAt(xy, 0);
 }
 
+Vec2 smoothTangentAtStation(Span<Vec2> xy, Span<double> s, double station) {
+    if (xy.size() < 2) return tangentAtStation(xy, s, station);
+    // the direction of the smooth curve through the points (a Catmull-Rom spline: at each point the chord across it, as
+    // tangentAt), so the direction turns at a rate that runs on without a jump from one segment into the next
+    const StationSpot spot = spotAtStation(s.data(), s.size(), station);
+    const std::size_t k = spot.seg, last = xy.size() - 1;
+    const Vec2 p0 = xy[k], p1 = xy[k + 1];
+    const Vec2 m0 = (xy[std::min(k + 1, last)] - xy[k == 0 ? 0 : k - 1]) * (k == 0 ? 1.0 : 0.5);
+    const Vec2 m1 = (xy[std::min(k + 2, last)] - xy[k]) * (k + 2 > last ? 1.0 : 0.5);
+    const double t = spot.t;
+    const Vec2 d = p0 * (6 * t * t - 6 * t) + m0 * (3 * t * t - 4 * t + 1) + p1 * (6 * t - 6 * t * t) + m1 * (3 * t * t - 2 * t);
+    return d.length() > kShortestStationSpan ? normalize(d) : tangentAtStation(xy, s, station);
+}
+
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
     return valueAtStation(xs.data(), ys.data(), xs.size(), x);
 }

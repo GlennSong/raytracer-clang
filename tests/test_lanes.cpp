@@ -2275,9 +2275,10 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     // that fits no vehicle (a corner fault), a fold tidied, a crossing point to look at (lane_graph_crossings.h), a kink in a
     // line (#281: the road builder's to fix, reported, not smoothed), the one stated join whose lines miss, a junction whose
     // arms' stop lines overlap so its outline crosses itself (j0 and j22: corners for step 9), and a street end that meets
-    // another road where the road file states no junction (the planner's to state): s208 alone, the fourth arm of j95, not
-    // in its ring. (Was 17, ADR-0464: the 16 spokes ending under the freeway ring counted too; the freeway meets no road at
-    // grade, so since ADR-0469 they are dead ends, joined across.)
+    // another road where the road file states no junction (the planner's to state): none. (Was 17, ADR-0464: the 16 spokes
+    // ending under the freeway ring counted too; the freeway meets no road at grade, so since ADR-0469 they are dead ends,
+    // joined across. Was 1 until ADR-0473, s208, the fourth arm of j95: its centre line stopped 15 m short of j95's point;
+    // it now reaches it and j95 states it as its fourth arm, through with s213.)
     std::map<std::string, uint32_t> byKind;
     std::set<std::string> outlines, unstated, gapJoins;
     for (const std::string& p : problemLines(lg.problems)) {
@@ -2300,14 +2301,14 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
         ++byKind[kind];
     }
     const std::map<std::string, uint32_t> knownKinds = {{"fits no vehicle", kTrafficLabFitsNone}, {"tidied", kTrafficLabTidied}, {"crossing points", kTrafficLabCrossingLines},
-                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}, {"no junction stated", 1}};
+                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}};
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u problems: %s\n", k.second, k.first.c_str());
     CHECK(byKind == knownKinds);
     // (was j0, j4, j19, j93, j96 from step 9, ADR-0428: two arms' stop lines, stated by the square rule, crossed where they
     // met at a sharp angle; none since ADR-0471 sets them back at the angle the arms meet)
     CHECK(outlines.empty());
     CHECK(gapJoins == std::set<std::string>({"lane d1_0_a_off.f0 leaves lane fw1_a.f3"}));
-    CHECK(unstated == std::set<std::string>({"s208"}));
+    CHECK(unstated.empty());
 }
 
 // THE TRAFFIC LAB'S ROAD MODEL'S OWN PROBLEMS, BY KIND AND COUNT (written from its model_problems.txt): 8 sides taken as

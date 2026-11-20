@@ -19,7 +19,13 @@
 //                      points of each junction spread over several, once, as the layout finds them (ADR-0425);
 //                      --lane-rules M the lane level's rules, the solid stretch before a stop line M metres (ADR-0426);
 //                      --arm-order lists each junction whose arms are not listed in their ring (exit 3 when one is not, or
-//                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427)
+//                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427);
+//                      --state-arm J ROAD states the end of ROAD at junction J's point as one of J's arms, in its ring, with
+//                      the through pairs the rule gives it, then writes the layout (ADR-0473)
+//   lanes_tool reclass <graph.json> <class> <road> ... [--write]   each road's class set, in place (ADR-0473)
+//   lanes_tool reframe <graph.json> <carriageway a> <carriageway b> <ramp> ... [--write]   each system-interchange ramp's
+//                      stated centre line set out again in the freeway's frame turning smoothly, without the sideways steps
+//                      the planner's old frame left at every point of the freeway (ADR-0473)
 //   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
 //                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>] [--door x y ...]   build the roads and assemble THE ROAD MODEL: model.txt,
@@ -303,9 +309,17 @@ int main(int argc, char** argv) {
         // one measure (road_layout.h armRing, on the roads composed), and the measure's notes; exits 3 when any differs or the
         // file is not marked "arms_in_ring". With --write: each listed junction's arms put in ring order by the measure,
         // their texts moved whole, the through pairs renumbered, and the file marked; nothing else moves.
+        // --state-arm J ROAD (ADR-0473): ONCE, the end of ROAD that lies at junction J's point stated as one of J's arms, in its
+        // ring, with the through pairs the rule gives it (road_layout.h insertArmText); then the layout as usual (the arm's
+        // street and heading, the street's end junction). For a file that keeps its own grouping (traffic_lab, ADR-0419).
         bool write = false, fresh = false, names = false, nodes = false, armOrder = false;
         double laneRules = -1;
+        std::string armJunction, armRoad;
         for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--state-arm") == 0 && i + 2 < argc) {
+                armJunction = argv[i + 1];
+                armRoad = argv[i + 2];
+            }
             if (std::strcmp(argv[i], "--arm-order") == 0) armOrder = true;
             if (std::strcmp(argv[i], "--write") == 0) write = true;
             if (std::strcmp(argv[i], "--fresh") == 0) fresh = true;
@@ -320,6 +334,24 @@ int main(int argc, char** argv) {
             std::ostringstream ss;
             ss << f.rdbuf();
             text = ss.str();
+        }
+        const std::string original = text;
+        if (!armJunction.empty()) {
+            // ONE ARM STATED, then the layout below writes its street and heading and the street's end (with --write)
+            const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+            std::string err, added;
+            std::string out;
+            try {
+                out = insertArmText(text, RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir), armJunction, armRoad, &added, &err);
+                if (!out.empty()) (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir);
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what());
+                return 1;
+            }
+            if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: not written: %s\n", argv[2], err.c_str()); return 1; }
+            std::printf("%s: %s%s\n", argv[2], added.c_str(), write ? "" : " (not written: --write)");
+            if (!write) return 0;
+            text = out;
         }
         if (armOrder) {
             // THE RING CHECKED (never a gate: a marked file is trusted at load), or with --write put in ring order and marked
@@ -454,7 +486,209 @@ int main(int argc, char** argv) {
         }
         std::printf("wrote the layout into %s (%zu bytes more; the bytes the bake keys are unchanged: %s; the file is %s)\n", argv[2],
                     out.size() - base.size(), stripLayoutText(out) == stripLayoutText(base) ? "yes" : "NO",
-                    out == text ? "unchanged, byte for byte" : "CHANGED");
+                    out == original ? "unchanged, byte for byte" : "CHANGED");
+        return 0;
+    }
+    if (argc >= 5 && (std::strcmp(argv[1], "reclass") == 0 || std::strcmp(argv[1], "reframe") == 0)) {
+        // ONE-OFF EDITS TO A FROZEN ROAD FILE'S ROADS, in place (road_layout.h setEdgeMemberText; ADR-0473), checked by reading
+        // the file back; with --write only.
+        //   reclass <file> <class> <road> ...: each road's "class" set to <class> (a row of the file's classes or of
+        //     assets/data/road_classes.json); its lanes, limit, barriers and sidewalks follow the class.
+        //   reframe <file> <carriageway a> <carriageway b> <ramp> ...: each ramp's stated centre line set out again in the
+        //     freeway's frame with a smoothly turning direction. The planner placed a system interchange's ramps
+        //     (interchange.cpp systemInterchange) in the frame of the freeway's centre line (here the middle of its two
+        //     carriageways, a and b, point for point), set out along each segment's own direction, so the ramps jump
+        //     sideways at every point of the freeway, by their offset times its turn. Each ramp point is read back into
+        //     that frame (station, offset; inside the bend two segments both hold it: the reading nearest the circle the
+        //     readings fit, on the legs the one nearest its neighbour); the ramp's arc (the points within kArcOn of that
+        //     circle: the planner's loopR 60 m / linkR 80 m) is laid evenly round the circle and set out in the smooth frame
+        //     (polyline_ops.h smoothTangentAtStation, which the planner now uses); each leg is set out in the smooth frame
+        //     by the arc and eases back to its stated points at the gore, so both ends stay where they were.
+        const bool reclass = std::strcmp(argv[1], "reclass") == 0;
+        bool write = false;
+        std::vector<std::string> args;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--write") == 0) write = true;
+            else args.push_back(argv[i]);
+        }
+        std::string text;
+        {
+            std::ifstream f(argv[2], std::ios::binary);
+            if (!f) { std::fprintf(stderr, "lanes_tool: cannot read %s\n", argv[2]); return 1; }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            text = ss.str();
+        }
+        const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+        const nlohmann::json spec = nlohmann::json::parse(text, nullptr, false);
+        if (spec.is_discarded() || !spec.contains("edges")) { std::fprintf(stderr, "lanes_tool: %s: not a road file\n", argv[2]); return 1; }
+        auto statedPoints = [&](const std::string& id) {
+            std::vector<Vec2> pts;
+            for (const nlohmann::json& e : spec["edges"])
+                if (e.value("id", std::string()) == id && e.contains("path"))
+                    for (const nlohmann::json& p : e["path"]["points"]) pts.push_back(Vec2(p.at(0).get<double>(), p.at(1).get<double>()));
+            return pts;
+        };
+        std::string out = text, err;
+        if (reclass) {
+            const std::string cls = args.front();
+            const bool known = (spec.contains("classes") && spec["classes"].contains(cls)) || roadClasses().count(cls) > 0;
+            if (!known) { std::fprintf(stderr, "lanes_tool: %s: no road class %s\n", argv[2], cls.c_str()); return 1; }
+            for (std::size_t k = 1; k < args.size(); ++k) {
+                out = setEdgeMemberText(out, args[k], {"class"}, cls, &err);
+                if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+                std::printf("%s: %s is now class %s\n", argv[2], args[k].c_str(), cls.c_str());
+            }
+        } else {
+            if (args.size() < 3) { std::fprintf(stderr, "lanes_tool reframe <file> <carriageway a> <carriageway b> <ramp> ...\n"); return 1; }
+            const std::vector<Vec2> ca = statedPoints(args[0]), cbReversed = statedPoints(args[1]);
+            if (ca.size() < 2 || ca.size() != cbReversed.size()) {
+                std::fprintf(stderr, "lanes_tool: %s: %s and %s are not two carriageways point for point\n", argv[2], args[0].c_str(), args[1].c_str());
+                return 1;
+            }
+            std::vector<Vec2> line(ca.size());
+            for (std::size_t i = 0; i < ca.size(); ++i) line[i] = (ca[i] + cbReversed[ca.size() - 1 - i]) * 0.5;
+            const std::vector<double> ls = stations(line);
+            constexpr double kVertexZone = 0.5;   // tangentAtStation turns within this of a point: a reading there is not exact
+            constexpr double kArcOn = 0.3;        // metres: a reading this near the fitted circle is on the ramp's arc
+            auto smoothAt = [&](const Vec2& sv) { return pointAt(line, ls, sv.x) + perp(smoothTangentAtStation(line, ls, sv.x)) * sv.y; };
+            for (std::size_t r = 2; r < args.size(); ++r) {
+                const std::vector<Vec2> p = statedPoints(args[r]);
+                const std::size_t n = p.size();
+                if (n < 8) { std::fprintf(stderr, "lanes_tool: %s: ramp %s has too few points\n", argv[2], args[r].c_str()); return 1; }
+                // each point read back into the stepped frame: every (station, offset) that sets out to it exactly. Inside the
+                // freeway's bend two segments' frames overlap, so a point has two readings; outside it a corner the frame
+                // skips has none. First the reading nearest the freeway; once the circle is fitted, the one nearest it.
+                std::vector<std::vector<Vec2>> readings(n);
+                for (std::size_t i = 0; i < n; ++i)
+                    for (std::size_t k = 0; k + 1 < line.size(); ++k) {
+                        const double len = ls[k + 1] - ls[k];
+                        const Vec2 t = (line[k + 1] - line[k]) / len;
+                        const double u = dot(p[i] - line[k], t);
+                        if (u < kVertexZone || u > len - kVertexZone) continue;
+                        readings[i].push_back(Vec2(ls[k] + u, dot(p[i] - line[k], perp(t))));
+                    }
+                std::vector<Vec2> sv(n);
+                std::vector<char> read(n, 0);
+                for (std::size_t i = 0; i < n; ++i)
+                    for (const Vec2& c : readings[i])
+                        if (!read[i] || std::fabs(c.y) < std::fabs(sv[i].y)) { sv[i] = c; read[i] = 1; }
+                // the circle the readings fit (least squares on x^2 + y^2 = 2ax + 2by + c): on all, then on those near it
+                Vec2 centre;
+                double radius = 0;
+                std::vector<char> use = read;   // (the first fit on the middle half: the legs lie off the circle)
+                for (std::size_t i = 0; i < n; ++i) use[i] = read[i] && i >= n / 4 && i < n - n / 4;
+                for (int pass = 0; pass < 5; ++pass) {
+                    if (pass >= 2)   // each point's reading nearest the circle fitted so far
+                        for (std::size_t i = 0; i < n; ++i)
+                            for (const Vec2& c : readings[i])
+                                if (std::fabs((c - centre).length() - radius) < std::fabs((sv[i] - centre).length() - radius)) sv[i] = c;
+                    double m[3][4] = {};
+                    for (std::size_t i = 0; i < n; ++i) {
+                        if (!use[i]) continue;
+                        const double row[3] = {2 * sv[i].x, 2 * sv[i].y, 1.0}, rhs = dot(sv[i], sv[i]);
+                        for (int a = 0; a < 3; ++a) {
+                            for (int b = 0; b < 3; ++b) m[a][b] += row[a] * row[b];
+                            m[a][3] += row[a] * rhs;
+                        }
+                    }
+                    for (int a = 0; a < 3; ++a)   // Gauss-Jordan on the 3x3 normal equations
+                        for (int b = 0; b < 3; ++b) {
+                            if (a == b) continue;
+                            const double f = m[b][a] / m[a][a];
+                            for (int c = 0; c < 4; ++c) m[b][c] -= f * m[a][c];
+                        }
+                    centre = Vec2(m[0][3] / m[0][0], m[1][3] / m[1][1]);
+                    radius = std::sqrt(m[2][3] / m[2][2] + dot(centre, centre));
+                    const double keep = pass == 0 ? 2.0 : kArcOn;
+                    for (std::size_t i = 0; i < n; ++i) use[i] = read[i] && std::fabs((sv[i] - centre).length() - radius) < keep;
+                }
+                std::size_t first = n, last = 0;
+                double rms = 0;
+                int on = 0;
+                for (std::size_t i = 0; i < n; ++i)
+                    if (use[i]) {
+                        first = std::min(first, i);
+                        last = std::max(last, i);
+                        const double e = (sv[i] - centre).length() - radius;
+                        rms += e * e;
+                        ++on;
+                    }
+                if (on < 8) { std::fprintf(stderr, "lanes_tool: %s: ramp %s has no arc in the frame of %s/%s\n", argv[2], args[r].c_str(), args[0].c_str(), args[1].c_str()); return 1; }
+                // the legs: each point's reading nearest the one before it, walking out from the arc
+                for (std::size_t i = first; i-- > 0;)
+                    for (const Vec2& c : readings[i])
+                        if (read[i + 1] && (c - sv[i + 1]).length() < (sv[i] - sv[i + 1]).length()) sv[i] = c;
+                for (std::size_t i = last + 1; i < n; ++i)
+                    for (const Vec2& c : readings[i])
+                        if (read[i - 1] && (c - sv[i - 1]).length() < (sv[i] - sv[i - 1]).length()) sv[i] = c;
+                // the arc: its points evenly round the circle, from its first reading's direction to its last's (a point the
+                // steps had pushed off the circle, or bunched along it, goes back in its turn), set out in the smooth frame
+                std::vector<Vec2> q = p;
+                std::vector<Vec2> moveBy(n);
+                std::vector<char> moved(n, 0);
+                {
+                    double sweep = 0;
+                    for (std::size_t i = first; i < last; ++i) {
+                        const Vec2 a = sv[i] - centre, b = sv[i + 1] - centre;
+                        sweep += std::atan2(cross(a, b), dot(a, b));
+                    }
+                    const double from = std::atan2(sv[first].y - centre.y, sv[first].x - centre.x);
+                    for (std::size_t i = first; i <= last; ++i) {
+                        const double th = from + sweep * static_cast<double>(i - first) / static_cast<double>(last - first);
+                        q[i] = smoothAt(centre + Vec2(std::cos(th), std::sin(th)) * radius);
+                    }
+                }
+                // the legs: set out in the smooth frame by the arc, easing back to their stated points at the gore (the leg
+                // along the crossing road was set out in that road's own frame there, and the gore stays where its anchor is)
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (i >= first && i <= last) continue;
+                    const bool startLeg = i < first;
+                    const double legLength = startLeg ? static_cast<double>(first) : static_cast<double>(n - 1 - last);
+                    const double fromArc = startLeg ? static_cast<double>(first - i) : static_cast<double>(i - last);
+                    const double weight = 1.0 - smoothstep01(fromArc / legLength);
+                    if (read[i]) {
+                        moveBy[i] = (smoothAt(sv[i]) - p[i]) * weight;
+                        moved[i] = 1;
+                    }
+                }
+                for (std::size_t i = 0; i < n; ++i) {   // a leg point the frame skipped: moved as its neighbours are
+                    if ((i >= first && i <= last) || moved[i]) continue;
+                    std::size_t a = i, b = i;
+                    while (a > 0 && !moved[a] && !(a >= first && a <= last)) --a;
+                    while (b + 1 < n && !moved[b] && !(b >= first && b <= last)) ++b;
+                    const Vec2 ma = moved[a] ? moveBy[a] : (a >= first && a <= last ? q[a] - p[a] : Vec2());
+                    const Vec2 mb = moved[b] ? moveBy[b] : (b >= first && b <= last ? q[b] - p[b] : Vec2());
+                    moveBy[i] = b == a ? ma : ma + (mb - ma) * (static_cast<double>(i - a) / static_cast<double>(b - a));
+                }
+                for (std::size_t i = 0; i < n; ++i)
+                    if (i < first || i > last) q[i] = p[i] + moveBy[i];
+                // in words: the fit, how far the points moved, and the sharpest turn from one point to the next before and after
+                auto sharpest = [](const std::vector<Vec2>& v) {
+                    double worst = 0;
+                    for (std::size_t i = 1; i + 1 < v.size(); ++i) {
+                        const Vec2 a = normalize(v[i] - v[i - 1]), b = normalize(v[i + 1] - v[i]);
+                        worst = std::max(worst, std::fabs(std::atan2(cross(a, b), dot(a, b))) * RAD_TO_DEG);
+                    }
+                    return worst;
+                };
+                double most = 0, ends = 0;
+                for (std::size_t i = 0; i < n; ++i) most = std::max(most, (q[i] - p[i]).length());
+                ends = std::max((q[0] - p[0]).length(), (q[n - 1] - p[n - 1]).length());
+                std::printf("%s: %s: arc points %zu-%zu of %zu on a circle of %.2f m in the frame (rms %.3f m, %d readings); "
+                            "points moved up to %.2f m (its ends %.2f m); sharpest turn between points %.1f -> %.1f degrees\n",
+                            argv[2], args[r].c_str(), first, last, n, radius, std::sqrt(rms / on), on, most, ends, sharpest(p), sharpest(q));
+                nlohmann::json pts = nlohmann::json::array();
+                for (const Vec2& v : q) pts.push_back({std::round(v.x * 100) / 100, std::round(v.y * 100) / 100});
+                out = setEdgeMemberText(out, args[r], {"path", "points"}, pts, &err);
+                if (out.empty()) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+            }
+        }
+        try { (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir); }
+        catch (const std::exception& ex) { std::fprintf(stderr, "lanes_tool: %s: would not read back (%s); not written\n", argv[2], ex.what()); return 1; }
+        if (!write) { std::printf("%s: not written (--write)\n", argv[2]); return 0; }
+        std::ofstream(argv[2], std::ios::binary) << out;
+        std::printf("wrote %s (%zu bytes before, %zu after)\n", argv[2], text.size(), out.size());
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "streetmap") == 0) {
