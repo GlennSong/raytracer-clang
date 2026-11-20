@@ -1,5 +1,5 @@
 // The modelling libraries written in Lua over the mesh words (#191): openings.lua, a hole through a wall with a
-// frame and a pane; truss.lua, a lattice of members along a path.
+// frame and a pane; truss.lua, a lattice of members along a path; scatter.lua, where to put many copies of a piece.
 #include "test_framework.h"
 
 #include "../src/engine/mesh_builder.h"
@@ -151,4 +151,63 @@ TEST_CASE(truss_builds_a_lattice_along_a_path) {
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
     CHECK(!m.parts.empty());
+}
+
+TEST_CASE(scatter_gives_placements_that_stand_each_copy_along_the_surface) {
+    ProcModel m;
+    std::string err;
+    const bool ok = runModel(R"LUA(
+        local scatter = require "scatter"
+        local function near(a, b) return math.abs(a - b) < 1e-9 end
+        -- a ring: `count` places, all `radius` from the middle, flat on the surface
+        local ring = scatter.ring{ at = { 1, 2, 3 }, normal = { 0, 0, 1 }, radius = 0.5, count = 8 }
+        assert(#ring == 8)
+        for _, p in ipairs(ring) do
+          local dx, dy, dz = p.pos[1] - 1, p.pos[2] - 2, p.pos[3] - 3
+          assert(near(math.sqrt(dx * dx + dy * dy), 0.5) and near(dz, 0) and near(p.up[3], 1))
+        end
+        -- along a line: both ends, or neither; round a closed outline, each corner once
+        local line = { { 0, 0, 0 }, { 1, 0, 0 } }
+        assert(#scatter.along{ path = line, spacing = 0.25 } == 5)
+        assert(#scatter.along{ path = line, spacing = 0.25, ends = false } == 3)
+        local square = { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, 1 }, { 0, 0, 1 } }
+        local round = scatter.along{ path = square, spacing = 0.5, closed = true }
+        assert(#round == 8)
+        -- a grid: rows by columns, a margin in from the edges, standing along u x v
+        local grid = scatter.grid{ origin = { 0, 0, 0 }, u = { 2, 0, 0 }, v = { 0, 0, -1 }, count = { 3, 2 }, margin = 0.1 }
+        assert(#grid == 6)
+        assert(near(grid[1].pos[1], 0.1) and near(grid[3].pos[1], 1.9) and near(grid[1].pos[3], -0.1) and near(grid[6].pos[3], -0.9))
+        assert(near(grid[1].up[2], 1))
+        -- the middles of chosen faces of a quad mesh
+        local box = poly.box{ 2, 1, 1 }
+        local tops = scatter.faces(box, box:select{ normal = { 0, 1, 0 }, min_dot = 0.9 })
+        assert(#tops == 1 and near(tops[1].pos[2], 0.5) and near(tops[1].up[2], 1))
+        assert(#scatter.faces(box, box:select{ all = true }) == 6)
+        assert(#scatter.join(ring, grid) == 14)
+        local ok1, why = pcall(scatter.ring, { at = { 0, 0, 0 } })
+        assert(not ok1 and why:find("give at, radius and count"))
+
+        -- used: one bolt, stored once, standing along each placement's `up`
+        local out = model.new()
+        local bolt = mesh.cylinder(0.02, 0.01, 6)
+        out:use(bolt, { { pos = { 0, 0, 0 }, up = { 1, 0, 0 } }, { pos = { 0, 0, 0 }, up = { 0, -1, 0 } },
+                        { pos = { 0, 0, 0 }, up = { 0, 3, 4 } }, { pos = { 0, 0, 0 } },
+                        { pos = { 0, 0, 0 }, up = { 0, 1, 0 }, spin = 90 } })
+        return out
+    )LUA", m, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(m.uses.size() == 1);
+    if (m.uses.size() != 1 || m.uses[0].placements.size() != 5) { CHECK(false); return; }
+    auto upOf = [&](int i) {
+        const Mat4 x = m.uses[0].placements[static_cast<std::size_t>(i)].matrix();
+        return Vec3(x.m[0][1], x.m[1][1], x.m[2][1]);       // where the piece's own +y goes
+    };
+    CHECK((upOf(0) - Vec3(1, 0, 0)).length() < 1e-9);
+    CHECK((upOf(1) - Vec3(0, -1, 0)).length() < 1e-9);     // straight down
+    CHECK((upOf(2) - Vec3(0, 0.6, 0.8)).length() < 1e-9);  // any length of `up` will do
+    CHECK((upOf(3) - Vec3(0, 1, 0)).length() < 1e-9);      // none given: as it was built
+    // spin turns the piece about its own up: its +x goes round to -z
+    const Mat4 spun = m.uses[0].placements[4].matrix();
+    CHECK((Vec3(spun.m[0][0], spun.m[1][0], spun.m[2][0]) - Vec3(0, 0, -1)).length() < 1e-9);
 }

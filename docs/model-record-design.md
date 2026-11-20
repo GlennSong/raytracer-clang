@@ -812,7 +812,11 @@ proposed to him:
    one mesh and `info` (counts, the length, every joint frame by frame, for hanging things on it). Square,
    triangular or your own section; zigzag, crossed or no diagonals; the path may bend. Members are round tubes that
    pass through each other at the joints (no gusset plates, no welded nodes).
-5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses.
+5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses. BUILT
+   2026-11-20 as a Lua library, `assets/scripts/scatter.lua`: `scatter.ring`, `scatter.along`, `scatter.grid`,
+   `scatter.faces` and `scatter.join` each give a list of placements for `m:use(piece, placements)`. A placement
+   may now say `up = {x,y,z}` (and `spin`) in place of `turn`: the piece's own +y stands along it. Even spacing
+   only; nothing random, and nothing that follows a curved surface between the points given.
 6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path.
 7. **Cage deform:** move a few control points and the mesh inside follows.
 8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level.

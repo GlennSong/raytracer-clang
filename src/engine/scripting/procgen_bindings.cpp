@@ -4267,7 +4267,7 @@ void readUseCollision(lua_State* L, int opts, ProcUse& g) {
 }
 
 // The placements of a use, from the array at `idx`: each { pos = {x,y,z}, scale = number } and a rotation. The
-// model's words give the rotation as `turn = {x,y,z}` in DEGREES, like a node's; m:add_instances, the older word,
+// model's words give the rotation as `turn = {x,y,z}` in DEGREES, like a node's, or as `up = {x,y,z}` (and `spin`); m:add_instances, the older word,
 // gives `yaw` in radians about the vertical, and its recipes keep working.
 void readPlacements(lua_State* L, int idx, bool yawRadians, std::vector<ProcPlacement>& out) {
     luaL_checktype(L, idx, LUA_TTABLE);
@@ -4278,6 +4278,24 @@ void readPlacements(lua_State* L, int idx, bool yawRadians, std::vector<ProcPlac
         p.position = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
         if (yawRadians) p.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(optField(L, -1, "yaw", 0.0)));
         else p.rotation = Quat::fromEuler(optVec3Field(L, -1, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+        // `up = {x,y,z}`: stand the piece's own +y along this direction (a bolt on a sloping plate), by the shortest
+        // turn; `spin` (degrees) then turns it about that direction. Given in place of `turn`.
+        if (!yawRadians) {
+            lua_getfield(L, -1, "up");
+            const bool hasUp = lua_istable(L, -1);
+            lua_pop(L, 1);
+            if (hasUp) {
+                const Vec3 up = optVec3Field(L, -1, "up", Vec3(0, 1, 0));
+                if (up.lengthSquared() < 1e-20) luaL_error(L, "a placement's `up` has no length");
+                const Vec3 to = normalize(up), from(0, 1, 0);
+                const Vec3 axis = cross(from, to);
+                const Real c = dot(from, to);
+                Quat stand;                                                    // +y already
+                if (axis.lengthSquared() > 1e-20) stand = Quat::fromAxisAngle(normalize(axis), std::acos(std::clamp(c, Real(-1), Real(1))));
+                else if (c < 0) stand = Quat::fromAxisAngle(Vec3(1, 0, 0), 3.14159265358979323846);   // straight down
+                p.rotation = Quat::fromAxisAngle(to, static_cast<Real>(optField(L, -1, "spin", 0.0)) * DEG_TO_RAD) * stand;
+            }
+        }
         p.scale = static_cast<Real>(optField(L, -1, "scale", 1.0));
         out.push_back(p);
         lua_pop(L, 1);
