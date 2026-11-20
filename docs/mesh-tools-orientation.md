@@ -66,6 +66,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | bb747fea | cage deform (`assets/scripts/cage.lua`) and un-subdivide (`unsubdivide`, Lua `P:unsubdivide`): the last two of the eight tools |
 | ccaa2c5f | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
 | 57f7b4a7 | B-spline curve and surface: `MeshBuilder::pathBSpline`, `bsplineSurface`; Lua `mesh.path.bspline`, `mesh.bspline_surface`; the libraries along a path |
+| c63f7af7 | a prefab entity may name a recipe directly (`"prefab": { "recipe": ... }`, `obtainRecipeModel`); the loader watches what a prefab's model is built from (`modelSourceFiles`) |
+| (this) | THE MODEL STUDIO, first piece: `src/editor_app/model_studio.{h,cpp}`, a script pane in the Qt editor whose model the viewport shows and rebuilds on every save; `editor_app --model <name>`; a studio level opens looking at its model |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -126,6 +128,13 @@ level suite has not been run.
 - Edit source with the edit tools, not shell appends (AGENTS.md).
 
 ## What is next
+
+**In hand: the model studio** (Glenn, 2026-11-20; the design note's "The model studio" has what is built and the
+numbered list of what is not). Build the editor with `cmake --build build-viewer --target editor_app`; run
+`./build-viewer/editor_app --model crane`. To check it without a person: `RT_EDITOR_WINDOW_SHOT=<png>
+RT_EDITOR_WINDOW_SHOT_DELAY=6 timeout 25 ./build-viewer/editor_app --model <name>` writes a picture of the whole
+window; write to the script's file while it runs to see a rebuild.
+
 
 Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen
 models, then modelling tools.**

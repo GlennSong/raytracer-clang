@@ -1,0 +1,283 @@
+// The model studio (#191). See model_studio.h.
+#include "model_studio.h"
+
+#include <QAction>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFileSystemWatcher>
+#include <QFontDatabase>
+#include <QHBoxLayout>
+#include <QInputDialog>
+#include <QKeySequence>
+#include <QLabel>
+#include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QShortcut>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextStream>
+#include <QVBoxLayout>
+
+namespace {
+
+const char* kScripts = "assets/scripts";
+const char* kLevels = "cache/model_studio";      // (cache/ is not tracked: these levels are the studio's own)
+
+// What a new model starts as: enough to see something, with the words a model is usually made of.
+const char* kStarter = R"LUA(-- %1: a model (docs/model-record-design.md). Save to rebuild it in the viewport.
+local m = model.new()
+m:material("paint", material.new{ roughness = 0.5, metallic = 0.1 })
+
+-- a block with its edges cut back, standing on the ground
+local body = poly.box{ 1, 1, 1 }
+body:translate{ 0, 0.5, 0 }
+body:bevel(0.05, 30, nil, 2)
+for _, part in pairs(body:to_parts(30)) do
+  m:add(mesh.paint(part, { 0.8, 0.35, 0.2 }), "paint")
+end
+
+-- what a copy of it collides with
+m:shape("body", { box = { 1, 1, 1 }, pos = { 0, 0.5, 0 } })
+return m
+)LUA";
+
+// The studio's level: daylight, a ground to stand on, and the model at the origin.
+const char* kLevel = R"JSON({
+  "version": 1,
+  "watch_scripts": true,
+  "editor_view": "models",
+  "name": "model_studio",
+  "_note": "Written by the editor's model studio. One prefab straight from a recipe; edit the recipe, not this.",
+  "player": { "position": [0, 1.2, -8], "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.6 }, "friction": 0.5 },
+  "environment": { "skyColor": [0.55, 0.68, 0.86] },
+  "lighting": { "ambientMultiplier": 0.7, "exposure": 0.7,
+    "sun": { "castsShadow": true, "color": [1, 0.98, 0.94], "direction": [0.4, 0.72, -0.32], "intensity": 6.0 } },
+  "entities": [
+    { "id": 1, "name": "ground", "shape": "box", "position": [0, -0.2, 0], "size": [40, 0.4, 40],
+      "material": { "albedo": [0.5, 0.5, 0.48], "metallic": 0.0, "roughness": 1.0, "opacity": 1.0, "emission": [0, 0, 0], "checkerboard": true },
+      "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 } },
+    { "id": 2, "name": "model", "shape": "prefab", "prefab": { "recipe": "%1" }, "position": [0, 0, 0] }
+  ]
+}
+)JSON";
+
+}  // namespace
+
+ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
+    auto* column = new QVBoxLayout(this);
+    column->setContentsMargins(4, 4, 4, 4);
+    auto* row = new QHBoxLayout();
+    auto* newButton = new QPushButton("New...", this);
+    auto* openButton = new QPushButton("Open...", this);
+    auto* saveButton = new QPushButton("Save", this);
+    auto* reloadButton = new QPushButton("Reload", this);
+    saveButton->setToolTip("Write the script (Ctrl+S in the pane). The model is rebuilt in the viewport.");
+    reloadButton->setToolTip("Take the script from disk again, dropping what is in the pane.");
+    file_ = new QLabel("no script open", this);
+    row->addWidget(newButton);
+    row->addWidget(openButton);
+    row->addWidget(saveButton);
+    row->addWidget(reloadButton);
+    row->addWidget(file_, 1);
+    column->addLayout(row);
+
+    edit_ = new QPlainTextEdit(this);
+    QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    mono.setPointSize(10);
+    edit_->setFont(mono);
+    edit_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    edit_->setTabStopDistance(edit_->fontMetrics().horizontalAdvance(' ') * 2);
+    edit_->setPlaceholderText("Open a model script (a .lua under assets/scripts), or start a new one.");
+    column->addWidget(edit_, 1);
+
+    status_ = new QLabel(this);
+    status_->setWordWrap(true);
+    status_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    column->addWidget(status_);
+
+    watcher_ = new QFileSystemWatcher(this);
+    QObject::connect(newButton, &QPushButton::clicked, [this]() { newScript(); });
+    QObject::connect(openButton, &QPushButton::clicked, [this]() {
+        const QString chosen = QFileDialog::getOpenFileName(this, "Open a model script", kScripts, "Lua scripts (*.lua)");
+        if (!chosen.isEmpty()) openScript(chosen);
+    });
+    QObject::connect(saveButton, &QPushButton::clicked, [this]() { save(); });
+    QObject::connect(reloadButton, &QPushButton::clicked, [this]() {
+        if (!path_.isEmpty()) loadText();
+    });
+    auto* saveKey = new QShortcut(QKeySequence::Save, edit_);
+    saveKey->setContext(Qt::WidgetShortcut);     // only while the pane has the keyboard: elsewhere Ctrl+S saves the level
+    QObject::connect(saveKey, &QShortcut::activated, [this]() { save(); });
+    QObject::connect(edit_, &QPlainTextEdit::cursorPositionChanged, [this]() {
+        if (path_.isEmpty() || status_->property("bad").toBool()) return;
+        const QTextCursor c = edit_->textCursor();
+        setStatus(QString("line %1, column %2").arg(c.blockNumber() + 1).arg(c.positionInBlock() + 1), false);
+    });
+    QObject::connect(edit_->document(), &QTextDocument::modificationChanged, [this](bool changed) {
+        if (path_.isEmpty()) return;
+        file_->setText(QDir::current().relativeFilePath(path_) + (changed ? "  (not saved)" : ""));
+    });
+    // The file changed on disk: someone else wrote it (an assistant, another editor). Unedited, the pane follows;
+    // edited, it keeps the user's text and says so.
+    QObject::connect(watcher_, &QFileSystemWatcher::fileChanged, [this](const QString& changed) {
+        if (changed != path_) return;
+        if (!watcher_->files().contains(path_) && QFile::exists(path_)) watcher_->addPath(path_);   // (a save by rename drops the watch)
+        QFile f(path_);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+        const QString onDisk = QString::fromUtf8(f.readAll());
+        if (onDisk == edit_->toPlainText()) return;                 // our own save
+        if (edit_->document()->isModified()) {
+            changedOnDisk_ = true;
+            setStatus("The script changed on disk while you were editing. Save keeps yours; Reload takes the other.", true);
+            return;
+        }
+        loadText();
+    });
+}
+
+QString ModelStudioPanel::recipeName() const { return QFileInfo(path_).completeBaseName(); }
+QString ModelStudioPanel::levelPath() const { return QString("%1/%2.json").arg(kLevels, recipeName()); }
+bool ModelStudioPanel::dirty() const { return !path_.isEmpty() && edit_->document()->isModified(); }
+
+void ModelStudioPanel::setStatus(const QString& text, bool bad) {
+    status_->setProperty("bad", bad);
+    status_->setStyleSheet(bad ? "color: #d05040;" : "");
+    status_->setText(text);
+}
+
+void ModelStudioPanel::gotoLine(int line) {
+    const QTextBlock block = edit_->document()->findBlockByNumber(line - 1);
+    if (!block.isValid()) return;
+    QTextCursor c(block);
+    c.select(QTextCursor::LineUnderCursor);
+    edit_->setTextCursor(c);
+    edit_->centerCursor();
+}
+
+void ModelStudioPanel::loadText() {
+    QFile f(path_);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStatus("Cannot read " + path_, true);
+        return;
+    }
+    const QString text = QString::fromUtf8(f.readAll());
+    // keep the place: another hand may have changed a line far from where the user is reading
+    const int line = edit_->textCursor().blockNumber(), column = edit_->textCursor().positionInBlock();
+    loading_ = true;
+    edit_->setPlainText(text);
+    edit_->document()->setModified(false);
+    loading_ = false;
+    changedOnDisk_ = false;
+    const QTextBlock block = edit_->document()->findBlockByNumber(line);
+    if (block.isValid()) {
+        QTextCursor c(block);
+        c.movePosition(QTextCursor::Right, QTextCursor::MoveAnchor, std::min(column, static_cast<int>(block.length()) - 1));
+        edit_->setTextCursor(c);
+    }
+    file_->setText(QDir::current().relativeFilePath(path_));
+}
+
+void ModelStudioPanel::writeLevel() const {
+    QDir().mkpath(kLevels);
+    QFile f(levelPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return;
+    f.write(QString(kLevel).arg(recipeName()).toUtf8());
+}
+
+void ModelStudioPanel::openScript(const QString& chosen) {
+    if (dirty()) {
+        const QMessageBox::StandardButton choice = QMessageBox::warning(
+            this, "Save the script?", "The script in the pane has changes that are not saved.", QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+        if (choice == QMessageBox::Cancel) return;
+        if (choice == QMessageBox::Save && !save()) return;
+    }
+    const QString abs = QFileInfo(chosen).absoluteFilePath();
+    // A recipe is found by its name under assets/scripts (or the level's own folder): one outside would open in the
+    // pane and build nothing.
+    const QString scripts = QFileInfo(kScripts).absoluteFilePath();
+    if (QFileInfo(abs).absolutePath() != scripts) {
+        setStatus("A model script lives in " + QString(kScripts) + " (the engine finds a recipe by its name there).", true);
+        return;
+    }
+    if (!path_.isEmpty()) watcher_->removePath(path_);
+    path_ = abs;
+    watcher_->addPath(path_);
+    edit_->setTextCursor(QTextCursor(edit_->document()));
+    loadText();
+    writeLevel();
+    setStatus("Building " + recipeName() + " ...", false);
+    if (openLevel) openLevel(levelPath().toStdString());
+}
+
+void ModelStudioPanel::newScript() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "New model", "Its name (letters, digits and _; it becomes assets/scripts/<name>.lua):", QLineEdit::Normal,
+                                               "my_model", &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    if (!QRegularExpression("^[A-Za-z_][A-Za-z0-9_]*$").match(name).hasMatch()) {
+        setStatus("A model's name is letters, digits and _, and does not start with a digit.", true);
+        return;
+    }
+    const QString file = QString("%1/%2.lua").arg(kScripts, name);
+    if (QFile::exists(file)) {
+        setStatus(file + " is already there: Open it, or choose another name.", true);
+        return;
+    }
+    QFile f(file);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        setStatus("Cannot write " + file, true);
+        return;
+    }
+    f.write(QString(kStarter).arg(name).toUtf8());
+    f.close();
+    openScript(file);
+}
+
+bool ModelStudioPanel::save() {
+    if (path_.isEmpty()) return false;
+    QFile f(path_);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        setStatus("Cannot write " + path_, true);
+        return false;
+    }
+    f.write(edit_->toPlainText().toUtf8());
+    f.close();
+    edit_->document()->setModified(false);
+    changedOnDisk_ = false;
+    if (!watcher_->files().contains(path_)) watcher_->addPath(path_);
+    setStatus("Saved. Rebuilding " + recipeName() + " ...", false);
+    return true;
+}
+
+void ModelStudioPanel::noteLog(bool isError, const QString& line) {
+    if (path_.isEmpty()) return;
+    // The loader's line when this level's model cannot be built:  prefab entity 'model': prefab '<recipe>': ...
+    if (isError && line.contains("prefab entity 'model'")) {
+        QString why = line.mid(line.indexOf("prefab entity 'model'") + 23).trimmed();
+        // a Lua error names its line as  [string "..."]:LINE:  or  <file>.lua:LINE:
+        int errorLine = 0;
+        QRegularExpressionMatch m = QRegularExpression(QString("%1\\.lua: \\[string [^\\]]*\\]:(\\d+):").arg(QRegularExpression::escape(recipeName()))).match(why);
+        if (m.hasMatch()) errorLine = m.captured(1).toInt();
+        why.replace(QRegularExpression("\\[string \"[^\\]]*\\]:(\\d+):"), "line \\1:");
+        // (said once: "prefab 'x': the model 'recipe:x': x.lua: line 3: ..." is "line 3: ...")
+        const int own = why.indexOf(recipeName() + ".lua: ");
+        if (own >= 0) why = why.mid(own + recipeName().size() + 6);
+        setStatus(why, true);
+        if (errorLine > 0 && !dirty()) gotoLine(errorLine);
+        return;
+    }
+    // ...and when the level has loaded (again): built, unless an error for this load came first.
+    if (!isError && line.contains("Loaded level:") && line.contains(recipeName() + ".json")) {
+        if (!status_->property("bad").toBool() || status_->text().startsWith("Saved") || status_->text().startsWith("Building"))
+            setStatus("Built " + recipeName() + ".", false);
+        return;
+    }
+    if (!isError && line.contains("watch_scripts: change detected")) {
+        if (!changedOnDisk_) setStatus("Rebuilding " + recipeName() + " ...", false);
+    }
+}

@@ -32,6 +32,7 @@ private:
 
     Renderer& editorRenderer;
     std::string levelFile;
+    void frameModelsIfAsked(FrameContext& ctx);   // "editor_view": "models" (the model studio's level)
     ScriptWatch watch;
 };
 

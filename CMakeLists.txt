@@ -1760,6 +1760,7 @@ if(Qt6_FOUND)
         src/editor_app/property_inspector.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
+        src/editor_app/model_studio.cpp      # the model studio: a script pane whose model the viewport shows (#191)
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)

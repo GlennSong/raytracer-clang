@@ -29,6 +29,7 @@
 #include "../log.h"
 #include "bake_dialog.h"
 #include "level_cache_panel.h"
+#include "model_studio.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #ifdef RT_ROADS_LANES
@@ -287,6 +288,8 @@ struct LogConsole {
     QPlainTextEdit* view = nullptr;
     std::mutex mutex;
     std::vector<std::pair<engine::logging::Level, QString>> pending;
+    // every line as it is drained, for a panel that reads its own news out of the log (the model studio)
+    std::function<void(bool isError, const QString& line)> onLine;
 
     QDockWidget* buildDock(QMainWindow* main) {
         auto* dock = new QDockWidget("Console", main);
@@ -316,6 +319,7 @@ struct LogConsole {
                               : level == engine::logging::Level::Warn ? "[WARN] "
                                                                       : "";
             view->appendPlainText(tag + text);
+            if (onLine) onLine(level == engine::logging::Level::Error, text);
         }
     }
 };
@@ -692,8 +696,12 @@ int main(int argc, char** argv) {
     QApplication qtApp(argc, argv);
 
     std::string levelPath = "assets/levels/arena.json";
-    for (int i = 1; i < argc; i++)
+    // --model <name>: start in the model studio on assets/scripts/<name>.lua (model_studio.h)
+    std::string studioScript;
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc) { studioScript = argv[++i]; continue; }
         if (argv[i][0] != '-') levelPath = argv[i];
+    }
 
     auto hostedOwned = std::make_unique<engine::HostedWindow>();
     engine::HostedWindow* hosted = hostedOwned.get();
@@ -751,10 +759,20 @@ int main(int argc, char** argv) {
     mainWindow.resizeDocks({levelCacheDock}, {380}, Qt::Horizontal);
     std::function<void()> refreshLevelCache;
 
+    // THE MODEL STUDIO (model_studio.h): a script pane beside the viewport; the viewport shows the script's model.
+    // Its openLevel is set once openScene exists, below.
+    auto* modelDock = new QDockWidget("Model script", &mainWindow);
+    auto* modelStudio = new ModelStudioPanel(modelDock);
+    modelDock->setWidget(modelStudio);
+    mainWindow.addDockWidget(Qt::LeftDockWidgetArea, modelDock);
+    mainWindow.tabifyDockWidget(hierarchyDock, modelDock);
+    hierarchyDock->raise();
+
     // Engine log console, tabbed with the asset browser.
     LogConsole console;
     BakeJob bakeJob;
     QDockWidget* consoleDock = console.buildDock(&mainWindow);
+    console.onLine = [modelStudio](bool isError, const QString& line) { modelStudio->noteLog(isError, line); };
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
     mainWindow.tabifyDockWidget(assetsDock, consoleDock);
 
@@ -940,6 +958,19 @@ int main(int argc, char** argv) {
         viewport->setFocus();
         if (refreshLevelCache) refreshLevelCache();
     };
+
+    // The model studio opens its own small level the same way; the dock comes forward and takes room for a script.
+    modelStudio->openLevel = [&, modelDock](const std::string& path) {
+        openScene(path);
+        modelDock->show();
+        modelDock->raise();
+        if (modelDock->width() < 560) mainWindow.resizeDocks({modelDock}, {620}, Qt::Horizontal);
+    };
+    // Assets: double-clicking a .lua under assets/scripts opens it in the studio (a level still opens as a level).
+    QObject::connect(assetsView, &QTreeView::doubleClicked, [&, modelStudio, assetsModel](const QModelIndex& index) {
+        const QString path = assetsModel->filePath(index);
+        if (path.endsWith(".lua") && QFileInfo(path).absolutePath() == QFileInfo("assets/scripts").absoluteFilePath()) modelStudio->openScript(path);
+    });
 
     // File > Recently Opened: the last few scenes you've opened, newest first,
     // persisted in settings.json. Rebuilt each time the menu opens so it always
@@ -1487,6 +1518,11 @@ int main(int argc, char** argv) {
     // The scene we boot with counts as recently opened (normalized like the rest).
     engine::recordRecentScene(app.settings(), relativeScenePath(levelPath));
     app.pushState(makeEditor());
+    if (!studioScript.empty()) {
+        QString script = QString::fromStdString(studioScript);
+        if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
+        QTimer::singleShot(0, [modelStudio, script]() { modelStudio->openScript(script); });
+    }
     app.begin();
     // The same control socket the standalone viewer opens (RT_CONTROL=0 turns
     // it off): an already-open editor is attachable for scripted captures and

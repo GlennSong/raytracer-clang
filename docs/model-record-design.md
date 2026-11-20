@@ -844,6 +844,48 @@ cable and scatter libraries take any `mesh.path.*` result as it is (`scatter.alo
 one). Not built: weights and trimming curves (full NURBS: wanted only to read CAD data, since circles and conics are
 made directly), a surface that closes on itself, and moving one control point of a path already made.
 
+### The model studio: a script pane beside the engine's viewport (2026-11-20)
+
+Glenn: "create another mode in that editor that would allow me and you to interactively build a Lua script right
+there in that tool and then see the output in a 3-D panel next to it ... the actual engine runtime ... as I walk
+around the model I could give you feedback and then you could update the Lua script or I could." It is the ask
+parked as #104, now cheap because the model record, the store and prefabs exist.
+
+**Built so far (the working loop):**
+
+- **The dock.** `src/editor_app/model_studio.{h,cpp}`, "Model script" in the Qt editor, tabbed with the Hierarchy.
+  New (a starter model under a name), Open (a `.lua` in `assets/scripts`, or double-click one in Assets), Save
+  (Ctrl+S in the pane), Reload. `editor_app --model crane` starts in it.
+- **What the viewport shows.** The panel writes a small level, `cache/model_studio/<name>.json` (not tracked):
+  daylight, a checkered ground with physics, and one prefab entity that names the recipe directly:
+  `"prefab": { "recipe": "<name>" }`. So the model is a stamped prefab in the real engine (levels of detail,
+  collision shapes, moving nodes), with no line in `models.lua` or `prefabs.lua` yet. Play runs it: walk round
+  it, bump into it.
+- **Rebuilding is the engine's own script watcher,** not a second mechanism. The loader hands the watcher every
+  file the model is built from (`modelSourceFiles`: the recipe, each library it requires, each file it reads, the
+  same for models it uses). Saving in the pane rebuilds; so does a write to the file from anywhere else (an
+  assistant editing it), and so does an edit to `truss.lua` if the script requires it. The pane follows the file
+  when it has no unsaved edits, and says so when it has.
+- **A mistake** shows under the pane in red with its line, and the pane's cursor goes to the line. The recipe stays
+  watched, so mending it rebuilds.
+- **The camera** opens looking at the model (a level with `"editor_view": "models"` is framed on what its prefabs
+  draw) and is left alone on a rebuild.
+
+**Engine pieces under it:** `obtainRecipeModel` / `recipeModelName` (a model straight from a recipe, kept in the
+store as `recipe:<name>`), `Prefab::recipe`, the level entity's object form, `modelSourceFiles`, the loader's
+watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` changes).
+
+**Not built yet, in the order planned:**
+
+1. While a recipe has a mistake the viewport is empty: the last good model should stay up.
+2. "What made this?": each part, node, marker and shape recording the script line that added it; a click in the
+   viewport showing it and putting the pane on that line. One way, scene to script.
+3. A "copy what I am looking at" button (part, script line, camera, a screenshot's path) for pointing at things
+   in a message.
+4. "Save as model and prefab": the line in `models.lua` and `prefabs.lua`.
+5. The model's numbers beside the pane (size, triangles per level, the audit), line numbers in the pane, Lua
+   colouring, arguments for a recipe that takes them.
+
 ## The model half, done; what the prefab half starts from
 
 Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of

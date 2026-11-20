@@ -1,5 +1,10 @@
 #include "editor_state.h"
 
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
 #include "editor_home_view.h"
 #include "../../renderer/window.h"
 #include "../level_loader.h"
@@ -72,7 +77,8 @@ void EditorState::onEnter(FrameContext& ctx) {
     // BEFORE PlayingState::onEnter below, so CameraSystem::onStart seeds from
     // it like any other settings-driven pose.
     static EditorHomeViewPolicy sHomeView;   // process-lifetime; states aren't
-    if (sHomeView.shouldReset(levelFile)) {
+    const bool freshLevel = sHomeView.shouldReset(levelFile);
+    if (freshLevel) {
         ctx.settings.setDouble("flyEyeX", kEditorHomeEyeX);
         ctx.settings.setDouble("flyEyeY", kEditorHomeEyeY);
         ctx.settings.setDouble("flyEyeZ", kEditorHomeEyeZ);
@@ -88,12 +94,48 @@ void EditorState::onEnter(FrameContext& ctx) {
     ctx.settings.setString("levelPath", levelFile);
 
     reloadDocument(ctx);
+    // A level that asks for it ("editor_view": "models": the model studio's) opens LOOKING AT ITS MODELS: the camera
+    // stands back from everything its stamped prefabs draw, three-quarter on, the whole of it in view. Only when the
+    // level is newly opened, so a rebuild after an edit leaves the camera where the user put it.
+    if (freshLevel) frameModelsIfAsked(ctx);
     PlayingState::onEnter(ctx);
     // PlayingState captures the pointer for first-person play; the editor is
     // a pointing UI — picking, gizmos, panels — so the cursor stays visible.
     window.setCursorMode(CursorMode::Normal);
     LOG_INFO << "Edit mode: click selects, 1/2/3 move/rotate/scale, "
                 "Play runs the level";
+}
+
+void EditorState::frameModelsIfAsked(FrameContext& ctx) {
+    std::ifstream f(levelFile);
+    if (!f) return;
+    const nlohmann::json root = nlohmann::json::parse(f, nullptr, false);
+    if (!root.is_object() || root.value("editor_view", std::string()) != "models") return;
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    bool any = false;
+    ctx.world.each<Transform, ModelPiece>([&](Entity e, Transform& t, ModelPiece& piece) {
+        if (piece.from > 0) return;                       // the full level only
+        const Renderable* r = ctx.world.get<Renderable>(e);
+        if (r == nullptr) return;
+        const BoundingSphere b = ctx.renderer.getMeshBounds(r->mesh);
+        const Vec3 c = t.matrix().transformPoint(b.center);
+        const Vec3 reach(b.radius, b.radius, b.radius);
+        lo = Vec3(std::min(lo.x, c.x - reach.x), std::min(lo.y, c.y - reach.y), std::min(lo.z, c.z - reach.z));
+        hi = Vec3(std::max(hi.x, c.x + reach.x), std::max(hi.y, c.y + reach.y), std::max(hi.z, c.z + reach.z));
+        any = true;
+    });
+    // nothing built (a recipe with a mistake in it): stand where a small model would be seen from
+    const Vec3 centre = any ? (lo + hi) * 0.5 : Vec3(0, 1, 0);
+    const Real radius = any ? std::max<Real>(0.5, (hi - lo).length() * 0.5) : 2.0;
+    const Vec3 from = normalize(Vec3(-0.55, 0.38, -1.0));   // over the left shoulder of something that faces +z
+    const Vec3 eye = centre + from * (radius * 2.4);
+    const Vec3 look = normalize(centre - eye);
+    // (fly camera: forward = (sin yaw cos pitch, sin pitch, -cos yaw cos pitch))
+    ctx.settings.setDouble("flyEyeX", eye.x);
+    ctx.settings.setDouble("flyEyeY", std::max<Real>(eye.y, 0.3));
+    ctx.settings.setDouble("flyEyeZ", eye.z);
+    ctx.settings.setDouble("flyPitch", std::asin(std::clamp<Real>(look.y, -1, 1)) * 180.0 / 3.14159265358979323846);
+    ctx.settings.setDouble("flyYaw", std::atan2(look.x, -look.z) * 180.0 / 3.14159265358979323846);
 }
 
 void EditorState::reloadDocument(FrameContext& ctx) {
