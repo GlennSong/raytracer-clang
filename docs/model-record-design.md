@@ -821,8 +821,18 @@ proposed to him:
    Lua library, `assets/scripts/cable.lua`: `cable.hang(a, b, { sag })` gives the points of a hanging curve (the
    true one when the ends are level), `cable.wire` one round wire along points, `cable.rope` strands twisted along
    them, `cable.length` the length. Shapes that stand still: a rope that swings is #311.
-7. **Cage deform:** move a few control points and the mesh inside follows.
-8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level.
+7. **Cage deform:** move a few control points and the mesh inside follows. BUILT 2026-11-20 as a Lua library,
+   `assets/scripts/cage.lua`: `cage.new{ lo, hi, counts }`, `c:move(i, j, k, delta)` or `c:move_where(rule)`, then
+   `c:mesh(m)` or `c:poly(P)`. The classic free-form deformation: smooth through the whole box with three or more
+   control points along an axis, straight with two. A box-shaped cage only, and an inner control point moves the
+   surface by less than it moved.
+8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level. BUILT 2026-11-20:
+   `unsubdivide` in `procgen/polymesh.{h,cpp}`, Lua `P:unsubdivide([near])`. A mesh with a subdivided mesh's
+   pattern loses a level: a quarter of the faces, the same grid. The points that stay do not move. It refuses a
+   mesh with a face that is not a quad or with an open border, so a kit car's body with its open panels is not
+   yet a customer.
+
+All eight tools on this list are built. What each does not do is said in its line.
 
 ## The model half, done; what the prefab half starts from
 

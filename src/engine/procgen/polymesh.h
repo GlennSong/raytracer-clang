@@ -169,6 +169,20 @@ std::vector<int> slice(PolyMesh& m, Vec3 point, Vec3 normal, double eps = 1e-7);
 // both go and the hole is open on that side.
 std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vector<int>& b);
 
+// UN-SUBDIVIDE (#191): take one level of subdivision back out. A mesh that came from `subdivide` (or has the same
+// pattern: all quads, every other point an edge's middle) loses its edge points and face points and keeps every
+// second loop: a quarter of the faces, in the same order and shape, for a lower level of detail that is still an
+// orderly grid (where the simplifier gives a scatter of triangles). The points that stay do not move, so the
+// result is the subdivided shape sampled, a little inside the cage that made it.
+//
+// `keep` names one point that must stay (a mesh's pattern has two sets of points that could be "the corners"; by
+// default the set holding point 0, which is the one `subdivide` wrote first). A crease that ran along both halves
+// of an edge runs along the whole edge, one level sharper.
+//
+// Returns false, and changes nothing, when the mesh does not have the pattern: a face that is not a quad, an open
+// border, or loops that do not pair off.
+bool unsubdivide(PolyMesh& m, int keep = 0);
+
 // The point nearest to `at` (for naming an edge to loopCut by where its ends are).
 int nearestPoint(const PolyMesh& m, Vec3 at);
 

@@ -5108,6 +5108,15 @@ int l_poly_bridge(lua_State* L) {
     pushSel(L, made);
     return 1;
 }
+// P:unsubdivide([near]) -> true | false: take one level of subdivision back out, in place: every second loop stays,
+// a quarter of the faces (procgen/polymesh.h unsubdivide). `near` is a place whose nearest point must stay. False,
+// and nothing changed, when the mesh does not have a subdivided mesh's pattern.
+int l_poly_unsubdivide(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const int keep = lua_isnoneornil(L, 2) ? 0 : nearestPoint(m, checkVec3(L, 2));
+    lua_pushboolean(L, unsubdivide(m, keep));
+    return 1;
+}
 int l_poly_crease_faces(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
@@ -5304,7 +5313,7 @@ void registerPolyMetatable(lua_State* L) {
             {"extract", l_poly_extract},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
-            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel}, {"loop_cut", l_poly_loop_cut}, {"slice", l_poly_slice}, {"bridge", l_poly_bridge},
+            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel}, {"unsubdivide", l_poly_unsubdivide}, {"loop_cut", l_poly_loop_cut}, {"slice", l_poly_slice}, {"bridge", l_poly_bridge},
             {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},

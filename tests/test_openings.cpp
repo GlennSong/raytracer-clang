@@ -1,6 +1,6 @@
 // The modelling libraries written in Lua over the mesh words (#191): openings.lua, a hole through a wall with a
 // frame and a pane; truss.lua, a lattice of members along a path; scatter.lua, where to put many copies of a piece;
-// cable.lua, a line that hangs and a rope of twisted strands.
+// cable.lua, a line that hangs and a rope of twisted strands; cage.lua, a mesh reshaped by a few control points.
 #include "test_framework.h"
 
 #include "../src/engine/mesh_builder.h"
@@ -261,4 +261,65 @@ TEST_CASE(cable_hangs_between_two_points_and_a_rope_twists_along_a_line) {
     for (const Vertex& v : m.parts[0].mesh.vertices) farthest = std::max(farthest, std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z));
     CHECK(farthest <= 0.05 + 1e-6);
     CHECK(farthest > 0.045);
+}
+
+TEST_CASE(cage_reshapes_what_is_inside_it_by_its_control_points) {
+    ProcModel m;
+    std::string err;
+    const bool ok = runModel(R"LUA(
+        local cage = require "cage"
+        local function near(a, b) return math.abs(a - b) < 1e-9 end
+        local function same(p, q) return near(p[1], q[1]) and near(p[2], q[2]) and near(p[3], q[3]) end
+        local c = cage.new{ lo = { 0, 0, 0 }, hi = { 2, 1, 4 }, counts = { 3, 2, 3 } }
+        -- nothing moved: nothing moves
+        assert(same(c:at({ 0.3, 0.7, 1.1 }), { 0.3, 0.7, 1.1 }))
+        assert(same(c:point(2, 2, 3), { 1, 1, 4 }))
+        -- every control point moved the same way: everything moves that way
+        local all = cage.new{ lo = { 0, 0, 0 }, hi = { 2, 1, 4 }, counts = { 3, 2, 3 } }
+        all:move_where(function() return { 0.5, 0, -1 } end)
+        assert(same(all:at({ 0.3, 0.7, 1.1 }), { 0.8, 0.7, 0.1 }))
+        -- a corner control point takes its corner with it and leaves the other corners alone
+        c:move(1, 1, 1, { -1, 0, 0 })
+        assert(same(c:at({ 0, 0, 0 }), { -1, 0, 0 }))
+        assert(same(c:at({ 2, 1, 4 }), { 2, 1, 4 }) and same(c:at({ 0, 1, 0 }), { 0, 1, 0 }))
+        -- an inner control point pulls the surface under it, by less than it moved, and fades to nothing at the edges
+        local b = cage.new{ lo = { 0, 0, 0 }, hi = { 2, 1, 4 }, counts = { 3, 2, 3 } }
+        b:move(2, 2, 2, { 0, 1, 0 })
+        local top = b:at({ 1, 1, 2 })
+        assert(near(top[2], 1 + 0.25), "the middle of the top rises a quarter of the pull: " .. top[2])
+        assert(same(b:at({ 0, 1, 2 }), { 0, 1, 2 }) and same(b:at({ 1, 1, 0 }), { 1, 1, 0 }))
+        assert(same(b:at({ 1, 0, 2 }), { 1, 0, 2 }), "the bottom stays")
+        local part = b:at({ 0.5, 1, 2 })
+        assert(part[2] > 1 and part[2] < top[2])
+        -- two control points along an axis: straight between them (a shear)
+        local s = cage.new{ lo = { 0, 0, 0 }, hi = { 1, 1, 1 } }
+        s:move_where(function(i, j, k) if j == 2 then return { 0.4, 0, 0 } end end)
+        assert(same(s:at({ 0.2, 0.5, 0.9 }), { 0.4, 0.5, 0.9 }))
+        -- outside the cage a point goes as the nearest face does
+        assert(same(s:at({ 0.2, 3, 0.9 }), { 0.6, 3, 0.9 }))
+
+        -- a mesh and a quad mesh through the same cage end up the same shape
+        local P = poly.box{ 2, 1, 4 }
+        P:translate{ 1, 0.5, 2 }
+        b:poly(P)
+        local lo, hi = P:bounds()
+        assert(near(lo[2], 0) and near(hi[2], 1), "the box's corners did not move")
+        local bent = b:mesh(mesh.translate(mesh.box{ 2, 1, 4 }, { 1, 0.5, 2 }))
+        assert(mesh.audit(bent).tris == 12)
+
+        local function refused(fn, says)
+          local ok, why = pcall(fn)
+          assert(not ok and tostring(why):find(says, 1, true), tostring(why))
+        end
+        refused(function() cage.new{ lo = { 0, 0, 0 } } end, "give lo and hi")
+        refused(function() cage.new{ lo = { 0, 0, 0 }, hi = { 1, 1, 1 }, counts = { 1, 2, 2 } } end, "2 or more")
+        refused(function() cage.new{ lo = { 0, 0, 0 }, hi = { 1, 0, 1 } } end, "past lo")
+        refused(function() b:move(4, 1, 1, { 0, 0, 0 }) end, "no control point 4, 1, 1")
+        local out = model.new()
+        out:add(bent)
+        return out
+    )LUA", m, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    CHECK(!m.parts.empty());
 }

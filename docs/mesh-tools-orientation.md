@@ -63,6 +63,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 19fd8fc2 | the crane rebuilt with the tools: lattice mast and boom, a cab with framed windows, bevelled edges; the same nodes, markers and shapes |
 | ff719461 | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
 | c5d9a860 | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
+| (this) | cage deform (`assets/scripts/cage.lua`) and un-subdivide (`unsubdivide`, Lua `P:unsubdivide`): the last two of the eight tools |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -134,10 +135,13 @@ models, then modelling tools.**
    boulder whose shape is its hull; each a line in `models.lua` and `prefabs.lua`, all standing in
    `prefab_lab.json`). Nothing broke. Still to try: a building part, a model from a `.glb`, something with
    textures baked by the recipe.
-3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"). Edge bevel, loop
-   cut, slice, bridge, openings, the truss, scatter, and cable and rope are built. Left: cage deform and
-   un-subdivide. The four Lua libraries are tested in `tests/test_openings.cpp`. Scratch recipes that show them:
-   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua`, `bolts.lua`, `cables.lua` (not tracked).
+3. **Modelling tools: all eight on the design note's list are built** (bevel, loop cut / slice / bridge,
+   openings, truss, scatter, cable and rope, cage deform, un-subdivide). C++ ones are on the quad mesh
+   (`procgen/polymesh.{h,cpp}`); the Lua libraries are `openings.lua`, `truss.lua`, `scatter.lua`, `cable.lua`,
+   `cage.lua` in `assets/scripts`, tested in `tests/test_openings.cpp`. Scratch recipes that show each:
+   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua`, `bolts.lua`, `cables.lua`,
+   `deform.lua` (not tracked). What each tool does not do is in the design note; those gaps are the next tool
+   work if Glenn wants more (round bevels, arched openings, gusset plates, un-subdivide with open borders).
 
 The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 

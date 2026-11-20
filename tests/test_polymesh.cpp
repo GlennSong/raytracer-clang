@@ -452,3 +452,74 @@ TEST_CASE(polymesh_bridge_joins_two_solids_or_makes_a_hole_through_one) {
     CHECK(odd.faces.size() == faces);
     CHECK(bridge(odd, square, square).empty());
 }
+
+TEST_CASE(polymesh_unsubdivide_takes_a_level_back_out) {
+    PolyMesh cage = cube();
+    cage.creases.clear();
+    // one level in, one level out: the cube's 6 faces and 8 points again, facing out
+    PolyMesh one = subdivide(cage, 1);
+    CHECK(one.faces.size() == 24);
+    CHECK(unsubdivide(one));
+    CHECK(one.faces.size() == 6);
+    CHECK(one.pts.size() == 8);
+    CHECK(isClosed(one));
+    CHECK(signedVolume(one) > 0);
+    CHECK(signedVolume(one) < 1.0);          // the points did not move: the smoothed corners, inside the cage
+    for (const PolyMesh::Face& f : one.faces) CHECK(f.v.size() == 4);
+    // two levels in, one out: the same faces as one level in, at the points two levels put them
+    PolyMesh two = subdivide(cage, 2);
+    const PolyMesh level1 = subdivide(cage, 1);
+    CHECK(two.faces.size() == 96);
+    CHECK(unsubdivide(two));
+    CHECK(two.faces.size() == level1.faces.size());
+    CHECK(two.pts.size() == level1.pts.size());
+    CHECK(isClosed(two));
+    CHECK(unsubdivide(two));
+    CHECK(two.faces.size() == 6);
+    CHECK(isClosed(two) && signedVolume(two) > 0);
+    // a third time there is no level left: refused, unchanged
+    CHECK(!unsubdivide(two));
+    CHECK(two.faces.size() == 6 && two.pts.size() == 8);
+
+    // a crease that held through the level comes back on the whole edge
+    // (a crease of sharpness 3 is 2 on each half after one level; one of sharpness 1 is used up by the level)
+    PolyMesh sharp = cube();
+    CHECK(!sharp.creases.empty());            // the loft creased its caps
+    for (std::pair<const std::pair<int, int>, float>& c : sharp.creases) c.second = 3.0f;
+    const std::size_t creased = sharp.creases.size();
+    PolyMesh fine = subdivide(sharp, 1);
+    CHECK(unsubdivide(fine));
+    CHECK(fine.creases.size() == creased);
+    for (const std::pair<const std::pair<int, int>, float>& c : fine.creases) CHECK_APPROX(c.second, 3.0, 1e-6);
+
+    // a bevelled cube subdivided: faces of 3, 4 and 8 corners come back as they were
+    PolyMesh b = cube();
+    b.creases.clear();
+    bevel(b, 0.1);
+    PolyMesh bs = subdivide(b, 1);
+    CHECK(unsubdivide(bs));
+    CHECK(bs.faces.size() == b.faces.size());
+    CHECK(bs.pts.size() == b.pts.size());
+    int threes = 0;
+    for (const PolyMesh::Face& f : bs.faces) threes += f.v.size() == 3 ? 1 : 0;
+    CHECK(threes == 8);
+    CHECK(isClosed(bs) && signedVolume(bs) > 0);
+
+    // keeping a face's middle instead gives the other grid (the dual): 8 faces of three corners, 6 points
+    PolyMesh dual = subdivide(cage, 1);
+    const int middle = nearestPoint(dual, Vec3(0, 0, 0.5));
+    CHECK(unsubdivide(dual, middle));
+    CHECK(dual.pts.size() == 6);
+    CHECK(dual.faces.size() == 8);
+    CHECK(isClosed(dual) && signedVolume(dual) > 0);
+
+    // not the pattern: a face that is not a quad, or an open border
+    PolyMesh tri = cube();
+    bevel(tri, 0.1);
+    const std::size_t before = tri.faces.size();
+    CHECK(!unsubdivide(tri));
+    CHECK(tri.faces.size() == before);
+    const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
+    PolyMesh open = subdivide(loft({sq, sq}, {-0.5, 0.5}, false, false), 1);
+    CHECK(!unsubdivide(open));
+}
