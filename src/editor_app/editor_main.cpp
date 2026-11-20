@@ -966,6 +966,47 @@ int main(int argc, char** argv) {
         modelDock->raise();
         if (modelDock->width() < 560) mainWindow.resizeDocks({modelDock}, {620}, Qt::Horizontal);
     };
+    // "Copy view": where the camera is, and a screenshot of the viewport taken now.
+    modelStudio->viewNote = [&]() -> QString {
+        const engine::CameraState& cam = app.renderView().camera;
+        const std::string shot = engine::nextScreenshotPath(engine::screenshotFolder(app.settings()));
+        const bool asked = app.renderer().requestFrameDump(shot);
+        QString text = QString("Camera: at (%1, %2, %3) looking toward (%4, %5, %6)\n")
+                           .arg(cam.position.x, 0, 'f', 2).arg(cam.position.y, 0, 'f', 2).arg(cam.position.z, 0, 'f', 2)
+                           .arg(cam.target.x, 0, 'f', 2).arg(cam.target.y, 0, 'f', 2).arg(cam.target.z, 0, 'f', 2);
+        if (asked) text += "Screenshot: " + QString::fromStdString(shot) + "\n";
+        return text;
+    };
+    // The model in the viewport, in numbers.
+    modelStudio->modelNumbers = [&]() -> QString {
+        engine::World* world = bridge.world();
+        if (world == nullptr) return QString();
+        std::shared_ptr<const engine::ProcModel> model;
+        std::size_t pieces = 0, bodies = 0;
+        world->each<engine::ModelInstance>([&](engine::Entity, engine::ModelInstance& mi) {
+            if (model != nullptr) return;
+            model = mi.model;
+            pieces = mi.pieces.size();
+            bodies = mi.bodies.size();
+        });
+        if (model == nullptr) return QString();
+        const RenderMesh full = engine::flattenModel(*model);
+        Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+        for (const Vertex& v : full.vertices) {
+            lo = Vec3(std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z));
+            hi = Vec3(std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z));
+        }
+        if (full.vertices.empty()) return QString("nothing drawn");
+        QString text = QString("%1 x %2 x %3 m (wide, tall, deep); %L4 triangles").arg(hi.x - lo.x, 0, 'f', 2).arg(hi.y - lo.y, 0, 'f', 2).arg(hi.z - lo.z, 0, 'f', 2)
+                           .arg(static_cast<qulonglong>(full.indices.size() / 3));
+        for (std::size_t i = 1; i < model->levelFrom.size(); ++i)
+            text += QString(", %L1 from %2 m").arg(static_cast<qulonglong>(engine::flattenModel(*model, model->levelFrom[i]).indices.size() / 3)).arg(model->levelFrom[i], 0, 'f', 0);
+        int moving = 0;
+        for (const engine::ProcNode& n : model->nodes) moving += n.motion.kind != engine::ProcMotion::Kind::None ? 1 : 0;
+        text += QString("; %1 pieces drawn; %2 collision shapes (%3 bodies); %4 nodes (%5 moving); %6 markers")
+                    .arg(pieces).arg(model->colliders.size()).arg(bodies).arg(model->nodes.size()).arg(moving).arg(model->markerCount());
+        return text;
+    };
     // Assets: double-clicking a .lua under assets/scripts opens it in the studio (a level still opens as a level).
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&, modelStudio, assetsModel](const QModelIndex& index) {
         const QString path = assetsModel->filePath(index);
@@ -1522,6 +1563,18 @@ int main(int argc, char** argv) {
         QString script = QString::fromStdString(studioScript);
         if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
         QTimer::singleShot(0, [modelStudio, script]() { modelStudio->openScript(script); });
+    }
+    // RT_STUDIO_PRESS=copy|lists: press that button of the studio a few seconds in, for checking it unattended
+    // (as RT_EDITOR_WINDOW_SHOT is for the window). "copy" also prints what went to the clipboard.
+    if (const char* press = std::getenv("RT_STUDIO_PRESS"); press && *press) {
+        const std::string which = press;
+        QTimer::singleShot(4000, [modelStudio, which]() {
+            if (which == "lists") modelStudio->addToLists();
+            if (which == "copy") {
+                modelStudio->copyView();
+                LOG_INFO << "[studio] copied:\n" << QApplication::clipboard()->text().toStdString();
+            }
+        });
     }
     app.begin();
     // The same control socket the standalone viewer opens (RT_CONTROL=0 turns

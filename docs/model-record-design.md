@@ -886,11 +886,17 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
    is. Tested up to the stamped piece; the click in the editor has not been tried by a person yet. Not done: nodes,
    markers and collision shapes recording their lines; a label passed through a library for finer tags than one
    line; a highlight on the picked piece that covers every piece of the same line.
-3. A "copy what I am looking at" button (part, script line, camera, a screenshot's path) for pointing at things
-   in a message.
-4. "Save as model and prefab": the line in `models.lua` and `prefabs.lua`.
-5. The model's numbers beside the pane (size, triangles per level, the audit), line numbers in the pane, Lua
-   colouring, arguments for a recipe that takes them.
+3. DONE the same day: "Copy view" puts on the clipboard the script, the piece last picked with its line and
+   that line's text, the cursor's line, any error shown, the model's numbers, where the camera is and the path of
+   a screenshot taken then. Pasted into a message, it says exactly what is being looked at.
+4. DONE the same day: "Add to lists" gives the script its line in `models.lua` and `prefabs.lua` (static, solid),
+   refusing while the script has a mistake and leaving a name already listed alone.
+5. DONE the same day: line numbers, Lua colouring, and the model's numbers under the pane (size, triangles per
+   level, pieces, collision shapes, nodes, markers).
+
+Still open: nodes, markers and shapes recording their lines; finer tags than one line per library call; arguments
+for a recipe that takes them; a "walk" button (Play already does it); typing and clicking in the pane have been
+checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 
 ## The model half, done; what the prefab half starts from
 

@@ -2,6 +2,11 @@
 #include "model_studio.h"
 
 #include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QPainter>
+#include <QSyntaxHighlighter>
+#include <QTextCharFormat>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -67,6 +72,131 @@ const char* kLevel = R"JSON({
 
 }  // namespace
 
+namespace {
+
+// The script pane: a plain text edit with line numbers down its left side (an error names a line; so does "what
+// made this").
+class CodePane : public QPlainTextEdit {
+public:
+    explicit CodePane(QWidget* parent) : QPlainTextEdit(parent), gutter_(new Gutter(this)) {
+        QObject::connect(this, &QPlainTextEdit::blockCountChanged, [this](int) { layoutGutter(); });
+        QObject::connect(this, &QPlainTextEdit::updateRequest, [this](const QRect& rect, int dy) {
+            if (dy != 0) gutter_->scroll(0, dy);
+            else gutter_->update(0, rect.y(), gutter_->width(), rect.height());
+        });
+        layoutGutter();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override {
+        QPlainTextEdit::resizeEvent(e);
+        layoutGutter();
+    }
+
+private:
+    class Gutter : public QWidget {
+    public:
+        explicit Gutter(CodePane* pane) : QWidget(pane), pane_(pane) {}
+    protected:
+        void paintEvent(QPaintEvent* e) override { pane_->paintGutter(e); }
+    private:
+        CodePane* pane_;
+    };
+    int gutterWidth() const {
+        int digits = 1;
+        for (int n = std::max(1, blockCount()); n >= 10; n /= 10) ++digits;
+        return 10 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * std::max(3, digits);
+    }
+    void layoutGutter() {
+        setViewportMargins(gutterWidth(), 0, 0, 0);
+        const QRect r = contentsRect();
+        gutter_->setGeometry(r.left(), r.top(), gutterWidth(), r.height());
+    }
+    void paintGutter(QPaintEvent* e) {
+        QPainter painter(gutter_);
+        painter.fillRect(e->rect(), palette().color(QPalette::AlternateBase));
+        painter.setPen(palette().color(QPalette::PlaceholderText));
+        painter.setFont(font());
+        QTextBlock block = firstVisibleBlock();
+        int top = qRound(blockBoundingGeometry(block).translated(contentOffset()).top());
+        const int current = textCursor().blockNumber();
+        while (block.isValid() && top <= e->rect().bottom()) {
+            const int height = qRound(blockBoundingRect(block).height());
+            if (block.isVisible() && top + height >= e->rect().top()) {
+                painter.setPen(palette().color(block.blockNumber() == current ? QPalette::Text : QPalette::PlaceholderText));
+                painter.drawText(0, top, gutter_->width() - 6, fontMetrics().height(), Qt::AlignRight, QString::number(block.blockNumber() + 1));
+            }
+            block = block.next();
+            top += height;
+        }
+    }
+    Gutter* gutter_;
+};
+
+// Lua, coloured: comments, strings, numbers, the language's own words, and the toolkit's tables (mesh, poly, model...).
+class LuaColours : public QSyntaxHighlighter {
+public:
+    explicit LuaColours(QTextDocument* doc) : QSyntaxHighlighter(doc) {
+        keyword_.setForeground(QColor("#c586c0"));
+        toolkit_.setForeground(QColor("#4ec9b0"));
+        number_.setForeground(QColor("#b5cea8"));
+        string_.setForeground(QColor("#ce9178"));
+        comment_.setForeground(QColor("#6a9955"));
+    }
+
+protected:
+    void highlightBlock(const QString& text) override {
+        static const QRegularExpression words("\\b(and|break|do|else|elseif|end|false|for|function|goto|if|in|local|nil|not|or|repeat|return|then|true|until|while)\\b");
+        static const QRegularExpression tables("\\b(mesh|poly|model|material|profile|path|rng|tex|sdf|terrain|building|furniture|stylized|real|streetfurniture|args)\\b");
+        static const QRegularExpression numbers("\\b\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b");
+        auto each = [&](const QRegularExpression& re, const QTextCharFormat& format) {
+            QRegularExpressionMatchIterator it = re.globalMatch(text);
+            while (it.hasNext()) {
+                const QRegularExpressionMatch m = it.next();
+                setFormat(static_cast<int>(m.capturedStart()), static_cast<int>(m.capturedLength()), format);
+            }
+        };
+        each(numbers, number_);
+        each(words, keyword_);
+        each(tables, toolkit_);
+        // strings and a comment to the line's end, in the order they come (a -- inside a string is not a comment)
+        for (int i = 0; i < text.size(); ++i) {
+            const QChar c = text[i];
+            if (c == '"' || c == '\'') {
+                int j = i + 1;
+                while (j < text.size() && text[j] != c) j += text[j] == '\\' ? 2 : 1;
+                setFormat(i, std::min<int>(j, text.size() - 1) - i + 1, string_);
+                i = j;
+            } else if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+                setFormat(i, text.size() - i, comment_);
+                break;
+            }
+        }
+    }
+
+private:
+    QTextCharFormat keyword_, toolkit_, number_, string_, comment_;
+};
+
+// A line added to a list script (models.lua, prefabs.lua) just before the closing brace of the table it returns.
+// Returns what happened, for the status: empty when it was added.
+QString addListLine(const QString& file, const QString& name, const QString& line) {
+    QFile f(file);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return "cannot read " + file;
+    QString text = QString::fromUtf8(f.readAll());
+    f.close();
+    if (QRegularExpression(QString("^\\s*%1\\s*=").arg(QRegularExpression::escape(name)), QRegularExpression::MultilineOption).match(text).hasMatch())
+        return QString();   // already there: left as it is
+    const int brace = text.lastIndexOf(QRegularExpression("^\\}\\s*$", QRegularExpression::MultilineOption));
+    if (brace < 0) return file + " does not end with the closing } of its table on a line of its own";
+    text.insert(brace, line + "\n");
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return "cannot write " + file;
+    f.write(text.toUtf8());
+    return QString();
+}
+
+}  // namespace
+
 ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     auto* column = new QVBoxLayout(this);
     column->setContentsMargins(4, 4, 4, 4);
@@ -77,15 +207,24 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     auto* reloadButton = new QPushButton("Reload", this);
     saveButton->setToolTip("Write the script (Ctrl+S in the pane). The model is rebuilt in the viewport.");
     reloadButton->setToolTip("Take the script from disk again, dropping what is in the pane.");
+    auto* copyButton = new QPushButton("Copy view", this);
+    copyButton->setToolTip("Copy what you are looking at (the script, the piece last clicked and its line, the camera, a screenshot's path)\nto paste into a message.");
+    auto* listButton = new QPushButton("Add to lists", this);
+    listButton->setToolTip("Give this script its line in models.lua and prefabs.lua: the engine can then build it by name and a level can place it.");
     file_ = new QLabel("no script open", this);
     row->addWidget(newButton);
     row->addWidget(openButton);
     row->addWidget(saveButton);
     row->addWidget(reloadButton);
-    row->addWidget(file_, 1);
+    row->addWidget(copyButton);
+    row->addWidget(listButton);
     column->addLayout(row);
+    column->addWidget(file_);
+    QObject::connect(copyButton, &QPushButton::clicked, [this]() { copyView(); });
+    QObject::connect(listButton, &QPushButton::clicked, [this]() { addToLists(); });
 
-    edit_ = new QPlainTextEdit(this);
+    edit_ = new CodePane(this);
+    new LuaColours(edit_->document());
     QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     mono.setPointSize(10);
     edit_->setFont(mono);
@@ -98,6 +237,11 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     status_->setWordWrap(true);
     status_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     column->addWidget(status_);
+    numbers_ = new QLabel(this);
+    numbers_->setWordWrap(true);
+    numbers_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    numbers_->setStyleSheet("color: palette(placeholder-text);");
+    column->addWidget(numbers_);
 
     watcher_ = new QFileSystemWatcher(this);
     QObject::connect(newButton, &QPushButton::clicked, [this]() { newScript(); });
@@ -256,12 +400,46 @@ bool ModelStudioPanel::save() {
 
 void ModelStudioPanel::showPiece(int line, const QString& what) {
     if (path_.isEmpty()) return;
+    pickedLine_ = line;
+    pickedWhat_ = what;
     if (line > 0) {
         gotoLine(line);
         setStatus(QString("line %1 made this: %2").arg(line).arg(what) + (dirty() ? "  (the pane has unsaved edits: the line may have moved)" : ""), false);
     } else {
         setStatus("This is " + what + " (no script line is recorded for it).", false);
     }
+}
+
+void ModelStudioPanel::copyView() {
+    if (path_.isEmpty()) { setStatus("Open a script first.", true); return; }
+    QString text = "Model studio: " + QDir::current().relativeFilePath(path_) + (dirty() ? " (the pane has edits not yet saved)" : "") + "\n";
+    if (pickedLine_ > 0) {
+        text += QString("Picked: line %1: %2\n").arg(pickedLine_).arg(pickedWhat_);
+        const QTextBlock block = edit_->document()->findBlockByNumber(pickedLine_ - 1);
+        if (block.isValid()) text += "    > " + block.text().trimmed() + "\n";
+    } else if (!pickedWhat_.isEmpty()) {
+        text += "Picked: " + pickedWhat_ + "\n";
+    } else {
+        text += "Nothing picked (click a piece of the model to name it).\n";
+    }
+    const QTextCursor c = edit_->textCursor();
+    text += QString("Cursor: line %1\n").arg(c.blockNumber() + 1);
+    if (status_->property("bad").toBool()) text += "Error shown: " + status_->text().section('\n', 0, 0) + "\n";
+    if (!numbers_->text().isEmpty()) text += "Model: " + numbers_->text() + "\n";
+    if (viewNote) text += viewNote();
+    QApplication::clipboard()->setText(text);
+    setStatus("Copied what you are looking at. Paste it into your message.", false);
+}
+
+void ModelStudioPanel::addToLists() {
+    if (path_.isEmpty()) { setStatus("Open a script first.", true); return; }
+    if (status_->property("bad").toBool()) { setStatus("Mend the script first: a model that does not build should not be on the lists.", true); return; }
+    const QString name = recipeName();
+    const QString models = QString("%1/models.lua").arg(kScripts), prefabs = QString("%1/prefabs.lua").arg(kScripts);
+    QString why = addListLine(models, name, QString("  %1 = { recipe = \"%1\" },").arg(name));
+    if (why.isEmpty()) why = addListLine(prefabs, name, QString("  %1 = { model = \"%1\", physics = { body = \"static\" } },").arg(name));
+    if (!why.isEmpty()) { setStatus("Not added: " + why, true); return; }
+    setStatus(QString("'%1' is in models.lua and prefabs.lua. A level places it with { \"shape\": \"prefab\", \"prefab\": \"%1\", \"position\": [x, y, z] }.").arg(name), false);
 }
 
 void ModelStudioPanel::noteLog(bool isError, const QString& line) {
@@ -287,6 +465,7 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
     if (!isError && line.contains("Loaded level:") && line.contains(recipeName() + ".json")) {
         if (!status_->property("bad").toBool() || status_->text().startsWith("Saved") || status_->text().startsWith("Building"))
             setStatus("Built " + recipeName() + ".", false);
+        if (modelNumbers) numbers_->setText(modelNumbers());
         return;
     }
     if (!isError && line.contains("watch_scripts: change detected")) {
