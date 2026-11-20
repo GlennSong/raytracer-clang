@@ -1447,11 +1447,50 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     Vec3 spawnOffset = ent.contains("position") ? parseVec3(ent["position"]) : Vec3(0, 0, 0);
     SurfaceTexCache scriptSurfTex;   // the baked sets this model's parts bind (one bake per surface)
 
-    struct MaterialMaps { TextureHandle albedo{}; TextureHandle normal{}; bool done = false; };
-    std::vector<MaterialMaps> uploaded(model.materials.size());
+    // What a mesh is made of, for the renderer: the material's numbers and maps on `out`, and the mesh's handle
+    // (a textured mesh gets its tiling laid on first). The model's parts and every used piece's parts go through
+    // this, so a part looks the same placed once or many times. A material's maps go to the GPU once, however many
+    // meshes are made of it.
+    struct MaterialMaps { TextureHandle albedo{}; TextureHandle normal{}; TextureHandle leaf{}; };
+    std::map<const ProcMaterial*, MaterialMaps> uploaded;
+    auto dress = [&](const ProcMaterial& made, const RenderMesh& mesh, const std::string& meshKey, RenderMaterial& out) -> MeshHandle {
+        out.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
+        out.metallic = made.metallic;
+        out.roughness = made.roughness;
+        out.opacity = made.opacity;
+        out.emission = made.emission;
+        if (made.twoSided)
+            out.flags |= RenderMaterial::FLAG_TWO_SIDED;
+        // Analytic surface library (renderer.h Surface): an id evaluated in-shader
+        // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
+        // road-local u/v baked onto the carriageway. Independent of texture maps,
+        // so it rides whether or not the part is `textured`.
+        if (made.surface != 0)
+            out.setSurface(static_cast<RenderMaterial::Surface>(made.surface));
+        if (!made.textured && surfaceIsBakedOnMeshUVs(out.surface()))
+            bindSurfaceMaps(out, bakeSurfaceTextures(renderer, out.surface(), scriptSurfTex));
+        const bool known = uploaded.count(&made) != 0;
+        MaterialMaps& maps = uploaded[&made];
+        if (!known) {
+            if (made.textured && !made.albedo.pixels.empty()) maps.albedo = upload(made.albedo);
+            if (made.textured && !made.normal.pixels.empty()) maps.normal = upload(made.normal);
+            if (made.alphaFoliage) maps.leaf = upload(leafTexture(128));
+        }
+        if (made.alphaFoliage) {              // alpha-cut leaf cards
+            out.albedoMap = maps.leaf;
+            out.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        }
+        if (!made.textured) return assets.acquireMesh(mesh, meshKey);
+        RenderMesh tiled = mesh;
+        double tile = made.tile > 1e-6 ? made.tile : 1.0;
+        applyWorldPlanarUVs(tiled, 1.0 / tile);
+        if (!made.albedo.pixels.empty()) out.albedoMap = maps.albedo;
+        if (!made.normal.pixels.empty()) out.normalMap = maps.normal;
+        return assets.acquireMesh(tiled, meshKey);
+    };
+
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
         const ProcPart& part = model.parts[i];
-        const ProcMaterial& made = model.materialOf(part);
         if (part.mesh.vertices.empty()) continue;
         Entity e = world.create();
         // The part's entity sits at the node the part hangs on. The root's frame is no move and no turn, so a flat
@@ -1464,38 +1503,7 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;
-        r.material.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
-        r.material.metallic = made.metallic;
-        r.material.roughness = made.roughness;
-        r.material.opacity = made.opacity;
-        r.material.emission = made.emission;
-        if (made.twoSided)
-            r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
-        // Analytic surface library (renderer.h Surface): an id evaluated in-shader
-        // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
-        // road-local u/v baked onto the carriageway. Independent of texture maps,
-        // so it rides whether or not the part is `textured`.
-        if (made.surface != 0)
-            r.material.setSurface(static_cast<RenderMaterial::Surface>(made.surface));
-        if (!made.textured && surfaceIsBakedOnMeshUVs(r.material.surface()))
-            bindSurfaceMaps(r.material, bakeSurfaceTextures(renderer, r.material.surface(), scriptSurfTex));
-        if (made.textured) {
-            RenderMesh tiled = part.mesh;
-            double tile = made.tile > 1e-6 ? made.tile : 1.0;
-            applyWorldPlanarUVs(tiled, 1.0 / tile);
-            r.mesh = assets.acquireMesh(tiled, key + ":part" + std::to_string(i));
-            // A material's maps go to the GPU once, however many parts are made of it.
-            MaterialMaps& maps = uploaded[static_cast<std::size_t>(part.material)];
-            if (!maps.done) {
-                if (!made.albedo.pixels.empty()) maps.albedo = upload(made.albedo);
-                if (!made.normal.pixels.empty()) maps.normal = upload(made.normal);
-                maps.done = true;
-            }
-            if (!made.albedo.pixels.empty()) r.material.albedoMap = maps.albedo;
-            if (!made.normal.pixels.empty()) r.material.normalMap = maps.normal;
-        } else {
-            r.mesh = assets.acquireMesh(part.mesh, key + ":part" + std::to_string(i));
-        }
+        r.mesh = dress(model.materialOf(part), part.mesh, key + ":part" + std::to_string(i), r.material);
         world.add<Renderable>(e, r);
         // Optional axial spin (procedural-planet-plan): an `angularVelocity`
         // [x,y,z] (axis · rad/s) on the entity makes MotionSystem rotate each part
@@ -1508,25 +1516,21 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         }
     }
 
-    for (std::size_t gi = 0; gi < model.instances.size(); ++gi) {
-        const ProcInstanceGroup& cg = model.instances[gi];
-        if (cg.proto.vertices.empty() || cg.transforms.empty()) continue;
+    // Used pieces (proc_model.h ProcUse): each part of a piece is one instanced draw, placed at every copy. A piece
+    // of one mesh on its root is the instance group this grew from.
+    const std::vector<ProcDrawnPiece> drawn = drawnPieces(model);
+    for (std::size_t gi = 0; gi < drawn.size(); ++gi) {
+        const ProcDrawnPiece& d = drawn[gi];
+        if (d.part->mesh.vertices.empty() || d.transforms.empty()) continue;
         InstanceGroup g;
-        g.mesh = assets.acquireMesh(cg.proto, key + ":inst" + std::to_string(gi));
-        g.material.albedo = Vec3(1, 1, 1);
-        g.material.metallic = cg.metallic;
-        g.material.roughness = cg.roughness;
-        if (cg.alphaFoliage) {
-            g.material.albedoMap = upload(leafTexture(128));
-            g.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
-        }
-        g.transforms = cg.transforms;
+        g.mesh = dress(d.piece->materialOf(*d.part), d.part->mesh, key + ":inst" + std::to_string(gi), g.material);
+        g.transforms = d.transforms;
         Vec3 centroid(0, 0, 0);
-        for (const Mat4& tr : cg.transforms)
+        for (const Mat4& tr : g.transforms)
             centroid = centroid + Vec3(tr.m[0][3], tr.m[1][3], tr.m[2][3]);
-        centroid = centroid / static_cast<Real>(cg.transforms.size());
+        centroid = centroid / static_cast<Real>(g.transforms.size());
         Real spread = 0;
-        for (const Mat4& tr : cg.transforms)
+        for (const Mat4& tr : g.transforms)
             spread = std::max(spread,
                               (Vec3(tr.m[0][3], tr.m[1][3], tr.m[2][3]) - centroid).length());
         BoundingSphere mb = assets.meshBounds(g.mesh);
@@ -1605,15 +1609,16 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         }
     }
 
-    // Instanced colliders: stamp a collider at each placement (a lamp per verge).
+    // Colliders of used pieces: stamp a collider at each copy (a lamp per verge).
     // Mesh stamps merge into the friction buckets; primitives are one body each.
-    for (const ProcInstanceGroup& cg : model.instances) {
-        if (cg.collision == InstanceCollision::None || cg.transforms.empty()) continue;
+    for (const ProcPlacedUse& pu : placedUses(model)) {
+        const ProcUse& cg = *pu.use;
+        if (cg.collision == InstanceCollision::None || pu.transforms.empty()) continue;
         if (cg.collision == InstanceCollision::Mesh) {
-            const RenderMesh& proto =
-                cg.collisionProto.vertices.empty() ? cg.proto : cg.collisionProto;
+            const RenderMesh whole = cg.collisionProto.vertices.empty() ? flattenModel(*cg.piece) : RenderMesh();
+            const RenderMesh& proto = cg.collisionProto.vertices.empty() ? whole : cg.collisionProto;
             MeshCollider& mc = bucketFor(cg.colliderFriction);
-            for (const Mat4& xf : cg.transforms) appendTris(mc, proto, &xf);
+            for (const Mat4& xf : pu.transforms) appendTris(mc, proto, &xf);
             continue;
         }
         ColliderShape shape = cg.collision == InstanceCollision::Box ? ColliderShape::Box
@@ -1629,7 +1634,7 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         Real lift = shape == ColliderShape::Box ? cg.colliderHalfExtent.y
                   : shape == ColliderShape::Sphere ? cg.colliderRadius
                                                    : cg.colliderHalfHeight + cg.colliderRadius;
-        for (const Mat4& xf : cg.transforms) {
+        for (const Mat4& xf : pu.transforms) {
             Vec3 pos(xf.m[0][3], xf.m[1][3], xf.m[2][3]);
             spawnPrimitive(shape, pos + Vec3(0, lift, 0), 0, tmpl);
         }

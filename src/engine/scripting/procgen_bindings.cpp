@@ -3852,6 +3852,18 @@ int l_model_marker_count(lua_State* L) {
     return 1;
 }
 
+void addUseFromLua(lua_State* L, ProcModel& m, int node);   // below, with the uses
+
+// n:use(piece [, placements] [, opts]) -> n : place another model (or a mesh) on this node: once at the node, or at
+// each placement given in the node's space. What is inside the piece is reached through this node's name,
+// "wheel_fl/valve". Chainable.
+int l_node_use(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    addUseFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
 // n:marker(name [, opts]) -> n : a marker on this node, placed in the node's own space. Chainable.
 int l_node_marker(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
@@ -3902,57 +3914,112 @@ int l_node_point(lua_State* L) {
     return 1;
 }
 
-// m:add_instances(mesh, placements [, opts]) -> m : place a prototype many times.
-// placements is an array of { pos = {x,y,z}, yaw = radians, scale = number };
-// opts may set { roughness=, metallic=, alpha_foliage= }. Chainable.
+// --- uses: another model placed in this one, stored once (#191, model step 3) --------------------------------------
+// The piece of a use, from the argument at `idx`: a Model (shared: used from four nodes it is still one piece) or a
+// bare Mesh, which becomes a piece of that one mesh. `opts` (when a table) may give a bare mesh its look:
+// { roughness =, metallic =, alpha_foliage = }. A piece that reaches back to the model using it is an error.
+std::shared_ptr<const ProcModel> pieceArg(lua_State* L, int idx, int opts, const ProcModel& user) {
+    if (ModelPtr* mdl = static_cast<ModelPtr*>(luaL_testudata(L, idx, kModelMt))) {
+        if ((*mdl)->reaches(&user)) { luaL_error(L, "a model cannot use itself, or a piece that uses it"); return nullptr; }
+        return *mdl;
+    }
+    const RenderMesh& mesh = checkMesh(L, idx);
+    std::shared_ptr<ProcMaterial> look;
+    if (opts != 0 && lua_istable(L, opts)) {   // 0: the caller was given no options
+        const ProcMaterial plain;
+        const float roughness = static_cast<float>(optField(L, opts, "roughness", plain.roughness));
+        const float metallic = static_cast<float>(optField(L, opts, "metallic", plain.metallic));
+        const bool leaf = optBoolField(L, opts, "alpha_foliage", false);
+        if (roughness != plain.roughness || metallic != plain.metallic || leaf) {
+            look = std::make_shared<ProcMaterial>();
+            look->roughness = roughness;
+            look->metallic = metallic;
+            look->alphaFoliage = leaf;
+        }
+    }
+    return ProcModel::ofMesh(mesh, look);
+}
+
+// opts.collide on a use: solidify every copy. "mesh" stamps the piece's triangles at each copy; a
+// { shape="capsule", radius=, height= } (or box/sphere) table places one primitive collider per copy -- the right
+// shape for a lamp post (a thin capsule), exactly.
+void readUseCollision(lua_State* L, int opts, ProcUse& g) {
+    if (opts == 0 || !lua_istable(L, opts)) return;   // 0: the caller was given no options
+    lua_getfield(L, opts, "collide");
+    if (lua_isstring(L, -1) && std::strcmp(lua_tostring(L, -1), "mesh") == 0) {
+        g.collision = InstanceCollision::Mesh;
+    } else if (lua_istable(L, -1)) {
+        int ct = lua_absindex(L, -1);
+        std::string shape = optStrField(L, ct, "shape", "capsule");
+        g.colliderFriction =
+            static_cast<Real>(optField(L, ct, "friction", g.colliderFriction));
+        if (shape == "box") {
+            g.collision = InstanceCollision::Box;
+            g.colliderHalfExtent = optVec3Field(L, ct, "size", Vec3(1, 1, 1)) * 0.5;
+        } else if (shape == "sphere") {
+            g.collision = InstanceCollision::Sphere;
+            g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+        } else {
+            g.collision = InstanceCollision::Capsule;
+            g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+            g.colliderHalfHeight =
+                static_cast<Real>(optField(L, ct, "height", g.colliderHalfHeight * 2.0) * 0.5);
+        }
+    }
+    lua_pop(L, 1);
+}
+
+// The placements of a use, from the array at `idx`: each { pos = {x,y,z}, scale = number } and a rotation. The
+// model's words give the rotation as `turn = {x,y,z}` in DEGREES, like a node's; m:add_instances, the older word,
+// gives `yaw` in radians about the vertical, and its recipes keep working.
+void readPlacements(lua_State* L, int idx, bool yawRadians, std::vector<ProcPlacement>& out) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    const lua_Integer n = luaL_len(L, idx);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        ProcPlacement p;
+        p.position = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
+        if (yawRadians) p.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(optField(L, -1, "yaw", 0.0)));
+        else p.rotation = Quat::fromEuler(optVec3Field(L, -1, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+        p.scale = static_cast<Real>(optField(L, -1, "scale", 1.0));
+        out.push_back(p);
+        lua_pop(L, 1);
+    }
+}
+
+// The shared body of m:use and n:use: (piece [, placements] [, opts]) from stack slot 2, on `node`. Without
+// placements the piece is placed once, at the node itself. opts: { collide = ... } and, for a bare mesh, its look.
+void addUseFromLua(lua_State* L, ProcModel& m, int node) {
+    // placements are an array; opts are a table with named fields. One table after the piece is told apart by that.
+    int placements = 0, opts = 0;
+    if (lua_istable(L, 3) && (luaL_len(L, 3) > 0 || lua_istable(L, 4))) { placements = 3; opts = 4; }
+    else if (lua_istable(L, 3)) opts = 3;
+    ProcUse use;
+    use.piece = pieceArg(L, 2, opts, m);
+    use.node = node;
+    if (placements != 0) readPlacements(L, placements, false, use.placements);
+    else use.placements.push_back(ProcPlacement{});
+    readUseCollision(L, opts, use);
+    m.uses.push_back(std::move(use));
+}
+
+// m:use(piece [, placements] [, opts]) -> m : place another model (or a mesh) in this one, on the root. Chainable.
+int l_model_use(lua_State* L) {
+    addUseFromLua(L, checkModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:add_instances(mesh, placements [, opts]) -> m : place a prototype many times. The older word for m:use, kept
+// for its recipes: placements is an array of { pos = {x,y,z}, yaw = radians, scale = number }; opts may set
+// { roughness=, metallic=, alpha_foliage=, collide= }. Chainable.
 int l_model_add_instances(lua_State* L) {
     ProcModel& m = checkModel(L, 1);
-    ProcInstanceGroup g;
-    g.proto = checkMesh(L, 2);
-    luaL_checktype(L, 3, LUA_TTABLE);
-    lua_Integer n = luaL_len(L, 3);
-    for (lua_Integer i = 1; i <= n; ++i) {
-        lua_geti(L, 3, i);
-        Vec3 pos = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
-        double yaw = optField(L, -1, "yaw", 0.0);
-        double scale = optField(L, -1, "scale", 1.0);
-        g.transforms.push_back(Mat4::trs(pos,
-            Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(yaw)),
-            Vec3(scale, scale, scale)));
-        lua_pop(L, 1);
-    }
-    if (lua_istable(L, 4)) {
-        g.roughness = static_cast<float>(optField(L, 4, "roughness", g.roughness));
-        g.metallic = static_cast<float>(optField(L, 4, "metallic", g.metallic));
-        g.alphaFoliage = optBoolField(L, 4, "alpha_foliage", g.alphaFoliage);
-        // opts.collide: solidify every instance. "mesh" stamps the proto's
-        // triangles at each transform; a { shape="capsule", radius=, height= }
-        // (or box/sphere) table places one primitive collider per instance —
-        // the right shape for a lamp post (a thin capsule), exactly.
-        lua_getfield(L, 4, "collide");
-        if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "mesh") {
-            g.collision = InstanceCollision::Mesh;
-        } else if (lua_istable(L, -1)) {
-            int ct = lua_absindex(L, -1);
-            std::string shape = optStrField(L, ct, "shape", "capsule");
-            g.colliderFriction =
-                static_cast<Real>(optField(L, ct, "friction", g.colliderFriction));
-            if (shape == "box") {
-                g.collision = InstanceCollision::Box;
-                g.colliderHalfExtent = optVec3Field(L, ct, "size", Vec3(1, 1, 1)) * 0.5;
-            } else if (shape == "sphere") {
-                g.collision = InstanceCollision::Sphere;
-                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
-            } else {
-                g.collision = InstanceCollision::Capsule;
-                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
-                g.colliderHalfHeight =
-                    static_cast<Real>(optField(L, ct, "height", g.colliderHalfHeight * 2.0) * 0.5);
-            }
-        }
-        lua_pop(L, 1);
-    }
-    m.instances.push_back(std::move(g));
+    ProcUse use;
+    use.piece = pieceArg(L, 2, 4, m);
+    readPlacements(L, 3, true, use.placements);
+    readUseCollision(L, 4, use);
+    m.uses.push_back(std::move(use));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -4049,20 +4116,6 @@ int l_model_part_count(lua_State* L) {
 int l_model_instance_count(lua_State* L) {
     lua_pushinteger(L, checkModel(L, 1).instanceCount());
     return 1;
-}
-
-// Flatten a model to a single mesh: every part, plus each instance group's proto
-// stamped at each transform. Bridges a Model to single-mesh consumers/preview.
-RenderMesh flattenModel(const ProcModel& m) {
-    RenderMesh out;
-    for (const ProcPart& p : m.parts) {
-        if (p.node == 0) MeshBuilder::append(out, p.mesh);   // the root is the model's own space: no move to apply
-        else MeshBuilder::appendTransformed(out, p.mesh, m.nodeFrame(p.node).matrix());
-    }
-    for (const ProcInstanceGroup& g : m.instances)
-        for (const Mat4& xf : g.transforms)
-            MeshBuilder::appendTransformed(out, g.proto, xf);
-    return out;
 }
 
 // m:flatten() -> mesh.
@@ -4904,6 +4957,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_add);            lua_setfield(L, -2, "add");
         lua_pushcfunction(L, l_model_add_solid);      lua_setfield(L, -2, "add_solid");
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
+        lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
         lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
         lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");
         lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
@@ -4936,6 +4990,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_node_parent); lua_setfield(L, -2, "parent");
         lua_pushcfunction(L, l_node_point);  lua_setfield(L, -2, "point");
         lua_pushcfunction(L, l_node_marker); lua_setfield(L, -2, "marker");
+        lua_pushcfunction(L, l_node_use);    lua_setfield(L, -2, "use");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

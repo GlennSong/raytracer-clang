@@ -112,6 +112,7 @@ add_library(engine_core STATIC
     src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
+    src/engine/procgen/proc_model.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/tree_recipe.cpp
     src/engine/procgen/tree_lods.cpp
@@ -1087,6 +1088,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_mesh_lua_words.cpp
         tests/test_model_nodes.cpp      # a model's tree of nodes: the record, Lua, the bake and the loader (#191)
         tests/test_model_markers.cpp    # a model's markers and its table of materials (#191)
+        tests/test_model_uses.cpp       # one model placed inside another, stored once (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

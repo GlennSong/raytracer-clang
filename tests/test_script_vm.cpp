@@ -333,14 +333,14 @@ TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
     )LUA";
     CHECK(runProcgenModelValue(vm, code, m, &err));
     CHECK(m.parts.size() == 1);
-    CHECK(m.instances.size() == 1);
+    CHECK(m.uses.size() == 1);
     CHECK(m.instanceCount() > 0);              // a lamp per road segment
 
     // A bare mesh return is accepted as a single part.
     ProcModel single;
     CHECK(runProcgenModelValue(vm, "return mesh.box{1,1,1}", single, nullptr));
     CHECK(single.parts.size() == 1);
-    CHECK(single.instances.empty());
+    CHECK(single.uses.empty());
 }
 
 TEST_CASE(procgen_model_carries_colliders_following_geometry) {
@@ -367,8 +367,8 @@ TEST_CASE(procgen_model_carries_colliders_following_geometry) {
     // add_collider a third. The instance group carries its own collision spec.
     CHECK(m.parts.size() == 1);
     CHECK(m.colliders.size() == 3);
-    CHECK(m.instances.size() == 1);
-    CHECK(m.instances[0].collision == InstanceCollision::Capsule);
+    CHECK(m.uses.size() == 1);
+    CHECK(m.uses[0].collision == InstanceCollision::Capsule);
 
     int meshK = 0, capsuleK = 0;
     for (const ProcCollider& c : m.colliders) {

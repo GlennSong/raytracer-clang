@@ -1,6 +1,6 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model steps 1 and 2 (nodes; markers and named materials) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model steps 1 to 3 (nodes; markers and named materials; uses) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -207,8 +207,8 @@ boom:add(boom_mesh, paint)
 
 Left as they were, on purpose, for the steps that own them:
 
-- **Instance groups, colliders and flatten footprints** are in the root's space. Collision shapes on nodes come with
-  the model's `shapes` (used first in step 7); placed copies on nodes come with `uses` (step 3).
+- **Colliders and flatten footprints** are in the root's space. Collision shapes on nodes come with the model's
+  `shapes` (used first in step 7).
 - **A node cannot be moved after it is made.** Motion is step 4.
 - **A textured part's tiling** is laid in its node's space in the game (so the pattern stays with the piece) and in
   the world's space in the path tracer. The two differ only for a textured part on a node that is not the root. The
@@ -263,5 +263,71 @@ Left as they were, on purpose:
 - **Nothing reads a marker yet.** Sounds, lights and offers at markers are prefab steps 8 and 9.
 - **A material is still what `material.new` makes** (roughness, metallic, maps, opacity, emission), with the colour
   on the vertices. A colour per material, and changing "paint" on one copy of a prefab, belong to #309 and step 7.
-- **An instance group keeps its own roughness and metallic**, outside the table, until `uses` (step 3) replaces it.
 - **The path tracer still ignores a material's opacity and emission**, as before this step.
+
+### Model step 3: uses (2026-11-19)
+
+```lua
+local tire = model.new()
+tire:add(wall_mesh, "rubber")                                 -- a piece is a whole model: its own parts,
+tire:add(rim_mesh, "alloy")                                   -- materials, nodes and markers
+tire:use(bolt_mesh, ring_of_five)                             -- and its own uses: five bolts, one mesh
+tire:marker("valve", { pos = { 0.12, 0.17, 0 } })
+
+local car = model.new()
+car:node("wheel_fl", { pos = { 0.8, 0.33, 1.3 } }):use(tire)                          -- the one tire,
+car:node("wheel_fr", { pos = { -0.8, 0.33, 1.3 }, turn = { 0, 180, 0 } }):use(tire)   -- used at each wheel
+local at = car:marker_at("wheel_fl/valve")
+```
+
+Glenn's call: the instance group is extended into this, not kept beside it. There is one way to place a shared piece.
+
+- **The record** (`ProcUse`, in `ProcModel::uses`): the piece (a shared model), the node whose space it is placed
+  in, and one placement per copy (a position, a rotation, one scale). `ProcInstanceGroup` is gone: it was a bare mesh
+  with a roughness, placed by matrices in the root's space, and is now the case "a piece of one mesh, used on the
+  root".
+- **Stored once, drawn once.** The tire used at four nodes is one piece. Each part of it is one instanced draw with
+  four copies. The bolts inside it are one draw with twenty.
+- **Names inside a piece are its own.** They are reached through the node that uses the piece:
+  `car:marker_at("wheel_fl/valve")`, as deep as the pieces go (`rear/left/valve`). A copy's turn and scale carry the
+  marker with it. When a node places many copies, the path means the first.
+- **Lua:**
+  - `n:use(piece)` places it once, at the node. `n:use(piece, placements)` places it at each
+    `{ pos =, turn =, scale = }` in the node's space, `turn` in degrees. `m:use` does the same on the root.
+  - The piece is a model, or a bare mesh (with `{ roughness =, metallic =, alpha_foliage = }` for its look).
+  - `{ collide = "mesh" }` or `{ collide = { shape = "capsule", radius =, height = } }` stamps a collider at every
+    copy, as placed props always could.
+  - `m:add_instances(mesh, placements, opts)` is the older word for the same thing and still works, with `yaw` in
+    radians as its recipes wrote it.
+  - A model cannot use itself, or a piece that uses it. That is an error where it is written.
+- **One walk, four readers.** `placedUses` and `drawnPieces` (`procgen/proc_model.cpp`) say where every copy stands.
+  The offline bake, the game's loader, `m:flatten` and the model sheet all read them.
+- **A material is dressed one way.** A part of a used piece goes through the same material code as a plain part, in
+  the bake and in the loader. A placed copy can now have maps, opacity and emission, which the instance group could
+  not.
+- **The proof:** every recipe gives the same fingerprint before and after (the fingerprint now also covers a placed
+  piece's material), `blockdemo`'s lamps among them, with `bake_lab` differing only in its usual run-to-run way.
+  `tests/test_model_uses.cpp` holds the rest.
+
+Left as they were, on purpose:
+
+- **No mirroring.** A left and a right door cannot yet be one mirrored model. Wanted (Glenn, 2026-11-19); to be its
+  own commit once it is known how the renderer treats a mirrored copy.
+- **A used piece's own collision shapes** come with the model's `shapes` (step 7). Today a use says how its copies
+  collide.
+
+### Rules for a rig, from Glenn's car example (2026-11-19)
+
+Written down here so step 4 builds them in.
+
+- **Limits belong to the rig, and the rig is part of the model.** A node that may move says how (turn or slide),
+  about which axis and between which limits. They depend on that model's geometry. The current value is on the
+  entity; what drives it is a component.
+- **Motion sits above any flip or mirror.** For a wheel: `susp_fr -> steer_fr -> spin_fr -> the tire (turned half a
+  turn)`. The moving nodes are in the car's space, so the same steer value turns both front wheels the same way and
+  the same spin rolls both forward.
+- **The same value means the same action on both sides.** A right door's hinge axis points the other way, so "open
+  40" opens either door.
+- **Open question: one rig for a kind.** A script that opens doors needs every car to name its joints alike. The
+  proposal is a rig table in Lua per kind (names, axes, default limits) that each recipe applies, the recipe giving
+  only positions. Not decided.

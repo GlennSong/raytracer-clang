@@ -3,7 +3,7 @@
 //   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--size 512] [--spp 48]
 //
 // Runs the recipe (a chunk that returns a Mesh or a `model`; a model's nodes are drawn where the tree puts them and
-// listed in the text, with its named materials and its markers, which are also drawn), and writes
+// listed in the text, with its named materials, its markers (also drawn) and the pieces it uses), and writes
 //   sheet.png   four pictures in one: front and side on the top row, top and three-quarter on the bottom row,
 //               the model standing on a floor of 1 m squares so its size reads in every picture;
 //   sheet.txt   the numbers: size in metres, triangles and vertices per part, and the mesh audit's findings.
@@ -92,19 +92,28 @@ Bounds boundsOf(const ProcModel& m) {
         const ProcFrame at = m.nodeFrame(part.node);   // a part stands at the node it hangs on
         for (const Vertex& v : part.mesh.vertices) b.add(at.point(v.position));
     }
-    for (const ProcInstanceGroup& g : m.instances)
-        for (const Mat4& t : g.transforms)
-            for (const Vertex& v : g.proto.vertices) b.add(t.transformPoint(v.position));
+    for (const ProcDrawnPiece& d : drawnPieces(m))
+        for (const Mat4& t : d.transforms)
+            for (const Vertex& v : d.part->mesh.vertices) b.add(t.transformPoint(v.position));
     return b;
 }
 
-// Every marker of the model with where it is in the model.
-struct PlacedMarker { const ProcMarker* marker; const ProcNode* node; ProcFrame at; };
+// Every marker of the model with where it is in the model: its own, and those inside a piece used on a node, under
+// the name they are reached by ("wheel_fl/valve").
+struct PlacedMarker { std::string name; const ProcMarker* marker; std::string on; ProcFrame at; };
 std::vector<PlacedMarker> markersOf(const ProcModel& m) {
     std::vector<PlacedMarker> out;
     for (std::size_t n = 0; n < m.nodes.size(); ++n) {
         const ProcFrame node = m.nodeFrame(static_cast<int>(n));
-        for (const ProcMarker& mk : m.nodes[n].markers) out.push_back(PlacedMarker{&mk, &m.nodes[n], node * mk.frame});
+        for (const ProcMarker& mk : m.nodes[n].markers) out.push_back(PlacedMarker{mk.name, &mk, m.nodes[n].name, node * mk.frame});
+    }
+    for (const ProcUse& use : m.uses) {
+        if (use.node == 0 || use.piece == nullptr) continue;   // a piece on the root has no node's name to be reached by
+        const std::string& node = m.nodes[static_cast<std::size_t>(use.node)].name;
+        for (const PlacedMarker& inner : markersOf(*use.piece)) {
+            PlacedMarker pm{node + "/" + inner.name, inner.marker, node + ", in the piece used there", ProcFrame{}};
+            if (m.markerFrame(pm.name, pm.at)) out.push_back(pm);
+        }
     }
     return out;
 }
@@ -119,7 +128,7 @@ void addMarkers(Scene& scene, const std::vector<PlacedMarker>& markers, const Bo
     const Vec3 colours[3] = {Vec3(0.9, 0.05, 0.05), Vec3(0.05, 0.7, 0.05), Vec3(0.05, 0.2, 0.95)};
     ProcModel bars;
     for (const PlacedMarker& pm : markers) {
-        const int node = bars.addNode(pm.marker->name, 0, pm.at);
+        const int node = bars.addNode(pm.name, 0, pm.at);
         const Real len = pm.marker->size > 0 ? pm.marker->size : reach * 0.06;
         const Real thick = std::max(len * 0.08, reach * 0.004);
         for (int a = 0; a < 3; ++a) {
@@ -170,11 +179,15 @@ uint64_t fingerprint(const Scene& scene, const ProcModel& m) {
         h = bundle::fnv1a(&made[static_cast<std::size_t>(t.materialIndex)], sizeof(uint64_t), h);
         sum += h;
     }
-    for (const ProcInstanceGroup& g : m.instances) {
+    for (const ProcDrawnPiece& d : drawnPieces(m)) {
+        const ProcMaterial& made = d.piece->materialOf(*d.part);
+        const RenderMesh& proto = d.part->mesh;
         h = bundle::fnv1aStr("placed");
-        for (const Vertex& v : g.proto.vertices) { vec(v.position); vec(v.normal); vec(v.color); }
-        h = bundle::fnv1a(g.proto.indices.data(), g.proto.indices.size() * sizeof(g.proto.indices[0]), h);
-        for (const Mat4& t : g.transforms)
+        const double look[3] = {made.metallic, made.roughness, made.alphaFoliage ? 1.0 : 0.0};
+        h = bundle::fnv1a(look, sizeof look, h);
+        for (const Vertex& v : proto.vertices) { vec(v.position); vec(v.normal); vec(v.color); }
+        h = bundle::fnv1a(proto.indices.data(), proto.indices.size() * sizeof(proto.indices[0]), h);
+        for (const Mat4& t : d.transforms)
             for (int r = 0; r < 4; ++r) { const double row[4] = {t.m[r][0], t.m[r][1], t.m[r][2], t.m[r][3]}; h = bundle::fnv1a(row, sizeof row, h); }
         sum += h;
     }
@@ -241,9 +254,13 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
             const Vec3 at = m.nodeFrame(static_cast<int>(i)).position;
             long parts = 0;
             for (const ProcPart& part : m.parts) parts += part.node == static_cast<int>(i) ? 1 : 0;
-            std::snprintf(line, sizeof line, "  %*s%s: at (%.3f, %.3f, %.3f) in the model, %ld part%s\n", depth * 2, "", n.name.c_str(),
+            long copies = 0;
+            for (const ProcUse& use : m.uses) copies += use.node == static_cast<int>(i) ? static_cast<long>(use.placements.size()) : 0;
+            std::snprintf(line, sizeof line, "  %*s%s: at (%.3f, %.3f, %.3f) in the model, %ld part%s", depth * 2, "", n.name.c_str(),
                           at.x, at.y, at.z, parts, parts == 1 ? "" : "s");
             s << line;
+            if (copies > 0) { std::snprintf(line, sizeof line, ", %ld cop%s of a used piece", copies, copies == 1 ? "y" : "ies"); s << line; }
+            s << "\n";
         }
     }
     // The materials, when the recipe named any, and the markers.
@@ -268,8 +285,8 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
         s << line;
         for (const PlacedMarker& pm : markers) {
             const Vec3 face = pm.at.rotation.rotate(Vec3(0, 0, 1));
-            std::snprintf(line, sizeof line, "  %s (%s) on %s: at (%.3f, %.3f, %.3f) in the model, facing (%.2f, %.2f, %.2f)", pm.marker->name.c_str(),
-                          pm.marker->role.c_str(), pm.node->name.c_str(), pm.at.position.x, pm.at.position.y, pm.at.position.z, face.x, face.y, face.z);
+            std::snprintf(line, sizeof line, "  %s (%s) on %s: at (%.3f, %.3f, %.3f) in the model, facing (%.2f, %.2f, %.2f)", pm.name.c_str(),
+                          pm.marker->role.c_str(), pm.on.c_str(), pm.at.position.x, pm.at.position.y, pm.at.position.z, face.x, face.y, face.z);
             s << line;
             if (pm.marker->size > 0) { std::snprintf(line, sizeof line, ", size %.3f m", pm.marker->size); s << line; }
             s << "\n";
@@ -289,14 +306,16 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
                       mesh.vertices.size(), a.clean() ? "" : "  <- audit findings");
         s << line;
     }
-    for (std::size_t i = 0; i < m.instances.size(); ++i) {
-        const ProcInstanceGroup& g = m.instances[i];
-        const MeshAudit a = auditMesh(g.proto);
+    const std::vector<ProcDrawnPiece> drawn = drawnPieces(m);
+    for (std::size_t i = 0; i < drawn.size(); ++i) {
+        const MeshAudit a = auditMesh(drawn[i].part->mesh);
         all.add(a);
-        std::snprintf(line, sizeof line, "instanced piece %zu: %ld triangles, placed %zu times%s\n", i + 1, a.tris,
-                      g.transforms.size(), a.clean() ? "" : "  <- audit findings");
+        const std::string& made = drawn[i].piece->materials[static_cast<std::size_t>(drawn[i].part->material)].name;
+        std::snprintf(line, sizeof line, "instanced piece %zu%s%s: %ld triangles, placed %zu times%s\n", i + 1, made.empty() ? "" : " in ",
+                      made.c_str(), a.tris, drawn[i].transforms.size(), a.clean() ? "" : "  <- audit findings");
         s << line;
     }
+    // (Triangles are counted as stored: a used piece once, however many copies of it are drawn.)
     std::snprintf(line, sizeof line, "total: %ld triangles, %ld vertices in parts, %d placed copies, %d colliders\n", all.tris,
                   vertices, m.instanceCount(), m.colliderCount());
     s << line;

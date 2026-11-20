@@ -32,7 +32,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | bdff2422 | `mesh.sheet`, `mesh.ruled`, `mesh.patch` |
 | 4301e016, 7fb30148 | the design note and the model file name conventions |
 | 664eb630 | model step 1, nodes: `ProcNode` and `ProcFrame` in `procgen/proc_model.h`, Lua `m:node` and the node words, read by the bake, the loader, `m:flatten` and the model sheet; `tests/test_model_nodes.cpp` |
-| (this commit) | model step 2, markers and named materials: `ProcMarker`, the model's material table (`ProcPart::material` is an index), Lua `m:marker`, `m:material`, `m:add(mesh, "paint")`; `tests/test_model_markers.cpp` |
+| dc9bda04 | model step 2, markers and named materials: `ProcMarker`, the model's material table (`ProcPart::material` is an index), Lua `m:marker`, `m:material`, `m:add(mesh, "paint")`; `tests/test_model_markers.cpp` |
+| (this commit) | model step 3, uses: `ProcUse` replaces the instance group; the one walk in `procgen/proc_model.cpp` (`placedUses`, `drawnPieces`, `flattenModel`); Lua `n:use`, `m:use`; `tests/test_model_uses.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -58,16 +59,20 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   Compare shapes by the sheet's fingerprint, never by the order of parts or by a hash that depends on it.
   `bake_lab.lua` goes further: its baked normal maps come out different each run for the same reason, so its
   fingerprint never repeats. Run it many times and look for the old number among the results.
+- A Lua word that takes optional arguments must not read a stack slot it was not given: slot 0 is not "nothing",
+  it crashes. Test every word with its shortest call.
 - Edit source with the edit tools, not shell appends (AGENTS.md).
 
 ## What is next
 
-Model step 3 in the design note: **uses.** One model placed many times inside another (a wheel four times, a bolt
-forty), stored once. A node gets a `uses` naming the other model. Today's nearest thing is the instance group
-(`ProcInstanceGroup`, `m:add_instances`): a bare mesh with its own roughness and metallic, placed by matrices in the
-root's space. Decide first whether `uses` grows out of the instance group or replaces it; there must not be two ways
-to place a shared piece. The design note's last section, "What is built", lists what steps 1 and 2 left alone and
-which later step owns each.
+1. **Mirroring on a use** (Glenn asked, 2026-11-19): so a right door is the left door's model mirrored. Find out
+   first how the renderer and the path tracer treat a copy whose matrix mirrors (faces turn inside out unless the
+   draw accounts for it). Its own small commit.
+2. **Model step 4 in the design note: motion limits and poses.** Turn and slide on nodes, with limits; the model
+   sheet takes `--set cabin=90` to draw a pose. The design note's "Rules for a rig" section holds what Glenn's car
+   example settled, and one open question (one rig table per kind) to ask him before building.
+
+The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 
 Not started: edge bevel (deferred until the crane shows whether it is missed), baked maps on instanced objects
 (step 4), the ports, the crane. ADRs are written at merge, when numbers are free.

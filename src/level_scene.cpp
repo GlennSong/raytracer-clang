@@ -16,6 +16,7 @@
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
 #include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
+#include <map>
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
 #include "engine/level_params.h"            // shared level-JSON -> params readers
 #include "log.h"
@@ -374,12 +375,12 @@ static int addProcTexture(const TextureData& td, Scene& scene) {
 }
 
 void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
-    // One scene material (and one copy of its maps) per material of the model, made the first time a part uses it.
-    std::vector<int> sceneMaterial(m.materials.size(), -1);
-    auto materialFor = [&](int index) -> int {
-        int& mi = sceneMaterial[static_cast<std::size_t>(index)];
-        if (mi >= 0) return mi;
-        const ProcMaterial& pm = *m.materials[static_cast<std::size_t>(index)].material;
+    // One scene material (and one copy of its maps) per material, made the first time something is made of it. The
+    // model's parts and every used piece's parts go through this, so a part looks the same placed once or many times.
+    std::map<const ProcMaterial*, int> sceneMaterial;
+    auto materialFor = [&](const ProcMaterial& pm) -> int {
+        const std::map<const ProcMaterial*, int>::iterator known = sceneMaterial.find(&pm);
+        if (known != sceneMaterial.end()) return known->second;
         Material mat = Material::pbr(Vec3(1, 1, 1), pm.metallic, pm.roughness);
         if (pm.textured) {
             // World-planar tiling frame (meshUV=false): no authored UVs needed;
@@ -393,34 +394,33 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
             // at shade time — no baked texture, paint composites over the vertex colour.
             mat.surface = pm.surface;
         }
-        mi = scene.addMaterial(mat);
-        return mi;
-    };
-    for (const ProcPart& part : m.parts) {
-        if (part.mesh.indices.empty()) continue;
-        const int mi = materialFor(part.material);
-        // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
-        // land exactly where their vertices say.
-        const ProcFrame at = m.nodeFrame(part.node);
-        addMeshAsTriangles(part.mesh, offset + at.position, at.rotation, Vec3(1, 1, 1), mi, scene);
-    }
-    // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
-    for (const ProcInstanceGroup& g : m.instances) {
-        if (g.proto.indices.empty() || g.transforms.empty()) continue;
-        Material mat = Material::pbr(Vec3(1, 1, 1), g.metallic, g.roughness);
-        if (g.alphaFoliage) {                     // alpha-cut leaf cards
+        if (pm.alphaFoliage) {                    // alpha-cut leaf cards
             TextureData leaf = leafTexture(128);
             Texture tex;
             tex.width = leaf.width; tex.height = leaf.height;
             tex.channels = leaf.channels; tex.pixels = std::move(leaf.pixels);
             mat.alphaTex = scene.addTexture(std::move(tex));
         }
-        int mi = scene.addMaterial(mat);
-        int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
-        for (const Mat4& xf : g.transforms) {
-            Mat4 placed = xf;                 // translate the instance by the offset
-            placed.m[0][3] += offset.x; placed.m[1][3] += offset.y; placed.m[2][3] += offset.z;
-            scene.addInstance(proto, placed);
+        const int mi = scene.addMaterial(mat);
+        sceneMaterial[&pm] = mi;
+        return mi;
+    };
+    for (const ProcPart& part : m.parts) {
+        if (part.mesh.indices.empty()) continue;
+        const int mi = materialFor(m.materialOf(part));
+        // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
+        // land exactly where their vertices say.
+        const ProcFrame at = m.nodeFrame(part.node);
+        addMeshAsTriangles(part.mesh, offset + at.position, at.rotation, Vec3(1, 1, 1), mi, scene);
+    }
+    // Used pieces -> one BLAS proto per part of a piece, placed by the TLAS at every copy (ADR-0041). A piece used
+    // from several nodes is still one proto.
+    for (const ProcDrawnPiece& d : drawnPieces(m)) {
+        const int proto = scene.addProto(meshProtoTriangles(d.part->mesh, materialFor(d.piece->materialOf(*d.part))));
+        for (const Mat4& xf : d.transforms) {
+            Mat4 at = xf;                     // translate the copy by the entity's own offset
+            at.m[0][3] += offset.x; at.m[1][3] += offset.y; at.m[2][3] += offset.z;
+            scene.addInstance(proto, at);
         }
     }
 }

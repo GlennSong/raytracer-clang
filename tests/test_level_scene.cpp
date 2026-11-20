@@ -13,11 +13,10 @@ TEST_CASE(bake_proc_model_emits_parts_and_instanced_geometry) {
     // TLAS (ADR-0041). Renderer-agnostic: the same model a Lua recipe returns.
     ProcModel m;
     { ProcPart p; p.mesh = MeshBuilder::box(Vec3(1, 1, 1)); m.parts.push_back(p); }  // a part at the origin
-    ProcInstanceGroup g;
-    g.proto = MeshBuilder::box(Vec3(0.5, 0.5, 0.5));      // a prototype...
-    g.transforms = { Mat4::translate(5, 0, 0), Mat4::translate(10, 0, 0),
-                     Mat4::translate(15, 0, 0) };          // ...placed three times
-    m.instances.push_back(g);
+    ProcUse g;
+    g.piece = ProcModel::ofMesh(MeshBuilder::box(Vec3(0.5, 0.5, 0.5)));      // a prototype...
+    for (Real x : {5.0, 10.0, 15.0}) g.placements.push_back(ProcPlacement{Vec3(x, 0, 0), Quat(), 1});   // ...placed three times
+    m.uses.push_back(g);
 
     Scene scene;
     bakeProcModel(m, scene);

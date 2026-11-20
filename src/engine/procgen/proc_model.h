@@ -36,6 +36,8 @@ struct ProcMaterial {
     float opacity = 1.0f;
     Vec3 emission{0, 0, 0};
     bool twoSided = false;     // -> RenderMaterial::FLAG_TWO_SIDED
+    // The built-in leaf card (tree.h leafTexture), alpha-cut: what `alpha_foliage` on placed copies asks for.
+    bool alphaFoliage = false;
 };
 
 // Where a thing sits and how it is turned, relative to whatever holds it: a position and a rotation, no scale. A
@@ -116,21 +118,32 @@ struct ProcCollider {
     bool dynamic = false;            // static world geometry by default
 };
 
-// How an instance group collides: each placement stamps a collider. `None`
-// leaves the props non-solid; `Mesh` bakes the proto's triangles at every
-// transform into the shared static mesh body; the primitive kinds place one
-// Collider per instance (a lamp post is exactly a thin capsule).
+// How a used piece collides: each copy stamps a collider. `None` leaves the copies non-solid; `Mesh` bakes the
+// piece's triangles at every copy into the shared static mesh body; the primitive kinds place one Collider per copy
+// (a lamp post is exactly a thin capsule).
 enum class InstanceCollision { None, Mesh, Box, Sphere, Capsule };
 
-struct ProcInstanceGroup {
-    RenderMesh proto;
-    std::vector<Mat4> transforms;
-    float metallic = 0.0f;
-    float roughness = 0.85f;
-    bool  alphaFoliage = false;
-    // Optional per-instance collision (ADR-0042). `collisionProto` overrides the
-    // render proto for Mesh collision (a cheaper-but-faithful collision surface);
-    // empty means collide with the render proto itself.
+struct ProcModel;
+
+// Where one copy of a used piece goes: a position, a rotation and one scale for all three axes.
+struct ProcPlacement {
+    Vec3 position{0, 0, 0};
+    Quat rotation;
+    Real scale = 1;
+
+    Mat4 matrix() const { return Mat4::trs(position, rotation, Vec3(scale, scale, scale)); }
+};
+
+// A USE (#191, model step 3): another model placed inside this one, once or many times, and stored once. A wheel
+// used four times, a bolt forty, a lamp at every verge. The piece is a whole model, so it brings its own parts,
+// materials, nodes, markers and its own uses; the copies are drawn as instances of the piece's meshes. This is what
+// the instance group (ADR-0041/0042) grew into: that was a bare mesh with a roughness, placed in the root's space.
+struct ProcUse {
+    std::shared_ptr<const ProcModel> piece;
+    int node = 0;                             // the node whose space the placements are in
+    std::vector<ProcPlacement> placements;    // one per copy
+    // Optional collision per copy (ADR-0042). `collisionProto` overrides the piece's own triangles for Mesh
+    // collision (a cheaper-but-faithful collision surface); empty means collide with the piece itself.
     InstanceCollision collision = InstanceCollision::None;
     RenderMesh collisionProto;
     Real colliderRadius = 0.5, colliderHalfHeight = 0.5;
@@ -140,14 +153,14 @@ struct ProcInstanceGroup {
 
 struct ProcModel {
     // The model's pieces as a tree. There is always a root, node 0, whose frame is the model's own space and never
-    // changes; a model that adds no node is the flat model every recipe built before nodes existed. Instance groups,
-    // colliders and flatten footprints are in the root's space.
+    // changes; a model that adds no node is the flat model every recipe built before nodes existed. Colliders and
+    // flatten footprints are in the root's space.
     std::vector<ProcNode> nodes = {ProcNode{"root", -1, ProcFrame{}, {}}};
     // The model's materials. There is always entry 0, the plain material (untextured, vertex-coloured, no name),
     // which a part is made of unless it says otherwise.
     std::vector<ProcModelMaterial> materials = {ProcModelMaterial{"", std::make_shared<const ProcMaterial>()}};
     std::vector<ProcPart> parts;
-    std::vector<ProcInstanceGroup> instances;
+    std::vector<ProcUse> uses;                // other models placed in this one (see ProcUse)
     std::vector<ProcCollider> colliders;
     // Cut/fill footprints (ADR-0044) the recipe wants graded into the *level*
     // terrain — the script-side sibling of CityModel::flatten. A recipe that
@@ -230,13 +243,30 @@ struct ProcModel {
         return true;
     }
 
-    // Where a marker is in the model: its frame under its node's. False when the model has no such marker.
-    bool markerFrame(const std::string& name, ProcFrame& out) const {
-        int node = 0;
-        const ProcMarker* mk = findMarker(name, &node);
-        if (mk == nullptr) return false;
-        out = nodeFrame(node) * mk->frame;
-        return true;
+    // Where a marker is in the model: its frame under its node's. A marker inside a used piece is reached through
+    // the node that uses it, "wheel_fl/valve": the piece is stored once and its names are its own, so the node's
+    // name says which copy (the first, when a node places many). A copy's scale moves the marker with it. False
+    // when the model has no such marker.
+    bool markerFrame(const std::string& path, ProcFrame& out) const;
+
+    // --- uses ------------------------------------------------------------------------------------------------
+    // Does this model hold `other` as a piece, at any depth (or is it `other`)? A model may not use a piece that
+    // reaches back to it: there would be no end to drawing it.
+    bool reaches(const ProcModel* other) const {
+        if (this == other) return true;
+        for (const ProcUse& u : uses)
+            if (u.piece != nullptr && u.piece->reaches(other)) return true;
+        return false;
+    }
+
+    // A piece that is one mesh in one material: what a use of a bare mesh is.
+    static std::shared_ptr<ProcModel> ofMesh(RenderMesh mesh, const std::shared_ptr<const ProcMaterial>& material = nullptr) {
+        std::shared_ptr<ProcModel> piece = std::make_shared<ProcModel>();
+        ProcPart part;
+        part.mesh = std::move(mesh);
+        if (material != nullptr) part.material = piece->addMaterial("", material);
+        piece->parts.push_back(std::move(part));
+        return piece;
     }
 
     int markerCount() const {
@@ -249,12 +279,13 @@ struct ProcModel {
     // parts land where they did; its other nodes come across with their parts and markers, keeping their tree, and
     // its materials join this model's table (one entry where both hold the same material). Returns false and changes
     // nothing when the two models both have a node or a marker of one name, or give one name to two different
-    // materials; `clash`, when given, says which ("node 'door'").
+    // materials, or when `o` holds this model as a piece; `clash`, when given, says which ("node 'door'").
     bool merge(const ProcModel& o, std::string* clash = nullptr) {
         auto refuse = [&](const char* kind, const std::string& name) {
             if (clash != nullptr) *clash = std::string(kind) + " '" + name + "'";
             return false;
         };
+        if (o.reaches(this)) return refuse("model", "itself");
         for (std::size_t i = 1; i < o.nodes.size(); ++i)
             if (findNode(o.nodes[i].name) >= 0) return refuse("node", o.nodes[i].name);
         for (const ProcNode& n : o.nodes)
@@ -281,21 +312,48 @@ struct ProcModel {
             if (parts[i].node > 0) parts[i].node += base;
             parts[i].material = remap[static_cast<std::size_t>(parts[i].material)];
         }
-        instances.insert(instances.end(), o.instances.begin(), o.instances.end());
+        const std::size_t firstUse = uses.size();
+        uses.insert(uses.end(), o.uses.begin(), o.uses.end());
+        for (std::size_t i = firstUse; i < uses.size(); ++i)
+            if (uses[i].node > 0) uses[i].node += base;
         colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
         flatten.insert(flatten.end(), o.flatten.begin(), o.flatten.end());
         return true;
     }
 
-    int instanceCount() const {
-        int n = 0;
-        for (const ProcInstanceGroup& g : instances)
-            n += static_cast<int>(g.transforms.size());
-        return n;
-    }
+    // How many copies of used pieces the model draws, at every depth (four wheels of five bolts each are twenty-four).
+    int instanceCount() const;
 
     int colliderCount() const { return static_cast<int>(colliders.size()); }
 };
+
+// A use as it stands in the model that was asked: every copy's transform in that model's space, through the node it
+// is on and, for a use inside a piece, through every copy of that piece.
+struct ProcPlacedUse {
+    const ProcUse* use = nullptr;
+    std::vector<Mat4> transforms;
+};
+
+// Every use of a model at every depth, placed. THE one walk of the uses: the offline bake, the level loader,
+// flatten and the model sheet all read this, so they cannot disagree about where a copy is. A use on the root of the
+// model asked has exactly its placements' matrices.
+std::vector<ProcPlacedUse> placedUses(const ProcModel& m);
+
+// One instanced draw of a model: one part of a used piece, and where every copy of it stands in the model. A piece
+// used from four nodes is ONE of these with four transforms (per part of the piece), which is the point of a use.
+struct ProcDrawnPiece {
+    const ProcModel* piece = nullptr;
+    const ProcPart* part = nullptr;
+    std::vector<Mat4> transforms;
+};
+
+// Every instanced draw of a model, over `placedUses`: what the offline bake, the level loader, flatten and the model
+// sheet draw. In the order pieces are first met; parts with no triangles are left out.
+std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m);
+
+// One mesh of everything the model draws, in the model's space: its parts at their nodes and every copy of every
+// used piece. Bridges a model to single-mesh consumers.
+RenderMesh flattenModel(const ProcModel& m);
 
 }  // namespace engine
 
