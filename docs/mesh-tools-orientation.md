@@ -58,7 +58,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 67f89f0c | six more models through prefabs (`assets/scripts/prop_models.lua`): furniture, a hydrant, a lamp, an oak, a boulder |
 | 10c99851 | edge bevel, the first of the modelling tools: `bevel` in `procgen/polymesh.{h,cpp}`, Lua `P:bevel(width [, angle [, sel]])` |
 | e4d21119 | loop cut, slice and bridge: `loopCut`, `slice`, `bridge` in `procgen/polymesh.{h,cpp}`, Lua `P:loop_cut`, `P:slice`, `P:bridge` |
-| (this) | openings: `assets/scripts/openings.lua` (`openings.window`, `openings.hole`), a hole through a wall with a frame and a pane; `bridge` lets a hole reach the solid's edge; `tests/test_openings.cpp` |
+| 4bf5527f | openings: `assets/scripts/openings.lua` (`openings.window`, `openings.hole`), a hole through a wall with a frame and a pane; `bridge` lets a hole reach the solid's edge; `tests/test_openings.cpp` |
+| (this) | truss: `assets/scripts/truss.lua` (`truss.build`), a lattice of members along a path; tested in `tests/test_openings.cpp` |
 
 The unit suite passed 1594 of 1594 on 1e90ad41. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -131,8 +132,8 @@ models, then modelling tools.**
    `prefab_lab.json`). Nothing broke. Still to try: a building part, a model from a `.glb`, something with
    textures baked by the recipe.
 3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"). Edge bevel, loop
-   cut, slice, bridge and openings are built; the truss is next. Scratch recipes that show them:
-   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua` (not tracked).
+   cut, slice, bridge, openings and the truss are built; scatter on a surface is next. Scratch recipes that show them:
+   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua` (not tracked).
 
 The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 

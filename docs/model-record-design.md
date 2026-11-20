@@ -800,7 +800,11 @@ proposed to him:
    wall stays one closed solid. A doorway down to the floor is open at the bottom: `bridge` drops a new quad that
    would lie back to back with a face already there. Rectangular openings in a flat wall only; an arched head or a
    curved wall is not built.
-4. **Truss:** chords and diagonals along a path, the section free to taper.
+4. **Truss:** chords and diagonals along a path, the section free to taper. BUILT 2026-11-20 as a Lua library,
+   `assets/scripts/truss.lua`: `truss.build{ path, bay, section, size, size_end, chord, brace, pattern, ... }` gives
+   one mesh and `info` (counts, the length, every joint frame by frame, for hanging things on it). Square,
+   triangular or your own section; zigzag, crossed or no diagonals; the path may bend. Members are round tubes that
+   pass through each other at the joints (no gusset plates, no welded nodes).
 5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses.
 6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path.
 7. **Cage deform:** move a few control points and the mesh inside follows.
