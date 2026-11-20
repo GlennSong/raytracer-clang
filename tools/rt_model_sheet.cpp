@@ -430,12 +430,25 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
         }
     }
     MeshAudit all;
+    MeshShape allShape;
+    std::ostringstream shapes;   // a line per part, written after the counts
+    auto shapeLine = [&](const std::string& what, const MeshShape& sh) {
+        char text[360];
+        std::snprintf(text, sizeof text,
+                      "  %s: %.0f%% thin, %.0f%% sharp, edges %.4g mm to %.3g m, %.0f%% regular, %ld open edges, %ld over-shared\n",
+                      what.c_str(), 100.0 * sh.thinShare(), 100.0 * sh.sharpShare(), 1000.0 * sh.shortest, sh.longest,
+                      100.0 * sh.regularShare(), sh.open, sh.overShared);
+        shapes << text;
+    };
     long vertices = 0;
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
         if (m.parts[i].level != shown) continue;   // the parts of the level drawn
         const RenderMesh& mesh = m.parts[i].mesh;
         const MeshAudit a = auditMesh(mesh);
         all.add(a);
+        const MeshShape sh = measureShape(mesh);
+        allShape.add(sh);
+        if (sh.tris > 0) shapeLine("part " + std::to_string(i + 1), sh);
         vertices += static_cast<long>(mesh.vertices.size());
         std::string on = tree ? " on " + m.nodes[static_cast<std::size_t>(m.parts[i].node)].name : std::string();
         const std::string& made = m.materials[static_cast<std::size_t>(m.parts[i].material)].name;
@@ -450,6 +463,9 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
     for (std::size_t i = 0; i < drawn.size(); ++i) {
         const MeshAudit a = auditMesh(drawn[i].part->mesh);
         all.add(a);
+        const MeshShape sh = measureShape(drawn[i].part->mesh);
+        allShape.add(sh);
+        if (sh.tris > 0) shapeLine("instanced piece " + std::to_string(i + 1), sh);
         const std::string& made = drawn[i].piece->materials[static_cast<std::size_t>(drawn[i].part->material)].name;
         std::snprintf(line, sizeof line, "instanced piece %zu%s%s: %ld triangles, placed %zu times%s\n", i + 1, made.empty() ? "" : " in ",
                       made.c_str(), a.tris, drawn[i].transforms.size(), a.clean() ? "" : "  <- audit findings");
@@ -478,6 +494,28 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
         if (all.degenerate > 0) {
             std::snprintf(line, sizeof line, "  first face with no area at (%.3f, %.3f, %.3f)\n", all.degenWhere.x, all.degenWhere.y,
                           all.degenWhere.z);
+            s << line;
+        }
+    }
+    // HOW WELL MADE: numbers to compare between levels and between builds, not findings (mesh_audit.h says what each
+    // one means). A long narrow quad is "thin" and in perfect order; "regular" is the number that follows order.
+    if (allShape.tris > 0) {
+        s << "triangle shape (thin: longer than 10 times its width; sharp: a corner under 10 degrees; regular: points with\n"
+             "5 to 7 edges, what a grid of quads has; over-shared: edges with 3 or more faces):\n";
+        std::snprintf(line, sizeof line,
+                      "  all: %.0f%% thin, %.0f%% sharp, edges %.4g mm to %.3g m, %.0f%% regular, %ld open edges, %ld over-shared, "
+                      "thinnest %.0f:1\n",
+                      100.0 * allShape.thinShare(), 100.0 * allShape.sharpShare(), 1000.0 * allShape.shortest, allShape.longest,
+                      100.0 * allShape.regularShare(), allShape.open, allShape.overShared, allShape.worst);
+        s << line << shapes.str();
+        const MirrorCheck mirror = checkMirror(flattenModel(m, o.at));
+        if (mirror.missing == 0) {
+            s << "left against right: the same (every point has its mirror across x = 0 within 1 mm)\n";
+        } else {
+            std::snprintf(line, sizeof line,
+                          "left against right: %ld of %ld points have no mirror across x = 0 within 1 mm, inside the box "
+                          "(%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)\n",
+                          mirror.missing, mirror.points, mirror.lo.x, mirror.lo.y, mirror.lo.z, mirror.hi.x, mirror.hi.y, mirror.hi.z);
             s << line;
         }
     }

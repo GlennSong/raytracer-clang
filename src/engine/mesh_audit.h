@@ -104,6 +104,127 @@ inline void printMeshAudit(const char* what, const MeshAudit& a) {
 }
 
 
+// THE SHAPE OF THE TRIANGLES (Glenn, 2026-11-20, of a simplified car in Blender: "triangles super-stretched out and
+// others really squished together ... no organization"). auditMesh says whether a mesh is VALID; this says whether it
+// is WELL MADE. Numbers to compare, not findings: a long narrow strip of quads is thin and perfectly in order.
+// Vertices closer than 0.01 mm count as one point, so a hard edge's doubled vertices do not read as a gap.
+//   THIN         longer than 10 times its width: longest edge squared * sqrt(3) / (4 * area) > 10 (1 = equal sides).
+//   SHARP        a corner under 10 degrees.
+//   EDGES        the shortest and the longest edge (m). A fraction of a millimetre beside a metre is a sliver.
+//   REGULAR      the share of points with 5 to 7 edges. A grid of quads cut into triangles is all 6; a mesh a
+//                simplifier has been through, or a fan from one point, is not. The number that best matches "order".
+//   OPEN         edges with one face: the rim of a sheet, or a crack.
+//   OVER-SHARED  edges with three or more faces: sheets meeting along a line, which no closed skin has.
+struct MeshShape {
+    long tris = 0, thin = 0, sharp = 0;
+    long points = 0, regular = 0;
+    long open = 0, overShared = 0;
+    double shortest = 0, longest = 0;   // metres; 0 and 0 for no triangles
+    double worst = 1;                   // the thinnest triangle's ratio
+    void add(const MeshShape& o) {
+        if (o.tris > 0) { shortest = tris > 0 ? std::min(shortest, o.shortest) : o.shortest; longest = std::max(longest, o.longest); }
+        worst = std::max(worst, o.worst);
+        tris += o.tris; thin += o.thin; sharp += o.sharp; points += o.points; regular += o.regular;
+        open += o.open; overShared += o.overShared;
+    }
+    double thinShare() const { return tris > 0 ? static_cast<double>(thin) / static_cast<double>(tris) : 0; }
+    double sharpShare() const { return tris > 0 ? static_cast<double>(sharp) / static_cast<double>(tris) : 0; }
+    double regularShare() const { return points > 0 ? static_cast<double>(regular) / static_cast<double>(points) : 0; }
+};
+
+inline MeshShape measureShape(const RenderMesh& m) {
+    MeshShape r;
+    using Key = std::tuple<long long, long long, long long>;
+    std::map<Key, int> ids;
+    auto id = [&](const Vec3& p) {
+        const Key k{std::llround(p.x * 1e5), std::llround(p.y * 1e5), std::llround(p.z * 1e5)};
+        return ids.emplace(k, static_cast<int>(ids.size())).first->second;
+    };
+    std::map<std::pair<int, int>, int> faces;   // per edge, how many triangles
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t ix[3] = {m.indices[t], m.indices[t + 1], m.indices[t + 2]};
+        if (ix[0] >= m.vertices.size() || ix[1] >= m.vertices.size() || ix[2] >= m.vertices.size()) continue;
+        const Vec3 p[3] = {m.vertices[ix[0]].position, m.vertices[ix[1]].position, m.vertices[ix[2]].position};
+        const int v[3] = {id(p[0]), id(p[1]), id(p[2])};
+        if (v[0] == v[1] || v[1] == v[2] || v[0] == v[2]) continue;   // no area once joined: auditMesh's to report
+        const double area = 0.5 * cross(p[1] - p[0], p[2] - p[0]).length();
+        if (!(area > 0) || !std::isfinite(area)) continue;
+        double len[3];
+        for (int k = 0; k < 3; ++k) {
+            len[k] = (p[(k + 1) % 3] - p[k]).length();
+            ++faces[{std::min(v[k], v[(k + 1) % 3]), std::max(v[k], v[(k + 1) % 3])}];
+            r.shortest = (r.tris == 0 && k == 0) ? len[k] : std::min(r.shortest, len[k]);
+            r.longest = std::max(r.longest, len[k]);
+        }
+        const double longest = std::max({len[0], len[1], len[2]});
+        const double ratio = longest * longest * std::sqrt(3.0) / (4.0 * area);
+        r.worst = std::max(r.worst, ratio);
+        if (ratio > 10.0) ++r.thin;
+        // the smallest corner is opposite the shortest edge: sin = 2 * area / (the other two edges' product)
+        const double shortest = std::min({len[0], len[1], len[2]});
+        const double others = len[0] * len[1] * len[2] / std::max(shortest, 1e-300);
+        const double sine = std::min(1.0, 2.0 * area / std::max(others, 1e-300));
+        if (std::asin(sine) < 10.0 * 3.14159265358979323846 / 180.0) ++r.sharp;
+        ++r.tris;
+    }
+    std::vector<int> edgesAt(ids.size(), 0);
+    for (const std::pair<const std::pair<int, int>, int>& e : faces) {
+        ++edgesAt[static_cast<std::size_t>(e.first.first)];
+        ++edgesAt[static_cast<std::size_t>(e.first.second)];
+        if (e.second == 1) ++r.open;
+        else if (e.second > 2) ++r.overShared;
+    }
+    for (int n : edgesAt) {
+        if (n == 0) continue;
+        ++r.points;
+        if (n >= 5 && n <= 7) ++r.regular;
+    }
+    return r;
+}
+
+// LEFT AGAINST RIGHT (Glenn, 2026-11-20: "the car's chassis isn't symmetrical on the right vs left side"; the kit had
+// given the hood one wing's shoulder and not the other's). Every point of `m` should have a point at its mirror
+// across x = 0, within `tolerance` metres. `missing` counts the ones that have none; the box is where they are.
+// A number to read, not a finding: a car's steering wheel has no mirror, and a crane is not meant to have one.
+struct MirrorCheck {
+    long points = 0, missing = 0;
+    Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // the box round the points with no mirror
+};
+
+inline MirrorCheck checkMirror(const RenderMesh& m, double tolerance = 0.001) {
+    MirrorCheck r;
+    using Key = std::tuple<long long, long long, long long>;
+    auto cell = [&](const Vec3& p) { return Key{std::llround(p.x / tolerance), std::llround(p.y / tolerance), std::llround(p.z / tolerance)}; };
+    std::map<Key, std::vector<Vec3>> grid;
+    for (const Vertex& v : m.vertices) {
+        std::vector<Vec3>& at = grid[cell(v.position)];
+        bool known = false;
+        for (const Vec3& q : at) known = known || (q - v.position).lengthSquared() < 1e-12;
+        if (!known) at.push_back(v.position);
+    }
+    for (const std::pair<const Key, std::vector<Vec3>>& c : grid) {
+        for (const Vec3& p : c.second) {
+            ++r.points;
+            const Vec3 want(-p.x, p.y, p.z);
+            const Key k = cell(want);
+            bool found = false;
+            for (long long dx = -1; dx <= 1 && !found; ++dx)
+                for (long long dy = -1; dy <= 1 && !found; ++dy)
+                    for (long long dz = -1; dz <= 1 && !found; ++dz) {
+                        const std::map<Key, std::vector<Vec3>>::const_iterator it =
+                            grid.find(Key{std::get<0>(k) + dx, std::get<1>(k) + dy, std::get<2>(k) + dz});
+                        if (it == grid.end()) continue;
+                        for (const Vec3& q : it->second) found = found || (q - want).length() <= tolerance;
+                    }
+            if (found) continue;
+            if (r.missing++ == 0) { r.lo = p; r.hi = p; }
+            r.lo = Vec3(std::min(r.lo.x, p.x), std::min(r.lo.y, p.y), std::min(r.lo.z, p.z));
+            r.hi = Vec3(std::max(r.hi.x, p.x), std::max(r.hi.y, p.y), std::max(r.hi.z, p.z));
+        }
+    }
+    return r;
+}
+
 // UNDERSIDES (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed from below can be seen through").
 // A surface you stand on that hangs more than `hang` over the ground must have something facing DOWN under it within
 // `depth` -- its soffit, a wall's bottom, or a solid's bottom at or under the ground -- or from below you look at the back of the road (culled) and through it.

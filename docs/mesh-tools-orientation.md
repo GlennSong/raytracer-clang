@@ -46,7 +46,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | b0e9dcb7 | second merge of `claude/island8-batch`, up to 23a20eeb (ADR-0468, where a place joins the sidewalks) |
 | d6c798a6 | model step 6, second piece, a model to a glTF file and back: `procgen/model_file.{h,cpp}`, `writeGlbTree`, `ModelImporter::loadCpuTree`; Lua `model.from_file`, `model.from_files`; the sheet's `--glb` and a `.glb` as input; AGENTS.md "Model file names" brought up to what is built; `tests/test_model_file.cpp` |
 | 6fc7cf5a | model step 6, last piece, the model store: `procgen/model_store.{h,cpp}`, `scripting/model_recipes.{h,cpp}` (`obtainModel`), the list `assets/scripts/models.lua`, Lua `model.get`, `ProcModel::frozen`; the sheet takes a model's name; `tests/test_model_store.cpp`. THE MODEL HALF OF THE DESIGN NOTE IS DONE |
-| (this commit) | the car lab's middle level is built by the kit, not simplified (Glenn's call after looking at the file); `kit.build` takes `autosmooth`; `n:use(piece, nil, opts)` keeps its options |
+| ec4c66ba | the car lab's middle level is built by the kit, not simplified (Glenn's call after looking at the file); `kit.build` takes `autosmooth`; `n:use(piece, nil, opts)` keeps its options |
+| f411f2ca | the kit's hood and trunk lid take both shoulders (Glenn saw the body differ left to right). Changes the game's kit cars on the right shoulder |
+| (this commit) | the sheet measures triangle shape and left against right: `measureShape`, `checkMirror` in `engine/mesh_audit.h`; `tests/test_mesh_shape.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -82,9 +84,11 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 - `mesh.simplify` makes a poor level of anything a recipe can build lower. It weighs only how far the surface moves:
   flat panels come out as long thin triangles in no order, and far away it eats small separate shells first and
   crumples thin solids. Build each level with the recipe (the car kit builds low; `car_rig_lab.lua` shows three
-  levels made that way) and keep `simplify` for things with no recipe. To measure a mesh rather than judge it by
-  eye: `build-viewer/sheets/mesh_quality.py` over a `--glb` file, in Blender (not tracked; the sheet should grow
-  these numbers).
+  levels made that way) and keep `simplify` for things with no recipe.
+- Measure a mesh, do not judge it by eye. The sheet's `.txt` has "triangle shape" (thin and sharp triangles, edge
+  lengths, how regular the points are, open and over-shared edges, per part) and "left against right" (points with
+  no mirror across x = 0). They are `measureShape` and `checkMirror` in `engine/mesh_audit.h`. "Thin" alone misleads:
+  a long narrow quad is thin and in perfect order. "Regular" is the number that follows what the eye calls order.
 - `n:use(piece, nil, { level = n })` once dropped its options, and the use went to the full level without a word.
   Fixed; the sheet's "copies of used pieces" per level is where it showed.
 - A test that reads a recipe's model must stop when the recipe fails, or it reads parts that are not there and the
