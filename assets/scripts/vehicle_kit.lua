@@ -217,7 +217,10 @@ function kit.body(P)
       for _, f in ipairs(rows(d.lo, d.hi, sides[1].up[1], sides[1].up[2])) do sel[#sel + 1] = f end
       tag(sel, d.name)
     end
-    if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], first[9] - 1), "hood") end
+    -- across the top from the left belt corner to the right one, BOTH corners' rounding included: the mirror of
+    -- first[4] is last[9] (the section runs one way round, so a corner's points come in the other order on the far
+    -- side). It stopped at first[9] once, and the hood and the trunk lid took the left wing's shoulder but not the right's.
+    if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], last[9] - 1), "hood") end
     -- the tail above `y0`: every face at the back that faces back -- the cap and its window, and on a box whose
     -- roof meets the tail square (a van: its back wall above the belt is the roof run falling sheer) those rows too
     local tailZ = -P.length * 0.5 + 0.10
@@ -229,7 +232,7 @@ function kit.body(P)
     elseif plan.trunk and plan.trunk.kind == "gate" then
       tag(tail(plan.trunk.y0 or (P.tail_y[2] + 0.05)), "hatch")
     elseif plan.trunk then
-      local sel = rows(plan.trunk.lo, plan.trunk.hi, first[4], first[9] - 1)
+      local sel = rows(plan.trunk.lo, plan.trunk.hi, first[4], last[9] - 1)
       tag(sel, plan.trunk.kind == "hatch" and "hatch" or "trunk")
     end
   end
