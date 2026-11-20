@@ -22947,3 +22947,42 @@ Words:
 **For players:** nothing changes on any level (nobody walks the walks yet).
 
 **Revisit when** the one planned re-bake fixes the box edge and the sidewalk at kinks (then the corners above get walks); when the planner states j95's fourth arm and chooses tn0/tn1's class; or when piece 6 puts walkers on the walks.
+
+## ADR-0470 — One answer for "does another road meet this road's end": the design stage asks it at grade too (#306 re-bake bundle, S1)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: the design stage (which sets each road's heights) and the road model (which says what is at a street's end) now ask the same question the same way. ADR-0469 made the road model ask "does another road meet this end?" at grade, by the crossing policy, but left the design stage asking it in plan only, so the two disagreed under the freeway: the model called a street ending under the freeway a dead end, while the design stage still held that street's end up as if it met the freeway. Now both get one answer, and the `atGradeOnly` switch is gone.
+
+Words:
+- **Open end:** a road end nothing meets; the design stage brings its profile down to the ground there.
+- **Crossing policy:** `meetAtGrade` (ADR-0469): whether two roads meet at one level, by what they are (a track or the freeway meets nothing at grade but its own ramps).
+- **Band:** a road's paved width either side of its centreline.
+
+**The one rule** (`roadEndMeetsAnother(g, e, end)`, `lanes/road_design.h`):
+1. Another road's end within `endpointTol` of this end: they meet, whatever they are. The file joins them there (one road carrying on, or a node). The crossing policy is about roads meeting away from a shared node (`planCrossings` asks it only there), so it is not asked here. Asking it would have opened every freeway end where the freeway carries on into its next piece, and a boulevard's end where it runs on as the freeway, and brought them to the ground.
+2. This end inside another road's band: they meet only where `meetAtGrade` says they meet at grade.
+
+Nothing needs the plan-only form: the design stage was its one user, and what it got from it (a street end under a freeway viaduct counted as met) was the disagreement.
+
+**What moved** (`lanes_tool build`, against the tool at 07685e6d built from `git archive` in `out/`):
+
+| Road file | .glb | .svg | Ends now open | Deck height at those ends |
+|---|---|---|---|---|
+| traffic_lab | moved | identical | 16 (s283 ... s337, the spokes ending under the freeway ring) | 15 move, by 0.1 to 0.9 cm (they were already at the ground, about 0.4 m) |
+| river_town | moved | identical | 24 (the spokes under the freeway) | 10 move: s283 86 cm, s331 81, s308 36, s281 31, s317 24, s336 20, s333 20, s335 19, s127 17, s332 9; the freeway's fw0_b 0.1 cm (crossing agreement); the other 14's heights do not move |
+| agent_lab | moved | identical | the same 24 (river_town's roads) | as river_town |
+
+Each moved spoke's end comes down to its own ground instead of being held toward the freeway's deck; their steepest grade rises (river_town up to 11.3 %); no new grade fault: the only one listed that changes is s335, already over its 12 % before (17.7 % to 23.7 %). Nothing else moves: no other road's open ends change.
+
+**Tag:** `kLanesBuildTag` 2026-11-20.1. The one re-bake at the end of this bundle (S7) rebuilds the levels; no level was baked here, and the level tests were not run (they would bake). Level-test pins over these three levels' road mesh or their sims (traffic_lab, river_town, agent_lab: brain_crowd, river_town crowd, v2_drives, near crowd, walk_join) may move and are re-pinned once in S7.
+
+**Tests:** `road_model_37` asks the one test: the spur's end inside a street's band is met, inside a freeway's band is not; the design stage's open ends say the same (`designRoads` on walkTee: the spur's end under the freeway open, beside the street not); east and west, joined at a node, meet as freeways too (their ends stay closed). Checked to bite by breaking the code on purpose: the band test without the policy (5 checks fail), the policy asked at a shared node (4 checks fail). Put back, all pass.
+
+**One model:**
+- Concept touched: roads (what meets a road's end).
+- Before: one function with a switch, two callers asking it two ways. Now one function, one answer, two callers.
+- No road fact is computed outside `roads/`.
+
+**For players:** on traffic_lab nothing visible (under a centimetre). On river_town and agent_lab ten streets ending under the freeway now run down to the ground at their ends, up to 86 cm lower, instead of rising toward the viaduct, once the levels are re-baked (S7).
+
+**Revisit when** a road file joins roads at a node that should not meet (a freeway's end stated on a street's node): that is a planning fault for the file, not for this test.

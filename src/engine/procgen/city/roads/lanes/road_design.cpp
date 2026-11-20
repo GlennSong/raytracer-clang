@@ -105,16 +105,16 @@ bool meetAtGrade(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b, bo
     return true;
 }
 
-bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end, bool atGradeOnly) {
+bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end) {
     if (e.xy.size() < 2) return false;
     const Vec2 q = end ? e.xy.back() : e.xy.front();
     for (const EdgeSpec& o : g.edges) {
         if (&o == &e || o.xy.size() < 2) continue;
-        const bool endToEnd = std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol;
-        if (!endToEnd && !(project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e))) continue;
-        // (`e` ends where they meet; `o` too where the two ends meet)
-        if (atGradeOnly && !meetAtGrade(g, e, o, true, endToEnd)) continue;
-        return true;
+        // two roads' ends together: the file joins them there (one road carrying on, or a node), whatever they are
+        if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) return true;
+        // `e`'s end inside `o`'s paved band: they meet only where the crossing policy lets them meet at grade (`e` ends
+        // where they meet, `o` runs on)
+        if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e) && meetAtGrade(g, e, o, true, false)) return true;
     }
     return false;
 }

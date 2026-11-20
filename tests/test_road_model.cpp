@@ -4264,8 +4264,10 @@ TEST_CASE(road_model_37_a_street_ending_under_the_freeway_is_a_dead_end) {
     }
     // A SPUR ENDING INSIDE A ROAD'S BAND, with no junction stated (walkTee's spur, 6 m short of the east road's centre
     // line): a street the planner left unstated where the road is one it meets at grade; a dead end, joined across by a
-    // turn-round, where that road is a freeway (above it, by the class's own `limited_access`). The design stage's own
-    // test, in plan, still says the spur's end is met (its profile is not brought down to the ground: no mesh moves).
+    // turn-round, where that road is a freeway (above it, by the class's own `limited_access`). The design stage asks the
+    // same one test (ADR-0470): under the freeway the spur's end is open (brought down to the ground), beside a street it
+    // is met. Roads whose ends meet at a node meet whatever they are: east and west carry on into each other at (0, 0) as
+    // freeways too (were the crossing policy asked there, the freeway's own ends would be open and brought down).
     for (const char* cls : {"local", "freeway"}) {
         nlohmann::json file = walkTee(std::string(), true);
         for (nlohmann::json& e : file["edges"])
@@ -4280,8 +4282,18 @@ TEST_CASE(road_model_37_a_street_ending_under_the_freeway_is_a_dead_end) {
         std::printf("      the spur's end inside the %s road's band: %s\n", cls, streetEndKindWord(kind));
         CHECK(kind == (underFreeway ? StreetEndKind::DeadEnd : StreetEndKind::MeetsAnother));
         const EdgeSpec& spurEdge = g.edges[static_cast<size_t>(g.index.at("spur"))];
-        CHECK(roadEndMeetsAnother(g, spurEdge, 1));                         // the design's test: met, in plan, both ways
-        CHECK(roadEndMeetsAnother(g, spurEdge, 1, true) == !underFreeway);   // at grade: only the street
+        CHECK(roadEndMeetsAnother(g, spurEdge, 1) == !underFreeway);   // at grade: only the street
+        CHECK(roadEndMeetsAnother(g, g.edges[static_cast<size_t>(g.index.at("east"))], 0));   // a node: met, either class
+        CHECK(roadEndMeetsAnother(g, g.edges[static_cast<size_t>(g.index.at("west"))], 1));
+        {   // the design stage's open ends: the same answer
+            RoadLabGraph d = g;
+            (void)designRoads(d, [](double, double) { return 0.0; });
+            const EdgeSpec& ds = d.edges[static_cast<size_t>(d.index.at("spur"))];
+            CHECK(ds.openEnd[1] == underFreeway);
+            CHECK(ds.openEnd[0]);   // its far end meets nothing: open either way
+            CHECK(!d.edges[static_cast<size_t>(d.index.at("east"))].openEnd[0]);
+            CHECK(!d.edges[static_cast<size_t>(d.index.at("west"))].openEnd[1]);
+        }
         uint32_t spurEnds = 0;
         bool joinedAtTheFreeway = false;
         for (const ModelDeadEnd& d : m.deadEnds)

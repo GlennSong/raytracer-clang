@@ -27,13 +27,12 @@ struct DesignReport {
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain);
 
 // WHETHER ANOTHER ROAD MEETS ROAD `e`'S END (`end` 0: its start, 1: its end): another road ends within the rules'
-// endpointTol of it, or its paved band (the two roads' half widths) covers it. The design stage's test for an open end
-// (one it brings down to the ground), in plan, as it always was (`atGradeOnly` false). With `atGradeOnly`, a road counts
-// only where the crossing policy (meetAtGrade, below) lets the two meet at grade: a street ending under the freeway's
-// band meets nothing there, since the freeway meets no road at grade (ADR-0469). The road model asks it so
-// (road_model.h streetEndKind) to tell a road that just ends from one that meets others where the road file states no
-// junction (reported, never joined).
-bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end, bool atGradeOnly = false);
+// endpointTol of it (the file joins them there, whatever they are), or its paved band (the two roads' half widths)
+// covers it and the crossing policy (meetAtGrade, below) lets the two meet at grade: a street ending under the
+// freeway's band meets nothing there, since the freeway meets no road at grade (ADR-0469, ADR-0470). THE ONE ANSWER:
+// the design stage asks it for an open end (one it brings down to the ground), and the road model (road_model.h
+// streetEndKind) to tell a road that just ends from one that meets others where the road file states no junction.
+bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end);
 
 // THE PLANNER'S CROSSING POLICY, its one statement (ADR-0215 step 3; ADR-0469): whether roads `a` and `b` meet AT GRADE
 // where they meet (true), or one bridges the other (false), by what the two roads are, from their classes' stated flags:

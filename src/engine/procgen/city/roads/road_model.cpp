@@ -329,7 +329,7 @@ StreetEndKind streetEndKind(const RoadLabGraph& g, const ModelStreet& s, int end
     if (roadEnd < 0) return StreetEndKind::PartWay;
     if (!(roadEnd == 0 ? e.from.edge : e.to.edge).empty()) return StreetEndKind::RampAnchored;
     // (only a road it can meet at grade: a street ending under the freeway's band meets nothing there, ADR-0469)
-    return roads::lanes::roadEndMeetsAnother(g, e, roadEnd, true) ? StreetEndKind::MeetsAnother : StreetEndKind::DeadEnd;
+    return roads::lanes::roadEndMeetsAnother(g, e, roadEnd) ?StreetEndKind::MeetsAnother : StreetEndKind::DeadEnd;
 }
 
 const char* cornerGapWord(CornerGap g) {
