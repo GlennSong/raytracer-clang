@@ -44,7 +44,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 25780c6d | merge of `claude/island8-batch` into this branch, up to 74cdd74d (the walking road work, ADR-0464 to 0467). Glenn's call: its updates into this one, nothing the other way |
 | 268ba601 | model step 6, first piece, collision shapes on nodes: `ProcCollider` gains a name, a node, a rotation and the hull kind; `shapeMesh`; Lua `m:shape` / `n:shape`; the sheet's `--shapes`; `tests/test_model_shapes.cpp` |
 | b0e9dcb7 | second merge of `claude/island8-batch`, up to 23a20eeb (ADR-0468, where a place joins the sidewalks) |
-| (this commit) | model step 6, second piece, a model to a glTF file and back: `procgen/model_file.{h,cpp}`, `writeGlbTree`, `ModelImporter::loadCpuTree`; Lua `model.from_file`, `model.from_files`; the sheet's `--glb` and a `.glb` as input; AGENTS.md "Model file names" brought up to what is built; `tests/test_model_file.cpp` |
+| d6c798a6 | model step 6, second piece, a model to a glTF file and back: `procgen/model_file.{h,cpp}`, `writeGlbTree`, `ModelImporter::loadCpuTree`; Lua `model.from_file`, `model.from_files`; the sheet's `--glb` and a `.glb` as input; AGENTS.md "Model file names" brought up to what is built; `tests/test_model_file.cpp` |
+| (this commit) | model step 6, last piece, the model store: `procgen/model_store.{h,cpp}`, `scripting/model_recipes.{h,cpp}` (`obtainModel`), the list `assets/scripts/models.lua`, Lua `model.get`, `ProcModel::frozen`; the sheet takes a model's name; `tests/test_model_store.cpp`. THE MODEL HALF OF THE DESIGN NOTE IS DONE |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -55,7 +56,8 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   level of detail seen from that far. `--shapes` draws the collision shapes in place of the meshes. `--glb FILE` also writes the model as a glTF file to
   open in Blender, and a `.glb` can be given in place of the recipe.
   `assets/scripts/car_rig_lab.lua` (any kit car on the car rig) is the worked example; `build-viewer/sheets/uses.lua`
-  (a box car) and `nodes.lua` (a crane) are smaller ones, not tracked. Scratch recipes live in `build-viewer/sheets/` (not tracked).
+  (a box car) and `nodes.lua` (a crane) are smaller ones, not tracked. A model of `assets/scripts/models.lua` is
+  drawn by its name: `./build-viewer/rt_model_sheet sedan --out build-viewer/sheets/sedan.png`. Scratch recipes live in `build-viewer/sheets/` (not tracked).
 - **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles and what
   each is made of, whatever their order. The same number before and after a change means the same triangles. Take it for every recipe before
   you start (a loop over `assets/scripts/*.lua` with `--size 64 --spp 1` takes about 20 seconds; the scripts that are
@@ -88,18 +90,19 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 ## What is next
 
-**The model store, the last piece of model step 6.** Built models kept under a name so many entities share one; a
-handle into it; a cache key (the recipe, its arguments, the libraries it requires, the toolkit's version, and for a
-loaded model its files). Look first at what already caches built things by key (`procgen/furniture_kit.h`, the bundle
-and lot caches, `AssetManager`), so this is one of those and not a new kind of cache. `ProcModel::name` is there for
-it.
+**The prefab half of the design note, from step 7: prefab data and stamping one entity.** A prefab is Lua data: which
+model it shows (a name in `models.lua`) and which components it carries. Stamping one makes an entity with a model
+instance (the model, and this copy's value for each moving node), drawing (one model switching level as one thing),
+and physics from the model's collision shapes. The design note's last section, "The model half, done; what the prefab
+half starts from", lists what step 7 has to build on. Proof asked for: a scene with the crane; a physics test that
+the boom's shape stops a box.
 
-Then the prefab half of the design note, from step 7: prefab data and stamping one entity (the model instance, its
-drawing by level of detail, physics from the model's shapes).
+Before starting it, ask Glenn: the prefab half changes what the game draws and collides with, which the model half
+never did. Until now every existing level and recipe has been provably unchanged (the fingerprints).
 
-Two things found on the way that are someone's to decide, both written up in the design note's last section: the
-older glTF writer (`writeGlb`) writes triangles the engine's way round, so its files read back inside out; and the
-plain importer (`loadCpu`) does not read vertex colours.
+Two things found on the way that are someone's to decide, both written up in the design note: the older glTF writer
+(`writeGlb`) writes triangles the engine's way round, so its files read back inside out; and the plain importer
+(`loadCpu`) does not read vertex colours.
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 

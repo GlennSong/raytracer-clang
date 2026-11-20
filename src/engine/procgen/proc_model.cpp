@@ -133,6 +133,7 @@ namespace {
 
 std::shared_ptr<ProcModel> posedInto(const ProcModel& m, const ProcPose& pose, const std::string& prefix) {
     std::shared_ptr<ProcModel> out = std::make_shared<ProcModel>(m);
+    out->frozen = false;   // a new model, whatever the one it was posed from is
     for (ProcNode& n : out->nodes) {
         if (n.motion.kind == ProcMotion::Kind::None) continue;
         n.frame = n.frame * n.motion.frame(pose.of(prefix + n.name));

@@ -111,6 +111,13 @@ ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
 using ModelFileSource = std::function<std::string(const std::string& name)>;   // the file's path, or "" when there is none
 void openModelFiles(ScriptVM& vm, ModelFileSource source);
 
+// THE MODEL STORE FROM A RECIPE (#191, model step 6): `model.get("tire")` gives the one model kept under that name
+// (scripting/model_recipes.h obtainModel), to be used as a piece. It is frozen: the words that change a model
+// refuse it. The host supplies how a name is turned into a model; without this call `model.get` says this host keeps
+// no named models.
+using ModelGetter = std::function<std::shared_ptr<const struct ProcModel>(const std::string& name, std::string* error)>;
+void openModelStore(ScriptVM& vm, ModelGetter get);
+
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when
 // the script errors or does not return a Mesh. `openProcgenLibrary` must have

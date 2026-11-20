@@ -5,7 +5,8 @@
 // `--at METRES` draws the level of detail the model shows from that far away; the text counts every level.
 // `--shapes` draws the collision shapes in place of the meshes: what things bump into.
 // `--glb FILE` also writes the model as a glTF file by the engine's naming convention (model_file.h), and a `.glb`
-// can be given in place of the recipe: the sheet of a model made in Blender, or of one just written.
+// can be given in place of the recipe: the sheet of a model made in Blender, or of one just written. A bare NAME in
+// place of the recipe is a model of assets/scripts/models.lua, taken from the model store.
 // `--set` draws the model in a pose: a moving node's value, in degrees for a node that turns and metres for one
 // that slides (`--set boom=40 --set door_fl/window=-0.2`). The text lists every moving node and its limits.
 //
@@ -29,6 +30,7 @@
 #include "engine/procgen/model_file.h"
 #include "engine/procgen/proc_model.h"
 #include "engine/script_assets.h"
+#include "engine/scripting/model_recipes.h"
 #include "engine/scripting/procgen_bindings.h"
 #include "engine/scripting/script_modules.h"
 #include "engine/scripting/script_vm.h"
@@ -66,9 +68,10 @@ struct Options {
 };
 
 const char* kUsage =
-    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes]\n"
+    "usage: rt_model_sheet RECIPE.lua | MODEL.glb | NAME [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes]\n"
     "                      [--glb model.glb] [--size N] [--spp N]\n"
-    "  runs a Lua recipe that returns a mesh or a model and writes four views of it in one PNG,\n"
+    "  runs a Lua recipe that returns a mesh or a model (or reads a model file, or takes a model of models.lua by\n"
+    "  its name) and writes four views of it in one PNG,\n"
     "  with its size, triangle counts and mesh audit beside it as a .txt\n"
     "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n"
     "  --at draws the level of detail seen from that many metres away (the full model without it)\n"
@@ -489,7 +492,21 @@ int main(int argc, char** argv) {
 
     ProcModel model;
     const bool fromFile = o.recipe.size() > 4 && (o.recipe.substr(o.recipe.size() - 4) == ".glb" || o.recipe.substr(o.recipe.size() - 5) == ".gltf");
-    if (fromFile) {
+    // A bare name (no dot, no slash) is a model of models.lua, from the model store.
+    const bool named = o.recipe.find('.') == std::string::npos && o.recipe.find('/') == std::string::npos;
+    if (named) {
+        std::string error;
+        const std::shared_ptr<const ProcModel> kept = obtainModel(o.recipe, std::string(), &error);
+        if (kept == nullptr) {
+            std::fprintf(stderr, "rt_model_sheet: %s\n", error.c_str());
+            std::string listError;
+            std::string known;
+            for (const std::string& n : namedModels(std::string(), &listError)) known += (known.empty() ? "" : ", ") + n;
+            if (!known.empty()) std::fprintf(stderr, "  the named models are: %s\n", known.c_str());
+            return 1;
+        }
+        model = *kept;
+    } else if (fromFile) {
         std::string error;
         std::vector<std::string> notes;
         const std::shared_ptr<ProcModel> read = readModelGlb(o.recipe, &error, &notes);
@@ -506,6 +523,7 @@ int main(int argc, char** argv) {
         openProcgenLibrary(vm);
         openModuleLoader(vm, makeModuleSource(""));
         openModelFiles(vm, makeModelFileSource(""));
+        openModelStore(vm, [](const std::string& name, std::string* why) { return obtainModel(name, std::string(), why); });
         if (!o.argsJson.empty()) setRecipeArgs(vm, o.argsJson);
 
         std::string error;

@@ -96,6 +96,7 @@
 #include "procgen/scatter.h"
 #include "procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "procgen/proc_model.h"      // ProcModel (script model cache)
+#include "scripting/model_recipes.h" // obtainModel: a recipe's model.get
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
 #include "scripting/procgen_bindings.h"
@@ -1270,6 +1271,7 @@ static bool runScriptModel(const json& ent, const std::string& levelDir,
     openProcgenLibrary(vm);
     openModuleLoader(vm, makeModuleSource(levelDir, &g_loadedScriptFiles));
     openModelFiles(vm, makeModelFileSource(levelDir));
+    openModelStore(vm, [levelDir](const std::string& name, std::string* why) { return obtainModel(name, levelDir, why); });
     vm.setGlobalNumber("seed", ent.value("seed", 0.0));
     if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
     if (ground != nullptr) setGlobalHeightField(vm, "ground", *ground);

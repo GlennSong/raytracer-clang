@@ -29,6 +29,7 @@
 #include "engine/scripting/script_vm.h"
 #include "engine/scripting/procgen_bindings.h"
 #include "engine/scripting/script_modules.h"
+#include "engine/scripting/model_recipes.h"
 #include "engine/script_assets.h"
 #include "engine/scripting/script_modules.h"
 #endif
@@ -539,6 +540,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             openProcgenLibrary(*scriptVm);
             openModuleLoader(*scriptVm, makeModuleSource(levelDir));
             openModelFiles(*scriptVm, makeModelFileSource(levelDir));
+            openModelStore(*scriptVm, [levelDir](const std::string& name, std::string* why) { return obtainModel(name, levelDir, why); });
         }
         return *scriptVm;
     };

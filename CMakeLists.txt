@@ -114,6 +114,7 @@ add_library(engine_core STATIC
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/proc_model.cpp
     src/engine/procgen/model_file.cpp
+    src/engine/procgen/model_store.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/tree_recipe.cpp
     src/engine/procgen/tree_lods.cpp
@@ -486,6 +487,7 @@ if(RT_ENABLE_SCRIPTING)
     target_sources(engine_core PRIVATE
         src/engine/scripting/script_vm.cpp
         src/engine/scripting/script_modules.cpp
+        src/engine/scripting/model_recipes.cpp
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
@@ -1096,6 +1098,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_model_levels.cpp     # a model's levels of detail (#191)
         tests/test_model_shapes.cpp     # a model's collision shapes on its nodes (#191)
         tests/test_model_file.cpp       # a model written to a glTF file and read back (#191)
+        tests/test_model_store.cpp      # the model store and the list of named models (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

@@ -1,7 +1,7 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model steps 1 to 5 (nodes; markers and named materials; uses; motion, poses and rig tables; levels of detail) and
-most of step 6 (collision shapes, models to and from glTF files; the store is not built) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. The model half is built: steps 1 to 6 (nodes; markers and named materials; uses; motion, poses and rig tables;
+levels of detail; collision shapes, models to and from glTF files, and the model store). The prefab half is not. See "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -597,4 +597,63 @@ Left as they were, on purpose:
   reason. Nothing is silently left out.
 - **Baked maps beyond albedo and normal** (roughness, occlusion) are read by the importer but a model's material has
   no slot for them yet: materials work (#309).
-- **The model store** (names, handles, a cache key) is the last piece of step 6.
+
+### Model step 6, last piece: the model store and named models (2026-11-19)
+
+```lua
+-- assets/scripts/models.lua: the models the world can ask for by name
+return {
+  sedan  = { recipe = "car_rig_lab", args = { name = "sedan" } },
+  pickup = { recipe = "car_rig_lab", args = { name = "pickup" } },
+  crane  = { files = { "crane_high.glb", "crane_low.glb" }, distances = { 0, 80 } },   -- (an example; no such files yet)
+}
+```
+```lua
+local tire = model.get("tire")          -- in a recipe: the one tire, shared by every car that asks
+joint.spin_front_l:use(tire)
+```
+
+- **A named model is a line of data.** A recipe to run with its arguments, or model files to read. A new kind of
+  model is a new line. No C++ changes.
+- **Built once, kept, shared.** `obtainModel("sedan")` gives the one sedan. The store is the furniture kit's way
+  (model a piece once per variant and keep it) for any model. It is in memory; it writes nothing to disk.
+- **A kept model is frozen.** It is shared, so the recipe words that add to a model or change it refuse it, and say
+  to use it as a piece. A model made from a kept one (posed, mirrored) is the recipe's own.
+- **Each model knows what it was built from:**
+  - a *key*: the toolkit's tag (`kModelToolkitTag`, bumped when a mesh word's output changes), its line in the list
+    and its recipe's text;
+  - its *inputs*: each library the recipe required, each file it read, each other model it got, with the hash each
+    had;
+  - a *signature* over the key and all the inputs. This is what a model that uses another records for it, so a
+    change two models down (the library the tire requires) rebuilds the tire and the car that uses the tire.
+- **It is built again only when one of those has changed.** An edited recipe shows the next time the model is asked
+  for, without a restart. A model that the change does not touch is left as it is.
+- **A model that needs itself** (through others) is refused, as is a name the list lacks or a line with neither a
+  recipe nor files.
+- **`rt_model_sheet sedan`** takes a name in place of a recipe.
+
+Left as they were, on purpose:
+
+- **Nothing in the game asks the store yet.** A level's script entity still runs its recipe itself. The prefab
+  (step 7) names its model and gets it here; that is the customer.
+- **A handle is the model's shared pointer.** The design's "a handle into the store" needs nothing more until an
+  entity's component must refer to a model by something that survives a rebuild; then it is the name.
+- **A change is seen when the model is next asked for**, not while it is on screen. Swapping a rebuilt model under
+  live entities is hot reload's business, with the prefab.
+- **The lab recipe is what the list names.** `car_rig_lab.lua` was written for the model sheet; when the cars are
+  ported (step 11) the list names the kit's own recipe.
+
+## The model half, done; what the prefab half starts from
+
+Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of
+detail, named materials; models from recipes and from files; and a store that keeps each under a name. Nothing in
+the game is drawn or moved by it yet. Step 7 starts the prefab half and is where that changes. What it has to build
+on, each noted where it arose above:
+
+- **A model instance on the entity:** the model's name, each moving node's value, and (for dents) its own mesh for a
+  part.
+- **Drawing by level,** one model switching as one thing, on `minDistance` / `drawDistance` and `FLAG_LOD_BAND`.
+- **Physics from the model's shapes,** through the tree, a shape following its node; a real hull shape.
+- **The copies of a used piece** drawn in groups, and one made full when it is touched (step 10).
+- **Two descriptions to make one** when the car is ported: `Vehicle::Panel` and the rig; `kit.hinge`'s axes and the
+  rig table's.

@@ -3682,6 +3682,17 @@ int modelGc(lua_State* L) {
     return 0;
 }
 
+// A model that may be changed: every word that adds to a model or alters it takes its model through this. A model
+// kept in the model store is shared by everything that shows it, so it is refused.
+void refuseFrozen(lua_State* L, const ProcModel& m) {
+    if (m.frozen) luaL_error(L, "the model '%s' is kept in the model store and shared, so it cannot be changed; use it as a piece (m:use)", m.name.c_str());
+}
+ProcModel& openModel(lua_State* L, int idx) {
+    ProcModel& m = checkModel(L, idx);
+    refuseFrozen(L, m);
+    return m;
+}
+
 // model.new([name]) -> an empty Model. The name ("tire") is what a file written from it calls each copy of it.
 int l_model_new(lua_State* L) {
     ModelPtr m = std::make_shared<ProcModel>();
@@ -3693,6 +3704,31 @@ int l_model_new(lua_State* L) {
 // m:name() -> the model's name ("" when it has none).
 int l_model_name(lua_State* L) {
     lua_pushstring(L, checkModel(L, 1).name.c_str());
+    return 1;
+}
+
+// --- the model store (scripting/model_recipes.h) ---------------------------------------------------------------------
+int l_model_get_closed(lua_State* L) { return luaL_error(L, "this host keeps no named models (openModelStore)"); }
+
+constexpr const char* kModelGetterMt = "engine.procgen.ModelGetter";
+int modelGetterGc(lua_State* L) {
+    static_cast<ModelGetter*>(lua_touserdata(L, 1))->~ModelGetter();
+    return 0;
+}
+
+// model.get(name) -> model : the one model kept under that name in the model store, built if it has to be. Frozen:
+// use it as a piece.
+int l_model_get(lua_State* L) {
+    const ModelGetter& get = *static_cast<ModelGetter*>(lua_touserdata(L, lua_upvalueindex(1)));
+    ModelPtr model;
+    {
+        std::string why;
+        const std::string name = luaL_checkstring(L, 1);
+        model = std::const_pointer_cast<ProcModel>(get(name, &why));   // frozen: the changing words refuse it
+        if (model == nullptr) lua_pushstring(L, why.c_str());          // the reason outlives these strings
+    }
+    if (model == nullptr) return luaL_error(L, "model.get: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(model));
     return 1;
 }
 
@@ -3848,7 +3884,7 @@ void addMarkerFromLua(lua_State* L, ProcModel& m, int node) {
 // model holds (m:material); a textured one is laid world-planar, and with none the part is baked vertex-coloured.
 // `level` is the level of detail it belongs to (m:level); without it, the full model. Chainable.
 int l_model_add(lua_State* L) {
-    addPart(L, checkModel(L, 1), 0);
+    addPart(L, openModel(L, 1), 0);
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -3951,6 +3987,7 @@ int addNodeFromLua(lua_State* L, const ModelPtr& model, int parent) {
 
 // m:node(name [, opts]) -> node : a new node under the root (or under opts.parent).
 int l_model_node(lua_State* L) {
+    refuseFrozen(L, checkModel(L, 1));
     return addNodeFromLua(L, *static_cast<ModelPtr*>(luaL_checkudata(L, 1, kModelMt)), 0);
 }
 
@@ -3966,7 +4003,7 @@ int l_model_find(lua_State* L) {
 // m:material(name, material) -> m : give one of the model's materials a name, so a part can say m:add(mesh, "paint")
 // and anything later can find "paint" on the model. One name, one material: naming a different one is an error.
 int l_model_material(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     const char* name = luaL_checkstring(L, 2);
     const MaterialPtr& mat = *static_cast<MaterialPtr*>(luaL_checkudata(L, 3, kMaterialMt));
     if (name[0] == '\0') return luaL_error(L, "a material needs a name");
@@ -3989,7 +4026,7 @@ int l_model_material_count(lua_State* L) {
 
 // m:marker(name [, opts]) -> m : a marker on the root. Chainable.
 int l_model_marker(lua_State* L) {
-    addMarkerFromLua(L, checkModel(L, 1), 0);
+    addMarkerFromLua(L, openModel(L, 1), 0);
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -4081,7 +4118,7 @@ void addShapeFromLua(lua_State* L, ProcModel& m, int node) {
 
 // m:shape(name, spec) -> m : a collision shape on the root (see addShapeFromLua). Chainable.
 int l_model_shape(lua_State* L) {
-    addShapeFromLua(L, checkModel(L, 1), 0);
+    addShapeFromLua(L, openModel(L, 1), 0);
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -4089,6 +4126,7 @@ int l_model_shape(lua_State* L) {
 // n:shape(name, spec) -> n : a collision shape on this node, in the node's own space. Chainable.
 int l_node_shape(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     addShapeFromLua(L, *n.model, n.index);
     lua_pushvalue(L, 1);
     return 1;
@@ -4099,6 +4137,7 @@ int l_node_shape(lua_State* L) {
 // "wheel_fl/valve". Chainable.
 int l_node_use(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     addUseFromLua(L, *n.model, n.index);
     lua_pushvalue(L, 1);
     return 1;
@@ -4107,6 +4146,7 @@ int l_node_use(lua_State* L) {
 // n:marker(name [, opts]) -> n : a marker on this node, placed in the node's own space. Chainable.
 int l_node_marker(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     addMarkerFromLua(L, *n.model, n.index);
     lua_pushvalue(L, 1);
     return 1;
@@ -4120,12 +4160,14 @@ int l_model_node_count(lua_State* L) {
 // n:node(name [, opts]) -> node : a new node under this one.
 int l_node_node(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     return addNodeFromLua(L, n.model, n.index);
 }
 
 // n:add(mesh [, material]) -> n : a part hung on this node, its mesh in the node's own space. Chainable.
 int l_node_add(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     addPart(L, *n.model, n.index);
     lua_pushvalue(L, 1);
     return 1;
@@ -4150,6 +4192,7 @@ int l_node_parent(lua_State* L) {
 // move (see readMotion). The root does not move. Chainable.
 int l_node_motion(lua_State* L) {
     const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
     if (n.index == 0) return luaL_error(L, "the root does not move: put what moves on a node");
     // The name is copied to Lua's stack, so no C++ string is alive if readMotion raises.
     lua_pushstring(L, n.model->nodes[static_cast<std::size_t>(n.index)].name.c_str());
@@ -4265,7 +4308,7 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
 // simpler copy keeping `ratio` of its triangles (MeshBuilder::simplifiedSurface, what mesh.simplify calls), on the
 // same node in the same material. Each new level must be farther than the last.
 int l_model_level(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     const double distance = luaL_checknumber(L, 2);
     if (!(distance > m.levelFrom.back()))
         return luaL_error(L, "a level must be farther than the last one (%f m)", static_cast<double>(m.levelFrom.back()));
@@ -4363,7 +4406,7 @@ int l_model_mirrored(lua_State* L) {
 
 // m:use(piece [, placements] [, opts]) -> m : place another model (or a mesh) in this one, on the root. Chainable.
 int l_model_use(lua_State* L) {
-    addUseFromLua(L, checkModel(L, 1), 0);
+    addUseFromLua(L, openModel(L, 1), 0);
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -4372,7 +4415,7 @@ int l_model_use(lua_State* L) {
 // for its recipes: placements is an array of { pos = {x,y,z}, yaw = radians, scale = number }; opts may set
 // { roughness=, metallic=, alpha_foliage=, collide= }. Chainable.
 int l_model_add_instances(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     const int level = levelOpt(L, 4, m);
     ProcUse use;
     use.piece = pieceArg(L, 2, 4, m);
@@ -4388,7 +4431,7 @@ int l_model_add_instances(lua_State* L) {
 // from `mesh` (world space). The faithful collider for terrain, roads, and any
 // solid shell — collision is the actual surface, not an approximation. Chainable.
 int l_model_collide(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     ProcCollider c;
     c.kind = ProcCollider::Kind::Mesh;
     c.mesh = checkMesh(L, 2);
@@ -4403,7 +4446,7 @@ int l_model_collide(lua_State* L) {
 // same triangles. The default for built world geometry (a building shell, a
 // foundation): what you see is exactly what you hit. Chainable.
 int l_model_add_solid(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     const int material = materialArg(L, 3, m);
     RenderMesh mesh = checkMesh(L, 2);
     ProcPart part;
@@ -4423,7 +4466,7 @@ int l_model_add_solid(lua_State* L) {
 // (size={w,h,d}, yaw), "sphere" (radius), or "capsule" (radius, height); with
 // center={x,y,z}, friction, motion ("static"|"dynamic"). Chainable.
 int l_model_add_collider(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
     ProcCollider c;
     std::string shape = optStrField(L, 2, "shape", "box");
@@ -4455,7 +4498,7 @@ int l_model_collider_count(lua_State* L) {
 // m:merge(other) -> m : fold another Model's parts + instances into this one. The other model's nodes come across
 // under this model's root; two nodes of one name is an error.
 int l_model_merge(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     const ProcModel& other = checkModel(L, 2);
     if (&m == &other) return luaL_error(L, "a model cannot be merged into itself");
     bool merged = false;
@@ -4489,7 +4532,7 @@ int l_model_flatten(lua_State* L) {
 // and pads. The recipe still builds its road/block meshes on the conformed field;
 // this makes the walkable CDLOD ground agree. No-op if the level owns no terrain.
 int l_model_conform(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     RegionsVec& r = checkRegions(L, 2);
     m.flatten.insert(m.flatten.end(), r.begin(), r.end());
     lua_pushvalue(L, 1);
@@ -5587,6 +5630,7 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kModelFns[] = {
         {"new", l_model_new},
+        {"get", l_model_get_closed},                  // openModelStore replaces this
         {"from_file", l_model_from_files_closed},     // openModelFiles replaces these two
         {"from_files", l_model_from_files_closed},
         {nullptr, nullptr},
@@ -5712,6 +5756,22 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
+
+void openModelStore(ScriptVM& vm, ModelGetter get) {
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "model");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }   // openProcgenLibrary first
+    void* mem = lua_newuserdatauv(L, sizeof(ModelGetter), 0);
+    new (mem) ModelGetter(std::move(get));
+    if (luaL_newmetatable(L, kModelGetterMt)) {
+        lua_pushcfunction(L, modelGetterGc);
+        lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    lua_pushcclosure(L, l_model_get, 1);
+    lua_setfield(L, -2, "get");
+    lua_pop(L, 1);
+}
 
 void openModelFiles(ScriptVM& vm, ModelFileSource source) {
     lua_State* L = luaState(vm);
