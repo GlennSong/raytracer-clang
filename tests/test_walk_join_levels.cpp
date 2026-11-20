@@ -121,13 +121,15 @@ bool crowdPlace(const std::string& name) {
     const std::size_t u = name.rfind('_');
     return u != std::string::npos && u + 1 < name.size() && std::isdigit(static_cast<unsigned char>(name[u + 1]));
 }
-// The counts pinned per level, from the run looked at (2026-11-19, ADR-0468).
+// The counts pinned per level, from the run looked at (2026-11-19, ADR-0468). river_town's places in a cut-off part
+// were 98, now 97 (ADR-0469): s345's one place, whose sidewalks end under the freeway, is joined to the rest across that
+// dead end's turn-round.
 struct Pinned {
     int places, cutOff, placing, starting, finishing, fallbackSame, rampNodes, atNode, doors, doorsJoined, doorsAgree;
 };
 const Pinned& pinnedFor(const std::string& level) {
     static const Pinned kBrainCrowd{451, 4, 445, 405, 405, 445, 1, 0, 0, 0, 0};
-    static const Pinned kRiverTown{799, 98, 751, 749, 746, 764, 0, 3, 913, 902, 746};
+    static const Pinned kRiverTown{799, 97, 751, 749, 746, 764, 0, 3, 913, 902, 746};
     return level == "brain_crowd.json" ? kBrainCrowd : kRiverTown;
 }
 }  // namespace

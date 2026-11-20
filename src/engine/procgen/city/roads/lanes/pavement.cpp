@@ -1,6 +1,7 @@
 #include "engine/procgen/city/roads/lanes/pavement.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/polyline.h"   // lineCross
 
 #include <algorithm>
 #include <functional>
@@ -20,6 +21,7 @@ namespace roads::lanes {
 namespace {
 
 constexpr double kMaxEdge = 4.0;   // faces are densified to this before triangulation
+constexpr double kFootprintWeld = 0.01;   // a lane's footprint reaches 1 cm past its rails, so neighbours weld
 
 Ring railRing(const std::vector<Vec2>& left, const std::vector<Vec2>& right) {
     Ring r(left.begin(), left.end()); for (size_t i = right.size(); i-- > 0;) r.push_back(right[i]); return r;
@@ -95,11 +97,157 @@ FlatMesh triangulateConstrained(const Polygon2& poly) {
     return m;
 }
 
+// A road end's point, and the way its spine leaves that point (the spine's own end tangent, as spineRing frames it).
+Vec2 roadEndPoint(const EdgeSpec& e, int end) { return end == 0 ? e.xy.front() : e.xy.back(); }
+Vec2 roadEndLeaving(const EdgeSpec& e, int end) { return end == 0 ? tangentAt(e.xy, 0) : -tangentAt(e.xy, e.xy.size() - 1); }
+
 }  // namespace
+
+std::vector<BandKink> bandKinks(const RoadLabGraph& g) {
+    auto edgeOf = [&](const std::string& road) { const auto it = g.index.find(road); return it == g.index.end() ? -1 : it->second; };
+    auto drawn = [&](int ei) { return ei >= 0 && g.edges[static_cast<size_t>(ei)].laneCount() > 0 && g.edges[static_cast<size_t>(ei)].xy.size() >= 2; };
+    // THE PLACES THE FILE SAYS ROAD ENDS MEET, each a list of (road, station): every spread junction's node, every other
+    // junction's arms (they meet at its one point), and both ends of every carry-on
+    std::vector<std::vector<std::pair<int, double>>> meets;
+    for (const ModelJunction& J : g.junctions) {
+        if (!J.nodes.empty()) {
+            for (const ModelNode& n : J.nodes) {
+                meets.emplace_back();
+                for (const ModelNodePoint& p : n.points) meets.back().emplace_back(edgeOf(p.road), p.station);
+            }
+        } else {
+            meets.emplace_back();
+            for (const ModelArm& a : J.arms) meets.back().emplace_back(edgeOf(a.road), a.station);
+        }
+    }
+    for (size_t i = 0; i < g.streets.size(); ++i) {
+        const ModelStreet& S = g.streets[i];
+        for (int k = 0; k < 2; ++k) {
+            const ModelStreetId on = S.carriesOn[static_cast<size_t>(k)];
+            if (!on.valid() || on.index >= g.streets.size() || on.index <= i) continue;   // each pair once, from its first street
+            const ModelStreet& T = g.streets[on.index];
+            for (int kt = 0; kt < 2; ++kt)
+                if (T.carriesOn[static_cast<size_t>(kt)].valid() && T.carriesOn[static_cast<size_t>(kt)].index == i)
+                    meets.push_back({{edgeOf(S.road), k == 0 ? S.from : S.to}, {edgeOf(T.road), kt == 0 ? T.from : T.to}});
+        }
+    }
+    struct Way { double angle; int edge, end; Vec2 at; };   // end -1: a road passing through the place
+    std::set<std::array<int, 4>> seen;
+    std::vector<BandKink> out;
+    for (const std::vector<std::pair<int, double>>& place : meets) {
+        std::vector<Way> ways;
+        for (const std::pair<int, double>& p : place) {
+            if (!drawn(p.first)) continue;
+            const EdgeSpec& e = g.edges[static_cast<size_t>(p.first)];
+            const int end = sameWrittenStation(p.second, 0) ? 0 : sameWrittenStation(p.second, e.length()) ? 1 : -1;
+            if (end < 0) continue;
+            const Vec2 u = roadEndLeaving(e, end);
+            ways.push_back({std::atan2(u.y, u.x), p.first, end, roadEndPoint(e, end)});
+        }
+        // a road the place lists part way along it runs on through the place: its band is unbroken there, so it stands
+        // between the ends on either side of it (only where it really passes the place: a node lists a road where it
+        // leaves the junction's area, which may be metres from the node)
+        for (const std::pair<int, double>& p : place) {
+            if (!drawn(p.first)) continue;
+            const EdgeSpec& e = g.edges[static_cast<size_t>(p.first)];
+            if (!strictlyPast(p.second, 0, kWrittenStation) || !strictlyBefore(p.second, e.length(), kWrittenStation)) continue;
+            const Vec2 at = pointAt(e.xy, e.s, p.second), u = tangentAtStation(e.xy, e.s, p.second);
+            bool here = false;
+            for (const Way& w : ways) here = here || (w.end >= 0 && atOrBefore(distance(w.at, at), g.rules.endpointTol, kSamePoint));
+            if (!here) continue;
+            ways.push_back({std::atan2(u.y, u.x), p.first, -1, at});
+            ways.push_back({std::atan2(-u.y, -u.x), p.first, -1, at});
+        }
+        if (ways.size() < 2) continue;
+        std::sort(ways.begin(), ways.end(), [](const Way& a, const Way& b) { return a.angle < b.angle; });
+        for (size_t i = 0; i < ways.size(); ++i) {
+            const Way& a = ways[i];
+            const Way& b = ways[(i + 1) % ways.size()];
+            if (a.end < 0 || b.end < 0 || (a.edge == b.edge && a.end == b.end)) continue;
+            const EdgeSpec& A = g.edges[static_cast<size_t>(a.edge)];
+            const EdgeSpec& B = g.edges[static_cast<size_t>(b.edge)];
+            const Vec2 uA = roadEndLeaving(A, a.end), uB = roadEndLeaving(B, b.end);
+            if (cross(uA, uB) >= 0) continue;   // the way round from A to B is no more than half a turn: no open side
+            if (!atOrBefore(distance(a.at, b.at), g.rules.endpointTol, kSamePoint)) continue;   // stated, but drawn apart
+            const double zA = a.end == 0 ? A.z.front() : A.z.back(), zB = b.end == 0 ? B.z.front() : B.z.back();
+            if (A.z.empty() || B.z.empty() || std::fabs(zA - zB) >= g.rules.sameLevelDz) continue;   // one passes over the other
+            const std::array<int, 4> key{{std::min(a.edge * 2 + a.end, b.edge * 2 + b.end), std::max(a.edge * 2 + a.end, b.edge * 2 + b.end), 0, 0}};
+            if (!seen.insert(key).second) continue;
+            BandKink k;
+            k.edgeA = a.edge; k.endA = a.end; k.edgeB = b.edge; k.endB = b.end;
+            k.turn = PI - std::fabs(std::atan2(cross(uA, uB), dot(uA, uB)));
+            out.push_back(k);
+        }
+    }
+    return out;
+}
+
+std::array<Ring, 2> mitrePieces(const RoadLabGraph& g, const BandKink& k, double halfWidthA, double halfWidthB) {
+    const EdgeSpec& A = g.edges[static_cast<size_t>(k.edgeA)];
+    const EdgeSpec& B = g.edges[static_cast<size_t>(k.edgeB)];
+    const Vec2 pA = roadEndPoint(A, k.endA), pB = roadEndPoint(B, k.endB);
+    const Vec2 uA = roadEndLeaving(A, k.endA), uB = roadEndLeaving(B, k.endB);
+    // the bands' corners on the open side: A's on the left of the way it leaves, B's on the right of its own -- the same
+    // arithmetic as spineRing's, so each is the band's own corner to the bit
+    const Vec2 cA = pA + perp(uA) * halfWidthA, cB = pB - perp(uB) * halfWidthB;
+    if (atOrBefore(distance(cA, cB), 0, kSamePoint)) return {};
+    // the bisector of the open side: half way round from A's way to B's, the long way (more than half a turn)
+    const double open = 2 * PI - std::fabs(std::atan2(cross(uA, uB), dot(uA, uB)));
+    const double c = std::cos(open * 0.5), s = std::sin(open * 0.5);
+    const Vec2 w(uA.x * c - uA.y * s, uA.x * s + uA.y * c);
+    const Vec2 at = (pA + pB) * 0.5;
+    const double cap = kMitreLimit * std::max(halfWidthA, halfWidthB);
+    Real t = 0, u = 0;
+    const bool meet = lineCross(cA, cA - uA, cB, cB - uB, t, u) && t >= 0 && u >= 0;
+    if (meet) {
+        const Vec2 m = cA - uA * t;
+        if (dot(m - at, w) <= cap) return {{Ring{pA, cA, m}, Ring{pB, m, cB}}};
+        // too sharp: cut the point off square across the bisector, `cap` out
+        const double along = dot(uA, w);   // cos(open / 2): below zero, the open side being more than half a turn
+        const Vec2 qA = cA - uA * ((dot(cA - at, w) - cap) / along), qB = cB - uB * ((dot(cB - at, w) - cap) / along);
+        const Vec2 tip = at + w * cap;
+        return {{Ring{pA, cA, qA, tip}, Ring{pB, tip, qB, cB}}};
+    }
+    // bands of different widths at a slight turn: their edges' lines cross behind the ends, so join the corners straight
+    const Vec2 mid = (cA + cB) * 0.5;
+    return {{Ring{pA, cA, mid}, Ring{pB, mid, cB}}};
+}
 
 void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, Pavement& out) {
     out.footprints.clear(); out.footprints.reserve(L.lanes.size());
-    for (const Lane& l : L.lanes) out.footprints.push_back(offsetSet(fromRing(railRing(l.left, l.right)), 0.01));   // 1 cm each side: neighbours weld
+    for (const Lane& l : L.lanes) out.footprints.push_back(offsetSet(fromRing(railRing(l.left, l.right)), kFootprintWeld));
+    // THE MITRES AT KINKS (ADR-0472): each road's asphalt runs on to the bisector on the outside of the bend, as part of
+    // its lane nearest there (a lane of its own road, so the piece takes its height), before the closing below looks
+    // for gaps to round off; the shoulder and sidewalk bands get theirs further down
+    const std::vector<BandKink> kinks = bandKinks(g);
+    std::vector<std::vector<Ring>> shoulderMitres(g.edges.size()), sidewalkMitres(g.edges.size());
+    for (const BandKink& k : kinks) {
+        const EdgeSpec& A = g.edges[static_cast<size_t>(k.edgeA)];
+        const EdgeSpec& B = g.edges[static_cast<size_t>(k.edgeB)];
+        const std::array<Ring, 2> asphalt = mitrePieces(g, k, g.hw(A) + kFootprintWeld, g.hw(B) + kFootprintWeld);
+        for (int side = 0; side < 2; ++side) {
+            const Ring& piece = asphalt[static_cast<size_t>(side)];
+            if (piece.size() < 3) continue;
+            const int road = side == 0 ? k.edgeA : k.edgeB;
+            const Vec2 c = centroidOf(piece);
+            int owner = -1; double bd = std::numeric_limits<double>::infinity();
+            for (size_t li = 0; li < L.lanes.size(); ++li) {
+                const Lane& l = L.lanes[li];
+                if (l.isConnector() || l.road() != road || out.footprints[li].empty()) continue;
+                const double d = project(l.xy(), l.s(), c).distance;
+                if (d < bd) { bd = d; owner = static_cast<int>(li); }
+            }
+            if (owner >= 0) out.footprints[static_cast<size_t>(owner)] = unionSets(out.footprints[static_cast<size_t>(owner)], fromRing(piece));
+        }
+        const RoadClassSpec& cA = g.cls(A);
+        const RoadClassSpec& cB = g.cls(B);
+        auto keep = [&](std::vector<std::vector<Ring>>& into, const std::array<Ring, 2>& pieces) {
+            if (pieces[0].size() >= 3) into[static_cast<size_t>(k.edgeA)].push_back(pieces[0]);
+            if (pieces[1].size() >= 3) into[static_cast<size_t>(k.edgeB)].push_back(pieces[1]);
+        };
+        if (cA.shoulder > 0 && cB.shoulder > 0) keep(shoulderMitres, mitrePieces(g, k, g.carriagewayHalfWidth(A), g.carriagewayHalfWidth(B)));
+        if (cA.sidewalk > 0 && cB.sidewalk > 0) keep(sidewalkMitres, mitrePieces(g, k, g.sidewalkOuterHalfWidth(A), g.sidewalkOuterHalfWidth(B)));
+    }
     double r = g.rules.closing; out.closingAdded = 0;
     if (r > 0) {
         PolySet U = unionAll(out.footprints); PolySet extra = differenceSets(closing(U, r), U);
@@ -168,13 +316,20 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
     // this road there.
     struct Cutter { PolySet set; Box2 box; int edge; int lane; };   // height: the edge's envelope, else the lane's own
     std::vector<Cutter> laneCuts, hullCuts, shoulderCuts;
+    // a road's band of one layer: its spine ring, and its mitre pieces at kinks where it has any
+    auto mitredBand = [&](size_t ei, double halfWidth, const std::vector<std::vector<Ring>>& mitres) {
+        if (mitres[ei].empty()) return fromRing(spineRing(g.edges[ei].xy, halfWidth));
+        std::vector<Ring> rings{spineRing(g.edges[ei].xy, halfWidth)};
+        rings.insert(rings.end(), mitres[ei].begin(), mitres[ei].end());
+        return unionRings(rings);
+    };
     for (size_t li = 0; li < L.lanes.size(); ++li)
         if (!out.footprints[li].empty()) laneCuts.push_back({out.footprints[li], bounds(out.footprints[li]), L.lanes[li].road(), static_cast<int>(li)});
     for (size_t ei = 0; ei < g.edges.size(); ++ei) {
         const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
         const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
         PolySet in = fromRing(spineRing(e.xy, hw)); hullCuts.push_back({in, bounds(in), static_cast<int>(ei), -1});
-        if (c.shoulder > 0) { PolySet sh = fromRing(spineRing(e.xy, g.carriagewayHalfWidth(e))); shoulderCuts.push_back({sh, bounds(sh), static_cast<int>(ei), -1}); }
+        if (c.shoulder > 0) { PolySet sh = mitredBand(ei, g.carriagewayHalfWidth(e), shoulderMitres); shoulderCuts.push_back({sh, bounds(sh), static_cast<int>(ei), -1}); }
     }
     auto overlaps = [](const Box2& a, const Box2& b) { return a.maxX >= b.minX && b.maxX >= a.minX && a.maxY >= b.minY && b.maxY >= a.minY; };
     auto heightOf = [&](const Cutter& c, const Vec2& q) { return c.edge >= 0 ? H.ownRoad(c.edge, q) : H.own(c.lane, q); };
@@ -197,8 +352,8 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         }
         return best;
     };
-    auto cutAtLevel = [&](const Ring& bandRing, int owner, bool byShoulders) {
-        const PolySet band = fromRing(bandRing); const Box2 bb = bounds(band);
+    auto cutAtLevel = [&](const PolySet& band, int owner, bool byShoulders) {
+        const Box2 bb = bounds(band);
         std::vector<PolySet> cuts;
         auto consider = [&](const PolySet& X, const std::function<double(const Vec2&)>& heightAt) {
             for (const Polygon2& piece : intersectSets(band, X)) {
@@ -224,8 +379,8 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         for (size_t ei = 0; ei < g.edges.size(); ++ei) {
             const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
             const RoadClassSpec& c = g.cls(e);
-            if (c.shoulder > 0) sh.push_back(cutAtLevel(spineRing(e.xy, g.carriagewayHalfWidth(e)), static_cast<int>(ei), false));
-            if (c.sidewalk > 0) sw.push_back(cutAtLevel(spineRing(e.xy, g.sidewalkOuterHalfWidth(e)), static_cast<int>(ei), true));
+            if (c.shoulder > 0) sh.push_back(cutAtLevel(mitredBand(ei, g.carriagewayHalfWidth(e), shoulderMitres), static_cast<int>(ei), false));
+            if (c.sidewalk > 0) sw.push_back(cutAtLevel(mitredBand(ei, g.sidewalkOuterHalfWidth(e), sidewalkMitres), static_cast<int>(ei), true));
         }
         out.shoulder = sh.empty() ? PolySet{} : unionAll(sh);
         out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw);

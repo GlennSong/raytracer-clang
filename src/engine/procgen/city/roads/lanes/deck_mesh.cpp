@@ -1,6 +1,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/control_signs.h"            // markingsOnArm: which arms get a stop bar
 #include "engine/procgen/city/roads/lane_turns.h"               // laneLineBetween: the lines between lanes
+#include "engine/procgen/city/roads/lanes/control_plan.h"       // armDirection: the way an arm leaves, where no heading is stated
 #include "engine/procgen/city/roads/lanes/lane_graph_build.h"   // kerbPerpSign: which side of a lane its kerb is
 #include "engine/procgen/city/roads/lanes/lane_level.h"         // drivenLanePoints: where a lane is driven (#304)
 #include "engine/procgen/city/roads/road_model.h"               // builtRoadModel: the model the paint is read off
@@ -746,36 +747,77 @@ bool paintsJunctionBoxes(const RoadLabGraph& g, const EdgeSpec& e) {
 std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
     std::vector<JunctionArea> out;
     out.reserve(g.junctions.size());
-    for (const ModelJunction& pj : g.junctions) {
+    // each junction's arms as the one rule reads them (road_model_parts.h ArmMouth): road, mouth, half width and the way
+    // each leaves -- its stated heading, or where the file states none the one measure the layout writes headings by
+    // (control_plan.h armDirection)
+    std::vector<std::vector<ArmMouth>> mouthsOf(g.junctions.size());
+    for (std::size_t j = 0; j < g.junctions.size(); ++j) {
+        const ModelJunction& pj = g.junctions[j];
         JunctionArea A;
-        // each arm's road and mouth
-        std::vector<Vec2> mouth(pj.arms.size(), pj.at);
         for (std::size_t k = 0; k < pj.arms.size(); ++k) {
             const ModelArm& pa = pj.arms[k];
             ArmStop a;
             a.station = pa.station;
             a.spineIn = pa.spineIn;
+            ArmMouth m;
+            m.mouth = pj.at;
+            if (stated(pa.heading)) m.dir = directionOf(pa.heading);
             const std::map<std::string, int>::const_iterator ei = g.index.find(pa.road);
             if (ei != g.index.end()) {
                 a.edge = ei->second;
                 const EdgeSpec& e = g.edges[static_cast<std::size_t>(a.edge)];
-                if (e.xy.size() >= 2) mouth[k] = pointAt(e.xy, e.s, pa.station);
+                if (e.xy.size() >= 2) {
+                    m.mouth = pointAt(e.xy, e.s, pa.station);
+                    if (!stated(pa.heading)) m.dir = armDirection(e, pa.station, pa.spineIn);
+                }
+                m.halfWidth = g.hw(e);
                 a.painted = paintsJunctionBoxes(g, e);
             }
+            m.road = a.edge;
             A.arms.push_back(a);
+            mouthsOf[j].push_back(m);
         }
-        // the one rule (road_model_parts.h boxEdgeBack): back from the mouth by the widest road crossing it; the stop
-        // line kStopLineBack further (stopLineBack is the same sum, for a caller with no box edge to hand)
-        std::vector<ArmMouth> mouths;
-        for (std::size_t k = 0; k < A.arms.size(); ++k) {
-            const int edge = A.arms[k].edge;
-            mouths.push_back(ArmMouth{edge, mouth[k], edge >= 0 ? g.hw(g.edges[static_cast<std::size_t>(edge)]) : 0.0});
+        out.push_back(std::move(A));
+    }
+    // THE ROOM CAP (road_model_parts.h armRoom): each arm and the arm of the next stated junction facing it along its road
+    // (the nearest arm of another junction on that road, the way the arm leaves, whose spine runs the other way at it)
+    // share what the square rule's stop lines leave over beyond the storage a car needs between them
+    struct OnRoad { double station; bool spineIn; uint32_t junction, arm; };
+    std::map<int, std::vector<OnRoad>> onRoad;
+    for (std::size_t j = 0; j < out.size(); ++j)
+        for (std::size_t k = 0; k < out[j].arms.size(); ++k)
+            if (out[j].arms[k].edge >= 0)
+                onRoad[out[j].arms[k].edge].push_back(OnRoad{out[j].arms[k].station, out[j].arms[k].spineIn, static_cast<uint32_t>(j), static_cast<uint32_t>(k)});
+    auto squareStop = [&](uint32_t j, uint32_t k) { return squareBoxEdgeBack(mouthsOf[j], g.junctions[j].through, k) + kStopLineBack; };
+    for (std::size_t j = 0; j < out.size(); ++j)
+        for (std::size_t k = 0; k < out[j].arms.size(); ++k) {
+            ArmStop& a = out[j].arms[k];
+            if (a.edge < 0) continue;
+            const double away = a.spineIn ? -1.0 : 1.0;
+            const OnRoad* facing = nullptr;
+            for (const OnRoad& o : onRoad[a.edge]) {
+                const double gap = (o.station - a.station) * away;
+                if (o.junction == j || o.spineIn == a.spineIn || !(gap > 0)) continue;
+                if (!facing || gap < (facing->station - a.station) * away) facing = &o;
+            }
+            if (!facing) continue;
+            a.facing = static_cast<int>(facing->junction);
+            mouthsOf[j][k].room = armRoom((facing->station - a.station) * away, squareStop(static_cast<uint32_t>(j), static_cast<uint32_t>(k)),
+                                          squareStop(facing->junction, facing->arm), g.rules.storage);
         }
+    for (std::size_t j = 0; j < out.size(); ++j) {
+        const ModelJunction& pj = g.junctions[j];
+        JunctionArea& A = out[j];
+        // the one rule (road_model_parts.h boxEdgeBack): back from the mouth by the square rule, or until its kerbs clear
+        // each road crossing it at the angle they meet, within the room; the stop line kStopLineBack further
+        // (stopLineBack is the same sum, for a caller with no box edge to hand)
+        const std::vector<ArmMouth>& mouths = mouthsOf[j];
         for (std::size_t k = 0; k < A.arms.size(); ++k) {
             ArmStop& a = A.arms[k];
             const double away = a.spineIn ? -1.0 : 1.0;   // along the spine, away from the junction
             a.boxEdge = a.station + away * boxEdgeBack(mouths, pj.through, k);
             a.stopLine = a.boxEdge + away * kStopLineBack;
+            a.squeeze = a.edge >= 0 ? boxEdgeSqueeze(mouths, pj.through, k) : 0.0;
         }
         // its area along each road: its arms' box edges and mouths there, and the stretches stated inside it
         std::map<int, std::pair<double, double>> along;
@@ -791,7 +833,6 @@ std::vector<JunctionArea> junctionAreas(const RoadLabGraph& g) {
             if (ei != g.index.end()) cover(ei->second, st.from, st.to);
         }
         for (const std::pair<const int, std::pair<double, double>>& kv : along) A.spans.push_back(JunctionSpan{kv.first, kv.second.first, kv.second.second});
-        out.push_back(std::move(A));
     }
     return out;
 }

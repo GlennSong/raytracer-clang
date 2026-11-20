@@ -22861,3 +22861,344 @@ Words:
 - **Piece 6** switches the three uses to `walkJoinOn` (markers) and `walkJoinNear` (anything unstated), after the cut-off parts above are joined or decided, and after the parks' and quad's walks have a home.
 - **A lot's frontage, for Glenn to choose:** (a) record street id, station and kerb on `LotBuilding` at the facing step (the same `nearestFrontable` answer; lot format 5 to 6, every lots level re-baked); then doors ask `walkJoinOn` and the corners case goes. (b) Leave doors unstated and use the fallback (measured on the crowds' stated places: it gives the stated walk for 1,209 of 1,250; of the other 41, 34 pick the cross street at a corner and 7 another street). Note the lot pass faces a building by its centroid, the fallback asks from the door.
 - `RouteWalker` (route.h) could carry its parts, so a caller need not compute them.
+
+## ADR-0469 — Why sidewalks are cut off at junctions, found at the source: streets ending under the freeway are dead ends (fixed), and the junction-drawing faults are listed for the one planned re-bake (#306 task 4, before piece 6)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: before walkers switch onto the road model's walks (piece 6), Glenn asked (2026-11-19) for the junction faults that leave sidewalks cut off to be fixed first, with no re-bake. Each cause was traced to where it starts, junction by junction, from close-up drawings of the drawn pavement round every walk end that meets nothing. Two causes are fixed here without moving any road mesh: a street ending under the freeway is now a dead end (its two sidewalks joined across its end), and the walk ends at a spread junction's corners now say why they are alone. The causes that cut sidewalks off are in how junctions are drawn, so fixing them moves the road mesh: they are listed, with their size, for the one planned re-bake.
+
+Words:
+- **Walk:** a path a person on foot takes in the lane level (ADR-0466): a sidewalk's stretch along one kerb of one street, a corner walk round a junction's kerb, a crossing over a crosswalk, a turn-round across a dead end, a footway.
+- **Lone walk end:** a walk end that meets no other walk (`LaneGraphBuild::walkEndsAlone`, each with why and where).
+- **Cut off:** a sidewalk outside the largest set of walks a person can get round (the largest part on foot).
+- **Kerb end:** where a person steps off the kerb at a junction's arm: its crosswalk's end on that kerb.
+- **Box edge:** where a junction's area begins along each arm's road; the crosswalk is painted 1 to 4 m back from it and the stop line 5.2 m back (`boxEdgeBack`, ADR-0428).
+- **Grade-separated:** one road passes over the other on a bridge or viaduct; they do not meet.
+- **Crossing policy:** the planner's rule for where two roads may meet at one level, by what they are (ADR-0215 step 3): a track or the freeway meets nothing at grade but the freeway's own ramps; a footway ending on a road meets it; any two streets meet.
+- **Spread junction:** one the plan made of several points (ADR-0425).
+- **Re-bake:** any change that moves the road mesh (`lanes_tool build`'s .glb or .svg) or a bake key or lots tag.
+
+**The faults, by cause** (traffic_lab / river_town; each walk end that meets nothing, before this ADR):
+
+| Cause | Lone ends | What it really is | Fixed here? |
+|---|---|---|---|
+| (A) a street end "meets another road where no junction is stated" | 34 / 48 | 32 / 48 are streets ending 8 m under a freeway viaduct (traffic_lab's 16 spokes at its freeway ring, river_town's 24): grade-separated, so they meet nothing. 2 / 0 are traffic_lab's s208, which runs into j95's crossroads as its fourth arm, but j95 states three arms | the 32 / 48: yes, dead ends; s208: no (planning) |
+| (B1) a corner with no walk: a kerb end lies 6-20 m out in the paved junction | 24 / 49 | the box edge rule sets each arm back by the crossing road's half width as if the two met square; where they meet at a sharp angle, the crosswalk and its kerb ends stand in the other road's asphalt | no: re-bake |
+| (B2) a corner with no walk: the drawn sidewalk is in two pieces | 3 / 13 | each road's sidewalk band is cut square at the road's end, so where the kerb kinks from one road into the next (most often through a spread junction) a wedge of bare ground opens on the outside of the bend; at four river_town junctions the asphalt's rounding bites a notch out of the sidewalk instead | no: re-bake |
+| (C) "no corner is stated on this kerb" (ADR-0466 called these freeway and ramp arms) | 4 / 22 | a mislabel: every one is a spread junction's corner the build tried and could not lay (B1 or B2 above; they are counted there) | the label: yes |
+| (D) carries on into a street with no walk on that kerb | 0 / 16 | honest: a boulevard's sidewalks end where it runs on as the freeway (bv0, bv1), and the freeway's two turn-round loops tn0 and tn1, classed boulevard, have sidewalks at both ends of which is the freeway | no: honest ends; tn0/tn1's class is planning |
+
+(B1 and B2 above count lone ends after the relabel; the 4 / 22 of C are among them. The corners themselves, ADR-0465's list, are unchanged: traffic_lab 13 kerb-end-out and 9 two-pieces corners, river_town 27 and 17.)
+
+**What was measured, not guessed:**
+- **(A)** the heights at each of the 41 + 24 street ends, from the build's decks: every freeway case is 8 to 18.6 m below the freeway's deck (traffic_lab about 0.4 m against 8.4 m; river_town e.g. s327 24.3 m against 32.5 m, s319 11.2 m against 29.8 m). The design stage's own test for a road end that something meets (`roadEndMeetsAnother`) looks in plan only, and the road model used it for "what is at a street's end".
+- **(B1)** drawings of all 13 + 27 corners: both crosswalks of the corner end inside the junction's asphalt (most are not used by people already: `pavements` false, their kerb end in another arm's carriageway); the drawn kerb's rounded corner is well behind them. `boxEdgeBack` (road_model_parts.h) takes the widest crossing arm's half travel width, with no angle: right for a square crossing only. So it is the stated box edge that is wrong, not the drawn junction.
+- **(B2)** drawings of all 9 + 17: a wedge of bare ground at a kink between two roads' sidewalk bands (`spineRing` bands, cut square, `pavement.cpp`), or (river_town j39, j87, j116, j131) a rounded notch of asphalt in the sidewalk at a kink. The walk laying closes hairline seams up to 5 cm (`kSeamBridge`, ADR-0465); these are 0.1-1 m and show bare ground in the mesh, so stepping across them is not done.
+- **river_town j29** (the known traffic jam): 3-0 is B1 (arm 0, s81: its kerb end 11.4 m out in the asphalt), 2-3 is B2 (a wedge between s48's and s78's sidewalks).
+
+**Fixed here:**
+1. **The crossing policy, one statement** (`meetAtGrade(g, a, b, aEndsOnB, bEndsOnA)`, `lanes/road_design.h`). It was a lambda inside `planCrossings`; that now calls it, so a plan's crossings are written exactly as before. It reads the classes' stated flags only (`track`, `limited_access`, `footway`) and the ramp anchor.
+2. **"Meets another road" is at grade** (`roadEndMeetsAnother(g, e, end, atGradeOnly)`). With `atGradeOnly`, a road counts only where the crossing policy lets the two meet. The design stage still calls it without (in plan, as always), so no road's profile, mesh or paint moves. `streetEndKind` asks it at grade, so a street ending under the freeway is a dead end, and the existing dead-end rule (ADR-0464) joins its two sidewalks across its end by a turn-round. The planned layer (from the road file alone) gives the same answer, since it needs no heights.
+3. **A lone kerb end says what the build found** (`WalkCorner::fault`: kerb end out, two pieces, or an arm the build does not know; `walkCornerFaultWord`). The lane level reads the build's corner list (`Result::walkCorners`) for the ring pair at that kerb end, which includes a spread junction's pairs (they become corners only where a walk was laid, so ADR-0466 called their ends "no corner stated"). A lone end now reads "its corner has no walk (a kerb end lies out in the paved junction)" or "(the drawn sidewalk there is in two pieces)".
+
+**Before and after** (`road_model_33`, built with one car size; `level_walk_join` for the crowd's places):
+
+| | traffic_lab before | after | river_town before | after |
+|---|---|---|---|---|
+| Lone walk ends | 61 | 29 | 126 | 78 |
+| ...a street end under the freeway (was "meets another road") | 32 | 0 | 48 | 0 |
+| ...a street end meeting another road, no junction stated (s208) | 2 | 2 | 0 | 0 |
+| ...a corner with no walk: a kerb end out in the paved junction | 24 | 24 | 49 | 49 |
+| ...a corner with no walk: the drawn sidewalk in two pieces | 3 | 3 | 13 | 13 |
+| ...(of those, labelled "no corner is stated" before) | (4) | (0) | (22) | (0) |
+| ...carries on into a street with no walk on that kerb | 0 | 0 | 16 | 16 |
+| Turn-rounds (dead ends joined across) | 0 | 16 | 7 | 31 |
+| Sidewalks cut off (outside the largest part) | 4 | 4 | 28 | 25 |
+| Sidewalks in the largest part | 99.3% | 99.3% | 95.5% | 96.0% |
+| Crowd places on cut-off sidewalks (brain_crowd for traffic_lab) | 4 | 4 | 98 | 97 |
+| Corners with no walk (B1 + B2) | 22 | 22 | 44 | 44 |
+| Street ends meeting another road unstated (problem lines) | 17 | 1 | 24 | 0 |
+
+- river_town's three rejoined sidewalks are spokes ending under the freeway whose other end's corner has no walk: the turn-round joins them to their other kerb. One holds a crowd place (s345).
+- What is still cut off is bounded only by B1 and B2 corners (and, river_town, tn0/tn1's four sidewalks by the freeway; one part of 4 sidewalks has no lone end, every way out being such a corner or an unused crosswalk). river_town's 97 places: 41 on s10, s44, s284, s320; 28 on s135; 22 on s78, s139; 6 on s312. brain_crowd's 4: s33 twice, s147, s208.
+
+**Left for the one planned re-bake** (with piece 9 and the lot frontage), largest effect first:
+1. **The box edge at sharp angles (B1).** `boxEdgeBack` (road_model_parts.h, about 10 lines) should set an arm back until its own kerbs clear each crossing arm's carriageway at the angle they actually meet (the crossing road's half width over the sine of the angle, plus the arm's own half width over its tangent), from the arms' stated headings. About 20-40 lines with `ArmMouth` carrying a heading. It moves every stop line, crosswalk and junction box at a sharp-angled junction on every lanes level: a lanes tag bump (the paint), `kLaneGraphBuildVersion` (the lane level's stop lines), and every driving hash moves. It is the same fault as ADR-0428's self-crossing junction outlines (traffic_lab j0, j4, j19, j93, j96). The corners: traffic_lab j0 5-6, j4 2-3, j19 0-1, j22 0-1, j24 0-1, j37 2-3, j41 0-1, j70 0-1*, j81 2-3, j84 3-4, j92 3-4*, j93 2-3, j96 0-1; river_town j0 5-6, j4 2-3, j7 0-1*, j18 1-2*, j19 3-0*, j28 1-2, j29 3-0*, j35 2-3*, j37 0-1, j44 3-0, j56 0-1, j71 0-1, j72 0-1, j72 2-3, j73 2-3, j75 2-0, j90 2-3*, j90 3-4*, j92 3-0, j115 1-2, j116 1-2, j119 0-1*, j119 2-3*, j120 1-2, j129 0-1*, j130 1-2, j135 1-2 (* across a spread junction's points).
+2. **The sidewalk at a kink (B2).** `buildFootprints` (pavement.cpp) cuts each road's sidewalk band square at the road's end; where two roads' ends meet at a stated node or a spread junction's inside stretch, the bands should meet on the bisector of the kink (a mitre) and the asphalt's rounding should not bite the sidewalk. About 30-60 lines; the sidewalk mesh moves at every kink on every lanes level (a lanes tag bump). The corners: traffic_lab j7 1-2*, j7 2-3*, j14 1-2*, j55 0-1*, j84 4-5*, j93 4-0*, j94 2-0, j119 1-2, j129 0-1; river_town j0 4-5*, j6 1-2*, j6 2-3, j7 2-3*, j18 0-1*, j19 1-2*, j23 2-3*, j29 2-3*, j35 1-2*, j39 2-3, j52 1-2*, j87 2-0, j90 0-1, j116 3-0, j131 2-0, j137 2-0, j138 2-0.
+3. **Planning, in the road files** (each moves the mesh): traffic_lab j95 should state s208 as its fourth arm (one arm and its turns; its crosswalk and stop line are then painted); river_town's tn0 and tn1 (the freeway's turn-round loops) are classed boulevard and so carry sidewalks nobody can reach (4 sidewalks): a class with no sidewalk, for Glenn to choose.
+
+**Tests:**
+- `road_model_37_a_street_ending_under_the_freeway_is_a_dead_end` (new): the crossing policy, case by case; walkTee's spur ending inside a road's band is "meets another road" when that road is a street and a dead end joined across when it is a freeway, while the design's own plan test says met both times.
+- `road_model_33` pins the lone ends by cause per level, the turn-rounds (16 / 31) and the sidewalks cut off (4 / 25), and so that no end says "no corner is stated" where the build tried a walk.
+- `road_model_31` checks each corner's fault kind against its walk and its why.
+- `lanes_the_traffic_lab_lane_graph_can_be_driven_round`: the unstated street ends, 17 -> 1 (s208), the 16 spokes now dead ends.
+- `level_walk_join`: river_town's places in a cut-off part 98 -> 97 (s345's).
+- Checked to bite by breaking the code on purpose: the model asking the plan-only test (10 checks failed across road_model_37, road_model_33 and the traffic_lab lane-graph test); the lone-end label ignoring spread pairs (road_model_33's pins, the 4 / 22 "no corner is stated" back); the build recording the wrong fault (26 checks in road_model_31, 2 in road_model_33). Put back, all pass.
+
+**Format and caches:** `kLaneGraphBuildVersion` 18 (the dead ends and their turn-rounds), so each level's saved road model is made again once. No format, bake key or lots tag moved. `lanes_tool build` gives byte-identical `.glb` and `.svg` for traffic_lab and river_town against the tool at 23a20eeb (built apart, from `git archive`).
+
+**Hashes and suites:** nobody walks the walks yet, so the sim hashes held: brain_crowd 0xf0003605a4cb6ba2, river_town crowd 0x83b99189cfc16fbd, traffic_lab v2 five minutes 0x55109fe9a8e247b1, near crowd 0x59168988decd4c99. Full build; lanes_tests 145/145; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513; level_tests brain_lab 12/12, first_cars 1/1, river_town crowd 1/1, walk_join 1/1. Failing as before only: brain_crowd's kerb-wait share (line 275), the near crowd's off-lane worst (line 1108), v2_drives's two limits (lines 1002, 1026).
+
+**One model:**
+- Concepts touched: roads (what is at a street's end; the crossing policy; why a corner has no walk).
+- The crossing policy was one lambda in `planCrossings`; it is now the one function both the plan and the road model ask. The road model's street-end answer still comes from the design stage's one test, with the policy as a parameter (no second test). The fault kind is the build's own, read by the lane level from the build's list.
+- No road fact is computed outside `roads/`; no second model or structure was made.
+
+**For players:** nothing changes on any level (nobody walks the walks yet).
+
+**Revisit when** the one planned re-bake fixes the box edge and the sidewalk at kinks (then the corners above get walks); when the planner states j95's fourth arm and chooses tn0/tn1's class; or when piece 6 puts walkers on the walks.
+
+## ADR-0470 — One answer for "does another road meet this road's end": the design stage asks it at grade too (#306 re-bake bundle, S1)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: the design stage (which sets each road's heights) and the road model (which says what is at a street's end) now ask the same question the same way. ADR-0469 made the road model ask "does another road meet this end?" at grade, by the crossing policy, but left the design stage asking it in plan only, so the two disagreed under the freeway: the model called a street ending under the freeway a dead end, while the design stage still held that street's end up as if it met the freeway. Now both get one answer, and the `atGradeOnly` switch is gone.
+
+Words:
+- **Open end:** a road end nothing meets; the design stage brings its profile down to the ground there.
+- **Crossing policy:** `meetAtGrade` (ADR-0469): whether two roads meet at one level, by what they are (a track or the freeway meets nothing at grade but its own ramps).
+- **Band:** a road's paved width either side of its centreline.
+
+**The one rule** (`roadEndMeetsAnother(g, e, end)`, `lanes/road_design.h`):
+1. Another road's end within `endpointTol` of this end: they meet, whatever they are. The file joins them there (one road carrying on, or a node). The crossing policy is about roads meeting away from a shared node (`planCrossings` asks it only there), so it is not asked here. Asking it would have opened every freeway end where the freeway carries on into its next piece, and a boulevard's end where it runs on as the freeway, and brought them to the ground.
+2. This end inside another road's band: they meet only where `meetAtGrade` says they meet at grade.
+
+Nothing needs the plan-only form: the design stage was its one user, and what it got from it (a street end under a freeway viaduct counted as met) was the disagreement.
+
+**What moved** (`lanes_tool build`, against the tool at 07685e6d built from `git archive` in `out/`):
+
+| Road file | .glb | .svg | Ends now open | Deck height at those ends |
+|---|---|---|---|---|
+| traffic_lab | moved | identical | 16 (s283 ... s337, the spokes ending under the freeway ring) | 15 move, by 0.1 to 0.9 cm (they were already at the ground, about 0.4 m) |
+| river_town | moved | identical | 24 (the spokes under the freeway) | 10 move: s283 86 cm, s331 81, s308 36, s281 31, s317 24, s336 20, s333 20, s335 19, s127 17, s332 9; the freeway's fw0_b 0.1 cm (crossing agreement); the other 14's heights do not move |
+| agent_lab | moved | identical | the same 24 (river_town's roads) | as river_town |
+
+Each moved spoke's end comes down to its own ground instead of being held toward the freeway's deck; their steepest grade rises (river_town up to 11.3 %); no new grade fault: the only one listed that changes is s335, already over its 12 % before (17.7 % to 23.7 %). Nothing else moves: no other road's open ends change.
+
+**Tag:** `kLanesBuildTag` 2026-11-20.1. The one re-bake at the end of this bundle (S7) rebuilds the levels; no level was baked here, and the level tests were not run (they would bake). Level-test pins over these three levels' road mesh or their sims (traffic_lab, river_town, agent_lab: brain_crowd, river_town crowd, v2_drives, near crowd, walk_join) may move and are re-pinned once in S7.
+
+**Tests:** `road_model_37` asks the one test: the spur's end inside a street's band is met, inside a freeway's band is not; the design stage's open ends say the same (`designRoads` on walkTee: the spur's end under the freeway open, beside the street not); east and west, joined at a node, meet as freeways too (their ends stay closed). Checked to bite by breaking the code on purpose: the band test without the policy (5 checks fail), the policy asked at a shared node (4 checks fail). Put back, all pass.
+
+**One model:**
+- Concept touched: roads (what meets a road's end).
+- Before: one function with a switch, two callers asking it two ways. Now one function, one answer, two callers.
+- No road fact is computed outside `roads/`.
+
+**For players:** on traffic_lab nothing visible (under a centimetre). On river_town and agent_lab ten streets ending under the freeway now run down to the ground at their ends, up to 86 cm lower, instead of rising toward the viaduct, once the levels are re-baked (S7).
+
+**Revisit when** a road file joins roads at a node that should not meet (a freeway's end stated on a street's node): that is a planning fault for the file, not for this test.
+
+## ADR-0471 — Where two roads meet at a sharp angle, each arm's stop line and crosswalk stand back until its kerbs clear the other road, within the room to the next junction (#306 re-bake bundle, S2; ADR-0469's B1)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: at a junction where two roads meet at a sharp angle, each arm's crosswalk, stop line and the edge of the junction's area now stand far enough back that the arm's kerbs are clear of the other road's carriageway. Before, every arm stood back by the other road's half width, which is right only where roads meet square; at a sharp angle the crosswalk's kerb end stood 6-20 m out in the other road's asphalt, and no corner walk could be laid there (ADR-0469, fault B1). The extra setback is capped so that no stop line runs into the next junction, and so that the grouping of road ends into junctions, which asks the same rule, groups exactly as before. Where that cap stops an arm short, the road file has two junctions too close together for the angle their roads meet at; that is now said as a planning fault.
+
+Words:
+- **Arm:** one road's way out of a junction. Its **mouth** is where it meets the junction.
+- **Box edge:** where the junction's area begins along an arm's road. The crosswalk is painted 1 to 4 m back from it and the stop line 5.2 m back (`kStopLineBack`).
+- **Crossing road:** another arm of the junction, on another road, that is not this arm's own street carrying on (its through partner).
+- **Square rule:** the old setback (ADR-0428): the crossing road's half width, W.
+- **Kerbs clear:** the new setback: how far along the arm both its kerb lines are outside every crossing arm's carriageway. Each arm is read as a straight strip from its mouth along its stated heading, half its travel width either side.
+- **Half width:** half a road's travel width (`RoadLabGraph::hw`). W is the crossing road's, w the arm's own.
+- **Storage:** the length of street a car needs to wait in between two junctions' stop lines (the road file's lane rules, 6.5 m).
+- **Grouping:** how the layout makes junctions out of road-end nodes (`findJunctions`): two nodes on a road with less than the storage between their stop lines become one junction.
+- **Facing arm:** the arm of the next junction along the same road whose spine runs the other way, so the two stop lines face each other across the street between.
+- **Spread junction:** one made of several nodes (ADR-0425).
+
+**The rule** (`road_model_parts.h`, one function, `boxEdgeBack`, asked by both callers):
+1. The square rule, as before (`squareBoxEdgeBack`).
+2. Or, where it is more, the kerbs clear (`crossingClearance`). Where two arms leave one point at angle a, the kerb on the near side runs on beside the other road before it parts from it, and is clear at W / sin a + w / tan a. At a right angle or wider that is no more than W, so the square rule stands, to the bit (a heading written to the hundredth of a degree is read as square). Positions count, not just headings: an arm leaving beside another but apart from it (a divided road's other carriageway) never overlaps it and adds nothing, and an arm at another point of a spread junction counts where its strip actually reaches (river_town j29: s81's sharp neighbour s78 is 4.4 m away; the square rule's "same point, else anywhere" had hidden it).
+3. **The angle cap:** no arm sets another back further than it would meeting at 20 degrees from one point (`kSharpestMeet`; about 2.9 W + 2.7 w).
+4. **The room cap** (`ArmMouth::room`, `armRoom`): the extra over the square rule is at most half of what the square rule leaves on the street between the arm and the facing arm, once both square-rule stop lines and the storage are taken out (less a millimetre). So the two stop lines always leave at least the storage between them, and the grouping's answer cannot change: it groups two nodes only when the square rule already left less than the storage. Both callers fill the room the same way: `findJunctions` from its nodes along each road, `junctionAreas` from the next stated junction's facing arm.
+5. **The planning fault** (`boxEdgeSqueeze`, `ArmStop::squeeze`): where the room stops an arm more than 10 cm short of clear, the road model says so: "junction J, arm k (road): too close to junction K for the angle its roads meet at". Its kerb end may still lie out in the paved junction. That is the road file's to fix (move or merge the junctions), not this rule's.
+
+**One concept, not two:** one function decides the box edge. The grouping and the drawn junction ask it with the same arms, headings and room, so they can never disagree about where a stop line is.
+
+**Grouping unchanged, checked:** `lanes_tool junctions <file> --top 100000` (`findJunctions` on the file's own roads) prints byte-identical output before and after for traffic_lab (14033 bytes), river_town (14825) and agent_lab (14824). Without the room cap it does not: 4 traffic_lab and 7 river_town pairs of junctions merge, and most ids after the first merge shift. That was the first try, stopped and reported before this design was chosen.
+
+**Before and after** (lanes_tool and lanes_tests on the road files, no level bake; tool before built from HEAD 99964013):
+
+| | traffic_lab before | after | river_town before | after |
+|---|---|---|---|---|
+| Arms whose box edge moved (of 553 / 571) | | 194 (38 over 2 m, 7 over 10 m; largest j0 arm 5, 22.4 m) | | 379 (95 over 2 m, 36 over 10 m; largest j90 arm 1, 42.6 m) |
+| Corners with no walk: a kerb end out in the paved junction (B1) | 13 | 4 | 27 | 13 |
+| Corners with no walk: the drawn sidewalk in two pieces (B2) | 9 | 9 | 17 | 18 |
+| Lone walk ends | 29 | 7 | 78 | 43 |
+| ...a kerb end out | 24 | 4 | 49 | 22 |
+| ...two pieces | 3 | 1 | 13 | 5 |
+| ...meets another road (s208) / carries on into a street with no walk | 2 | 2 | 16 | 16 |
+| Sidewalks cut off (outside the largest part on foot) | 4 | 0 | 25 | 14 |
+| Sidewalks in the largest part | 99.3% | 100.0% | 96.0% | 97.7% |
+| Junction outlines that cross themselves | 5 (j0, j4, j19, j93, j96) | 0 | 11 (j4, j6, j7, j37, j44, j56, j72, j75, j90, j92, j120) | 1 (j75) |
+| Crosswalks whose kerb end lies in another road (not used by people) | 33 | 5 | | |
+| Stated turns that fit no vehicle | 75 | 68 | 175 | 199 |
+| Lane paths in the car's largest part | 96.6% | 96.8% | 87.2% | 86.3% |
+| Lanes crossing outside every junction | 4 | 0 | | |
+| Stop lines past another junction's point; facing stop lines with less than the storage between | 0; 0 | 0; 0 | 0; 0 | 0; 0 |
+| Arms too close to the next junction for their angle (the new planning fault) | | 9 | | 26 |
+
+agent_lab has river_town's roads and the same numbers.
+
+- **river_town j29** (the known traffic jam): corner 3-0 now has a walk. Arm 0's (s81) box edge moved 6.0 to 18.5 m and its kerb end, 11.4 m out before, is on the drawn pavement. s78's moved 6.0 to 16.8 m and s79's 6.0 to 8.4 m. Corner 2-3 is still B2, a sidewalk in two pieces (S3's).
+- **What got worse:** river_town's stated turns that fit no vehicle went 175 to 199, nearly all "leaves the paved road", at its big spread junctions (j0 11 to 20, j14 10 to 19, j90 10 to 17, j119 9 to 15, j135 7 to 13). The near turn across a sharp corner now starts and ends further back, and its arc cuts across the corner's sidewalk. That is the corner radius, step 9b's work: the corners are still drawn without a stated radius. The car's largest part dropped 87.2% to 86.3%. traffic_lab's went the other way (75 to 68).
+- **B1 corners still without a walk:** traffic_lab j0 5-6, j22 0-1, j70 0-1*, j84 3-4, every one at a junction the next one stands too close to. river_town j6 2-3, j7 0-1*, j8 2-3*, j35 2-3*, j37 0-1, j43 4-0*, j56 0-1, j75 2-0, j91 2-3* (too close to the next junction), and j19 3-0*, j116 1-2, j119 2-3*, j119 4-5* (* across a spread junction's points). The last four are at no junction the room caps. There the arms' straight strips do not catch what is drawn; why is not measured yet. j8 2-3, j43 4-0, j91 2-3 and j119 4-5 are new: each had a walk before and lost it when its box edge moved.
+- **B2 corners:** traffic_lab unchanged (the same 9). river_town 17 to 18: j6 2-3 is now counted under B1, and j0 6-0 and j14 5-0 are new.
+
+**The planning faults, by junction** (each arm, the junction too near it, and how far short of clear it stands):
+- traffic_lab (9): j0 arm 5 (s33, j24, 6.0 m), j0 arm 6 (s36, j25, 12.1 m), j22 arm 0 (s57, j35, 3.2 m), j24 arm 0 (s32, j25, 1.8 m), j37 arm 3 (s56, j35, 7.0 m), j70 arm 0 (s147, j84, 27.4 m), j70 arm 1 (s149, j84, 34.4 m), j84 arm 3 (s149, j70, 11.0 m), j84 arm 4 (s147, j70, 8.4 m).
+- river_town and agent_lab (26): j6 arm 3 (s7, j3, 3.6 m), j7 arm 0 (s10, j8, 1.4), j7 arm 1 (s13, j8, 6.1), j8 arm 2 (s13, j7, 1.1), j8 arm 3 (s10, j7, 1.4), j14 arm 0 (s21, j13, 12.4), j35 arm 2 (s65, j37, 46.9), j35 arm 3 (s62, j37, 50.4), j37 arm 0 (s62, j35, 17.1), j37 arm 1 (s65, j35, 13.5), j43 arm 0 (s106, j56, 24.7), j43 arm 4 (s104, j56, 28.2), j56 arm 0 (s106, j43, 15.9), j56 arm 1 (s104, j43, 17.5), j68 arm 0 (s129, j67, 0.1), j72 arm 0 (s137, j71, 0.2), j72 arm 1 (s134, j55, 4.5), j73 arm 0 (s138, j74, 0.8), j75 arm 0 (s172, j91, 19.3), j75 arm 2 (s169, j91, 17.6), j90 arm 0 (s228, j120, 43.0), j90 arm 4 (s195, j89, 0.7), j91 arm 2 (s172, j75, 38.2), j91 arm 3 (s169, j75, 34.3), j135 arm 4 (s323, j4, 0.3), j135 arm 5 (s6, j3, 2.4).
+
+**Tests:**
+- `road_model_38_the_box_edge_at_the_angle_the_arms_meet` (new). The rule arm by arm: a square crossroads gives W to the bit, with headings, without them, and with headings a hair off square; a 30-degree T gives W / sin 30 + w / tan 30 to the stem and to the street's arm on the sharp side, and W on the wide side; the room cap (3 m of room: W + 3, short by the rest; none: W); the angle cap (a 5-degree stem set back as at 20 degrees); a carriageway beside but apart adds nothing; `armRoom`'s sum. Built scenes: the 30-degree T has all three corners walked, the stem's kerb ends clear of the street's carriageway, and its stop line wholly ahead of the street's edge; walkTee's square T keeps the square rule's box edges to the bit; the same T with a junction 40 m east is still two junctions, its stop lines leave the storage between them, its box edge is the square rule plus the room, and it is said as the planning fault.
+- `road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction` (new): on traffic_lab, river_town and agent_lab, of the 536 / 530 / 530 arms facing the next junction, none has less than the storage between the stop lines, no stop line reaches past another junction's point, and the arms too close for their angle are the lists above.
+- Checked to bite by breaking the code on purpose. The square rule alone fails 10 checks in road_model_38 (no walk at the T's sharp corner, kerb end 0.95 m from the street's centre line). No room cap fails 4 checks in road_model_38 (the two junctions become one) and 3 in road_model_39 (6 / 20 / 20 stop-line pairs short of the storage, 1 / 6 / 6 past another junction's point), and `lanes_tool junctions` stops matching byte for byte. No angle cap fails 2 checks. Put back, all pass.
+- Re-pinned, each with old/new/why in its comment: `lanes_the_traffic_lab_lane_graph_can_be_driven_round` (fits none 75 to 68, crossing lines 16 to 11, kinks 63 to 60, outlines 5 to 0); `lanes_the_traffic_lab_road_model_problems_are_known` (crosswalk kerb end in a road 33 to 5; the new "too close for the angle" 9); `lanes_lane_graph_of_the_traffic_lab_is_sound_and_covers_every_lane` (its 4 lanes crossing outside every junction now lie inside them); `lanes_lane_graph_of_ring_city_is_sound_and_covers_every_lane` (fits no vehicle 4 to 2); `road_model_33` (lone ends by cause; sidewalks cut off 4 / 25 to 0 / 14). `road_model_31` pins no counts; it passes. `docs/road-model-compare/*_corner_faults.txt` are step 8's comparison lists, in a format no tool writes any more and pinned by nothing. They were left as they are: `lanes_tool lanegraph` writes the live list.
+
+**Format and caches:** `kLanesBuildTag` 2026-11-20.2 (the paint and junction areas move on every lanes level). `kLaneGraphBuildVersion` 19 (the lane level's stop lines). No format or road file changed. No level was baked and the level tests were not run: S7 re-bakes, and the level-test pins over these levels' road mesh or sims go red until then, by design.
+
+**One model:**
+- Concept touched: roads (where an arm's box edge and stop line stand).
+- Still one function, `boxEdgeBack`, with two callers. `ArmMouth` gained the arm's heading and its room. Both callers fill them the same way (the stated heading, or the layout's own measure `armDirection` where none is stated; the room from the facing arm).
+- `ArmStop::squeeze` and `facing` are the rule's own answer carried on its element, read once by the road model to say the planning fault.
+- No road fact is computed outside `roads/`, and no second structure was made.
+
+**For players** (after S7's re-bake): at sharp-angled junctions the crosswalks and stop lines move back to where the kerbs part. People on foot can get round 13 more corners on river_town and 9 on traffic_lab, and no traffic_lab sidewalk is cut off. Some cars at river_town's big spread junctions lose a turn that now cuts a corner, until corners get a stated radius.
+
+**Revisit when** the planner moves or merges the junctions listed as too close for their angle (S4 or later); when corners get a stated radius (step 9b), which should win back river_town's lost turns; or when someone looks at the four B1 corners the rule does not reach (river_town j19 3-0, j116 1-2, j119 2-3 and 4-5) and the four it newly cost (j8, j43, j91, j119).
+
+## ADR-0472 — Where a road kinks into the next, each road's asphalt, shoulder and sidewalk run on to the line that halves the bend, so the outside of the bend is paved in one piece (#306 re-bake bundle, S3; ADR-0469's B2)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: where two roads meet end to end at an angle, the build used to stop each road's paving square at its own end. On the outside of the bend that left a wedge of bare ground, 0.1 to 1 m wide at the sidewalk, through the asphalt, kerb and sidewalk, so the drawn sidewalk was in two pieces there and no corner walk could be laid round it (ADR-0469, fault B2). Sometimes the asphalt's automatic rounding (the "closing" that fills small gaps between lanes) partly filled the asphalt's wedge with a curve, and the bare ground showed as a round notch bitten out of the kerb. Now each road's paving runs on past its end to the bisector of the bend and meets the other's there: a **mitre**, as a picture frame's corners are cut. Only ends the road file says meet are joined, and only at one level.
+
+Words:
+- **Band:** a road's strip of one layer either side of its centre line (its **spine**): the asphalt out to half the travel width, the shoulder out to the carriageway's edge, the sidewalk out to its back edge (`spineRing`, pavement.cpp).
+- **Kink:** two road ends the road file states meet at one place, with nothing between them on one side, the outside of the bend, and at one level. The places it states are: a street carrying on as another (`ModelStreet::carriesOn`), a junction's arms at its one point (`ModelJunction::arms`), and a spread junction's points (`ModelJunction::nodes`; a spread junction is one the plan made of several points, ADR-0425).
+- **Bisector:** the line from where the ends meet that halves the outside of the bend.
+- **Mitre:** a band's end cut along the bisector instead of square; each road's band gets the piece from its own end to the bisector (`mitrePieces`).
+- **Mitre limit:** past a turn of 120 degrees a mitre's point would run out far (3.9 times the band's width at 150 degrees); it is cut off square across the bisector at `kMitreLimit` (2) times the wider band's half width.
+- **Same level:** the two ends' deck heights differ by less than the rules' `sameLevelDz` (1 m); otherwise one passes over the other and they are not joined.
+- **Corner walk:** the walk round a junction corner along the drawn sidewalk (ADR-0465). It is laid only where one piece of drawn sidewalk joins its two kerb ends.
+
+**The rule** (`lanes/pavement.h/.cpp`, run by `buildFootprints`):
+1. **Which ends meet** (`bandKinks(g)`): for each place the file states (each carry-on, each junction's point, each spread junction's point), the roads listed there whose station is the road's first or last point are road ends there; a road listed part way along it runs through and stands between the ends either side (only where it really passes that point: a spread junction's point lists a road where it leaves the junction's area, which may be metres away). Going round the place, two ends next to each other with more than half a turn between them, drawn within the file's `endpointTol` of one another and at one level, are a kink. Nothing is searched for by distance: the file says which ends meet.
+2. **The mitre pieces** (`mitrePieces`): each band's corner on the outside (computed exactly as `spineRing` computes it, so it is the band's own corner to the bit) runs on along the band's edge to where it meets the other band's edge; that point and the meeting point make the two pieces. Past the mitre limit the point is cut off square. Bands of different widths at a slight turn, whose edges' lines cross behind the ends, are joined straight from corner to corner. Where the two corners are already one point (a straight carry-on), the pieces are empty and nothing changes.
+3. **Asphalt** (half the travel width, and the 1 cm a lane's footprint reaches past its rails): each road's piece joins the footprint of that road's lane nearest it, before the closing looks for gaps, so the asphalt reaches the bisector and the closing finds no wedge to round off. That is what stops the notch.
+4. **Shoulder and sidewalk:** each road's band of the layer is its spine ring and its pieces (`mitredBand`), cut at its own level as before (ADR-0433's shoulder cut uses the mitred shoulder too). Only where both roads have the layer.
+
+walk_lanes.cpp did not change: it walks whatever sidewalk is drawn.
+
+**Before and after** (`lanes_tool build`, `lanes_tests` on the road files; tool before built from 273b6752; no level bake):
+
+| | traffic_lab before | after | river_town before | after |
+|---|---|---|---|---|
+| Kinks mitred | | 63 (sharpest 20.8°) | | 56 (sharpest 159.4°, one past the mitre limit: s337/s277, the planner's hairpin) |
+| Corners with no walk: the drawn sidewalk in two pieces (B2) | 9 | 0 | 18 | 3 (none at a kink; below) |
+| Corners with no walk: a kerb end out in the paved junction (B1) | 4 | 4 | 13 | 13 |
+| Corner walks laid | 532 | 541 | 540 | 555 |
+| Lone walk ends | 7 | 6 | 43 | 39 |
+| ...two pieces | 1 | 0 | 5 | 1 |
+| Sidewalks cut off (outside the largest part on foot) | 0 | 0 | 14 | 14 |
+| Sidewalks in the largest part | 100.0% | 100.0% | 97.7% | 97.7% |
+| Sidewalk area | 182 897 m² | +46 m² (+0.03%) | 221 969 m² | +627 m² (+0.28%) |
+| Asphalt area | 411 075 m² | +4 m² | 580 006 m² | +277 m² |
+| Shoulder / median area | | +2.5 m² / 0 | | +3.4 m² / 0 |
+| Islands / enclosed blocks | 26 / 135 | same | 31 / 153 | same |
+| Mitre pieces crossing themselves; sidewalk over asphalt | | 0; 4235 m², unchanged | | 0; 6791 m², unchanged |
+| Stated turns that fit no vehicle | 68 | 66 | | |
+
+agent_lab has river_town's roads (its road file differs elsewhere) and the same kinks.
+
+- **river_town j29 corner 2-3** (the known jam): the kerb kinks s48 → s77 → s78 through the junction's points; both kinks are mitred and the corner has its walk. Its 3-0 got one in ADR-0471, so all of j29's corners are walked.
+- **The notches** (river_town j39, j87, j116, j131): the asphalt now reaches the bisector, so the closing has no wedge to round, and the sidewalk runs round the outside of the bend. All four corners have walks.
+- **traffic_lab's freeway joints j153 and j154**: the straight on across the freeway's kink no longer leaves the paved road (fits no vehicle 68 to 66; the car's largest part 96.8% to 96.9%).
+- **The sidewalk added** is mostly river_town's hairpin s337/s277 (159°): the cut-off mitre closes its open end with a blunt nose of asphalt and sidewalk where it was bare ground. The hairpin itself is the planner's fault (listed in the orientation page).
+- **The checks the build runs** (`lanes_tool build`'s invariants): no new failure. river_town's deck cracks 328 to 316 and its step edges 103 to 102; the rest unchanged.
+- **Lot blocks** are the gaps in the drawn pavement, so river_town's and agent_lab's lots beside a mitred kink shift at the re-bake (the blocks' count does not change).
+
+**The three corners still in two pieces** (river_town), none at a kink:
+- j0 6-0 and j14 5-0 (across their points): new since ADR-0471, whose box edges put their kerb ends 37 to 48 m out. The walk between them goes round a block, and that way leaves the 30 m window the walk laying cuts round the two kerb ends (`kCornerWindow`). Widening the window to 90 m, tried and put back, lays both. Whether a walk round a whole block face is a corner at all is the question to answer first; not changed here.
+- j90 0-1: arm 0's (s228) kerb end lies 1.7 m from s227's centre line, on a scrap of s228's sidewalk left inside s227's carriageway (ADR-0471 lists j90 arm 0 as too close to j120 for its angle, 43 m short). It is B1 in kind; the scrap makes it read as two pieces.
+
+**Grouping unchanged, checked:** `lanes_tool junctions <file> --top 100000` prints byte-identical output before and after for traffic_lab, river_town and agent_lab (nothing in the grouping reads the pavement).
+
+**Tests:**
+- `road_model_40_the_bands_are_mitred_at_a_kink` (new), hand scenes:
+  - a carry-on kinked 40°: one kink; asphalt out to the carriageway's mitre and no sidewalk inside it; sidewalk unbroken across the bisector from kerb to back, and nothing past its mitre; the sidewalk in two pieces (one each side); the outside sidewalk's middle line walked across the kink stays on it. The same build drawn again with the file's statements of where ends meet taken away shows the old wedge (53 of 53 points across the bisector bare, three pieces).
+  - a T whose street kinks 25° at the junction, the stem inside the bend: one kink, all three corners walked, each on the drawn sidewalk.
+  - a 150° kink: the sidewalk's mitre reaches 22.0 m out (cut at 2 × 11 m; uncut, 42.5 m), drawn up to the cut and not past it.
+  - the 40° carry-on with one road 5 m up: no kink, the outside left as each road draws it.
+  - a straight carry-on: no kink, empty mitre pieces, and every layer and footprint the same to the bit as the same build drawn with nothing stated.
+- `road_model_41_the_shipped_kinks_are_mitred` (new): the table's kink counts and areas, no mitre piece crossing itself, sidewalk over asphalt not grown, and the three corners above by name.
+- Checked to bite by breaking the code on purpose: no mitres at all fails 7 checks in road_model_40 (the kinked T's outside corner "two pieces", as on the levels); no mitre limit fails 2; no height test fails 2; no asphalt piece fails 1 (the bay left in the carriageway); no "corners already one point" test fails 2 (the straight carry-on gets pieces). Put back, all pass.
+- Re-pinned, each with old/new/why in its comment: `road_model_33` (lone ends, two pieces: traffic_lab 1 to 0, river_town 5 to 1); `lanes_the_traffic_lab_lane_graph_can_be_driven_round` (fits no vehicle 68 to 66: j153, j154). `road_model_31` pins no counts; it passes and now prints each lone corner's kerb ends.
+
+**Suites:** full build; lanes_tests 149/149; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes: no new bare tolerance).
+
+**Format and caches:** `kLanesBuildTag` 2026-11-20.3 (the pavement moves at every kink on every lanes level). `kLaneGraphBuildVersion` 20 (the corner walks). No format or road file changed. No level was baked and the level tests were not run: S7 re-bakes.
+
+**One model:**
+- Concept touched: roads (where two road ends meet, and the drawn pavement there).
+- Which ends meet is read from the road file's own statements (carry-ons, junctions' arms and points), once, in `bandKinks`, inside `roads/lanes`. No ends are searched for by distance; the endpoint tolerance only refuses a stated meeting whose ends are drawn apart.
+- The mitre pieces join the existing bands and lane footprints; no new layer, list or structure of the roads was made. No road fact is computed outside `roads/`.
+
+**For players** (after S7's re-bake): where a street bends into the next, or through a spread junction, the kerb and sidewalk now run round the outside of the bend instead of stopping at a wedge of bare ground, and people on foot get round 9 more corners on traffic_lab and 15 on river_town. river_town's hairpin end is paved over.
+
+**Revisit when** the planner fixes the s337/s277 hairpin; when someone decides whether j0 6-0 and j14 5-0 (a walk round a block) are corners, and so the corner window; or when j90's arm 0 is moved (the planning fault ADR-0471 lists).
+
+## ADR-0473 — The road files' own faults, fixed in the files with the tools: traffic_lab's s208 is j95's fourth arm, river_town's turn-round loops are ramps, its interchange ramps are smooth; the steep s335 is diagnosed, not fixed (#306 re-bake bundle, S4)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: four faults that live in the road files of traffic_lab, river_town and agent_lab (agent_lab carries river_town's roads, edge for edge), not in the code that builds roads. Three are fixed in the files, each by a tool step that writes only what it names, so the one planned re-bake (S7) picks them up. The fourth, a street far too steep for its class, turned out to come from the code that sets road heights, and is written down for a sitting of its own.
+
+Words:
+- **Road file:** a level's `assets/lanelab/planned/<level>_lanelab.json`. These three are frozen: the planner that wrote them no longer makes the same file (ADR-0423), so they are edited, not planned again.
+- **Arm, ring, through pair:** a junction's ways in and out, listed counter-clockwise round it; two arms that are one street running on (ADR-0427).
+- **Grouping:** how the layout tool makes junctions out of road ends that meet (`findJunctions`, ADR-0419).
+- **Ramp class / boulevard class:** rows of `assets/data/road_classes.json`. A ramp is one 4.5 m lane with 2.5 m shoulders, barriers along its edges, no sidewalk, at most 9 % grade; a boulevard three 3.7 m lanes one way with 5 m sidewalks.
+- **System interchange:** where a freeway crosses a freeway; its **loop ramps** turn 270 degrees on a 60 m circle, its **corner links** 90 degrees on an 80 m one (`systemInterchange`, interchange.cpp).
+- **Frame:** setting a point out from a line by a station along it and an offset to its side.
+- **Design stage:** the step that gives every road its heights before anything is built (`designRoads`, road_design.cpp): profiles from the ground, then rounds of **agreement** that make roads meet at one height where they join (the **node rule**) and where one road's end lies on another (the **tee rule**).
+
+**1. traffic_lab: s208 is j95's fourth arm.**
+- *Cause:* s208's stated centre line stopped at (373.67, -15.06), 15.06 m short of j95's point (373.51, 0), inside the crossing road's band. The grouping joins road ends within the file's endpoint tolerance (0.5 m), so it saw a lone end; the road model said "meets another road, no junction stated". Fixing the grouping would mean a new rule (an end inside another road's band joins a junction), and traffic_lab keeps its old grouping anyway: `layout --fresh` would renumber its 156 junctions into 142 (ADR-0419).
+- *Fix:* one point appended to s208's centre line, (373.51, 0.0), by hand in the file: no tool edits an edge's points, and the edit is that one point (s208 runs on 15.06 m, a 0.6-degree bend). Then the new `lanes_tool layout <file> --state-arm j95 s208 --write` (road_layout.h `insertArmText`): s208's end is arm 3 of 4 in j95's ring (heading 270.6; the others 2.3, 92.5, 180.0), its through pair with s213 (arm 1, heading 92.5) follows the one rule over the headings, so j95's pairs are [[2,0],[1,3]]; the layout then writes the arm's street and heading and s208's end junction (street s208: 0 to 67.85 m, j94 to j95; was 52.79 m, j94 to nothing).
+- *Grouping:* `lanes_tool junctions <file> --top 100000` before and after differs in one line only: the control plan's j101 (the file's j95) holds s208 too, 3 -> 4 arms. No id moves. river_town and agent_lab: byte-identical.
+- *Numbers* (`lanes_tool lanegraph`, all seven vehicles): stated turns 1788 -> 1797, connectors 1405 -> 1412, turns fitting no vehicle 383 -> 385 (two j95 near turns too tight for any vehicle, as at traffic_lab's other arterial crossroads: corner radii, step 9b), bus's share of lane paths it can get round with lane changes 81.4 % -> 82.6 %. Street ends meeting another road with no junction: 1 -> 0. Lone walk ends "meets another road" 2 -> 0.
+
+**2. river_town and agent_lab: tn0 and tn1 are ramps** (Glenn, 2026-11-20).
+- They are the freeway spurs' turn-round loops (fw2_b -> tn0 -> fw2_a, fw3_b -> tn1 -> fw3_a), a 40 m circle each, carried on from the freeway at both ends. Classed boulevard, they had three lanes and 5 m sidewalks at both kerbs that no walk reached.
+- *Class:* ramp, by `lanes_tool reclass <file> ramp tn0 tn1 --write`. A 40 m loop is a ramp's geometry (the planner's loop ramps are 60 m); a freeway row would put four lanes and a freeway's speed on a 40 m circle. Lanes (1), limit (the policy's ramp limit), barriers (the class's default walls and guardrails), no sidewalk and no junction markings all follow the row; no building may front a ramp (`buildingMayFront`). The layout drops their street names (Juniper Road, Seventh Street): it names no ramp.
+- *Numbers:* tn0's grade fault (8.3 % against the boulevard's 8 %) is gone (7.4 % / 9 %). Lone walk ends "carries on into a street with no walk" 16 -> 8 (bv0's and bv1's sidewalks still end where they run on as the freeway, honestly). Sidewalks cut off from the largest part on foot 14 -> 10 (largest part 97.7 % -> 98.4 %). Kinks on tn0/tn1's lanes 215 -> 71 (fewer lanes; what is left is their stated 6 m point spacing on a 40 m circle, 7.5 degrees a point). Lane carry-ons into another slot 7 -> 11: the spur's four lanes run into the loop's one. Deck cracks +14 (316 -> 330 on this step alone): where the 20 m freeway deck meets the 9.5 m ramp deck at each end.
+
+**3. river_town and agent_lab: the "wonky" circular ramps.**
+- *Which:* the eight system-interchange ramps, x0 and x1's two loops (x?_inR_loop, x?_inL_loop) and two corner links each. Measured along their stated centre lines (points about 4 m apart): the loops turned up to 46-134 degrees from one point to the next, in pairs (+95 then -93: a sideways step), and their radius round the loop's centre jumped 2-5 m at a time; the links up to 10-16 degrees. Not the builder: it draws the stated points (its resampling, profile and deck follow them), and the vertical profile is smooth (grades 6-8 % of 9 %, unchanged by this).
+- *Cause, proven:* the planner placed each ramp in the frame of the through freeway's centre line (`Frame::at`), setting points out sideways along each segment's own direction (`tangentAtStation`). The freeway ring turns 1.4-2 degrees at each point, 20 m apart, so a point 90-150 m out (a loop's far side) jumps 2-5 m sideways at each of them. Read back into that frame (the centre line is the middle of fw1_a/fw1_b and fw0_a/fw0_b, point for point), the loops' points lie on a 60.0 m circle (rms 3-6 cm) and the links' on an 80.4-80.9 m one: exactly the planner's `loopR` and `linkR`.
+- *Fix in the planner* (one place): `Frame::at` sets points out along `smoothTangentAtStation` (polyline_ops.h, new): the direction of the Catmull-Rom spline through the line's points, which turns at a rate that runs on from one segment into the next. Asked 0.6 m either side of a point, 150 m out on a line turning 2 degrees every 20 m, a point moves 0.89 m on it and jumps 4.04 m on the old one (`road_model_42`). It changes only plans made from now on; no shipped road file is planned again.
+- *Fix in the files:* `lanes_tool reframe <file> fw1_a fw1_b <x0's four ramps> --write` and `... fw0_a fw0_b <x1's four> --write`: each stated point is read back into the old frame (inside the freeway's bend two segments' frames overlap: the reading nearest the fitted circle; on the legs, the one nearest its neighbour), the arc's points (within 0.3 m of the circle) are laid evenly round it and set out in the smooth frame, and each leg is set out in the smooth frame too, easing back to its stated points at the gore, so both ends of every ramp stay where they were (moved 0.00 m) and the ramp anchors are untouched. Points moved up to 1.0-5.0 m mid-ramp.
+- *Numbers:* sharpest turn from point to point, before -> after: x0_inR_loop 51.9 -> 15.0, x0_inL_loop 46.6 -> 8.1, x1_inR_loop 134.3 -> 17.8, x1_inL_loop 60.1 -> 8.0, links 10.0-16.4 -> 10.0-14.0 (what remains at a ramp's ends is the planner's own S-bend into the gore; round a loop's arc no turn is over 5.9 degrees). Kinks in lanes (`lanes_tool lanegraph`): river_town 440 -> 180 in all (with item 2), the loops' 129 -> 23, the links' 44 -> 34. Deck cracks +5, non-manifold edges +3, odd boundaries +4 on this step alone (river_town 316/221/42 -> 335/224/46 with item 2). The loops still vary in radius round the circle (about 35-75 m in plan): a 60 m circle in a curving freeway's frame is egg-shaped in plan, as the planner meant; a true plan circle would move each loop by metres and is a planning choice.
+- *Renders* (the road mesh from above, coloured by height, with the stated centre lines, before | after; and the turn per point along each ramp): `out/s4_renders/river_town_x0_plan_before_after.png`, `river_town_x1_plan_before_after.png`, `river_town_x0_turns_before_after.png`, `river_town_x1_turns_before_after.png`, `river_town_tn0_*`, `river_town_tn1_*`.
+
+**4. river_town and agent_lab: s335 at 23.7 % against 12 % — diagnosed, not fixed.**
+- *Which end:* its start, j103. s335 runs 153 m from j103 (27.3 m up) down to its open end under the freeway (1.5 m, its ground, since S1 pinned an open end to the ground). The freeway (fw1_b) passes over it near its end at 15.3 m; s335 passes under at about 4 m. Before S1 the end was held up toward the freeway, so the same drop was spread at 17.7 %.
+- *The real fault is j103:* the ground there is 5.7-7 m, every neighbouring junction stands at 0-10 m, but j103 stands at 27.3 m, so every street leaving it is far over its limit: s192 42.1 %, s334 41.0 %, s193 30.2 %, s335 23.7 %. Traced through the design stage: the profiles start j103 at 6.5 m; the agreement rounds then lift it about a metre a round, to 27.3 m by round 29. The pump is at j90, 82 m away along s334: s334's end lies inside s195's band at one of j90's spread points, so the tee rule holds it to s195's height (8.5 m apart at the first round) while the node rule averages the road ends there, and the two never agree.
+- *Why not in the file:* no height for s335 alone is honest. At 12 % from j103 it would reach the freeway crossing at 11.3 m, under a deck that needs it below 8.1 m; and j103 itself would stay 21 m up with its other three streets at 30-42 %.
+- *Tried, not kept:* skipping the tee rule between two arms of one stated junction (about 10 lines in `crossingMeets`). river_town then has s335 at 8.9 %, s192 12.3 %, s193 3.3 %, s334 14.0 %, but its deck cracks go 316 -> 643, step edges 102 -> 258 and structure-clearance faults 59 -> 77, and it would move heights on every lanes level. It needs a sitting of its own (the design stage at spread junctions), not a line in this one.
+
+**Writes the same file again:** `lanes_tool layout <file> --write` on a copy of each of the three files after the edits prints "the file is unchanged, byte for byte"; `--arm-order` finds every junction's ring as stated (0 of 156 / 144 / 144 differ).
+
+**Checks the build runs** (`lanes_tool build`, no new failing check): traffic_lab passes and fails the same checks; s208's 15 m more closes one more block between the roads (enclosed blocks 135 -> 136: its lots change at the re-bake). river_town and agent_lab: the grade check loses tn0; the rest as above. No level was baked; the level tests were not run (S7 re-bakes; its pins over these three levels move then).
+
+**Tests:**
+- `road_model_42_the_road_files_fixes_hold` (new): the smooth frame against the stepped one; each of the eight ramps' sharpest turn under 18 degrees and, round a loop's arc, under 6 (both files; before: 47-134); tn0/tn1 ramps with no sidewalk, a ramp's barriers, and no building fronting them; j95's arm 3 is s208, through with arm 1; `insertArmText` refuses the same arm again and a road whose end is not at the junction.
+- Re-pinned, old -> new, why: `lanes_the_traffic_lab_lane_graph_can_be_driven_round` (the "no junction stated" problem 1 -> 0, s208 named -> none: s208 is stated); `road_model_33` (traffic_lab lone ends "meets another road" 2 -> 0, s208; river_town "carry-on" 16 -> 8 and sidewalks cut off 14 -> 10, tn0/tn1 have no sidewalks).
+- Suites: full build; lanes_tests 150/150; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes).
+
+**Format and caches:** no format change and no tag bump: the builder makes the same output from the same file (the planner's frame is not the builder's), and each edited file changes its own bake key and its saved road model's key by its bytes. `kLanesBuildTag` and `kLaneGraphBuildVersion` unchanged.
+
+**One model:**
+- Concepts touched: roads (one junction's arms, two roads' classes, eight ramps' stated centre lines), and the planner's frame.
+- The facts are stated in the road file, the one place they live; the tools write them there in place through road_layout.h's text writers (`insertArmText`, `setEdgeMemberText`) and the layout writes what follows from them. No road fact is computed outside `roads/`; `lanes_tool reframe` reads the old planner frame only to undo it in a file, once. `smoothTangentAtStation` joins the one polyline toolkit; the planner and the tool both use it. No second model or structure was made.
+
+**For players** (after S7's re-bake): on traffic_lab, Fifth Avenue's south arm reaches its crossroads with Fourteenth Boulevard, with a crosswalk and a stop line, and cars turn into and out of it. On river_town and agent_lab the four cloverleaf loops and four corner links are smooth curves instead of a run of sideways steps, and the freeway's two turn-round loops are one-lane ramps with barriers instead of three-lane boulevards with sidewalks.
+
+**Revisit when** the design stage's agreement is reworked at spread junctions (j103 / j90 above); when the planner makes a loop a true circle in plan; or when the spur's four lanes should taper to the loop's one before it (the deck cracks at tn0/tn1's ends).

@@ -55,8 +55,16 @@ struct LaneLookup;   // deck_mesh.h: which lanes' footprints hold a point, asked
 
 // ONE CORNER WALK THE BUILD LAID (walk_lanes.h, ADR-0465), or why a ring pair has none: the junction, the two arms next
 // to each other round its ring and the kerb of each that faces the corner (road_model.h ringPairs); `lane` its walk (an
-// index into LaneSet::walks), -1: none, and `why` says why. `spread`: the two arms meet a spread junction at different
-// points (a corner the road file cannot state; the drawn pavement says where the kerb runs between them).
+// index into LaneSet::walks), -1: none, and `why` says why (`fault` its kind, for a reader that counts them; ADR-0469).
+// `spread`: the two arms meet a spread junction at different points (a corner the road file cannot state; the drawn
+// pavement says where the kerb runs between them).
+enum class WalkCornerFault : uint8_t {
+    None,          // a walk was laid
+    ArmUnknown,    // an arm's road is not one the build knows
+    KerbEndOut,    // a kerb end lies out in the paved junction, no drawn sidewalk by it
+    TwoPieces,     // each kerb end is by a drawn sidewalk, but not the same piece of it
+};
+const char* walkCornerFaultWord(WalkCornerFault f);
 struct WalkCorner {
     ModelJunctionId junction;
     uint32_t armA = 0, armB = 0;
@@ -64,6 +72,7 @@ struct WalkCorner {
     bool spread = false;
     int lane = -1;
     Vec2 anchorA, anchorB;           // each arm's kerb end on the corner's kerb (its crosswalk's end there, else at its box edge)
+    WalkCornerFault fault = WalkCornerFault::None;
     std::string why;
 };
 

@@ -577,7 +577,10 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
 
 namespace {
 
-// One road as a frame: a point at a station and an offset (+ is left of increasing station).
+// One road as a frame: a point at a station and an offset (+ is left of increasing station). The offset is set out
+// along a direction that turns smoothly between the route's points (smoothTangentAtStation, ADR-0473): set out along
+// each segment's own direction, a loop 90-150 m out jumped 2-5 m sideways at every point of a curving freeway, and
+// river_town's four loop ramps were drawn with those steps in them.
 struct Frame {
     const SystemRoad& road;
     std::vector<double> s;
@@ -585,7 +588,7 @@ struct Frame {
     double clampS(double st) const { return std::max(0.0, std::min(s.back(), st)); }
     Vec2 at(double st, double off) const {
         const double c = clampS(st);
-        return pointAt(road.route, s, c) + perp(tangentAtStation(road.route, s, c)) * off;
+        return pointAt(road.route, s, c) + perp(smoothTangentAtStation(road.route, s, c)) * off;
     }
     Vec2 tangent(double st) const { return tangentAtStation(road.route, s, clampS(st)); }
     double auxOff() const { return road.carriage + road.lanes * road.laneW / 2 + road.laneW / 2; }

@@ -206,24 +206,54 @@ inline uint32_t throughPartner(const ThroughPairs& through, uint32_t arm) {
     return kNoIndex;
 }
 
-// HOW FAR BACK FROM ITS MOUTH AN ARM'S STOP LINE STANDS -- THE ONE RULE (ADR-0419, ADR-0428; issue #292). The junction's
-// area begins back from the arm's mouth (away from the junction) by the half width of the widest road CROSSING it: an
-// arm's road other than its own and its stated through partner's (the same street carrying on is not crossing it), at
-// the same point of the junction (mouths within kSameJunctionPoint), else anywhere in the junction. That is the arm's BOX
-// EDGE: where the crossing road's lanes begin. Its STOP LINE stands kStopLineBack further back. Asked by the stated
-// junctions' areas (lanes/deck_mesh.h junctionAreas: the paint, the model's ModelArm::boxEdge / stopLine, the lane
-// level) and by the grouping of road ends into junctions (lanes/control_plan.h findJunctions).
+// HOW FAR BACK FROM ITS MOUTH AN ARM'S STOP LINE STANDS -- THE ONE RULE (ADR-0419, ADR-0428, ADR-0471; issue #292). The
+// junction's area begins back from the arm's mouth (away from the junction): that is the arm's BOX EDGE, where the
+// crossing roads' lanes begin. Its STOP LINE stands kStopLineBack further back. A road CROSSING an arm is one of the
+// junction's arms on a road other than its own and its stated through partner's (the same street carrying on is not
+// crossing it). The box edge stands back by:
+// - THE SQUARE RULE (ADR-0428, squareBoxEdgeBack): the half width of the widest road crossing it at the same point of
+//   the junction (mouths within kSameJunctionPoint), else anywhere in the junction. Right where roads meet square;
+// - or, where it is more, THE KERBS CLEAR (ADR-0471, crossingClearance): far enough that both of the arm's kerb lines
+//   are out of every crossing arm's carriageway, anywhere in the junction, at the angle they actually meet. Each arm is
+//   read as a straight strip of carriageway from its mouth along its stated heading, its half width either side. Where
+//   two arms leave one point at a sharp angle a, the arm's kerb on that side runs on beside the other's carriageway
+//   before it parts from it, and is clear at W / sin a + w / tan a (W: the crossing road's half width, w: the arm's own);
+//   at a right angle or wider apart that is no more than the square rule's W. An arm that leaves beside it but apart (a
+//   divided road's other carriageway) never overlaps it, and adds nothing.
+// TWO CAPS on what the kerbs-clear rule adds:
+// - THE ANGLE: no arm sets another back further than it would meeting it at kSharpestMeet from one point (W / sin 20 + w /
+//   tan 20, about 2.9 W + 2.7 w), so arms leaving almost together (a fork, a slip road) or overlapping set each other
+//   back a few road widths, not without bound;
+// - THE ROOM (ArmMouth::room): at most half the room the square rule leaves on the arm's road between its stop line and
+//   the next junction's facing one, less the storage a car needs between them (armRoom). So the two stop lines never
+//   pass each other or the next junction, and the grouping of road ends into junctions, which asks this rule whether a
+//   car has room between two nodes, groups exactly as the square rule did. An arm the room stops short of clear is a
+//   planning fault -- two junctions too close for the angle their roads meet at (boxEdgeSqueeze) -- and its kerb end
+//   still lies out in the paved junction.
+// Asked by the stated junctions' areas (lanes/deck_mesh.h junctionAreas: the paint, the model's ModelArm::boxEdge /
+// stopLine, the lane level) and by the grouping of road ends into junctions (lanes/control_plan.h findJunctions).
 constexpr Real kStopLineBack = 5.2;
 constexpr Real kSameJunctionPoint = 2.0;   // metres: two arms' mouths this near meet at one point of a junction
+constexpr Real kSharpestMeet = 20.0;       // degrees: the angle cap (above)
+// Two headings whose directions' dot product is no more than this are square or wider apart: a heading written to the
+// hundredth of a degree (directionOf(90)) reads back about 6e-17 off square, which is square.
+constexpr Real kSquareDot = 1e-9;
+// A kerb line whose slope across a strip's edge is under this runs along that edge (never crosses it).
+constexpr Real kAlongEdge = 1e-12;
 // One arm as the rule reads it: its road (any number that tells roads apart; below zero: a road nobody knows, which
-// crosses nothing), where its mouth is in plan, and its road's half width (half the travel width).
+// crosses nothing), where its mouth is in plan, its road's half width (half the travel width), the way it leaves the
+// junction (unit: its stated heading, directionOf; zero: not known, the square rule alone), and the room cap (above;
+// metres; infinite: no junction faces it along its road).
 struct ArmMouth {
     int road = -1;
     Vec2 mouth;
     Real halfWidth = 0;
+    Vec2 dir;
+    Real room = std::numeric_limits<Real>::infinity();
 };
-// Metres from arm k's mouth back to its box edge. `through`: the junction's stated through pairs, by place in `arms`.
-inline Real boxEdgeBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+// The square rule's metres from arm k's mouth back to its box edge. `through`: the junction's stated through pairs, by
+// place in `arms`.
+inline Real squareBoxEdgeBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
     const uint32_t ownStreet = throughPartner(through, static_cast<uint32_t>(k));
     Real atPoint = -1, anywhere = 0;
     for (std::size_t o = 0; o < arms.size(); ++o) {
@@ -234,9 +264,64 @@ inline Real boxEdgeBack(const std::vector<ArmMouth>& arms, const ThroughPairs& t
     }
     return atPoint >= 0 ? atPoint : anywhere;
 }
+// Metres from arm a's mouth to where its kerbs are clear of crossing arm b's strip, with the angle cap (above: THE KERBS
+// CLEAR); 0 where a heading is not known or the two leave square or wider apart (the square rule answers there).
+inline Real crossingClearance(const ArmMouth& a, const ArmMouth& b) {
+    const Real W = b.halfWidth, w = a.halfWidth;
+    if (a.dir.length() < 0.5 || b.dir.length() < 0.5 || dot(a.dir, b.dir) <= kSquareDot) return 0;   // (a zero dir: not known)
+    const Real sinCap = std::sin(kSharpestMeet * DEG_TO_RAD), cosCap = std::cos(kSharpestMeet * DEG_TO_RAD);
+    const Real cap = W / sinCap + w * cosCap / sinCap;
+    const Vec2 n = perp(a.dir), nb = perp(b.dir);
+    Real clear = 0;
+    for (const Real side : {Real(1), Real(-1)}) {
+        // the kerb line p(t) = o + t * a.dir, t >= 0, against b's strip: b.dir . q >= 0 and |nb . q| <= W (q = p - b.mouth),
+        // each a half line in t (slope * t + at0 >= 0); where they all hold is one interval [lo, hi]
+        const Vec2 o = a.mouth + n * (side * w) - b.mouth;
+        const Real slope[3] = {dot(b.dir, a.dir), -dot(nb, a.dir), dot(nb, a.dir)};
+        const Real at0[3] = {dot(b.dir, o), W - dot(nb, o), W + dot(nb, o)};
+        Real lo = 0, hi = std::numeric_limits<Real>::infinity();
+        for (int c = 0; c < 3; ++c) {
+            if (std::fabs(slope[c]) < kAlongEdge) {
+                if (at0[c] < 0) hi = -1;   // never inside
+            } else if (slope[c] > 0) {
+                lo = std::max(lo, -at0[c] / slope[c]);
+            } else {
+                hi = std::min(hi, -at0[c] / slope[c]);
+            }
+        }
+        if (hi > lo) clear = std::max(clear, hi);
+    }
+    return std::min(clear, cap);
+}
+// Metres arm k's kerbs need beyond the square rule to be clear of every crossing arm (angle-capped, not room-capped).
+inline Real kerbsClearBeyondSquare(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+    const uint32_t ownStreet = throughPartner(through, static_cast<uint32_t>(k));
+    Real clear = 0;
+    for (std::size_t o = 0; o < arms.size(); ++o) {
+        const ArmMouth& b = arms[o];
+        if (b.road < 0 || b.road == arms[k].road || o == ownStreet) continue;
+        clear = std::max(clear, crossingClearance(arms[k], b));
+    }
+    return std::max(Real(0), clear - squareBoxEdgeBack(arms, through, k));
+}
+// Metres from arm k's mouth back to its box edge: the square rule, or the kerbs clear, within the room.
+inline Real boxEdgeBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+    return squareBoxEdgeBack(arms, through, k) + std::min(kerbsClearBeyondSquare(arms, through, k), std::max(Real(0), arms[k].room));
+}
+// How many metres short of its kerbs clear the room cap leaves arm k's box edge (0: clear): the planning fault of two
+// junctions too close for the angle their roads meet at.
+inline Real boxEdgeSqueeze(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
+    return std::max(Real(0), kerbsClearBeyondSquare(arms, through, k) - std::max(Real(0), arms[k].room));
+}
 // ... and back to its stop line.
 inline Real stopLineBack(const std::vector<ArmMouth>& arms, const ThroughPairs& through, std::size_t k) {
     return boxEdgeBack(arms, through, k) + kStopLineBack;
+}
+// THE ROOM CAP for two arms facing each other along one road, `gap` metres apart (mouth to mouth), whose square-rule stop
+// lines stand `squareStopA` and `squareStopB` back: half what is left over once both stop lines and `storage` are taken
+// out, less kSamePoint so the two enlarged stop lines never leave a hair under `storage` between them (0: no room left).
+inline Real armRoom(Real gap, Real squareStopA, Real squareStopB, Real storage) {
+    return std::max(Real(0), (gap - squareStopA - squareStopB - storage) * Real(0.5) - kSamePoint);
 }
 
 struct ModelJunction {

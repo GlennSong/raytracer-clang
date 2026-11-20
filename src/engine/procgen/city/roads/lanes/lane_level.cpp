@@ -340,6 +340,14 @@ void layWalkPaths(const Result& r, RoadModel& model, LaneGraphBuild& out) {
                 for (const ModelCorner& c : m.corners)
                     if (c.junction == J && ((c.armA == arm && kerbKey(J, arm, c.kerbA) == key) || (c.armB == arm && kerbKey(J, arm, c.kerbB) == key)))
                         cornerStated = true;
+                // the ring pair at this kerb end the build tried and laid no walk for, and why (walk_lanes.h): a stated
+                // corner, or a spread junction's pair, which becomes a corner only where a walk was laid -- so its end is
+                // never "no corner stated" (ADR-0469: those were counted as freeway arms)
+                const WalkCorner* failed = nullptr;
+                for (const WalkCorner& wc : r.walkCorners)
+                    if (wc.lane < 0 && wc.junction == J &&
+                        ((wc.armA == arm && kerbKey(J, arm, wc.kerbA) == key) || (wc.armB == arm && kerbKey(J, arm, wc.kerbB) == key)))
+                        failed = &wc;
                 const ModelCrosswalk* cw = m.crosswalkAcross(J, arm);
                 const bool crossed = cw && cw->pavements;
                 const Walk& k = G.walks[alone.walk];
@@ -348,7 +356,9 @@ void layWalkPaths(const Result& r, RoadModel& model, LaneGraphBuild& out) {
                 } else if (k.modelWalk != kNoIndex && !m.walks[k.modelWalk].onRoad()) {
                     alone.why = "a corner walk's end with no sidewalk or crossing there";
                 } else {
-                    alone.why = cornerStated ? "its corner has no walk (the build could not lay one)" : "no corner is stated on this kerb";
+                    alone.why = failed       ? std::string("its corner has no walk (") + walkCornerFaultWord(failed->fault) + ")"
+                                : cornerStated ? "its corner has no walk (the build could not lay one)"
+                                               : "no corner is stated on this kerb";
                     if (!crossed) alone.why += ", and no crosswalk people use";
                 }
                 alone.where = kerb == 0 ? fmt("junction %s, arm %u (a footway)", m.junctions[J.index].id.c_str(), arm)

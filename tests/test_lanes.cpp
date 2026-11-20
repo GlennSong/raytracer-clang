@@ -2244,8 +2244,14 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // (step 9, ADR-0428: the stop lines moved to the stated rule -- fits none 82 -> 77, crossing lines 17 -> 29, kinks 65 -> 63)
 // (ADR-0450: kerb lanes driven clear of the parking band, 1.25 m nearer the centre line and 3.5 m wide -- fits none
 // 76 -> 75, crossing lines 29 -> 16 (narrower paths beside each other touch less), tidied folds 13 -> 11)
-constexpr uint32_t kTrafficLabFitsNone = 75,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
-                    kTrafficLabCrossingLines = 16, kTrafficLabKinks = 63, kTrafficLabTidied = 11;
+// (ADR-0471: the box edge at the angle the arms meet -- at sharp-angled junctions the stop lines stand further back, clear
+// of the crossing road: fits none 75 -> 68, crossing lines 16 -> 11, kinks 63 -> 60, outlines crossing themselves 5 -> 0
+// (j0, j4, j19, j93, j96: their arms' stop lines no longer overlap); the car's largest part 96.6% -> 96.8%)
+// (ADR-0472: the bands mitred at a kink -- fits none 68 -> 66: the freeway joints j153 (fw0_a.f3 into fw1_a.f3) and j154
+// (fw1_b.f0 into fw0_b.f0), straight on across a kink where the two carriageways' asphalt now meets on the bisector, no
+// longer leave the paved road; the car's largest part 96.8% -> 96.9%)
+constexpr uint32_t kTrafficLabFitsNone = 66,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
+                    kTrafficLabCrossingLines = 11, kTrafficLabKinks = 60, kTrafficLabTidied = 11;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
     std::printf("    traffic lab: %.1f%% of the lanes in the largest part a car can get round\n", 100 * lg.reachableShare);
@@ -2269,7 +2275,10 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     // that fits no vehicle (a corner fault), a fold tidied, a crossing point to look at (lane_graph_crossings.h), a kink in a
     // line (#281: the road builder's to fix, reported, not smoothed), the one stated join whose lines miss, a junction whose
     // arms' stop lines overlap so its outline crosses itself (j0 and j22: corners for step 9), and a street end that meets
-    // another road where the road file states no junction (the dead-end spokes at the ring: the planner's to state)
+    // another road where the road file states no junction (the planner's to state): none. (Was 17, ADR-0464: the 16 spokes
+    // ending under the freeway ring counted too; the freeway meets no road at grade, so since ADR-0469 they are dead ends,
+    // joined across. Was 1 until ADR-0473, s208, the fourth arm of j95: its centre line stopped 15 m short of j95's point;
+    // it now reaches it and j95 states it as its fourth arm, through with s213.)
     std::map<std::string, uint32_t> byKind;
     std::set<std::string> outlines, unstated, gapJoins;
     for (const std::string& p : problemLines(lg.problems)) {
@@ -2292,15 +2301,14 @@ TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
         ++byKind[kind];
     }
     const std::map<std::string, uint32_t> knownKinds = {{"fits no vehicle", kTrafficLabFitsNone}, {"tidied", kTrafficLabTidied}, {"crossing points", kTrafficLabCrossingLines},
-                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}, {"outline", 5}, {"no junction stated", 17}};
+                                                        {"kink", kTrafficLabKinks}, {"join with a gap", 1}};
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u problems: %s\n", k.second, k.first.c_str());
     CHECK(byKind == knownKinds);
-    // (j4, j19, j93, j96 since step 9, and j22 no longer, ADR-0428: two arms' stop lines, stated by the rule, cross where
-    // they meet at a sharp angle)
-    CHECK(outlines == std::set<std::string>({"j0", "j4", "j19", "j93", "j96"}));
+    // (was j0, j4, j19, j93, j96 from step 9, ADR-0428: two arms' stop lines, stated by the square rule, crossed where they
+    // met at a sharp angle; none since ADR-0471 sets them back at the angle the arms meet)
+    CHECK(outlines.empty());
     CHECK(gapJoins == std::set<std::string>({"lane d1_0_a_off.f0 leaves lane fw1_a.f3"}));
-    CHECK(unstated == std::set<std::string>({"s208", "s283", "s288", "s290", "s292", "s295", "s297", "s299", "s301", "s303", "s308",
-                                             "s326", "s328", "s330", "s332", "s335", "s337"}));
+    CHECK(unstated.empty());
 }
 
 // THE TRAFFIC LAB'S ROAD MODEL'S OWN PROBLEMS, BY KIND AND COUNT (written from its model_problems.txt): 8 sides taken as
@@ -2315,6 +2323,7 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
         std::string kind = "other";
         if (p.find(" takes no turn: ") != std::string::npos) kind = "arriving lane taking no turn";
         else if (p.find("its crosswalk's kerb end lies in another road") != std::string::npos) kind = "crosswalk kerb end in a road";
+        else if (p.find("for the angle its roads meet at") != std::string::npos) kind = "too close for the angle";
         else if (p.find(" stands halfway round from arm ") != std::string::npos) {
             kind = "halfway, taken as far";
             // named by the arms' roads (their places in the list are the stated ring's, ADR-0427)
@@ -2329,8 +2338,11 @@ TEST_CASE(lanes_the_traffic_lab_road_model_problems_are_known) {
         ++byKind[kind];
     }
     for (const std::pair<const std::string, uint32_t>& k : byKind) std::printf("      %u model problems: %s\n", k.second, k.first.c_str());
-    // (ADR-0452: 33 crosswalks of spread junctions whose kerb end lies in another road; not used by people)
-    CHECK(byKind == (std::map<std::string, uint32_t>{{"halfway, taken as far", 8}, {"crosswalk kerb end in a road", 33}}));
+    // (ADR-0452: 33 crosswalks of spread junctions whose kerb end lies in another road; not used by people. 5 since
+    // ADR-0471: set back at the angle the arms meet, 28 of them now lie clear of the other road. And 9 arms whose box edge
+    // the next junction stands too close to let clear for the angle their roads meet at, a planning fault: j0 arms 5 and 6,
+    // j22 arm 0, j24 arm 0, j37 arm 3, j70 arms 0 and 1, j84 arms 3 and 4; by arm in road_model_39)
+    CHECK(byKind == (std::map<std::string, uint32_t>{{"halfway, taken as far", 8}, {"crosswalk kerb end in a road", 5}, {"too close for the angle", 9}}));
     CHECK(halfway == (std::set<std::string>{"j7: s203 halfway from s16", "j7: s230 halfway from s13", "j18: s219 halfway from s28",
                                             "j18: s28 halfway from s219", "j18: s23 halfway from s31", "j18: s31 halfway from s23",
                                             "j82: s141 halfway from s224", "j82: s224 halfway from s141"}));
@@ -2532,7 +2544,9 @@ LaneGraphKnown ringCityKnown() {
     k.mergeJoins = 4;      // its 4 entry ramps
     // the file: each *_on ramp's `to` anchor on its ring carriageway, side right: the ring's outer lane, f2 of three
     k.merges = {"n_in_on.f0>in_NE.f2", "e_in_on.f0>in_ES.f2", "e_out_on.f0>out_EN.f2", "n_out_on.f0>out_NW.f2"};
-    k.problems = {{"crossing points", 42}, {"fits no vehicle", 4}, {"join with a gap", 28}, {"kink", 8}};
+    // (fits no vehicle 4 -> 2, ADR-0471: where its arms meet at a sharp angle the stop lines stand back at that angle, and
+    // two stated turns that fitted no vehicle now fit)
+    k.problems = {{"crossing points", 42}, {"fits no vehicle", 2}, {"join with a gap", 28}, {"kink", 8}};
     return k;
 }
 LaneGraphKnown hillJunctionKnown() {
@@ -2556,8 +2570,10 @@ LaneGraphKnown trafficLabKnown() {
     // at j84 s147's and s149's, and at j22's approach s57's and s60's
     // (moved 2 m with the kerb lanes of s36, s60 and s149 since they are driven clear of the parking band, ADR-0450: s36's
     // two kerb lanes now meet s33's outer lane, where its b0 met f1 and f2)
-    k.crossings = {"s33.f2 x s36.b0 @ (-221, -309)", "s33.f2 x s36.f0 @ (-225, -306)", "s57.f0 x s60.b2 @ (-219, 309)",
-                   "s147.b2 x s149.f0 @ (210, -309)"};
+    // (none since ADR-0471: the four (s33 x s36 twice at j0, s57 x s60 at j22, s147 x s149 at j84) lay just outside the
+    // sharp arms' square-rule stop lines; those stop lines now stand further back, at the angle the arms meet, so the
+    // crossings lie inside the junctions)
+    k.crossings = {};
     // the folds cut out (each lane's "tidied" problem line gives the metres; written here rounded up). (s61.b0 and s65.f0
     // no longer fold: kerb lanes driven 1.25 m nearer their spine, ADR-0450)
     k.tidied = {{"s2.f2", 2.4}, {"s30.f2", 1.7}, {"s90.f2", 1.3}, {"s182.f0", 1.5}, {"s189.f2", 1.5},

@@ -53,7 +53,8 @@ struct LaneLookup {
 //   - its MOUTH: the stated station `at`;
 //   - its BOX EDGE, where the junction's area begins, and its STOP LINE, where traffic arriving by it stops: back from
 //     the mouth as the one rule says (road_model_parts.h boxEdgeBack, stopLineBack: the widest crossing road's half
-//     width, then kStopLineBack).
+//     width, or where they meet at a sharp angle until the arm's kerbs clear the crossing roads, within the room the
+//     next junction facing it along its road leaves (ADR-0471); then kStopLineBack).
 // A crosswalk's band lies kCrosswalkNear to kCrosswalkFar back from an arm's box edge: the ONE source of those two numbers,
 // read only by the road model's one function that states the crosswalks (road_model.cpp stateCrosswalks, ADR-0452); the
 // paint draws each marked crosswalk from the model's record, with its lane arrows and stop bar where the road model states
@@ -69,6 +70,11 @@ struct ArmStop {
     double boxEdge = 0;         // where the junction's area begins, along the spine
     double stopLine = 0;        // where traffic arriving by it stops, along the spine
     bool painted = false;       // its road is a street the paint marks (paintsJunctionBoxes)
+    // THE PLANNING FAULT (ADR-0471, road_model_parts.h boxEdgeSqueeze): metres short of where its kerbs clear the roads
+    // crossing it that the room to `facing` (the next stated junction along its road, facing it; -1: none) leaves its box
+    // edge -- two junctions too close for the angle their roads meet at. 0: clear.
+    double squeeze = 0;
+    int facing = -1;
 };
 // One stated junction's arms (in their list order) and its area along each road it lies on (JunctionSpan: from the
 // lowest to the highest of its arms' box edges and mouths on that road, and any stretch the file states inside it).

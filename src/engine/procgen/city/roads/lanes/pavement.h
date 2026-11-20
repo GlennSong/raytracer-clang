@@ -46,6 +46,30 @@ struct Pavement {
     double closingAdded = 0;
 };
 
+// A KINK (ADR-0472): two road ends the road file states meet at one place -- a street carrying on as another, or two
+// roads ending at the same junction point or spread-junction node -- at the same level (within the rules' sameLevelDz),
+// with nothing between them on one side, which is the outside of the bend. Each road's bands (asphalt, shoulder,
+// sidewalk) are drawn from its own spine and end square there, so on the outside of the bend they leave a wedge of bare
+// ground; the build closes it with a MITRE: each band runs on past its end to the line that halves the bend (the
+// bisector), where it meets the other's. Which ends meet is read only from the file's statements (ModelStreet::carriesOn,
+// ModelJunction::arms and nodes), never found by searching for nearby ends. `edgeA`/`edgeB` index the graph's edges;
+// an end is 0 at the spine's first point and 1 at its last; B lies counter-clockwise of A across the open side.
+// `turn`: how far the road turns there, in radians (0: straight on, pi: back on itself).
+struct BandKink {
+    int edgeA = -1, endA = 0, edgeB = -1, endB = 0;
+    double turn = 0;
+};
+std::vector<BandKink> bandKinks(const RoadLabGraph& g);
+// A mitre's point reaches at most this many times the wider band's half width out from where the two ends meet (it does
+// past a turn of 120 degrees); beyond that it is cut off square across the bisector, so a hairpin's outside is not drawn
+// out to a spike.
+constexpr double kMitreLimit = 2.0;
+// One layer's mitre at a kink, as two pieces: A's (from its end to the bisector) and B's, each band `halfWidthA` /
+// `halfWidthB` out from its spine. Past a turn of 120 degrees (kMitreLimit) the point is cut off square across the
+// bisector, twice the wider half width out from where the ends meet. Where the two bands' corners on the open side are
+// already one point (a straight carry-on) both pieces are empty, and nothing is added.
+std::array<Ring, 2> mitrePieces(const RoadLabGraph& g, const BandKink& k, double halfWidthA, double halfWidthB);
+
 // Footprints + closing + layers (needs the lanes' own heights for the same-level test).
 void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, Pavement& out);
 // The arrangement, levels, partners and welded surfaces. Sets H's partners as a side effect.

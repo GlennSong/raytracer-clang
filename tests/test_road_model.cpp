@@ -32,6 +32,8 @@
 #include "engine/procgen/city/city_lots.h"                   // growLotBuildings: the lot pass faces its doors
 #include "engine/level_params.h"                             // readLotGrowParams
 #include "engine/procgen/city/roads/lanes/road_layout.h"
+#include "engine/procgen/city/roads/lanes/polyline_ops.h"   // smoothTangentAtStation (ADR-0473)
+#include "engine/procgen/city/road_network.h"               // buildingMayFront
 #include "engine/procgen/city/roads/road_entity.h"      // navRoadGraph
 #include "engine/procgen/city/roads/road_model.h"
 #include "engine/procgen/city/roads/lane_turns.h"           // the stated turns (ADR-0426)
@@ -3259,8 +3261,9 @@ TEST_CASE(road_model_31_the_shipped_levels_walks) {
         for (const WalkCorner& wc : r->walkCorners) {
             if (wc.lane < 0) {
                 ++whys[wc.why.find("kerb end lies") != std::string::npos ? std::string("a kerb end lies out in the paved junction") : wc.why];
-                std::printf("        no walk: junction %s arms %u-%u%s: %s\n", m.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB,
-                            wc.spread ? " (across its points)" : "", wc.why.c_str());
+                std::printf("        no walk: junction %s arms %u-%u%s: %s; kerb ends (%.2f, %.2f) and (%.2f, %.2f)\n",
+                            m.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB, wc.spread ? " (across its points)" : "",
+                            wc.why.c_str(), wc.anchorA.x, wc.anchorA.y, wc.anchorB.x, wc.anchorB.y);
                 continue;
             }
             ++laid;
@@ -3280,6 +3283,13 @@ TEST_CASE(road_model_31_the_shipped_levels_walks) {
                     "its sidewalk is wide (the worst %.2f m past it)\n",
                     level, pairs.size(), walkable, laid, laidSpread, m.corners.size(), sidewalkLanes, offWalks, off, checked, endsAway, worst);
         for (const std::pair<const std::string, uint32_t>& w : whys) std::printf("        %u with no walk: %s\n", w.second, w.first.c_str());
+        // each corner with no walk says what kind of fault it is, and one with a walk none (ADR-0469: the lane level's lone
+        // ends are counted by it)
+        for (const WalkCorner& wc : r->walkCorners) {
+            CHECK((wc.lane >= 0) == (wc.fault == WalkCornerFault::None));
+            if (wc.fault == WalkCornerFault::KerbEndOut) CHECK(wc.why.find("kerb end lies") != std::string::npos);
+            if (wc.fault == WalkCornerFault::TwoPieces) CHECK(wc.why.find("two pieces") != std::string::npos);
+        }
         CHECK(laid + static_cast<uint32_t>(r->walkCorners.size() - laid) == walkable);
         CHECK(laid > 0u && laidSpread > 0u);
         CHECK(offWalks == 0u);
@@ -3719,6 +3729,42 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         for (const std::pair<const std::string, std::pair<uint32_t, uint32_t>>& o : outside)
             std::printf("          %u sidewalks in %u parts bounded by: %s\n", o.second.second, o.second.first, o.first.c_str());
         CHECK(sidewalks > 0u && inLargest * 2 > sidewalks);
+        // THE LONE ENDS BY CAUSE, pinned (ADR-0469; was, at ADR-0466: traffic_lab 61, river_town 126). The fixes left for the
+        // one planned re-bake are named in the ADR:
+        //   - a corner with no walk because a kerb end lies out in the paved junction: the box edge's one rule
+        //     (road_model_parts.h boxEdgeBack) sets an arm's crosswalk back by the crossing road's half width as if the two
+        //     met square, so where they meet at a sharp angle the crosswalk's kerb end stands in the other road;
+        //   - a corner with no walk because the drawn sidewalk is in two pieces: each road's sidewalk band is cut square at
+        //     the road's end, leaving a wedge of bare ground where the kerb kinks from one road into the next;
+        //   - traffic_lab's s208, the fourth arm of j95, not stated in its ring (its two kerbs' ends; stated since ADR-0473);
+        //   - river_town's freeway carry-ons: a boulevard's sidewalks end where it runs on as the freeway (bv0, bv1; tn0 and
+        //     tn1 too until ADR-0473 made them ramps).
+        // No end may say "no corner is stated" where the build tried a walk (a spread junction's pair: it was counted as a
+        // freeway arm's), and none is a street end under the freeway (now a dead end, joined across: 16 and 24 turn-rounds).
+        std::map<std::string, uint32_t> cause;
+        for (const LaneGraphBuild::WalkEndAlone& a : report.walkEndsAlone)
+            ++cause[a.why.find(walkCornerFaultWord(WalkCornerFault::KerbEndOut)) != std::string::npos ? "kerb end out"
+                    : a.why.find(walkCornerFaultWord(WalkCornerFault::TwoPieces)) != std::string::npos ? "two pieces"
+                    : a.why.find("meets another road") != std::string::npos                         ? "meets another road"
+                    : a.why.find("carries on into") != std::string::npos                            ? "carry-on"
+                                                                                                    : a.why];
+        // (ADR-0471, the box edge at the angle the arms meet: kerb end out 24 -> 4 / 49 -> 22, two pieces 3 -> 1 / 13 -> 5 --
+        // a lone end is counted where its corner has no walk AND no crosswalk people use, and more crosswalks now lie clear of
+        // the other road; sidewalks cut off 4 -> 0 / 25 -> 14. The kerb ends still out are at the junctions the next one
+        // stands too close to (road_model_39), and four river_town corners at j19, j116 and j119)
+        // (ADR-0472, the bands mitred at a kink: two pieces 1 -> 0 / 5 -> 1. The one left is river_town j90 0-1, whose arm 0
+        // kerb end lies on a scrap of s228's sidewalk inside s227's carriageway: road_model_41. Sidewalks cut off unchanged,
+        // 0 / 14: the parts still cut off are bounded by kerb ends out.)
+        // (ADR-0473, the road files: traffic_lab's meets another road 2 -> 0, s208 now j95's fourth arm; river_town's
+        // carry-ons 16 -> 8 and sidewalks cut off 14 -> 10, tn0 and tn1 now ramps with no sidewalks, so only bv0's and bv1's
+        // sidewalks end where they run on as the freeway.)
+        const bool lab = std::string(level) == "traffic_lab";
+        const std::map<std::string, uint32_t> pinned =
+            lab ? std::map<std::string, uint32_t>{{"kerb end out", 4}}
+                : std::map<std::string, uint32_t>{{"kerb end out", 22}, {"two pieces", 1}, {"carry-on", 8}};
+        CHECK(cause == pinned);
+        CHECK(kinds.count("turn_round") && kinds.at("turn_round") == (lab ? 16u : 31u));
+        CHECK(sidewalks - inLargest == (lab ? 0u : 10u));
     }
 }
 
@@ -4209,4 +4255,625 @@ TEST_CASE(road_model_36_where_a_place_joins_the_walks_is_one_query) {
             CHECK(!onRamp.valid() && onRamp.why == WalkJoinWhy::NoWalk);
         }
     }
+}
+
+// ---- 37. a street ending under the freeway is a dead end: the crossing policy says what meets at grade (ADR-0469) -------
+
+TEST_CASE(road_model_37_a_street_ending_under_the_freeway_is_a_dead_end) {
+    // THE CROSSING POLICY, one statement (road_design.h meetAtGrade), by what the two roads are
+    {
+        RoadLabGraph g = RoadLabGraph::fromJson(walkTee());
+        const auto edgeOf = [&](const char* cls) {
+            EdgeSpec e = g.edges.front();
+            e.cls = cls;
+            return e;
+        };
+        const EdgeSpec local = edgeOf("local"), freeway = edgeOf("freeway"), rail = edgeOf("rail"), footway = edgeOf("footway");
+        CHECK(meetAtGrade(g, local, local, true, false));          // two streets: a junction
+        CHECK(!meetAtGrade(g, local, freeway, true, false));       // a street at the freeway: a bridge
+        CHECK(!meetAtGrade(g, freeway, local, false, true));
+        CHECK(!meetAtGrade(g, local, rail, true, false));          // at a track: a bridge
+        CHECK(meetAtGrade(g, footway, local, true, false));        // a footway ending on a road: its way in
+        CHECK(!meetAtGrade(g, footway, local, false, false));      // a footway crossing it: a footbridge
+    }
+    // A SPUR ENDING INSIDE A ROAD'S BAND, with no junction stated (walkTee's spur, 6 m short of the east road's centre
+    // line): a street the planner left unstated where the road is one it meets at grade; a dead end, joined across by a
+    // turn-round, where that road is a freeway (above it, by the class's own `limited_access`). The design stage asks the
+    // same one test (ADR-0470): under the freeway the spur's end is open (brought down to the ground), beside a street it
+    // is met. Roads whose ends meet at a node meet whatever they are: east and west carry on into each other at (0, 0) as
+    // freeways too (were the crossing policy asked there, the freeway's own ends would be open and brought down).
+    for (const char* cls : {"local", "freeway"}) {
+        nlohmann::json file = walkTee(std::string(), true);
+        for (nlohmann::json& e : file["edges"])
+            if (e["id"] == "east" || e["id"] == "west") e["class"] = cls;
+        RoadLabGraph g;
+        const RoadModel m = walkModel(file, g);
+        const ModelStreetId spur = streetNamed(m, "spur/1");
+        CHECK(spur.valid());
+        if (!spur.valid()) return;
+        const bool underFreeway = std::string(cls) == "freeway";
+        const StreetEndKind kind = streetEndKind(g, m.streets[spur.index], 1);
+        std::printf("      the spur's end inside the %s road's band: %s\n", cls, streetEndKindWord(kind));
+        CHECK(kind == (underFreeway ? StreetEndKind::DeadEnd : StreetEndKind::MeetsAnother));
+        const EdgeSpec& spurEdge = g.edges[static_cast<size_t>(g.index.at("spur"))];
+        CHECK(roadEndMeetsAnother(g, spurEdge, 1) == !underFreeway);   // at grade: only the street
+        CHECK(roadEndMeetsAnother(g, g.edges[static_cast<size_t>(g.index.at("east"))], 0));   // a node: met, either class
+        CHECK(roadEndMeetsAnother(g, g.edges[static_cast<size_t>(g.index.at("west"))], 1));
+        {   // the design stage's open ends: the same answer
+            RoadLabGraph d = g;
+            (void)designRoads(d, [](double, double) { return 0.0; });
+            const EdgeSpec& ds = d.edges[static_cast<size_t>(d.index.at("spur"))];
+            CHECK(ds.openEnd[1] == underFreeway);
+            CHECK(ds.openEnd[0]);   // its far end meets nothing: open either way
+            CHECK(!d.edges[static_cast<size_t>(d.index.at("east"))].openEnd[0]);
+            CHECK(!d.edges[static_cast<size_t>(d.index.at("west"))].openEnd[1]);
+        }
+        uint32_t spurEnds = 0;
+        bool joinedAtTheFreeway = false;
+        for (const ModelDeadEnd& d : m.deadEnds)
+            if (d.street == spur) {
+                ++spurEnds;
+                joinedAtTheFreeway = joinedAtTheFreeway || (d.end == 1 && d.turnRound);
+            }
+        CHECK(spurEnds == (underFreeway ? 2u : 1u));
+        CHECK(joinedAtTheFreeway == underFreeway);
+    }
+}
+
+// ---- 38. the box edge at the angle the arms meet (ADR-0471) -------------------------------------------------------------
+
+namespace {
+// A local street east-west through (0, 0), and one more local road `slant` leaving the junction at `degrees` below east
+// (into it: its spine runs in), laid out by the one-off tool as walkTee is. With `crossAt` > 0, a local road north from
+// (crossAt, 0): a second junction along the street, `crossAt` metres east.
+nlohmann::json sharpTee(double degrees, double crossAt = 0) {
+    nlohmann::json g;
+    g["name"] = "sharp_tee";
+    auto road = [](const std::string& id, const Vec2& a, const Vec2& b) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}}};
+    };
+    const Vec2 far = directionOf(-degrees) * 100.0;
+    g["edges"] = nlohmann::json::array({road("west", Vec2(-100, 0), Vec2(0, 0)), road("slant", far, Vec2(0, 0))});
+    if (crossAt > 0) {
+        g["edges"].push_back(road("east", Vec2(0, 0), Vec2(crossAt, 0)));
+        g["edges"].push_back(road("east2", Vec2(crossAt, 0), Vec2(100, 0)));
+        g["edges"].push_back(road("north", Vec2(crossAt, 0), Vec2(crossAt, 100)));
+    } else {
+        g["edges"].push_back(road("east", Vec2(0, 0), Vec2(100, 0)));
+    }
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    return g;
+}
+// Metres from p to the east road's centre line (the segment from the junction at (0, 0) east).
+Real fromEastLine(const Vec2& p) { return p.x >= 0 ? std::fabs(p.y) : p.length(); }
+const ModelArm* armOn(const ModelJunction& J, const std::string& road) {
+    for (const ModelArm& a : J.arms)
+        if (a.road == road) return &a;
+    return nullptr;
+}
+}  // namespace
+
+TEST_CASE(road_model_38_the_box_edge_at_the_angle_the_arms_meet) {
+    const Real W = 6.0, w = 6.0;   // a local road's half travel width (road_classes.json: two 6 m lanes)
+    // THE RULE, arm by arm (road_model_parts.h boxEdgeBack). A square crossroads: each arm set back by the crossing road's
+    // half width, with or without headings -- the square rule's number, to the bit
+    {
+        std::vector<ArmMouth> arms;
+        for (const Vec2& d : {Vec2(1, 0), Vec2(0, 1), Vec2(-1, 0), Vec2(0, -1)}) arms.push_back(ArmMouth{static_cast<int>(arms.size() % 2), Vec2(), W, d});
+        const ThroughPairs through = {{0, 2}, {1, 3}};
+        std::vector<ArmMouth> noHeadings = arms;
+        for (ArmMouth& a : noHeadings) a.dir = Vec2();
+        for (std::size_t k = 0; k < 4; ++k) {
+            CHECK(boxEdgeBack(arms, through, k) == W);
+            CHECK(boxEdgeBack(noHeadings, through, k) == W);
+            CHECK(squareBoxEdgeBack(arms, through, k) == W);
+        }
+        // headings written to the hundredth of a degree (directionOf(90) is a hair off square): square all the same
+        for (std::size_t k = 0; k < 4; ++k) arms[k].dir = directionOf(90.0 * static_cast<double>(k));
+        for (std::size_t k = 0; k < 4; ++k) CHECK(boxEdgeBack(arms, through, k) == W);
+    }
+    // A SHARP T from one point: the street through (east and west), a stem leaving 30 degrees off east. The stem's kerb on
+    // the east side clears the street's carriageway at W / sin 30 + w / tan 30; the street's east arm is set back as far
+    // by the stem; its west arm (150 degrees off the stem) by the square rule's W
+    {
+        const Real a = 30 * DEG_TO_RAD;
+        const std::vector<ArmMouth> arms = {ArmMouth{0, Vec2(), W, Vec2(1, 0)}, ArmMouth{0, Vec2(), W, Vec2(-1, 0)},
+                                            ArmMouth{1, Vec2(), w, directionOf(-30)}};
+        const ThroughPairs through = {{0, 1}};
+        const Real want = W / std::sin(a) + w / std::tan(a);
+        std::printf("      a 30-degree T: the stem set back %.2f m (the square rule: %.2f m)\n", boxEdgeBack(arms, through, 2), W);
+        CHECK(approxEqual(boxEdgeBack(arms, through, 2), want, 1e-9));
+        CHECK(approxEqual(boxEdgeBack(arms, through, 0), want, 1e-9));
+        CHECK(boxEdgeBack(arms, through, 1) == W);
+        CHECK(boxEdgeSqueeze(arms, through, 2) == 0);
+        // THE ROOM CAP: with 3 m of room, the stem stands back the square rule and 3 m, short of clear by the rest
+        std::vector<ArmMouth> tight = arms;
+        tight[2].room = 3;
+        CHECK(approxEqual(boxEdgeBack(tight, through, 2), W + 3, 1e-9));
+        CHECK(approxEqual(boxEdgeSqueeze(tight, through, 2), want - W - 3, 1e-9));
+        tight[2].room = 0;
+        CHECK(boxEdgeBack(tight, through, 2) == W);
+    }
+    // THE ANGLE CAP: a stem leaving 5 degrees off east is set back as if it met at kSharpestMeet (20 degrees), not 5
+    {
+        const std::vector<ArmMouth> arms = {ArmMouth{0, Vec2(), W, Vec2(1, 0)}, ArmMouth{0, Vec2(), W, Vec2(-1, 0)},
+                                            ArmMouth{1, Vec2(), w, directionOf(-5)}};
+        const Real c = kSharpestMeet * DEG_TO_RAD;
+        const Real capped = W / std::sin(c) + w / std::tan(c);
+        CHECK(approxEqual(boxEdgeBack(arms, {{0, 1}}, 2), capped, 1e-9));
+        CHECK(boxEdgeBack(arms, {{0, 1}}, 2) < W / std::sin(5 * DEG_TO_RAD));
+    }
+    // AN ARM BESIDE IT BUT APART (a divided road's other carriageway, 14 m off, leaving the same way): its strip never
+    // overlaps the arm's, so it sets it back by the square rule's W only
+    {
+        const std::vector<ArmMouth> arms = {ArmMouth{0, Vec2(0, 0), w, Vec2(1, 0)}, ArmMouth{1, Vec2(0, 14), W, Vec2(1, 0)}};
+        CHECK(boxEdgeBack(arms, {}, 0) == W);
+    }
+    // THE ROOM between two facing arms: half what the square rule's stop lines and the storage leave, less a millimetre
+    CHECK(approxEqual(armRoom(50, 15, 15, 6.5), 6.75 - kSamePoint, 1e-9));
+    CHECK(armRoom(30, 15, 15, 6.5) == 0);
+
+    // A SHARP T BUILT (a 30-degree stem): every corner walked, the stem's crosswalk kerb ends on drawn pavement and clear
+    // of the street's carriageway, its stop line wholly ahead of the street's edge. (The square rule left the stem's kerb
+    // end out in the asphalt of the sharp corner: no walk there.)
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(sharpTee(30)));
+        uint32_t laid = 0;
+        for (const WalkCorner& wc : r->walkCorners) {
+            if (wc.lane < 0) std::printf("      no walk: arms %u-%u: %s\n", wc.armA, wc.armB, wc.why.c_str());
+            laid += wc.lane >= 0 ? 1u : 0u;
+            CHECK(wc.fault == WalkCornerFault::None);
+        }
+        CHECK(laid == 3u);
+        const RoadModel m = assembleRoadModel(*r, oneCar());
+        CHECK(m.junctions.size() == 1u);
+        if (m.junctions.size() != 1u) return;
+        const ModelJunction& J = m.junctions[0];
+        const ModelArm* stem = armOn(J, "slant");
+        CHECK(stem != nullptr);
+        if (!stem) return;
+        const uint32_t stemArm = static_cast<uint32_t>(stem - J.arms.data());
+        const ModelCrosswalk* cw = m.crosswalkAcross(ModelJunctionId(0), stemArm);
+        CHECK(cw != nullptr && cw->pavements);
+        if (cw)
+            for (const Vec2& e : cw->ends) {
+                std::printf("      the stem's kerb end (%.2f, %.2f): %.2f m from the street's centre line (its half width %.2f)\n", e.x, e.y,
+                            fromEastLine(e), W);
+                CHECK(fromEastLine(e) > W);
+            }
+        const EdgeSpec& slant = r->graph.edges[static_cast<std::size_t>(r->graph.index.at("slant"))];
+        const Vec2 at = pointAt(slant.xy, slant.s, stem->stopLine);
+        const Vec2 side = perp(tangentAtStation(slant.xy, slant.s, stem->stopLine)) * w;
+        CHECK(fromEastLine(at + side) > W && fromEastLine(at - side) > W);
+        for (const std::string& p : m.problems) CHECK(p.find("too close to junction") == std::string::npos);
+    }
+    // A SQUARE T (walkTee) BUILT: the box edges the square rule gives, to the bit
+    {
+        RoadLabGraph g;
+        const RoadModel m = walkModel(walkTee(), g);
+        for (const ModelArm& a : m.junctions[0].arms) CHECK(a.boxEdge == a.station + (a.spineIn ? -W : W));
+    }
+    // THE ROOM CAP ON A SCENE: the sharp T with a second junction 40 m east along the street. Kerbs clear, the street's east
+    // arm would stand back about 22 m, leaving no room for a car before the next junction's stop line; the room caps it,
+    // the grouping still finds two junctions (it asks the same rule), the two stop lines leave the storage between them,
+    // and the arm is said as a planning fault (junctions too close for the angle their roads meet at)
+    {
+        const nlohmann::json file = sharpTee(30, 40);
+        CHECK(file["junctions"].size() == 2u);
+        RoadLabGraph g;
+        const RoadModel m = walkModel(file, g);
+        const ModelJunction* A = nullptr;
+        const ModelJunction* B = nullptr;
+        for (const ModelJunction& J : m.junctions) (armOn(J, "slant") ? A : B) = &J;
+        CHECK(A && B);
+        if (!A || !B) return;
+        const ModelArm* east = armOn(*A, "east");
+        const ModelArm* eastAtB = armOn(*B, "east");
+        CHECK(east && eastAtB);
+        if (!east || !eastAtB) return;
+        const Real between = eastAtB->stopLine - east->stopLine;
+        std::printf("      east arm: box edge %.2f, stop line %.2f; the next junction's stop line %.2f: %.2f m between (storage %.1f)\n",
+                    east->boxEdge, east->stopLine, eastAtB->stopLine, between, g.rules.storage);
+        CHECK(between >= g.rules.storage);
+        CHECK(approxEqual(east->boxEdge, W + armRoom(40, W + kStopLineBack, W + kStopLineBack, g.rules.storage), 1e-9));
+        uint32_t faults = 0;
+        for (const std::string& p : m.problems) {
+            if (p.find("too close to junction") == std::string::npos) continue;
+            std::printf("      %s\n", p.c_str());
+            faults += p.find("junction " + A->id + ", arm ") == 0 && p.find("(east): too close to junction " + B->id) != std::string::npos ? 1u : 0u;
+        }
+        CHECK(faults == 1u);
+    }
+}
+
+// THE SHIPPED ROAD FILES' STOP LINES (ADR-0471): along every road, no arm's stop line reaches the next junction's facing
+// one with less than the storage a car needs between them (so none passes it), and no stop line reaches past any point of
+// another junction on its road (an arm's mouth or the end of a stretch inside it). The arms the room stops short of
+// clear, the planning fault of two junctions too close for the angle their roads meet at, by count and by junction.
+TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction) {
+    const std::map<std::string, std::set<std::string>> knownSqueezed = {
+        {"traffic_lab", {"j0:5", "j0:6", "j22:0", "j24:0", "j37:3", "j70:0", "j70:1", "j84:3", "j84:4"}},
+        {"river_town", {"j135:4", "j135:5", "j14:0", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
+                        "j72:0", "j72:1", "j73:0", "j75:0", "j75:2", "j7:0", "j7:1", "j8:2", "j8:3", "j90:0", "j90:4", "j91:2", "j91:3"}}};
+    for (const char* level : {"traffic_lab", "river_town", "agent_lab"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/')));
+        (void)expand(g);
+        const RoadModel m = plannedRoadModel(g);
+        struct Point { uint32_t junction; Real station; int arm; bool spineIn; };   // arm -1: an inside stretch's end
+        std::map<std::string, std::vector<Point>> onRoad;
+        for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+            const ModelJunction& J = m.junctions[j];
+            for (uint32_t a = 0; a < J.arms.size(); ++a) onRoad[J.arms[a].road].push_back(Point{j, J.arms[a].station, static_cast<int>(a), J.arms[a].spineIn});
+            for (const ModelStretch& in : J.inside)
+                for (const Real s : {in.from, in.to}) onRoad[in.road].push_back(Point{j, s, -1, false});
+        }
+        uint32_t pairs = 0, short_ = 0, past = 0;
+        for (uint32_t j = 0; j < m.junctions.size(); ++j)
+            for (const ModelArm& a : m.junctions[j].arms) {
+                if (!stated(a.stopLine)) continue;
+                const Real away = a.spineIn ? -1 : 1, back = (a.stopLine - a.station) * away;
+                const Point* facing = nullptr;
+                for (const Point& p : onRoad[a.road]) {
+                    const Real gap = (p.station - a.station) * away;
+                    if (p.junction == j || !(gap > 0)) continue;
+                    if (back >= gap) ++past;
+                    if (p.arm >= 0 && p.spineIn != a.spineIn && (!facing || gap < (facing->station - a.station) * away)) facing = &p;
+                }
+                if (!facing) continue;
+                ++pairs;
+                const ModelArm& b = m.junctions[facing->junction].arms[static_cast<std::size_t>(facing->arm)];
+                const Real backB = (b.stopLine - b.station) * (b.spineIn ? -1 : 1);
+                const Real between = (facing->station - a.station) * away - back - backB;
+                if (between < g.rules.storage - kSamePoint) ++short_;
+            }
+        std::set<std::string> squeezed;
+        for (const std::string& p : m.problems) {
+            const std::size_t at = p.find("): too close to junction ");
+            if (at == std::string::npos) continue;
+            const std::size_t comma = p.find(", arm ");
+            squeezed.insert(p.substr(std::string("junction ").size(), comma - std::string("junction ").size()) + ":" +
+                            p.substr(comma + 6, p.find(' ', comma + 6) - comma - 6));
+        }
+        std::printf("      %s: %u arms facing the next junction along their road, %u with less than the storage between the stop "
+                    "lines, %u stop lines past another junction's point; %zu arms too close to the next junction for their angle\n",
+                    level, pairs, short_, past, squeezed.size());
+        CHECK(pairs > 500u && short_ == 0u && past == 0u);
+        const std::string known = std::string(level) == "agent_lab" ? "river_town" : level;   // (agent_lab has river_town's roads)
+        CHECK(squeezed == knownSqueezed.at(known));
+    }
+}
+
+// ---- 40. the bands at a kink: each road's asphalt, shoulder and sidewalk mitred on the bisector (ADR-0472) ---------------
+
+namespace {
+// TWO LOCAL ROADS MEETING END TO END AT (0, 0): `a` from the west, `b` leaving `turnDeg` counter-clockwise of east, so the
+// outside of the bend lies to the south (a's right, b's right). The file says a carries on as b. Both carry a planned
+// profile, so their heights are as given: `a` at 0 m and `b` at `riseB`.
+nlohmann::json kinkScene(double turnDeg, double riseB = 0) {
+    nlohmann::json g;
+    g["name"] = "kink";
+    const Vec2 far = directionOf(turnDeg) * 100.0;
+    auto road = [](const std::string& id, const Vec2& p, const Vec2& q, double z) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{p.x, p.y}, {q.x, q.y}}}}},
+                              {"profile", {{"step", 1.0}, {"z", std::vector<double>(101, z)}}}};
+    };
+    g["edges"] = nlohmann::json::array({road("a", Vec2(-100, 0), Vec2(0, 0), 0.0), road("b", Vec2(0, 0), far, riseB)});
+    g["junctions"] = nlohmann::json::array();
+    g["streets"] = nlohmann::json::array(
+        {{{"id", "a"}, {"road", "a"}, {"from", 0.0}, {"to", 100.0}, {"junctions", {nullptr, nullptr}}, {"carries_on", {nullptr, "b"}}},
+         {{"id", "b"}, {"road", "b"}, {"from", 0.0}, {"to", 100.0}, {"junctions", {nullptr, nullptr}}, {"carries_on", {"a", nullptr}}}});
+    return g;
+}
+// THE DRAWN PAVEMENT OF A BUILD AGAIN, from its own lanes and heights: as the build drew it, or (`stated` false) with the
+// file's statements of where road ends meet -- its streets and junctions -- taken away, which is how every kink was drawn
+// before ADR-0472 (each band cut square at its road's end).
+Pavement redrawn(const Result& r, bool stated) {
+    RoadLabGraph g = r.graph;
+    if (!stated) {
+        g.streets.clear();
+        g.junctions.clear();
+    }
+    Pavement p;
+    buildFootprints(g, r.lanes, *r.heights, p);
+    return p;
+}
+// The way out of kinkScene's bend from (0, 0): half way round its outside, from a's way back west to b's way out.
+Vec2 kinkOutside(double turnDeg) { return directionOf(-90.0 + turnDeg * 0.5); }
+// A T whose street kinks at the junction: `west` ends at (0, 0) from the west, `east` leaves it `turnDeg` clockwise of
+// east, and the stem `south` comes up from the south, on the inside of the bend. Nothing stands on the north side, the
+// outside. Laid out as the layout tool would state it.
+nlohmann::json kinkTee(double turnDeg) {
+    nlohmann::json g;
+    g["name"] = "kink_tee";
+    auto road = [](const std::string& id, const Vec2& p, const Vec2& q) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{p.x, p.y}, {q.x, q.y}}}}}};
+    };
+    g["edges"] = nlohmann::json::array({road("west", Vec2(-100, 0), Vec2(0, 0)), road("east", Vec2(0, 0), directionOf(-turnDeg) * 100.0),
+                                        road("south", Vec2(0, -100), Vec2(0, 0))});
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    return g;
+}
+// Two polygon sets the same to the bit (a byte-for-byte check of the drawn pavement, so an exact compare is the point).
+bool samePolySets(const PolySet& x, const PolySet& y) {
+    auto sameRing = [](const Ring& p, const Ring& q) {
+        if (p.size() != q.size()) return false;
+        for (std::size_t i = 0; i < p.size(); ++i)
+            if (!(p[i].x == q[i].x && p[i].y == q[i].y)) return false;
+        return true;
+    };
+    if (x.size() != y.size()) return false;
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        if (!sameRing(x[i].outer, y[i].outer) || x[i].holes.size() != y[i].holes.size()) return false;
+        for (std::size_t h = 0; h < x[i].holes.size(); ++h)
+            if (!sameRing(x[i].holes[h], y[i].holes[h])) return false;
+    }
+    return true;
+}
+// How many points along the broken line `pts` (every 10 cm) lie off a polygon set.
+uint32_t offAlong(const PolySet& s, const std::vector<Vec2>& pts) {
+    uint32_t off = 0;
+    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+        const int n = std::max(1, static_cast<int>(distance(pts[i], pts[i + 1]) / 0.1));
+        for (int k = 0; k <= n; ++k) off += contains(s, lerp(pts[i], pts[i + 1], static_cast<Real>(k) / n)) ? 0u : 1u;
+    }
+    return off;
+}
+}  // namespace
+
+TEST_CASE(road_model_40_the_bands_are_mitred_at_a_kink) {
+    // A CARRY-ON KINKED 40 DEGREES. The file says a carries on as b, so the two ends are one kink. Each band runs on to the
+    // bisector on the outside of the bend: the carriageway is asphalt out to its mitre (no bay left for the asphalt's
+    // rounding to bite out of the kerb), the sidewalk is unbroken from that kerb to its own mitre, the sidewalk is in one
+    // piece each side, and a walk along the middle of the outside sidewalk stays on it across the kink. The same build drawn
+    // again with nothing stated about where the ends meet shows the old wedge: bare ground across the bisector, the outside
+    // sidewalk in two pieces.
+    {
+        const double turn = 40;
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(turn)));
+        const Pavement drawn = redrawn(*r, true), unstated = redrawn(*r, false);
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() != 1u) return;
+        CHECK(samePolySets(drawn.sidewalk, r->pavement.sidewalk) && samePolySets(drawn.surface, r->pavement.surface));
+        CHECK(g.edges[static_cast<std::size_t>(kinks[0].edgeA)].id == "a" && kinks[0].endA == 1);
+        CHECK(g.edges[static_cast<std::size_t>(kinks[0].edgeB)].id == "b" && kinks[0].endB == 0);
+        CHECK(approxEqual(kinks[0].turn, turn * DEG_TO_RAD, 1e-9));
+        const EdgeSpec& a = g.edges[static_cast<std::size_t>(g.index.at("a"))];
+        const Real kerb = g.carriagewayHalfWidth(a), outer = g.sidewalkOuterHalfWidth(a), middle = (kerb + outer) * 0.5;
+        const Real reach = 1.0 / std::cos(turn * 0.5 * DEG_TO_RAD);   // how far out along the bisector a band's edge meets its twin's, per metre
+        const Vec2 out = kinkOutside(turn);
+        CHECK(contains(r->pavement.surface, out * (kerb * reach - 0.05)));
+        CHECK(!contains(r->pavement.sidewalk, out * (kerb * reach - 0.05)));   // (the kerb is not drawn into the carriageway)
+        CHECK(!contains(unstated.surface, out * (kerb * reach - 0.05)));
+        std::vector<Vec2> across;
+        for (Real d = kerb * reach + 0.05; d < outer * reach - 0.05; d += 0.1) across.push_back(out * d);
+        uint32_t bare = 0, bareBefore = 0;
+        for (const Vec2& p : across) {
+            bare += contains(r->pavement.sidewalk, p) ? 0u : 1u;
+            bareBefore += contains(unstated.sidewalk, p) ? 0u : 1u;
+        }
+        std::printf("      a 40-degree carry-on: %zu points across the bisector, kerb to back: %u off the sidewalk (stated nothing: %u)\n",
+                    across.size(), bare, bareBefore);
+        CHECK(!across.empty() && bare == 0u && bareBefore == across.size());
+        CHECK(!contains(r->pavement.sidewalk, out * (outer * reach + 0.05)));
+        std::printf("      sidewalk pieces: %zu (stated nothing: %zu)\n", r->pavement.sidewalk.size(), unstated.sidewalk.size());
+        CHECK(r->pavement.sidewalk.size() == 2u && unstated.sidewalk.size() == 3u);
+        // the outside sidewalk's middle: along a, to the bisector, along b
+        const Vec2 bOut = directionOf(turn);
+        const std::vector<Vec2> walkLine = {Vec2(-20, -middle), out * (middle * reach), bOut * 20.0 - perp(bOut) * middle};
+        CHECK(offAlong(r->pavement.sidewalk, walkLine) == 0u);
+        CHECK(offAlong(unstated.sidewalk, walkLine) > 0u);
+    }
+    // A T WHOSE STREET KINKS 25 DEGREES AT THE JUNCTION, the stem on the inside of the bend: the two street ends with
+    // nothing between them on the outside are a kink, and the corner walk round the outside, which found the drawn sidewalk
+    // in two pieces before (ADR-0469's B2), is laid. Every corner has its walk, on the drawn sidewalk.
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkTee(25)));
+        const std::vector<BandKink> kinks = bandKinks(r->graph);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() == 1u)
+            CHECK(r->graph.edges[static_cast<std::size_t>(kinks[0].edgeA)].id == "east" &&
+                  r->graph.edges[static_cast<std::size_t>(kinks[0].edgeB)].id == "west");
+        const PreparedSet walk(drawnWalk(*r));
+        uint32_t laid = 0;
+        for (const WalkCorner& wc : r->walkCorners) {
+            if (wc.lane < 0) std::printf("      no walk: arms %u-%u: %s\n", wc.armA, wc.armB, wc.why.c_str());
+            CHECK(wc.fault == WalkCornerFault::None);
+            if (wc.lane < 0) continue;
+            ++laid;
+            CHECK(offTheWalk(r->lanes.walks[static_cast<std::size_t>(wc.lane)], walk) == 0u);
+        }
+        CHECK(laid == 3u);
+    }
+    // A SHARP KINK, 150 DEGREES: the mitre's point would reach out 3.9 times the band's half width; it is cut off square
+    // across the bisector at kMitreLimit times it. The sidewalk is drawn up to the cut and not past it.
+    {
+        const double turn = 150;
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(turn)));
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() != 1u) return;
+        const EdgeSpec& a = g.edges[static_cast<std::size_t>(g.index.at("a"))];
+        const Real outer = g.sidewalkOuterHalfWidth(a), cap = kMitreLimit * outer;
+        const Vec2 out = kinkOutside(turn);
+        Real farthest = 0;
+        for (const Ring& piece : mitrePieces(g, kinks[0], outer, outer))
+            for (const Vec2& q : piece) farthest = std::max(farthest, dot(q, out));
+        std::printf("      a 150-degree kink: the sidewalk's mitre reaches %.2f m out (cut at %.2f; uncut it would reach %.2f)\n", farthest,
+                    cap, outer / std::cos(turn * 0.5 * DEG_TO_RAD));
+        CHECK(approxEqual(farthest, cap, kSamePoint));
+        CHECK(contains(r->pavement.sidewalk, out * (cap - 0.1)));
+        CHECK(!contains(r->pavement.sidewalk, out * (cap + 0.1)));
+    }
+    // ENDS AT DIFFERENT HEIGHTS ARE NOT JOINED: the same 40-degree carry-on with b 5 m up (more than sameLevelDz) is no
+    // kink, and the outside stays as each road draws it
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(40, 5.0)));
+        CHECK(r->graph.rules.sameLevelDz < 5.0);
+        CHECK(bandKinks(r->graph).empty());
+        const EdgeSpec& a = r->graph.edges[static_cast<std::size_t>(r->graph.index.at("a"))];
+        const Real middle = (r->graph.carriagewayHalfWidth(a) + r->graph.sidewalkOuterHalfWidth(a)) * 0.5;
+        CHECK(!contains(r->pavement.sidewalk, kinkOutside(40) * (middle / std::cos(20 * DEG_TO_RAD))));
+    }
+    // A STRAIGHT CARRY-ON IS UNCHANGED: no kink, a mitre of nothing, and the drawn pavement the same to the bit as the same
+    // build drawn with nothing stated about where the ends meet
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(0)));
+        const Pavement drawn = redrawn(*r, true), unstated = redrawn(*r, false);
+        CHECK(bandKinks(r->graph).empty());
+        BandKink straight;
+        straight.edgeA = r->graph.index.at("a");
+        straight.endA = 1;
+        straight.edgeB = r->graph.index.at("b");
+        straight.endB = 0;
+        for (const Ring& piece : mitrePieces(r->graph, straight, 9.0, 9.0)) CHECK(piece.empty());
+        CHECK(samePolySets(drawn.surface, unstated.surface));
+        CHECK(samePolySets(drawn.sidewalk, unstated.sidewalk));
+        CHECK(samePolySets(drawn.shoulder, unstated.shoulder));
+        CHECK(samePolySets(drawn.median, unstated.median));
+        CHECK(drawn.footprints.size() == unstated.footprints.size());
+        for (std::size_t li = 0; li < drawn.footprints.size() && li < unstated.footprints.size(); ++li)
+            CHECK(samePolySets(drawn.footprints[li], unstated.footprints[li]));
+        // (and the build drew the same)
+        CHECK(samePolySets(drawn.sidewalk, r->pavement.sidewalk) && samePolySets(drawn.surface, r->pavement.surface));
+    }
+}
+
+// THE SHIPPED ROAD FILES' KINKS (ADR-0472): how many there are, how many the mitre limit cuts off, what the mitres add to
+// the drawn pavement (the same build drawn again with nothing stated about where ends meet), that no mitre piece crosses
+// itself, and that the corners left with the drawn sidewalk in two pieces are the three known ones -- none at a kink.
+TEST_CASE(road_model_41_the_shipped_kinks_are_mitred) {
+    // the corners left with no walk because the drawn sidewalks by their kerb ends are two pieces (junction id, arms)
+    const std::map<std::string, std::set<std::string>> knownTwoPieces = {
+        {"traffic_lab", {}},
+        // j0 6-0, j14 5-0: S2's box edges put their kerb ends 37-48 m out, and the walk round the block between them leaves
+        // the corner window (kCornerWindow); j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's
+        // carriageway (ADR-0471: j90 arm 0 too close to j120 for its angle)
+        {"river_town", {"j0 6-0", "j14 5-0", "j90 0-1"}}};
+    for (const char* level : {"traffic_lab", "river_town"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const std::unique_ptr<Result> r =
+            build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        uint32_t capped = 0, crossed = 0;
+        Real sharpest = 0;
+        for (const BandKink& k : kinks) {
+            sharpest = std::max(sharpest, k.turn * RAD_TO_DEG);
+            capped += k.turn > 120 * DEG_TO_RAD ? 1u : 0u;
+            const EdgeSpec& A = g.edges[static_cast<std::size_t>(k.edgeA)];
+            const EdgeSpec& B = g.edges[static_cast<std::size_t>(k.edgeB)];
+            if (k.turn > 120 * DEG_TO_RAD)
+                std::printf("        past the mitre limit: %s and %s, turning %.1f degrees\n", A.id.c_str(), B.id.c_str(), k.turn * RAD_TO_DEG);
+            for (const Ring& piece : mitrePieces(g, k, g.sidewalkOuterHalfWidth(A), g.sidewalkOuterHalfWidth(B))) {
+                Vec2 at;
+                if (piece.size() == 4u && (segmentsCross(piece[0], piece[1], piece[2], piece[3], at) || segmentsCross(piece[1], piece[2], piece[3], piece[0], at)))
+                    ++crossed;
+            }
+        }
+        const Pavement unstated = redrawn(*r, false);
+        const Real sidewalkAdded = setArea(r->pavement.sidewalk) - setArea(unstated.sidewalk);
+        const Real asphaltAdded = setArea(r->pavement.surface) - setArea(unstated.surface);
+        const Real overlap = setArea(intersectSets(r->pavement.sidewalk, r->pavement.surface));
+        const Real overlapBefore = setArea(intersectSets(unstated.sidewalk, unstated.surface));
+        std::set<std::string> twoPieces;
+        for (const WalkCorner& wc : r->walkCorners)
+            if (wc.fault == WalkCornerFault::TwoPieces)
+                twoPieces.insert(g.junctions[wc.junction.index].id + " " + std::to_string(wc.armA) + "-" + std::to_string(wc.armB));
+        std::printf("      %s: %zu kinks (the sharpest %.1f degrees; %u past the mitre limit), %u mitre pieces crossing themselves; the "
+                    "mitres add %.1f m2 of sidewalk (%.2f%%) and %.1f m2 of asphalt; sidewalk over asphalt %.1f m2 (stated nothing: %.1f); "
+                    "%zu corners with the sidewalk in two pieces\n",
+                    level, kinks.size(), sharpest, capped, crossed, sidewalkAdded, 100 * sidewalkAdded / setArea(unstated.sidewalk),
+                    asphaltAdded, overlap, overlapBefore, twoPieces.size());
+        CHECK(!kinks.empty() && crossed == 0u);
+        CHECK(sidewalkAdded > 0 && asphaltAdded > 0);
+        CHECK(overlap <= overlapBefore + 1.0);
+        CHECK(twoPieces == knownTwoPieces.at(level));
+    }
+}
+
+// ---- 42. the frozen road files' fixes (ADR-0473, #306 re-bake bundle S4) ------------------------------------------------
+
+TEST_CASE(road_model_42_the_road_files_fixes_hold) {
+    // THE SMOOTH FRAME (polyline_ops.h smoothTangentAtStation): a line turning 2 degrees every 20 m, a point set out 150 m
+    // to its side, read 0.6 m before and after each of its points. On each segment's own direction (tangentAtStation, the
+    // planner's frame before) the point jumps sideways by about 150 m x 2 degrees (4.0 m measured, inside the bend); on the
+    // smooth direction it moves on by about the 1.2 m read along, scaled by the bend (0.9 m measured).
+    std::vector<Vec2> line;
+    Vec2 at(0, 0);
+    for (int i = 0; i < 12; ++i) {
+        line.push_back(at);
+        at = at + Vec2(std::cos(2.0 * i * DEG_TO_RAD), std::sin(2.0 * i * DEG_TO_RAD)) * 20.0;
+    }
+    const std::vector<double> st = stations(line);
+    auto setOut = [&](double s, bool smooth) {
+        return pointAt(line, st, s) + perp(smooth ? smoothTangentAtStation(line, st, s) : tangentAtStation(line, st, s)) * 150.0;
+    };
+    double stepped = 0, smooth = 0;
+    for (std::size_t k = 1; k + 1 < line.size(); ++k) {
+        stepped = std::max(stepped, distance(setOut(st[k] - 0.6, false), setOut(st[k] + 0.6, false)));
+        smooth = std::max(smooth, distance(setOut(st[k] - 0.6, true), setOut(st[k] + 0.6, true)));
+    }
+    std::printf("      150 m out, 1.2 m read across a point: %.2f m on the segments' own directions, %.2f m on the smooth one\n", stepped, smooth);
+    CHECK(stepped > 3.0);
+    CHECK(smooth < 1.2);
+
+    for (const char* level : {"river_town", "agent_lab"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const nlohmann::json spec = nlohmann::json::parse(slurp(path));
+        // THE INTERCHANGE RAMPS, set out again (lanes_tool reframe): no turn from one stated point to the next sharper than
+        // 18 degrees (it was 47-134 on the loops), and round a loop's arc none over 6 (it was 40-134: the steps)
+        for (const nlohmann::json& e : spec["edges"]) {
+            const std::string id = e["id"].get<std::string>();
+            if (id.rfind("x0_", 0) != 0 && id.rfind("x1_", 0) != 0) continue;
+            std::vector<Vec2> p;
+            for (const nlohmann::json& q : e["path"]["points"]) p.push_back(Vec2(q.at(0).get<double>(), q.at(1).get<double>()));
+            double sharpest = 0, sharpestOnArc = 0;
+            for (std::size_t i = 1; i + 1 < p.size(); ++i) {
+                const Vec2 a = p[i] - p[i - 1], b = p[i + 1] - p[i];
+                const double turn = std::fabs(std::atan2(cross(a, b), dot(a, b))) * RAD_TO_DEG;
+                sharpest = std::max(sharpest, turn);
+                if (i >= 10 && i + 10 < p.size()) sharpestOnArc = std::max(sharpestOnArc, turn);
+            }
+            const bool loop = id.find("_loop") != std::string::npos;
+            std::printf("      %s %s: sharpest turn between points %.1f degrees, %.1f away from its ends\n", level, id.c_str(), sharpest, sharpestOnArc);
+            CHECK(sharpest < 18.0);
+            if (loop) CHECK(sharpestOnArc < 6.0);
+        }
+        // THE FREEWAY'S TURN-ROUND LOOPS ARE RAMPS: one lane, no sidewalk, a ramp's barriers, and no building fronts them
+        const RoadLabGraph g = RoadLabGraph::fromJson(spec, std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned");
+        for (const char* id : {"tn0", "tn1"}) {
+            const EdgeSpec* e = g.find(id);
+            CHECK(e != nullptr);
+            if (!e) continue;
+            CHECK(e->cls == "ramp");
+            CHECK(g.cls(*e).sidewalk == 0.0);
+            CHECK(g.cls(*e).defaultBarriers);
+            CHECK(!buildingMayFront(classOf(g, *e), false));
+        }
+    }
+
+    // TRAFFIC_LAB'S j95 STATES s208 AS ITS FOURTH ARM, in its ring, through with s213; stating it again is refused
+    const std::string labPath = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/traffic_lab_lanelab.json";
+    const std::string labText = slurp(labPath);
+    const RoadLabGraph lab = RoadLabGraph::fromJson(nlohmann::json::parse(labText), std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned");
+    bool seen = false;
+    for (const ModelJunction& j : lab.junctions) {
+        if (j.id != "j95") continue;
+        seen = true;
+        CHECK(j.arms.size() == 4u && j.arms[3].road == "s208" && j.arms[3].spineIn);
+        bool through = false;
+        for (const std::array<uint32_t, 2>& t : j.through) through = through || (std::min(t[0], t[1]) == 1u && std::max(t[0], t[1]) == 3u);
+        CHECK(through);
+    }
+    CHECK(seen);
+    std::string err;
+    CHECK(insertArmText(labText, lab, "j95", "s208", nullptr, &err).empty());
+    CHECK(err.find("already states") != std::string::npos);
+    // a road whose end is not at the junction is refused, and says how far it ends from it
+    CHECK(insertArmText(labText, lab, "j95", "s182", nullptr, &err).empty());
+    CHECK(err.find("endpoint tolerance") != std::string::npos);
 }

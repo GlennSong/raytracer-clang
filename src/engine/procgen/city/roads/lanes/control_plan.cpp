@@ -447,17 +447,43 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
         for (const ArmFacts& a : na.arms) {
             const int edge = g.index.at(a.road);
             const EdgeSpec& e = g.edges[static_cast<std::size_t>(edge)];
-            na.mouths.push_back(ArmMouth{edge, pointAt(e.xy, e.s, a.at), g.hw(e)});
+            // (its heading as the layout writes it, so the rule here reads the arm as the stated junction will)
+            na.mouths.push_back(ArmMouth{edge, pointAt(e.xy, e.s, a.at), g.hw(e), directionOf(degreesOf(armDirection(e, a.at, a.spineIn)))});
         }
     }
-    // Metres from node n back along road `via` to its stop line on the side its arm of `via` with this `spineIn` leaves
-    // by; below zero when the node has no such arm (the road ends at the node on that side).
-    auto nodeStopLineBack = [&](int n, int via, bool spineIn) {
+    // node n's arm on road `via` leaving by this `spineIn` (its place in the node's arms), or -1: none (the road ends at
+    // the node on that side)
+    auto armOf = [&](int n, int via, bool spineIn) {
         const NodeArms& na = nodeArms[static_cast<std::size_t>(n)];
         for (std::size_t k = 0; k < na.arms.size(); ++k)
-            if (na.mouths[k].road == via && na.arms[k].spineIn == spineIn) return stopLineBack(na.mouths, na.through, k);
-        return -1.0;
+            if (na.mouths[k].road == via && na.arms[k].spineIn == spineIn) return static_cast<int>(k);
+        return -1;
     };
+    // Metres from node n back along road `via` to its stop line on that arm; below zero when the node has no such arm.
+    auto nodeStopLineBack = [&](int n, int via, bool spineIn) {
+        const int k = armOf(n, via, spineIn);
+        const NodeArms& na = nodeArms[static_cast<std::size_t>(n)];
+        return k < 0 ? -1.0 : stopLineBack(na.mouths, na.through, static_cast<std::size_t>(k));
+    };
+    std::map<int, std::vector<std::pair<double, int>>> onRoad;   // road -> (station, node), sorted
+    for (std::size_t n = 0; n < nodes.size(); ++n)
+        for (const NodePoint& p : nodes[n].points) onRoad[p.edge].emplace_back(p.s, static_cast<int>(n));
+    for (std::pair<const int, std::vector<std::pair<double, int>>>& kv : onRoad) std::sort(kv.second.begin(), kv.second.end());
+    // THE ROOM CAP (road_model_parts.h armRoom): two nodes' arms facing each other along a road share what the square
+    // rule's stop lines leave over beyond the storage, so the room test below groups as the square rule did
+    for (const std::pair<const int, std::vector<std::pair<double, int>>>& kv : onRoad)
+        for (std::size_t k = 0; k + 1 < kv.second.size(); ++k) {
+            const int a = kv.second[k].second, b = kv.second[k + 1].second;
+            const int ka = a == b ? -1 : armOf(a, kv.first, false), kb = a == b ? -1 : armOf(b, kv.first, true);
+            if (ka < 0 || kb < 0) continue;
+            NodeArms& A = nodeArms[static_cast<std::size_t>(a)];
+            NodeArms& B = nodeArms[static_cast<std::size_t>(b)];
+            const Real room = armRoom(kv.second[k + 1].first - kv.second[k].first,
+                                      squareBoxEdgeBack(A.mouths, A.through, static_cast<std::size_t>(ka)) + kStopLineBack,
+                                      squareBoxEdgeBack(B.mouths, B.through, static_cast<std::size_t>(kb)) + kStopLineBack, g.rules.storage);
+            A.mouths[static_cast<std::size_t>(ka)].room = std::min(A.mouths[static_cast<std::size_t>(ka)].room, room);
+            B.mouths[static_cast<std::size_t>(kb)].room = std::min(B.mouths[static_cast<std::size_t>(kb)].room, room);
+        }
     // each carriageway of a divided road -> its partner
     std::map<int, int> partner;
     for (const DividedPair& p : how.divided ? *how.divided : g.divided) {
@@ -479,11 +505,7 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
     };
     std::vector<int> parent(nodes.size());
     std::iota(parent.begin(), parent.end(), 0);
-    std::map<int, std::vector<std::pair<double, int>>> onRoad;   // road -> (station, node), sorted below
-    for (std::size_t n = 0; n < nodes.size(); ++n)
-        for (const NodePoint& p : nodes[n].points) onRoad[p.edge].emplace_back(p.s, static_cast<int>(n));
-    for (std::pair<const int, std::vector<std::pair<double, int>>>& kv : onRoad) {
-        std::sort(kv.second.begin(), kv.second.end());
+    for (const std::pair<const int, std::vector<std::pair<double, int>>>& kv : onRoad) {
         for (std::size_t k = 0; k + 1 < kv.second.size(); ++k) {
             const int a = kv.second[k].second, b = kv.second[k + 1].second;
             if (a == b) continue;

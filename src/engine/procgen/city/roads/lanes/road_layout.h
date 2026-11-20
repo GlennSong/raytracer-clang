@@ -256,6 +256,26 @@ std::string insertArmOrderText(const std::string& text, const RoadLabGraph& asRe
 // The command that writes the ring order into a road file, for messages that ask for it.
 constexpr const char* kArmOrderCommand = "lanes_tool layout <road file> --arm-order --write";
 
+// ONE ROAD'S END STATED AS AN ARM OF A JUNCTION THE FILE LISTS, IN PLACE (ADR-0473; the one-off `lanes_tool layout <file>
+// --state-arm J ROAD --write`): for a file whose own list keeps its grouping (traffic_lab, ADR-0419), where finding the
+// junctions again would regroup the whole file. The road's end must lie at the junction's point or one of its points,
+// within the graph's endpoint tolerance; that end becomes an arm (road, station, which way the spine runs), placed in the
+// junction's ring by the one measure (armRing), which must keep the stated arms' order. Its through pairs follow the one
+// rule over the arms' headings (control_plan.h throughPairs): every pair the file states must be one the rule gives, and
+// the rule's pairs holding the new arm are added after them. Nothing else moves; the arm's street and heading and the
+// street's end junction are the layout's to write (the tool runs it straight after). `added` (optional): the arm's place
+// and the pairs added, in words. Empty (with `err`) when the road or junction is not there, the end is not at it, the arm
+// is stated already, the ring would reorder the stated arms, or a stated pair is not the rule's.
+std::string insertArmText(const std::string& text, const RoadLabGraph& asRead, const std::string& junction, const std::string& road,
+                          std::string* added = nullptr, std::string* err = nullptr);
+
+// ONE MEMBER OF ONE ROAD (an edge) WRITTEN AGAIN, IN PLACE (ADR-0473; the one-off `lanes_tool reclass` and `lanes_tool
+// reframe`): the value at `keyPath` inside the edge whose "id" is `edge` (e.g. {"class"}, or {"path", "points"}) replaced
+// by `value`, laid out as the file lays out its own values (its indent per level, from the member's own lead). The member
+// must exist already. Nothing else moves. Empty (with `err`) when the edge or the member is not there.
+std::string setEdgeMemberText(const std::string& text, const std::string& edge, const std::vector<std::string>& keyPath,
+                              const nlohmann::json& value, std::string* err = nullptr);
+
 }  // namespace roads::lanes
 }  // namespace engine
 
