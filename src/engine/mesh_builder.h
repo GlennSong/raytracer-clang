@@ -283,6 +283,13 @@ struct MeshBuilder {
     // Winding is kept. POSITIONS ONLY: a kept vertex keeps its other attributes as they were, so the caller re-derives
     // normals, UVs and colours (an implicit surface's from its field). Returns the triangles left.
     static std::size_t simplify(RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30);
+    // A SIMPLER COPY OF A SURFACE, ready to draw: what `mesh.simplify` gives a recipe and what a model's lower levels
+    // are made by. `simplify` works on faces that share vertices and moves positions only, so this welds by position
+    // first (unless `weldFirst` is false), simplifies, drops the vertices no triangle uses any more, and gives the
+    // result creased normals (`creaseDegrees`; negative leaves the normals alone). Colours ride on the vertices that
+    // are kept; uvs do not survive. `left`, when given, is the triangles left.
+    static RenderMesh simplifiedSurface(const RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30, bool weldFirst = true,
+                                        double creaseDegrees = 50.0, std::size_t* left = nullptr);
     // MANIFOLD BY SPLITTING: where two sheets of a mesh touch at a vertex (an isosurface's pinch where a feature is
     // thinner than its cell -- an edge then sits on four faces), the vertex is split, one copy for each fan of faces
     // round it that are joined through edges of exactly two faces. Positions are kept (the sheets still touch); the

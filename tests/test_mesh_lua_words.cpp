@@ -122,6 +122,7 @@ const std::map<std::string, std::string> kReach = {
     {"ruled", "mesh.ruled"},
     {"shape", "c++ only: the level file's shape names; a script calls the primitive itself"},
     {"sheet", "mesh.sheet"},
+    {"simplifiedSurface", "mesh.simplify"},
     {"simplify", "mesh.simplify"},
     {"sphere", "mesh.sphere"},
     {"splitNonManifold", "mesh.split_non_manifold"},

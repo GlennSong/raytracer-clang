@@ -374,7 +374,8 @@ static int addProcTexture(const TextureData& td, Scene& scene) {
     return scene.addTexture(std::move(tex));
 }
 
-void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
+void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset, Real distance) {
+    const int level = m.levelAt(distance);
     // One scene material (and one copy of its maps) per material, made the first time something is made of it. The
     // model's parts and every used piece's parts go through this, so a part looks the same placed once or many times.
     std::map<const ProcMaterial*, int> sceneMaterial;
@@ -406,7 +407,7 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
         return mi;
     };
     for (const ProcPart& part : m.parts) {
-        if (part.mesh.indices.empty()) continue;
+        if (part.mesh.indices.empty() || part.level != level) continue;
         const int mi = materialFor(m.materialOf(part));
         // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
         // land exactly where their vertices say.
@@ -415,7 +416,7 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
     }
     // Used pieces -> one BLAS proto per part of a piece, placed by the TLAS at every copy (ADR-0041). A piece used
     // from several nodes is still one proto.
-    for (const ProcDrawnPiece& d : drawnPieces(m)) {
+    for (const ProcDrawnPiece& d : drawnPieces(m, distance)) {
         const int proto = scene.addProto(meshProtoTriangles(d.part->mesh, materialFor(d.piece->materialOf(*d.part))));
         for (const Mat4& xf : d.transforms) {
             Mat4 at = xf;                     // translate the copy by the entity's own offset

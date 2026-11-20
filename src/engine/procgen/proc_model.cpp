@@ -3,6 +3,8 @@
 
 #include "../mesh_builder.h"
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 
 namespace engine {
@@ -10,9 +12,10 @@ namespace engine {
 namespace {
 
 // `outer` is every copy of the piece `m` is, in the asked model's space; null when `m` is the asked model.
-void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, std::vector<ProcPlacedUse>& out) {
+void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, Real distance, std::vector<ProcPlacedUse>& out) {
+    const int level = m.levelAt(distance);
     for (const ProcUse& use : m.uses) {
-        if (use.piece == nullptr || use.placements.empty()) continue;
+        if (use.piece == nullptr || use.placements.empty() || use.level != level) continue;
         // The root's frame is no move and no turn, so a use on it has its placements' matrices as they are.
         const bool onRoot = use.node == 0;
         const Mat4 node = onRoot ? Mat4::identity() : m.nodeFrame(use.node).matrix();
@@ -25,15 +28,15 @@ void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, std::vector<Pr
                 for (const ProcPlacement& p : use.placements) transforms.push_back(onRoot ? o * p.matrix() : o * node * p.matrix());
         }
         out.push_back(ProcPlacedUse{&use, transforms});
-        walkUses(*use.piece, &transforms, out);
+        walkUses(*use.piece, &transforms, distance, out);
     }
 }
 
 }  // namespace
 
-std::vector<ProcPlacedUse> placedUses(const ProcModel& m) {
+std::vector<ProcPlacedUse> placedUses(const ProcModel& m, Real distance) {
     std::vector<ProcPlacedUse> out;
-    walkUses(m, nullptr, out);
+    walkUses(m, nullptr, distance, out);
     return out;
 }
 
@@ -67,13 +70,14 @@ bool ProcModel::markerFrame(const std::string& path, ProcFrame& out) const {
     return false;
 }
 
-std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m) {
+std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance) {
     std::vector<ProcDrawnPiece> out;
     std::map<const ProcPart*, std::size_t> known;
-    for (const ProcPlacedUse& placed : placedUses(m)) {
+    for (const ProcPlacedUse& placed : placedUses(m, distance)) {
         const ProcModel& piece = *placed.use->piece;
+        const int level = piece.levelAt(distance);
         for (const ProcPart& part : piece.parts) {
-            if (part.mesh.indices.empty()) continue;
+            if (part.mesh.indices.empty() || part.level != level) continue;
             std::map<const ProcPart*, std::size_t>::iterator slot = known.find(&part);
             if (slot == known.end()) {
                 slot = known.emplace(&part, out.size()).first;
@@ -133,13 +137,37 @@ std::shared_ptr<ProcModel> posedModel(const ProcModel& m, const ProcPose& pose, 
     return posedInto(m, pose, std::string());
 }
 
-RenderMesh flattenModel(const ProcModel& m) {
+int addSimplifiedLevel(ProcModel& m, Real distance, double ratio, double maxError) {
+    const int level = m.addLevel(distance);
+    if (level < 0) return -1;
+    const std::size_t parts = m.parts.size(), uses = m.uses.size();
+    for (std::size_t i = 0; i < parts; ++i) {
+        if (m.parts[i].level != 0) continue;
+        ProcPart simple = m.parts[i];
+        const std::size_t have = simple.mesh.indices.size() / 3;
+        const std::size_t target = static_cast<std::size_t>(std::max(0.0, std::floor(static_cast<double>(have) * ratio)));
+        simple.mesh = MeshBuilder::simplifiedSurface(m.parts[i].mesh, target, maxError >= 0.0 ? maxError * maxError : 1e30);
+        simple.level = level;
+        m.parts.push_back(std::move(simple));
+    }
+    for (std::size_t i = 0; i < uses; ++i) {
+        if (m.uses[i].level != 0) continue;
+        ProcUse again = m.uses[i];
+        again.level = level;
+        m.uses.push_back(std::move(again));
+    }
+    return level;
+}
+
+RenderMesh flattenModel(const ProcModel& m, Real distance) {
     RenderMesh out;
+    const int level = m.levelAt(distance);
     for (const ProcPart& p : m.parts) {
+        if (p.level != level) continue;
         if (p.node == 0) MeshBuilder::append(out, p.mesh);   // the root is the model's own space: no move to apply
         else MeshBuilder::appendTransformed(out, p.mesh, m.nodeFrame(p.node).matrix());
     }
-    for (const ProcDrawnPiece& d : drawnPieces(m))
+    for (const ProcDrawnPiece& d : drawnPieces(m, distance))
         for (const Mat4& xf : d.transforms) MeshBuilder::appendTransformed(out, d.part->mesh, xf);
     return out;
 }

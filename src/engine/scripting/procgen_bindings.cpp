@@ -2641,20 +2641,28 @@ void normalsAfterReshaping(lua_State* L, int optsIdx, RenderMesh& m) {
 // triangles, the surface moved as little as possible (MeshBuilder::simplify). `max_error` is how far the surface may
 // move, in metres; without it only the count stops it.
 int l_mesh_simplify(lua_State* L) {
-    auto m = surfaceForReshaping(L, 1, 2);
-    const std::size_t have = m->indices.size() / 3;
+    const RenderMesh& in = checkMesh(L, 1);
+    const bool opts = lua_istable(L, 2);
+    const bool weldFirst = !opts || optBoolField(L, 2, "weld", true);
+    // the triangles a ratio is taken of are the welded surface's, as they always were
+    MeshBuilder::WeldTolerance tol;
+    tol.positionOnly = true;
+    const std::size_t have = (weldFirst ? MeshBuilder::weld(in, tol) : in).indices.size() / 3;
     std::size_t target = have / 2;
     double maxError = 1e30;
-    if (lua_istable(L, 2)) {
+    double crease = 50.0;
+    if (opts) {
         const double ratio = optNumField(L, 2, "ratio", 0.5);
         target = static_cast<std::size_t>(std::max(0.0, optNumField(L, 2, "tris", std::floor(static_cast<double>(have) * ratio))));
         const double metres = optNumField(L, 2, "max_error", -1.0);
         if (metres >= 0.0) maxError = metres * metres;   // the C++ takes the squared distance
+        lua_getfield(L, 2, "crease");
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) crease = -1.0;   // crease = false: leave the normals
+        else if (lua_isnumber(L, -1)) crease = lua_tonumber(L, -1);
+        lua_pop(L, 1);
     }
-    const std::size_t left = MeshBuilder::simplify(*m, target, maxError);
-    *m = MeshBuilder::weld(*m);   // drop the vertices no triangle uses any more
-    normalsAfterReshaping(L, 2, *m);
-    pushMesh(L, m);
+    std::size_t left = 0;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::simplifiedSurface(in, target, maxError, weldFirst, crease, &left)));
     lua_pushinteger(L, static_cast<lua_Integer>(left));
     return 2;
 }
@@ -3698,13 +3706,28 @@ int materialArg(lua_State* L, int idx, ProcModel& m) {
     return 0;
 }
 
-// A part from the arguments (mesh [, material]) starting at stack slot 2, hung on `node`.
+// Which level of detail something belongs to, from `{ level = n }` in the table at `opts` (0 or not a table: none
+// given). Lua counts levels from 1, the full model; returns the index from 0. A level the model lacks stops the recipe.
+int levelOpt(lua_State* L, int opts, const ProcModel& m) {
+    if (opts == 0 || !lua_istable(L, opts)) return 0;
+    lua_getfield(L, opts, "level");
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); return 0; }
+    const lua_Integer n = luaL_checkinteger(L, -1);
+    lua_pop(L, 1);
+    if (n < 1 || n > static_cast<lua_Integer>(m.levelFrom.size()))
+        return luaL_error(L, "the model has no level %d (it has %d; add one with m:level)", static_cast<int>(n), static_cast<int>(m.levelFrom.size()));
+    return static_cast<int>(n) - 1;
+}
+
+// A part from the arguments (mesh [, material] [, { level = n }]) starting at stack slot 2, hung on `node`.
 void addPart(lua_State* L, ProcModel& m, int node) {
     const int material = materialArg(L, 3, m);   // first: an error here must leave no mesh half made
+    const int level = levelOpt(L, lua_istable(L, 4) ? 4 : (lua_istable(L, 3) ? 3 : 0), m);
     ProcPart part;
     part.mesh = checkMesh(L, 2);
     part.material = material;
     part.node = node;
+    part.level = level;
     m.parts.push_back(std::move(part));
 }
 
@@ -3733,8 +3756,9 @@ void addMarkerFromLua(lua_State* L, ProcModel& m, int node) {
     m.addMarker(node, marker);
 }
 
-// m:add(mesh [, material]) -> m : append a part. `material` is a Material or the name of one the model holds
-// (m:material); a textured one is laid world-planar, and with none the part is baked vertex-coloured. Chainable.
+// m:add(mesh [, material] [, { level = n }]) -> m : append a part. `material` is a Material or the name of one the
+// model holds (m:material); a textured one is laid world-planar, and with none the part is baked vertex-coloured.
+// `level` is the level of detail it belongs to (m:level); without it, the full model. Chainable.
 int l_model_add(lua_State* L) {
     addPart(L, checkModel(L, 1), 0);
     lua_pushvalue(L, 1);
@@ -4053,13 +4077,48 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
     int placements = 0, opts = 0;
     if (lua_istable(L, 3) && (luaL_len(L, 3) > 0 || lua_istable(L, 4))) { placements = 3; opts = 4; }
     else if (lua_istable(L, 3)) opts = 3;
+    const int level = levelOpt(L, opts, m);
     ProcUse use;
     use.piece = pieceArg(L, 2, opts, m);
     use.node = node;
+    use.level = level;
     if (placements != 0) readPlacements(L, placements, false, use.placements);
     else use.placements.push_back(ProcPlacement{});
     readUseCollision(L, opts, use);
     m.uses.push_back(std::move(use));
+}
+
+// m:level(distance [, { simplify = ratio, max_error = metres }]) -> n : add a level of detail, drawn from `distance`
+// metres away, and return its number (the full model is level 1, so the first one added is 2). Put things in it with
+// { level = n } on m:add, n:add and m:use / n:use. With `simplify` the level is made from the full one: each part a
+// simpler copy keeping `ratio` of its triangles (MeshBuilder::simplifiedSurface, what mesh.simplify calls), on the
+// same node in the same material. Each new level must be farther than the last.
+int l_model_level(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    const double distance = luaL_checknumber(L, 2);
+    if (!(distance > m.levelFrom.back()))
+        return luaL_error(L, "a level must be farther than the last one (%f m)", static_cast<double>(m.levelFrom.back()));
+    int level = -1;
+    if (lua_istable(L, 3) && optNumField(L, 3, "simplify", -1.0) >= 0.0) {
+        const double ratio = optNumField(L, 3, "simplify", 0.5);
+        if (ratio > 1.0) return luaL_error(L, "simplify is the share of triangles kept, 0 to 1");
+        level = addSimplifiedLevel(m, distance, ratio, optNumField(L, 3, "max_error", -1.0));
+    } else {
+        level = m.addLevel(distance);
+    }
+    lua_pushinteger(L, level + 1);
+    return 1;
+}
+
+// m:levels() -> { 0, 40, 150 } : the distance each level of detail is drawn from, the full model first.
+int l_model_levels(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < m.levelFrom.size(); ++i) {
+        lua_pushnumber(L, m.levelFrom[i]);
+        lua_seti(L, -2, static_cast<lua_Integer>(i) + 1);
+    }
+    return 1;
 }
 
 // m:posed{ name = value, ... } -> model : the model held in a pose, as a new model; `m` is not changed. A value is
@@ -4143,8 +4202,10 @@ int l_model_use(lua_State* L) {
 // { roughness=, metallic=, alpha_foliage=, collide= }. Chainable.
 int l_model_add_instances(lua_State* L) {
     ProcModel& m = checkModel(L, 1);
+    const int level = levelOpt(L, 4, m);
     ProcUse use;
     use.piece = pieceArg(L, 2, 4, m);
+    use.level = level;
     readPlacements(L, 3, true, use.placements);
     readUseCollision(L, 4, use);
     m.uses.push_back(std::move(use));
@@ -5088,6 +5149,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
         lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
         lua_pushcfunction(L, l_model_posed);          lua_setfield(L, -2, "posed");
+        lua_pushcfunction(L, l_model_level);          lua_setfield(L, -2, "level");
+        lua_pushcfunction(L, l_model_levels);         lua_setfield(L, -2, "levels");
         lua_pushcfunction(L, l_model_joints);         lua_setfield(L, -2, "joints");
         lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
         lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");

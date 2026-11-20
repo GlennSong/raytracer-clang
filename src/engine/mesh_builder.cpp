@@ -939,6 +939,21 @@ std::vector<std::array<uint32_t, 3>> MeshBuilder::convexHull(const std::vector<V
 }
 
 
+RenderMesh MeshBuilder::simplifiedSurface(const RenderMesh& mesh, std::size_t targetTris, double maxError, bool weldFirst,
+                                          double creaseDegrees, std::size_t* left) {
+    RenderMesh out = mesh;
+    if (weldFirst) {
+        WeldTolerance tol;
+        tol.positionOnly = true;
+        out = weld(mesh, tol);
+    }
+    const std::size_t remaining = simplify(out, targetTris, maxError);
+    out = weld(out);   // drop the vertices no triangle uses any more
+    if (creaseDegrees >= 0.0) autosmooth(out, creaseDegrees);
+    if (left != nullptr) *left = remaining;
+    return out;
+}
+
 std::size_t MeshBuilder::simplify(RenderMesh& mesh, std::size_t targetTris, double maxError) {
     const std::size_t nv = mesh.vertices.size();
     std::vector<std::array<uint32_t, 3>> F;

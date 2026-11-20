@@ -1,7 +1,8 @@
 // rt_model_sheet -- THE MODEL SHEET (#191 step 1): one command that shows what a Lua recipe builds.
 //
-//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--size 512] [--spp 48]
+//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--size 512] [--spp 48]
 //
+// `--at METRES` draws the level of detail the model shows from that far away; the text counts every level.
 // `--set` draws the model in a pose: a moving node's value, in degrees for a node that turns and metres for one
 // that slides (`--set boom=40 --set door_fl/window=-0.2`). The text lists every moving node and its limits.
 //
@@ -55,13 +56,15 @@ struct Options {
     int size = 512;
     int samples = 48;
     std::vector<std::pair<std::string, double>> set;   // --set name=value: the pose to draw
+    double at = 0;                                     // --at metres: the level of detail seen from that far
 };
 
 const char* kUsage =
-    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--size N] [--spp N]\n"
+    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--size N] [--spp N]\n"
     "  runs a Lua recipe that returns a mesh or a model and writes four views of it in one PNG,\n"
     "  with its size, triangle counts and mesh audit beside it as a .txt\n"
-    "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n";
+    "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n"
+    "  --at draws the level of detail seen from that many metres away (the full model without it)\n";
 
 bool parse(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; ++i) {
@@ -71,6 +74,7 @@ bool parse(int argc, char** argv, Options& o) {
         if (a == "-h" || a == "--help") return false;
         else if (a == "--out") { if (!value(o.out)) return false; }
         else if (a == "--args") { if (!value(o.argsJson)) return false; }
+        else if (a == "--at") { if (!value(v)) return false; o.at = std::atof(v.c_str()); }
         else if (a == "--set") {
             if (!value(v)) return false;
             const std::size_t eq = v.find('=');
@@ -97,13 +101,15 @@ struct Bounds {
     Vec3 size() const { return hi - lo; }
 };
 
-Bounds boundsOf(const ProcModel& m) {
+Bounds boundsOf(const ProcModel& m, Real distance) {
+    const int level = m.levelAt(distance);
     Bounds b;
     for (const ProcPart& part : m.parts) {
+        if (part.level != level) continue;
         const ProcFrame at = m.nodeFrame(part.node);   // a part stands at the node it hangs on
         for (const Vertex& v : part.mesh.vertices) b.add(at.point(v.position));
     }
-    for (const ProcDrawnPiece& d : drawnPieces(m))
+    for (const ProcDrawnPiece& d : drawnPieces(m, distance))
         for (const Mat4& t : d.transforms)
             for (const Vertex& v : d.part->mesh.vertices) b.add(t.transformPoint(v.position));
     return b;
@@ -163,7 +169,7 @@ void addMarkers(Scene& scene, const std::vector<PlacedMarker>& markers, const Bo
 // the model record can be checked against every recipe without looking at pictures. Each triangle is hashed alone and
 // the hashes are added, so the ORDER of triangles and parts does not count: a recipe that walks a Lua table with
 // `pairs` adds its parts in a different order every run, and it is still the same shape.
-uint64_t fingerprint(const Scene& scene, const ProcModel& m) {
+uint64_t fingerprint(const Scene& scene, const ProcModel& m, Real distance) {
     uint64_t sum = 0;
     uint64_t h = 0;
     auto vec = [&](const Vec3& v) { const double d[3] = {v.x, v.y, v.z}; h = bundle::fnv1a(d, sizeof d, h); };
@@ -190,7 +196,7 @@ uint64_t fingerprint(const Scene& scene, const ProcModel& m) {
         h = bundle::fnv1a(&made[static_cast<std::size_t>(t.materialIndex)], sizeof(uint64_t), h);
         sum += h;
     }
-    for (const ProcDrawnPiece& d : drawnPieces(m)) {
+    for (const ProcDrawnPiece& d : drawnPieces(m, distance)) {
         const ProcMaterial& made = d.piece->materialOf(*d.part);
         const RenderMesh& proto = d.part->mesh;
         h = bundle::fnv1aStr("placed");
@@ -345,9 +351,26 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
             s << "\n";
         }
     }
+    // The levels of detail, when the model has more than the full one: what each draws, copies and all.
+    const int shown = m.levelAt(o.at);
+    if (m.levelFrom.size() > 1) {
+        std::snprintf(line, sizeof line, "levels of detail: %zu (drawn here: level %d)\n", m.levelFrom.size(), shown + 1);
+        s << line;
+        for (std::size_t lv = 0; lv < m.levelFrom.size(); ++lv) {
+            long parts = 0, tris = 0, copies = 0;
+            for (const ProcPart& part : m.parts)
+                if (part.level == static_cast<int>(lv)) { ++parts; tris += static_cast<long>(part.mesh.indices.size() / 3); }
+            for (const ProcDrawnPiece& d : drawnPieces(m, m.levelFrom[lv])) tris += static_cast<long>(d.part->mesh.indices.size() / 3 * d.transforms.size());
+            for (const ProcPlacedUse& placed : placedUses(m, m.levelFrom[lv])) copies += static_cast<long>(placed.transforms.size());
+            std::snprintf(line, sizeof line, "  level %zu, from %.4g m: %ld triangles drawn (%ld part%s, %ld cop%s of used pieces)\n", lv + 1,
+                          m.levelFrom[lv], tris, parts, parts == 1 ? "" : "s", copies, copies == 1 ? "y" : "ies");
+            s << line;
+        }
+    }
     MeshAudit all;
     long vertices = 0;
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
+        if (m.parts[i].level != shown) continue;   // the parts of the level drawn
         const RenderMesh& mesh = m.parts[i].mesh;
         const MeshAudit a = auditMesh(mesh);
         all.add(a);
@@ -359,7 +382,9 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
                       mesh.vertices.size(), a.clean() ? "" : "  <- audit findings");
         s << line;
     }
-    const std::vector<ProcDrawnPiece> drawn = drawnPieces(m);
+    const std::vector<ProcDrawnPiece> drawn = drawnPieces(m, o.at);
+    long placedCopies = 0;   // copies of pieces, however many parts a piece has
+    for (const ProcPlacedUse& placed : placedUses(m, o.at)) placedCopies += static_cast<long>(placed.transforms.size());
     for (std::size_t i = 0; i < drawn.size(); ++i) {
         const MeshAudit a = auditMesh(drawn[i].part->mesh);
         all.add(a);
@@ -369,8 +394,8 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
         s << line;
     }
     // (Triangles are counted as stored: a used piece once, however many copies of it are drawn.)
-    std::snprintf(line, sizeof line, "total: %ld triangles, %ld vertices in parts, %d placed copies, %d colliders\n", all.tris,
-                  vertices, m.instanceCount(), m.colliderCount());
+    std::snprintf(line, sizeof line, "total: %ld triangles, %ld vertices in parts, %ld placed copies, %d colliders\n", all.tris,
+                  vertices, placedCopies, m.colliderCount());
     s << line;
     std::snprintf(line, sizeof line, "fingerprint: %016llx (the same number means the same triangles)\n",
                   static_cast<unsigned long long>(print));
@@ -434,12 +459,12 @@ int main(int argc, char** argv) {
         }
         model = *posedModel(built, pose);
     }
-    const Bounds bounds = boundsOf(model);
+    const Bounds bounds = boundsOf(model, o.at);
     if (!bounds.valid()) { std::fprintf(stderr, "rt_model_sheet: %s built no geometry\n", o.recipe.c_str()); return 1; }
 
     Scene scene;
-    bakeProcModel(model, scene);
-    const uint64_t print = fingerprint(scene, model);
+    bakeProcModel(model, scene, Vec3(), o.at);
+    const uint64_t print = fingerprint(scene, model, o.at);
     addMarkers(scene, markersOf(model), bounds);
     addStage(scene, bounds);
     scene.buildAccelerator();

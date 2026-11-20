@@ -1491,7 +1491,9 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
 
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
         const ProcPart& part = model.parts[i];
-        if (part.mesh.vertices.empty()) continue;
+        // The full level only: a model's lower levels of detail are picked by distance once a model is drawn as one
+        // thing (the prefab's drawing, #191 step 7); separate part entities would each switch at their own distance.
+        if (part.mesh.vertices.empty() || part.level != 0) continue;
         Entity e = world.create();
         // The part's entity sits at the node the part hangs on. The root's frame is no move and no turn, so a flat
         // model's geometry stays world-space. (A textured part's tiling is laid in its node's space, so the pattern

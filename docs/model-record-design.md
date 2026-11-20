@@ -1,6 +1,7 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model steps 1 to 4 (nodes; markers and named materials; uses; motion, poses and rig tables) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model steps 1 to 5 (nodes; markers and named materials; uses; motion, poses and rig tables; levels of detail) are
+built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -466,3 +467,44 @@ What the rig makes possible that the cars do not do today (ideas, none built):
 - Windows that lower: a slide joint under each door.
 - A door that comes off keeps its glass, liner and handle, because it is a subtree and not a re-centred skin.
 - Traffic cars (drawn in groups, not physics bodies) can share the rig, so a parked car can have a door open.
+
+### Model step 5: levels of detail (2026-11-19)
+
+```lua
+tire:level(40, { simplify = 0.3 })                  -- a level made from the full one: each mesh at 30%
+car:level(40, { simplify = 0.3 })
+local far = car:level(150)                          -- a level the recipe fills itself
+car:add(low_poly_body, "body", { level = far })     -- simpler in structure: one mesh on the root
+car:use(tire, wheel_places, { level = far })        -- (the tire has its own levels, by its own distances)
+```
+
+- **The record:** `ProcModel::levelFrom` holds the distance each level is drawn from, the full model first at 0.
+  A part and a use each have a `level`. A model that adds none has the one full level and is as it always was.
+- **One rig, one set of markers.** Levels do not have nodes of their own: a level's parts hang on the model's
+  nodes, or all on the root when the level is simpler in structure.
+- **A used piece has its own levels.** The tire switches at the tire's distances and the car at the car's. A level
+  of the car says which uses it draws at all (the far car places four plain discs and no bolts).
+- **Two ways to make a level:**
+  - *From the full one*, by the toolkit's simplify: `m:level(distance, { simplify = ratio })`. Each part becomes a
+    simpler copy on the same node in the same material; each use is drawn again. Good for a middle level.
+  - *By the recipe*: `m:level(distance)` and then `{ level = n }` on what belongs to it. Needed for a far level.
+- **What the car lab showed about far levels.** Simplifying is not enough far away. Crushing the whole car (interior
+  and all) into one mesh loses the wheels first; simplifying the outside alone to 12% crumples the panels, which
+  are thin solids with back faces. The far level that reads well is the kit's own low-poly build of the same car
+  plus plain discs for wheels: 34,625 triangles near, 10,580 from 40 m, 4,681 from 150 m.
+- **One simplify.** `MeshBuilder::simplifiedSurface` is the weld, simplify, weld and creasing that `mesh.simplify`
+  did in the Lua binding; the binding and the model's levels both call it now.
+- **The one walk takes a distance:** `placedUses`, `drawnPieces`, `flattenModel` and `bakeProcModel` draw what is
+  seen from that far (0, the default, is the full model). The model sheet takes `--at METRES` and lists the
+  triangles each level draws.
+
+Left as they were, on purpose:
+
+- **The game draws the full level only.** A script entity's parts are separate entities today, and each would
+  measure its own distance and switch at a different moment (the fault Glenn saw on buildings, 2026-10-02: "parts of
+  buildings disappear ... then pop in later"). One model switching as one thing is the prefab's drawing (step 7).
+  It will use what every drawn thing already has: `minDistance` and `drawDistance` on `Renderable` and
+  `InstanceGroup`, and the per-pixel crossfade `FLAG_LOD_BAND` that trees and building tiers use.
+- **A prefab's own distances** (the design's `draw = { distances = ... }`) come with the prefab.
+- **A level's materials are entries of the model's one table.** A far level that wants a single baked map names one
+  more entry; baking it is materials work (#309).

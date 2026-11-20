@@ -128,6 +128,7 @@ struct ProcPart {
     RenderMesh mesh;
     int material = 0;      // an index into ProcModel::materials
     int node = 0;          // an index into ProcModel::nodes
+    int level = 0;         // which level of detail it belongs to: an index into ProcModel::levelFrom (0 = the full one)
 };
 
 // A composable procedural model (ADR-0042): the value a recipe returns at any
@@ -182,6 +183,7 @@ struct ProcPlacement {
 struct ProcUse {
     std::shared_ptr<const ProcModel> piece;
     int node = 0;                             // the node whose space the placements are in
+    int level = 0;                            // which level of detail of the USING model draws these copies
     std::vector<ProcPlacement> placements;    // one per copy
     // Optional collision per copy (ADR-0042). `collisionProto` overrides the piece's own triangles for Mesh
     // collision (a cheaper-but-faithful collision surface); empty means collide with the piece itself.
@@ -200,6 +202,12 @@ struct ProcModel {
     // The model's materials. There is always entry 0, the plain material (untextured, vertex-coloured, no name),
     // which a part is made of unless it says otherwise.
     std::vector<ProcModelMaterial> materials = {ProcModelMaterial{"", std::make_shared<const ProcMaterial>()}};
+    // LEVELS OF DETAIL (#191, model step 5): versions of the model for different distances. Level i is what is
+    // drawn from `levelFrom[i]` metres away up to the next level's distance; level 0, the full model, is from 0, and
+    // is the only level unless a recipe adds more. A part and a use each belong to one level. Every level hangs on
+    // the same nodes and has the same markers, so a hook is in one place whatever the distance; a far level may be
+    // simpler in structure (one mesh on the root). A used piece has levels of its own, by its own distances.
+    std::vector<Real> levelFrom = {0};
     std::vector<ProcPart> parts;
     std::vector<ProcUse> uses;                // other models placed in this one (see ProcUse)
     std::vector<ProcCollider> colliders;
@@ -233,6 +241,23 @@ struct ProcModel {
         for (int p = nodes[static_cast<std::size_t>(node)].parent; p >= 0; p = nodes[static_cast<std::size_t>(p)].parent)
             f = nodes[static_cast<std::size_t>(p)].frame * f;
         return f;
+    }
+
+    // --- levels of detail --------------------------------------------------------------------------------------
+    // Add a level drawn from `distance` metres away. Returns its index, or -1 (and adds nothing) unless it is
+    // farther than the last level's distance.
+    int addLevel(Real distance) {
+        if (!(distance > levelFrom.back())) return -1;
+        levelFrom.push_back(distance);
+        return static_cast<int>(levelFrom.size()) - 1;
+    }
+
+    // The level drawn from `distance` metres away.
+    int levelAt(Real distance) const {
+        int level = 0;
+        for (std::size_t i = 1; i < levelFrom.size(); ++i)
+            if (distance >= levelFrom[i]) level = static_cast<int>(i);
+        return level;
     }
 
     // --- materials -------------------------------------------------------------------------------------------
@@ -339,7 +364,7 @@ struct ProcModel {
     // parts land where they did; its other nodes come across with their parts and markers, keeping their tree, and
     // its materials join this model's table (one entry where both hold the same material). Returns false and changes
     // nothing when the two models both have a node or a marker of one name, or give one name to two different
-    // materials, or when `o` holds this model as a piece; `clash`, when given, says which ("node 'door'").
+    // materials, or have lower levels of detail at different distances, or when `o` holds this model as a piece; `clash`, when given, says which ("node 'door'").
     bool merge(const ProcModel& o, std::string* clash = nullptr) {
         auto refuse = [&](const char* kind, const std::string& name) {
             if (clash != nullptr) *clash = std::string(kind) + " '" + name + "'";
@@ -355,6 +380,10 @@ struct ProcModel {
             const int mine = findMaterial(mm.name);
             if (mine >= 0 && materials[static_cast<std::size_t>(mine)].material != mm.material) return refuse("material", mm.name);
         }
+        // Levels of detail: the other model's levels become this model's when this one has only the full level;
+        // two models that both have lower levels must switch at the same distances.
+        if (o.levelFrom.size() > 1 && levelFrom.size() > 1 && o.levelFrom != levelFrom) return refuse("levels of detail", "at different distances");
+        if (o.levelFrom.size() > 1) levelFrom = o.levelFrom;
         // The other model's node i is this model's node `base + i`, except its root, which is this root.
         const int base = static_cast<int>(nodes.size()) - 1;
         nodes[0].markers.insert(nodes[0].markers.end(), o.nodes[0].markers.begin(), o.nodes[0].markers.end());
@@ -396,8 +425,9 @@ struct ProcPlacedUse {
 
 // Every use of a model at every depth, placed. THE one walk of the uses: the offline bake, the level loader,
 // flatten and the model sheet all read this, so they cannot disagree about where a copy is. A use on the root of the
-// model asked has exactly its placements' matrices.
-std::vector<ProcPlacedUse> placedUses(const ProcModel& m);
+// model asked has exactly its placements' matrices. `distance` is how far away the model is seen from: only the
+// uses of the level drawn at that distance are walked, in the model and in each piece (0: the full model).
+std::vector<ProcPlacedUse> placedUses(const ProcModel& m, Real distance = 0);
 
 // One instanced draw of a model: one part of a used piece, and where every copy of it stands in the model. A piece
 // used from four nodes is ONE of these with four transforms (per part of the piece), which is the point of a use.
@@ -409,11 +439,17 @@ struct ProcDrawnPiece {
 
 // Every instanced draw of a model, over `placedUses`: what the offline bake, the level loader, flatten and the model
 // sheet draw. In the order pieces are first met; parts with no triangles are left out.
-std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m);
+std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance = 0);
 
 // One mesh of everything the model draws, in the model's space: its parts at their nodes and every copy of every
-// used piece. Bridges a model to single-mesh consumers.
-RenderMesh flattenModel(const ProcModel& m);
+// used piece, as seen from `distance` metres away (0: the full model). Bridges a model to single-mesh consumers.
+RenderMesh flattenModel(const ProcModel& m, Real distance = 0);
+
+// A LOWER LEVEL MADE FROM THE FULL ONE: add a level drawn from `distance` metres, each of the full level's parts a
+// simpler copy on the same node in the same material (MeshBuilder::simplifiedSurface; `ratio` of its triangles kept,
+// the surface moved no more than `maxError` metres when that is >= 0), and each of its uses again (a piece has its
+// own levels). Returns the level's index, or -1 when `distance` is not farther than the last level's.
+int addSimplifiedLevel(ProcModel& m, Real distance, double ratio, double maxError = -1.0);
 
 // A model HELD IN A POSE: a new model whose nodes stand where the pose puts them, for everything that draws a still
 // (the model sheet, a recipe that wants a door ajar). Its posed nodes no longer move. A used piece is posed, and so

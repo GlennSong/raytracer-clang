@@ -36,14 +36,16 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | b8d4fb81 | model step 3, uses: `ProcUse` replaces the instance group; the one walk in `procgen/proc_model.cpp` (`placedUses`, `drawnPieces`, `flattenModel`); Lua `n:use`, `m:use`; `tests/test_model_uses.cpp` |
 | 9e36e21c | the mirrored twin: `mirroredModel` in `procgen/proc_model.cpp`, Lua `m:mirrored()`, left to right only |
 | b74d5d99 | model step 4, motion and rigs: `ProcMotion`, `ProcPose`, `posedModel`; Lua `n:motion`, `m:posed`, `m:joints`; the rig tables in `assets/scripts/rigs.lua`; the sheet's `--set`; `tests/test_model_motion.cpp` |
-| (this commit) | the rig's joints renamed to the names the car kit and the game use; `assets/scripts/car_rig_lab.lua`, any kit car as a model on the car rig (model sheet only); the sheet lists nodes in tree order |
+| 5c403683 | the rig's joints renamed to the names the car kit and the game use; `assets/scripts/car_rig_lab.lua`, any kit car as a model on the car rig (model sheet only); the sheet lists nodes in tree order |
+| (this commit) | model step 5, levels of detail: `levelFrom`, a level on parts and uses, `addSimplifiedLevel`, `MeshBuilder::simplifiedSurface`; Lua `m:level`, `{ level = n }`; the sheet's `--at`; `tests/test_model_levels.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
 ## How to check your work
 
 - **Look at it:** `./build-viewer/rt_model_sheet RECIPE.lua --out build-viewer/sheets/x.png`, then open the PNG. The
-  `.txt` beside it has the audit. `--set NODE=VALUE` (repeatable) draws a pose: `--set door_front_l=50 --set hood=40`.
+  `.txt` beside it has the audit. `--set NODE=VALUE` (repeatable) draws a pose: `--set door_front_l=50 --set hood=40`. `--at METRES` draws the
+  level of detail seen from that far.
   `assets/scripts/car_rig_lab.lua` (any kit car on the car rig) is the worked example; `build-viewer/sheets/uses.lua`
   (a box car) and `nodes.lua` (a crane) are smaller ones, not tracked. Scratch recipes live in `build-viewer/sheets/` (not tracked).
 - **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles and what
@@ -66,15 +68,26 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   fingerprint never repeats. Run it many times and look for the old number among the results.
 - A Lua word that takes optional arguments must not read a stack slot it was not given: slot 0 is not "nothing",
   it crashes. Test every word with its shortest call.
+- `mesh.simplify` makes a good middle level and a bad far one: it eats small separate shells first and crumples thin
+  solids. A far level wants its own low-poly build (the car kit has one) and plain stand-ins for small pieces.
+- A test that reads a recipe's model must stop when the recipe fails, or it reads parts that are not there and the
+  whole test binary dies with no message (its output is buffered when piped: `stdbuf -o0 ./build-viewer/run_tests`
+  shows the script error). When running several `RT_TEST_FILTER`s in a loop, check each one printed its own "cases
+  passed" line: a crashed one prints nothing, and a missing line is easy to read past.
 - Edit source with the edit tools, not shell appends (AGENTS.md).
 
 ## What is next
 
-**Model step 5 in the design note: levels of detail.** Several versions of a model's meshes, the high one drawn close
-up and lower ones farther away, by recipe or by `mesh.simplify`. One rig, one set of markers and one set of collision
-shapes serve every level; a lower level may be simpler in structure (a far crane can be one mesh on the root). Look
-first at how the engine already picks a level by distance (the tree recipes' levels and `recipeTreeParts` in
-`level_loader.cpp`, the building tiers) so this joins that and is not a second way.
+**Model step 6 in the design note: the model store and loading from files.**
+
+- **The store:** built models kept under a name, so many entities share one; a handle into it; a cache key (the
+  recipe, its arguments, the libraries it requires, the toolkit's version). Look first at what already caches built
+  things by key (`procgen/furniture_kit.h`, the bundle and lot caches, `AssetManager`) so this is one of those and
+  not a new kind of cache.
+- **Loading:** `model.from_files{ name =, levels = { "crane_high.glb", ... }, distances = {...} }`. The first file's
+  node tree is the rig, its empties are markers, and names say the rest (AGENTS.md "Model file names": `col_<kind>_`
+  for a collision shape, `_lod<N>` for a level). Today's importer (`engine/model_importer.h`) returns a flat list of
+  meshes and materials and is extended, not replaced.
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 
