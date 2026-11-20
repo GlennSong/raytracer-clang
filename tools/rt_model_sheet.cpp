@@ -448,11 +448,11 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
         all.add(a);
         const MeshShape sh = measureShape(mesh);
         allShape.add(sh);
-        if (sh.tris > 0) shapeLine("part " + std::to_string(i + 1), sh);
         vertices += static_cast<long>(mesh.vertices.size());
         std::string on = tree ? " on " + m.nodes[static_cast<std::size_t>(m.parts[i].node)].name : std::string();
         const std::string& made = m.materials[static_cast<std::size_t>(m.parts[i].material)].name;
         if (!made.empty()) on += " in " + made;
+        if (sh.tris > 0) shapeLine("part " + std::to_string(i + 1) + on, sh);
         std::snprintf(line, sizeof line, "part %zu%s: %ld triangles, %zu vertices%s\n", i + 1, on.c_str(), a.tris,
                       mesh.vertices.size(), a.clean() ? "" : "  <- audit findings");
         s << line;

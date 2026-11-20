@@ -48,7 +48,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 6fc7cf5a | model step 6, last piece, the model store: `procgen/model_store.{h,cpp}`, `scripting/model_recipes.{h,cpp}` (`obtainModel`), the list `assets/scripts/models.lua`, Lua `model.get`, `ProcModel::frozen`; the sheet takes a model's name; `tests/test_model_store.cpp`. THE MODEL HALF OF THE DESIGN NOTE IS DONE |
 | ec4c66ba | the car lab's middle level is built by the kit, not simplified (Glenn's call after looking at the file); `kit.build` takes `autosmooth`; `n:use(piece, nil, opts)` keeps its options |
 | f411f2ca | the kit's hood and trunk lid take both shoulders (Glenn saw the body differ left to right). Changes the game's kit cars on the right shoulder |
-| (this commit) | the sheet measures triangle shape and left against right: `measureShape`, `checkMirror` in `engine/mesh_audit.h`; `tests/test_mesh_shape.cpp` |
+| 8712173e | the sheet measures triangle shape and left against right: `measureShape`, `checkMirror` in `engine/mesh_audit.h`; `tests/test_mesh_shape.cpp` |
+| 949357c5 | the kit creases the same band on both flanks (the second cause of left differing from right). Changes every subdivided kit car |
+| d534a3c5 | a door opening's wall stands at the opening only: `solidify` takes `against`; the sedan's 532 edges with three or more faces are gone. Changes kit cars with panels |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -89,6 +91,13 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   lengths, how regular the points are, open and over-shared edges, per part) and "left against right" (points with
   no mirror across x = 0). They are `measureShape` and `checkMirror` in `engine/mesh_audit.h`. "Thin" alone misleads:
   a long narrow quad is thin and in perfect order. "Regular" is the number that follows what the eye calls order.
+- The kit car's thinnest triangles (edges of 0.02 mm on a hood) are the cage's design, not a bug to patch: every
+  section has the same number of points, so ahead of the windscreen the cabin's corners are folded into a ribbon a
+  few millimetres wide along the hood's edge, and the middle of the hood is one quad across. Changing it changes
+  every car's look: Glenn's call.
+- A survey of every recipe (2026-11-20, `--size 64 --spp 1` over `assets/scripts/*.lua`): the building labs carry
+  most of the edges with three or more faces (circulation_lab 178,084, hotel_lab 56,098, store_lab 36,406,
+  floor_lab 28,533, tower_lineup 27,493). Those are the buildings session's to look at, not this branch's.
 - `n:use(piece, nil, { level = n })` once dropped its options, and the use went to the full level without a word.
   Fixed; the sheet's "copies of used pieces" per level is where it showed.
 - A test that reads a recipe's model must stop when the recipe fails, or it reads parts that are not there and the
