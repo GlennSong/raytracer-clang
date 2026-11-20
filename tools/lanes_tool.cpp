@@ -820,6 +820,39 @@ int main(int argc, char** argv) {
         std::ofstream(outDir + "/lots_grown.txt") << dumpGrown;
         std::ofstream(outDir + "/lots_stored.txt") << dumpStored;
         std::printf("the lots grown in memory and the lots the bundle stores dump %s\n", dumpGrown == dumpStored ? "byte-identical" : "DIFFERENTLY");
+        // the grown part meshes, counted and hashed (positions, normals, colours, uvs, indices), so two grows' geometry compare
+        for (const std::vector<RenderMesh>* set : {&grown.parts, &grown.flatParts}) {
+            bundle::Fnv h;
+            std::size_t vertices = 0, indices = 0;
+            for (const RenderMesh& m : *set) {
+                h.pod(m.materialIndex);
+                for (const Vertex& v : m.vertices) {
+                    h.pod(v.position);
+                    h.pod(v.normal);
+                    h.pod(v.color);
+                    h.pod(v.u);
+                    h.pod(v.v);
+                }
+                if (!m.indices.empty()) h.bytes(m.indices.data(), m.indices.size() * sizeof(m.indices[0]));
+                vertices += m.vertices.size();
+                indices += m.indices.size();
+            }
+            std::printf("%s: %zu meshes, %zu vertices, %zu indices, hash %016llx\n", set == &grown.parts ? "parts" : "flat parts", set->size(), vertices,
+                        indices, static_cast<unsigned long long>(h.h));
+        }
+        // where they front, as the lot pass recorded it (ADR-0474)
+        std::size_t buildings = 0, buildingsStated = 0, doors = 0, doorsStated = 0;
+        for (const LotBuilding& lb : grown.lots) {
+            if (lb.units.empty()) continue;
+            ++buildings;
+            buildingsStated += lb.frontage.onStreet() ? 1 : 0;
+            for (const BuildingUnit& u : lb.units)
+                for (const DoorSpec& d : u.doors) {
+                    ++doors;
+                    doorsStated += d.frontage.onStreet() ? 1 : 0;
+                }
+        }
+        std::printf("frontage: %zu of %zu buildings and %zu of %zu doors state the street they front\n", buildingsStated, buildings, doorsStated, doors);
         std::printf("wrote %s/lots_grown.txt, lots_stored.txt\n", outDir.c_str());
         return 0;
     }

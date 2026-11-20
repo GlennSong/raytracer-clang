@@ -88,7 +88,8 @@ move the loop into it; never a private loop in the reader.
 | The kerb lane path beside a space (or a station) and how far along it: where a car stops to turn in, or rejoins | `RoadModel::kerbLaneBeside(space)`, `kerbLaneAt(street, dir, station)` |
 | The space nearest a point within a distance | `RoadModel::nearestKerbSpace(point, reach)` |
 | How far along a lane path a station of its spine falls | `RoadModel::alongPathAt(path, station)` |
-| Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, interim); `frontageOn(street, station, dir)` (stated facts) |
+| Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, for what states nothing); `frontageOn(street, station, dir)` (stated facts); the station and kerb from a search's hit on a centre line, the one statement both the model and the lot pass use: `frontageOnLine` (`line_frontage.h`, ADR-0474) |
+| Where a lot's building and each door front, recorded at plan time (ADR-0474) | `LotBuilding::frontage`, `DoorSpec::frontage`, `AuthoredPlace::frontage` (`StatedFrontage`, road_network.h: street id, station, kerb; a walkway slot, empty until the walkways are made) |
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
 | Where a place (a marker, a door) joins the walks: a point on a walk along its street, its kerb, and whether held to a sidewalk's end, across the road, cut off (ADR-0468, THE ONE ANSWER for placing a place, starting and ending a walk; built layer) | `RoadModel::walkJoinOn(frontage, openWalks, parts)` (stated: `frontageOn`); the one fallback by position `walkJoinNear(point, ...)` (`frontageAt`, then the same); `WalkJoin`, `WalkJoinWhy`; a station's place on a walk: `walkAlongAt(walk, station)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
@@ -132,14 +133,17 @@ table holds no spaces (its unused `CarSpace` is deleted); the kerb lane path bes
 (`kerbLaneBeside`). The outlines painted on the road are drawn from these spaces on a level the new driving drives.
 The old city sim still lays and parks in its own bays (`CitySim::ParkingBay`, a different list); they go with it.
 
-**From a door to the road** (ADR-0439). `frontageAt(point)` is a search by position, an interim: a built lot records
-nothing about the street its door fronts. It is the same search the lot pass faces its doors by: both call
-`nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with `buildingMayFront` as the rule.
-`lotRoadInputs` makes the lot pass's roads from that list; never add a road to one and not the other.
+**From a door to the road** (ADR-0439, ADR-0474). `frontageAt(point)` is a search by position. It is the same search
+the lot pass faces its doors by: both call `nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with
+`buildingMayFront` as the rule, and both turn the hit into a station and kerb by `frontageOnLine` (line_frontage.h).
+`lotRoadInputs` makes the lot pass's roads from that list, with each line's stations as the model states them; never
+add a road to one and not the other. Since ADR-0474 the lot pass records the answer (`StatedFrontage` on each building
+and door, lot format 6), so a reader of a lot asks `frontageOn` with no search; `frontageAt` stays for what states
+nothing.
 
 **From a place to the walks** (ADR-0468). `walkJoinOn` answers from a stated frontage (the brain's markers state
-street, station and kerb); `walkJoinNear` is the only fallback by position (a lot's door states nothing: `LotBuilding`
-and `DoorSpec` record no street; recording it is a lot format bump and a re-bake, left for Glenn). Only walks along a
+street, station and kerb; since ADR-0474 so do a lot's buildings and doors, carried to the sim as
+`AuthoredPlace::frontage`, read by nobody until piece 6); `walkJoinNear` is the only fallback by position. Only walks along a
 street (`Walk::street` set: sidewalk and footway stretches) are joined, never a corner, crossing or turn-round, never a
 walk closed to the mover; `cutOff` says when the walk is outside the largest part on foot. The street map's three
 look-ups it replaces in piece 6 are named for the comparison (`CitySim::walkStartNode`, `kerbLinkNear`, `kerbSideLink`;
@@ -158,7 +162,7 @@ Under `src/engine/procgen/city/roads/`:
 
 | File | What it holds |
 |---|---|
-| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). |
+| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). `line_frontage.h` declares the one step from a centre-line hit to a station and kerb (`frontageOnLine`, defined in road_model.cpp), small so the lot pass can include it (ADR-0474). |
 | `road_model_parts.h` | The one set of junction, arm, street, node and stretch types (`ModelJunction`, `ModelArm`, `ModelStreet`...). The road file is read into them (`RoadLabGraph::junctions` / `streets`), the layout and the control plan write them, and `plannedRoadModel` copies them whole and adds what only the model knows. A junction or street named by another is a place in the same list, not an id string. `graph_index.h` holds the index types it shares with the lane graph. |
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |

@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/road_model.h"
+#include "engine/procgen/city/roads/line_frontage.h"   // frontageOnLine: where a point fronts a centre line (ADR-0474)
 
 #include "engine/bundle/bundle.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // junctionAreas: each arm's stop line, the one rule
@@ -217,6 +218,18 @@ Vec2 spineDirection(const StreetLine& l, Real from, Real to) {
 
 Vec2 towardKerb(const Vec2& spine, int dir) {
     return perp(spine * static_cast<Real>(dir)) * static_cast<Real>(roads::lanes::kerbPerpSign());
+}
+
+LineFrontage frontageOnLine(const Vec2* xy, const Real* stations, const NearestLine& hit, const Vec2& p) {
+    LineFrontage f;
+    const std::size_t k = hit.seg;
+    f.station = stations[k] + (stations[k + 1] - stations[k]) * hit.t;
+    const Vec2 seg = xy[k + 1] - xy[k];
+    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
+    // which kerb the point is on: the one it lies toward from the centre line (on the line itself: the +1 kerb)
+    f.dir = dot(p - hit.on, towardKerb(spine, 1)) >= 0 ? 1 : -1;
+    f.towards = towardKerb(spine, f.dir);
+    return f;
 }
 
 bool junctionLit(const ModelJunction& J) {
@@ -1266,18 +1279,15 @@ RoadFrontage RoadModel::frontageAt(const Vec2& door) const {
         [](std::size_t) { return Real(0); }, [&](std::size_t i) { return buildingMayFront(lines[i].section->klass, false); });
     if (n.line < 0) return f;
     const RoadLine& l = lines[static_cast<std::size_t>(n.line)];
-    const uint32_t k = l.line.first + static_cast<uint32_t>(n.seg);
     f.street = l.street;
     f.junction = l.junction;
     f.section = l.section;
-    f.station = lineStations[k] + (lineStations[k + 1] - lineStations[k]) * n.t;
     f.distance = n.distance;
     f.on = n.on;
-    const Vec2 seg = linePoints[k + 1] - linePoints[k];
-    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
-    // which kerb the door is on: the one it lies toward from the centre line (on the line itself: the +1 kerb)
-    f.dir = dot(door - n.on, towardKerb(spine, 1)) >= 0 ? 1 : -1;
-    f.towards = towardKerb(spine, f.dir);
+    const LineFrontage lf = frontageOnLine(linePoints.data() + l.line.first, lineStations.data() + l.line.first, n, door);
+    f.station = lf.station;
+    f.dir = lf.dir;
+    f.towards = lf.towards;
     return f;
 }
 

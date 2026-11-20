@@ -34,6 +34,21 @@ bool parseRoadClass(const std::string& name, RoadClass& out);
 inline bool buildingMayFront(RoadClass klass, bool overGround) {
     return klass != RoadClass::Freeway && klass != RoadClass::Ramp && !overGround;
 }
+// WHERE A PLACE SAYS IT FRONTS (ADR-0474): written once, when the lot pass builds the place, so a reader asks the road
+// model from it with no search (RoadModel::frontageOn, then walkJoinOn). Either a street of the road model by its id,
+// the station (metres along that street's centre line) level with the place and the kerb it is on (`dir` +1: the kerb
+// of the traffic running along the centre line; -1: against it); or a walkway by its id and the metres along it (no
+// walkway is made yet: a later piece). Neither: it says nothing (no street a building may front, or the nearest such
+// road is a stretch inside a junction), and a reader asks by position instead (RoadModel::walkJoinNear).
+struct StatedFrontage {
+    std::string street;
+    Real station = 0;
+    int dir = 1;
+    std::string walkway;
+    Real along = 0;
+    bool onStreet() const { return !street.empty(); }
+    bool onWalkway() const { return !walkway.empty(); }
+};
 
 // What MEETS at a node — not how many edges (roads-v2.2 semantic layer,
 // issue #17). Auto = unclassified; classifyRoadGraph (road_semantics.h)

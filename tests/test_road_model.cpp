@@ -2579,9 +2579,19 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     readLotGrowParams(LotCitysim::of(cityJson), lp);
     lp.roadMargin = 0;
     LotPlanDebug plan;
-    int faced = 0, nearerFreeway = 0;
+    int faced = 0, nearerFreeway = 0, doorsStated = 0;
     for (const LotBuilding& b : growLotBuildings(blocks, lp, &plan, nullptr, &roads, 0.0)) {
         if (b.units.empty()) continue;
+        // WHAT THE LOT PASS RECORDS (ADR-0474): the street the building was turned to face, and each door's street,
+        // station and kerb, the same answer the model gives for the door's foot (both by frontageOnLine)
+        CHECK(b.frontage.street == "st" && b.frontage.dir == 1 && !b.frontage.onWalkway());
+        for (const BuildingUnit& u : b.units)
+            for (const DoorSpec& d : u.doors) {
+                const RoadFrontage at = hand.frontageAt(d.foot);
+                CHECK(at.valid() && at.street.valid() && d.frontage.street == hand.streets[at.street.index].id);
+                CHECK(approxEqual(d.frontage.station, at.station, kSamePoint) && d.frontage.dir == at.dir && !d.frontage.onWalkway());
+                ++doorsStated;
+            }
         const RoadFrontage front = hand.frontageAt(b.site);
         CHECK(front.valid() && front.street == streetNamed(hand, "st"));
         if (!front.valid()) continue;
@@ -2591,8 +2601,10 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
         ++faced;
         nearerFreeway += b.site.y < 40.0 ? 1 : 0;   // (y = 40 is halfway between the two centre lines)
     }
-    std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line\n", faced, nearerFreeway);
-    CHECK(faced >= 2 && nearerFreeway >= 1);
+    std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line; %d doors "
+                "record the model's street, station and kerb\n",
+                faced, nearerFreeway, doorsStated);
+    CHECK(faced >= 2 && nearerFreeway >= 1 && doorsStated >= faced);
 }
 
 // ---- 26. the model's kerb spaces as places the agent brain can hold (ADR-0440) -------------------------------------------

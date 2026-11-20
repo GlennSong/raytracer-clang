@@ -419,6 +419,7 @@ const char* crosswalkControlWord(CrosswalkControl c);
 // the spine runs `spine` (unit). Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign; the
 // crosswalks' kerb ends and the walks (lanes/walk_lanes.h) are laid by it.
 Vec2 towardKerb(const Vec2& spine, int dir);
+// (where a point fronts a road's centre line, from a search's hit on it: line_frontage.h frontageOnLine, ADR-0474)
 
 // ---- WHERE PEOPLE ON FOOT CAN WALK (ADR-0464, #306 task 4 piece 1) -----------------------------------------------------
 // The facts the walking paths will be laid from (pieces 2 and 3): stated once, by the planned layer, from stated facts
@@ -676,9 +677,10 @@ struct RoadModel {
     std::vector<RoadLine> roadLines() const;
     // WHERE A PLAN POINT (A DOOR) FRONTS THE ROAD: the nearest road a building may front (buildingMayFront), by its
     // centre line -- the same search over the same lines, in the same order, as the lot pass faces its doors by
-    // (LotRoads::nearestFrontable), so a door built facing a street is answered that street. AN INTERIM: a search by
-    // position, because a built lot does not record the street, station and side its door fronts; when the lot pass
-    // records them, a reader hands them to frontageOn below and nothing is searched.
+    // (LotRoads::nearestFrontable), so a door built facing a street is answered that street. The station and kerb come
+    // from frontageOnLine, as the lot pass's do. The lot pass now records them on each building and door
+    // (StatedFrontage, ADR-0474); a reader of a lot hands them to frontageOn below and nothing is searched. This search
+    // stays for what states nothing.
     RoadFrontage frontageAt(const Vec2& door) const;
     // ...the same answer from stated facts, with no search: a street, a station along its spine and a kerb.
     RoadFrontage frontageOn(ModelStreetId street, Real station, int dir) const;

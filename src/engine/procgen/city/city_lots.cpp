@@ -9,6 +9,7 @@
 #include <functional>
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
 #include "road_network.h"    // RoadClass
+#include "roads/line_frontage.h"   // frontageOnLine: where a point fronts a road, the road model's one statement (ADR-0474)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "section.h"         // the toolkit's section massing (issue #105)
 #include "cells.h"           // the toolkit's complex: a bundle of tubes (issue #105 step 5)
@@ -1958,11 +1959,26 @@ public:
     // ---- facing (the road model's streets) ----------------------------------------------------------------------
     // One road found near a point: which (an index into the inputs' roads; -1: none), the distance from the point
     // to its centre line, and the point of the centre line nearest it.
-    struct Found { int road = -1; Real distance = Real(1e30); Vec2 on; };
+    struct Found { int road = -1; Real distance = Real(1e30); Vec2 on; NearestLine hit; };
     // The street a building at `from` may face: the nearest one a building may front, by its centre line.
     Found nearestFrontable(const Vec2& from) const {
         return nearest(from, Real(1e30), false, [](const LotRoad& r) { return mayFront(r); });
     }
+    // WHERE `from` FRONTS, from the street found for it (nearestFrontable): that street's id, the station and the kerb,
+    // by the road model's one statement of them (road_model.h frontageOnLine; RoadModel::frontageAt asks the same of the
+    // same lines), ADR-0474. Says nothing when no street was found or it is a stretch inside a junction.
+    StatedFrontage frontageOf(const Found& f, const Vec2& from) const {
+        StatedFrontage s;
+        if (f.road < 0) return s;
+        const LotRoad& r = in_->roads[static_cast<std::size_t>(f.road)];
+        if (r.insideJunction || r.stations.size() != r.line.size()) return s;
+        const LineFrontage lf = frontageOnLine(r.line.data(), r.stations.data(), f.hit, from);
+        s.street = r.id;
+        s.station = lf.station;
+        s.dir = lf.dir;
+        return s;
+    }
+    StatedFrontage frontageOf(const Vec2& from) const { return frontageOf(nearestFrontable(from), from); }
     // The road model's id of a road found (empty: none).
     const std::string& idOf(const Found& f) const {
         static const std::string none;
@@ -2078,6 +2094,7 @@ private:
             [&](std::size_t i) { return surface ? roads[i].halfWidth : Real(0); }, [&](std::size_t i) { return keep(roads[i]); });
         f.distance = n.distance;
         f.road = n.line;
+        f.hit = n;
         if (n.line >= 0) f.on = n.on;
         return f;
     }
@@ -3096,6 +3113,8 @@ LotRoadInputs lotRoadsFromLines(std::vector<LotRoad> roads) {
         deck->spines.push_back(std::move(s));
     }
     deck->buildIndex();
+    for (LotRoad& r : roads)   // (a hand-made road states no stations: its lengths from the first point)
+        if (r.stations.empty()) r.stations = stations(r.line);
     in.roads = std::move(roads);
     in.deck = std::move(deck);
     return in;
@@ -5571,6 +5590,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (lotRoads.known()) {
                 // (a building fronts a street, never a freeway or a ramp; with no such street it keeps its plan's facing)
                 const LotRoads::Found street = lotRoads.nearestFrontable(b.site);
+                b.frontage = lotRoads.frontageOf(street, b.site);   // the street it faces, kept (ADR-0474)
                 const Vec2 q = street.road >= 0 ? street.on : b.site;
                 Vec2 dir = q - b.site;
                 if (dir.length() > 1e-6) {
@@ -7016,6 +7036,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
              << " | backstop clipped " << dbg->pClips << ", pairs STILL overlapping "
              << dbg->pLeftOverlapping << " (" << dbg->pSameEdge << " from ONE edge, " << dbg->pAtInsert << " already overlapping AT INSERT, " << dbg->pConcave << " NON-CONVEX, " << dbg->pClipFailed << " CLIPS THAT DID NOT SEPARATE)";
     }
+    // WHERE EACH DOOR FRONTS (ADR-0474), once every unit stands (the party-wall pass above grows some again, doors and
+    // all): the street a building may front nearest its foot, the station and the kerb. Geometry is untouched.
+    if (lotRoads.known())
+        for (LotBuilding& lb : out)
+            for (BuildingUnit& u : lb.units)
+                for (DoorSpec& d : u.doors) d.frontage = lotRoads.frontageOf(d.foot);
     // The SKYLINE lines: storeys, towers, footprint shape and open space —
     // the same census the loader prints on a warm load (which grows nothing).
     {

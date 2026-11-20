@@ -23202,3 +23202,46 @@ Words:
 **For players** (after S7's re-bake): on traffic_lab, Fifth Avenue's south arm reaches its crossroads with Fourteenth Boulevard, with a crosswalk and a stop line, and cars turn into and out of it. On river_town and agent_lab the four cloverleaf loops and four corner links are smooth curves instead of a run of sideways steps, and the freeway's two turn-round loops are one-lane ramps with barriers instead of three-lane boulevards with sidewalks.
 
 **Revisit when** the design stage's agreement is reworked at spread junctions (j103 / j90 above); when the planner makes a loop a true circle in plan; or when the spur's four lanes should taper to the loop's one before it (the deck cracks at tn0/tn1's ends).
+
+## ADR-0474 — Every lot building and every door records the street it fronts, the station along it and the kerb, at plan time, from the road model's own rule (#306 re-bake bundle, S5; ADR-0468's "left for later" option a)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: when the lot pass builds a city, it now writes down, on each building and on each of its doors, which street that building or door faces. Until now it worked this out to turn the building, then threw the answer away, and anything that later wanted to know (where a door joins the sidewalks, ADR-0468) had to search again by distance. Now the answer is kept, so a reader can ask the road model "where is this door" from stated facts, with no search. Nothing reads it yet: piece 6 of #306 task 4 will.
+
+Words:
+- **Frontage:** where a place faces the road: a **street** (by the road model's id, e.g. `s75`), a **station** (metres along that street's centre line) and a **kerb** (+1: the kerb of the traffic running along the centre line; -1: the other one). The same three facts the brain's markers state (ADR-0441, ADR-0468).
+- **Walkway:** a path for people on foot that is not a street's sidewalk (a later sitting, S6, makes them). The record has room for "fronts walkway w, a metres along it", left empty for now.
+- **Facing step:** the point in the lot pass where a building is turned to face the nearest street a building may front (never a freeway or a ramp: `buildingMayFront`).
+- **Nearest-line hit:** what the shared search `nearestLine` (polyline.h) returns: which line, which segment of it, how far along that segment, and the nearest point.
+
+**What changed:**
+- **One record type,** `StatedFrontage` (road_network.h, beside `buildingMayFront`): street id, station, kerb, and the empty walkway slot (walkway id, metres along). It lives on `LotBuilding::frontage`, `DoorSpec::frontage` and `AuthoredPlace::frontage` (components.h), so the three holders share one type.
+- **One rule for the station and kerb.** The lines that turned a nearest-line hit into a station and a kerb were inside `RoadModel::frontageAt`. They are now one function, `frontageOnLine` (`roads/line_frontage.h`, defined in road_model.cpp beside `towardKerb`). `frontageAt` calls it, and so does the lot pass (`LotRoads::frontageOf`). The lot pass does no projection of its own. It is a small header of its own because the whole road model header cannot be included in city_lots.cpp (its `Section` type clashes with the building toolkit's).
+- **The lot pass's roads carry what the rule needs.** `LotRoad` gains each centre line's stations, copied from the model (`RoadModel::lineStations`) by `lotRoadInputs`, and `insideJunction` (a stretch of road inside a junction, which no place fronts: the model's `walkJoinOn` answers "fronts no street" there). A hand-made road's stations are its lengths from its first point (`lotRoadsFromLines`, by polyline.h `stations`). `LotRoads::Found` keeps the whole hit.
+- **The building:** at the facing step, the same `nearestFrontable` answer that turns it is kept: `b.frontage = lotRoads.frontageOf(street, b.site)`. That is from the lot's centroid at that moment (a building's `site` moves later to its plan's centre).
+- **Each door:** once every unit stands (after the party-wall pass, which grows some units again, doors and all), every door's foot is asked `frontageOf(foot)`: the same search and the same rule as `RoadModel::frontageAt(foot)`.
+- **To the sim:** the level loader copies the entrance door's frontage onto the place it makes (`AuthoredPlace::frontage`). Shop fronts and authored markers leave it empty. Nothing reads it yet.
+- **`lanes_tool regions-lots`** now also prints the grown part meshes' counts and a hash, and how many buildings and doors state a street, so two grows' geometry can be compared.
+
+**Not done (stopped, as the brief allowed):** `level_walk_join_...` still uses the fallback by position for doors. Wiring stated doors to `walkJoinOn` would mean carrying the frontage from `AuthoredPlace` into the old sim's `citysim::Place`. That is piece 6's switch-over, not a small test change, and the level tests cannot see the new fields until the S7 re-bake anyway.
+
+**Geometry is unchanged.** river_town's lots grown in memory (`RT_BUNDLE_WRITE=0 lanes_tool regions-lots`, nothing written), at HEAD (a temporary detached work tree, now deleted) and with this change:
+- 626 lots; the per-lot dump (site, size, yaw, heights, lot line, plan, every door's foot, facing and size, to 0.1 mm) is byte-identical;
+- parts: 70 meshes, 13,837,642 vertices, 20,523,288 indices, hash `afe8a5402046cc6f`, both times; flat (middle detail) parts: 70 meshes, 1,274,244 vertices, 1,707,684 indices, hash `fb1f1e49993f74c2`, both times.
+- What river_town's lots now state: 470 of 475 buildings and 858 of 863 doors name the street they front. The other 5 and 5 are nearest a stretch inside a junction, and say nothing.
+
+**Format and caches:** `kLotsFormatVersion` 5 -> 6 and `kLotsVersion` 14 -> 15 (the new fields in the lot record), `kLotsBuildTag` 2026-11-14.1 -> 2026-11-20.1. Every level that grows lots re-bakes at S7; no level was baked here and the level tests were not run. No road key, `kLanesBuildTag` or road model format moved.
+
+**Tests:**
+- `lot_cache` round trip: a building's and a door's frontage (street, station, kerb, walkway, along) come back equal; a park's says nothing.
+- `road_model_25` (lanes_tests): on its hand-made model (a freeway and a street), every grown building states the street it was turned to face, and every door's street, station and kerb equal `RoadModel::frontageAt` for its foot.
+- Suites: full build; lanes_tests 150/150 (road_model_25: 7 buildings, 8 doors stated and agreeing); driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes). No pinned value or hash moved.
+
+**One model:**
+- Concepts touched: roads (where a point fronts a street) and places (a lot's building and door).
+- The station and kerb are worked out once, in `roads/` (`frontageOnLine`), and the lot pass asks it; the street is found by the one shared search over the model's own list of lines, as before (ADR-0439). The stations copied onto `LotRoad` are the model's values in the lot pass's look-up made from the model on request, never saved and holding nothing of their own.
+- No road fact is computed outside `roads/`; no second structure of the roads. `StatedFrontage` is a value written onto the place's own record, not a table of its own.
+
+**For players:** nothing changes.
+
+**Revisit when** piece 6 switches the walks over (doors then ask `walkJoinOn` from this); when S6 makes walkways (the walkway slot gets filled); or if a building should state the street from its final site rather than from where it was turned.

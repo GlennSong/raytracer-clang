@@ -7089,6 +7089,7 @@ bool LevelLoader::load(const std::string& path,
                         p.hasEntrance = true;
                         p.ex = static_cast<float>(d0.foot.x + d0.normal.x * 1.5);
                         p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
+                        p.frontage = d0.frontage;   // where it fronts, as the lot pass recorded it (ADR-0474)
                         break;
                     }
                     for (const engine::LotBuilding::Walk& k : lb.walks)

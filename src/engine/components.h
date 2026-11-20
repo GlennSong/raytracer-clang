@@ -972,6 +972,10 @@ struct AuthoredPlace {
     // keeps the legacy centroid snap.
     bool hasEntrance = false;
     float ex = 0, ez = 0;
+    // WHERE THAT DOOR FRONTS (ADR-0474): the street, station and kerb the lot pass recorded for it (DoorSpec::frontage).
+    // Says nothing for an authored marker, a shop front or a door the lot pass found no street for. Nothing reads it
+    // yet: the walks will ask from it (RoadModel::walkJoinOn) in #306 task 4 piece 6.
+    StatedFrontage frontage;
     // The RECIPE that grew it (empty for an authored marker): the citysim's place kind (places.lua) and, for a home,
     // its dwellings' rule (by the recipe's use, building_uses.lua) come from it. `units`: how many units it grew (a
     // row of houses is one place of several houses). `capacity`: how many it holds; 0 = no limit (a hall's beds

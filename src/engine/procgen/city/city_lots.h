@@ -59,6 +59,9 @@ struct DoorSpec {
     Real height = 0;
     bool back = false;   // the rear service door (attached buildings): it faces the yard, not the street
     bool open = false;   // an OPEN BAY (a fire station's, its roller door up): a gap in the wall, no leaf to swing
+    // WHERE ITS FOOT FRONTS (ADR-0474): the street a building may front nearest the foot, its station and kerb, as the
+    // road model answers for the same point (LotRoads::frontageOf, RoadModel::frontageAt). Written once every unit stands.
+    StatedFrontage frontage{};
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
@@ -95,6 +98,9 @@ struct LotBuilding {
     std::string district;   // districtName(tag) — "financial", "oldtown", ...
     std::string recipe;     // the architect RECIPE that built it ("school",
                             // "glass_tower", "fire_station", ...) — debug/UI
+    // WHERE IT FRONTS (ADR-0474): the street it was turned to face at the facing step, from its site, its station and
+    // kerb (LotRoads::frontageOf). Says nothing for a lot that never reaches the facing step (a park, a green).
+    StatedFrontage frontage;
     Real baseY = 0;         // world Y the building grows from (terrain-sampled
                             // when LotParams::ground is set; 0 on flat ground)
     Real groundY = 0;       // the building's graded PAD plane (terrain levels):
@@ -509,7 +515,11 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
 struct LotRoad {
     std::string id;            // the road model's street id; for a stretch of road inside a junction, the junction's id
     std::vector<Vec2> line;    // its centre line
-    Real halfWidth = 0;        // from the centre line to the carriageway's edge (travel lanes and shoulder)
+    // each point's station along its road's spine, as the road model states it (RoadModel::lineStations); a hand-made
+    // road's are its lengths from the first point (lotRoadsFromLines)
+    std::vector<Real> stations;
+    bool insideJunction = false;   // a stretch of road inside a junction (`id` is the junction's): no street to front
+    Real halfWidth = 0;      // from the centre line to the carriageway's edge (travel lanes and shoulder)
     Real sidewalk = 0;         // the sidewalk's width beyond that edge (0: none)
     RoadClass klass = RoadClass::Local;
     // Carried over the ground on a bridge here: no one's front door (Glenn, 2026-09-30: "assuming the city road

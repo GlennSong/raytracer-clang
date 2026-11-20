@@ -67,9 +67,10 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     a.loops = {{Vec2(0, 0), Vec2(5, 0), Vec2(5, 5), Vec2(0, 5)}};
     a.areas = {{"pitch", Vec2(1, 2), Vec2(0, 1), 25.0, 17.0}};
     a.sitSpots = {{Vec2(3, 4), Vec2(0, -1), 0.53}};
-    a.open = {{{Vec2(-1, -1), Vec2(13, -1), Vec2(13, 0), Vec2(-1, 0)}, OpenKind::Forecourt}, {{Vec2(12, 0), Vec2(13, 0), Vec2(13, 9)}, OpenKind::SideYard}};
+    a.frontage.street = "s75"; a.frontage.station = 41.25; a.frontage.dir = -1; a.frontage.walkway = "w3"; a.frontage.along = 7.5;   // (format 6)
+    a.open ={{{Vec2(-1, -1), Vec2(13, -1), Vec2(13, 0), Vec2(-1, 0)}, OpenKind::Forecourt}, {{Vec2(12, 0), Vec2(13, 0), Vec2(13, 9)}, OpenKind::SideYard}};
     a.pavedLot = a.pad; a.paveY = 4.8; a.lot = {Vec2(-2, -2), Vec2(14, -2), Vec2(14, 10), Vec2(-2, 10)}; a.padBound = {Vec2(-1, -2), Vec2(13, -2), Vec2(13, 9)};
-    BuildingUnit u; u.plan = {Vec2(1, 1), Vec2(11, 1), Vec2(11, 7), Vec2(1, 7)}; u.baseY = 4.6; u.params = everyFieldSet(); DoorSpec d; d.foot = Vec2(6, 1); d.normal = Vec2(0, -1); d.width = 1.2; d.height = 2.4; u.doors = {d}; u.enterable = true;
+    BuildingUnit u; u.plan = {Vec2(1, 1), Vec2(11, 1), Vec2(11, 7), Vec2(1, 7)}; u.baseY = 4.6; u.params = everyFieldSet(); DoorSpec d; d.foot = Vec2(6, 1); d.normal = Vec2(0, -1); d.width = 1.2; d.height = 2.4; d.frontage.street = "s12"; d.frontage.station = 3.5; d.frontage.dir = -1; d.frontage.walkway = "w9"; d.frontage.along = 2.25; u.doors = {d}; u.enterable = true;
     BuildingUnit u2; u2.plan = {Vec2(2, 2), Vec2(4, 2), Vec2(4, 4)}; u2.baseY = 5; a.units = {u, u2};
     LotBuilding park; park.type = "park"; park.site = Vec2(-50, 50); park.height = 0.25; park.pad = {Vec2(-60, 40), Vec2(-40, 40), Vec2(-40, 60), Vec2(-60, 60)}; park.treeSpots = {Vec3(-55, 0, 45)};
     res.lots = {a, park};
@@ -104,7 +105,12 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK(x.units.size() == 2 && x.units[0].enterable && !x.units[1].enterable && x.units[0].baseY == 4.6 && samePoly(x.units[0].plan, u.plan) && samePoly(x.units[1].plan, u2.plan));
         CHECK(x.units.size() == 2 && sameParams(x.units[0].params, u.params) && sameParams(x.units[1].params, BuildingParams()));
         CHECK(x.units.size() == 2 && x.units[0].doors.size() == 1 && x.units[0].doors[0].foot.x == 6 && x.units[0].doors[0].normal.y == -1 && x.units[0].doors[0].width == 1.2 && x.units[0].doors[0].height == 2.4);
-        const LotBuilding& y = back.lots[1]; CHECK(y.type == "park" && y.height == 0.25 && y.plan.empty() && samePoly(y.pad, park.pad) && y.treeSpots.size() == 1 && y.padMesh.vertices.empty() && y.units.empty());
+        if (x.units.size() == 2 && x.units[0].doors.size() == 1) {   // where the door and the building front (format 6)
+            const StatedFrontage& df = x.units[0].doors[0].frontage;
+            CHECK(df.street == "s12" && df.station == 3.5 && df.dir == -1 && df.walkway == "w9" && df.along == 2.25);
+        }
+        CHECK(x.frontage.street == "s75" && x.frontage.station == 41.25 && x.frontage.dir == -1 && x.frontage.walkway == "w3" && x.frontage.along == 7.5);
+        const LotBuilding& y = back.lots[1]; CHECK(y.type == "park" && y.height == 0.25 && y.plan.empty() && samePoly(y.pad, park.pad) && y.treeSpots.size() == 1 && y.padMesh.vertices.empty() && y.units.empty() && !y.frontage.onStreet() && !y.frontage.onWalkway());
     }
     CHECK(back.plan.blocks.size() == 1 && back.plan.lots.size() == 2 && back.plan.alleys.size() == 1 && back.plan.alleys[0].second.x == 1);
     CHECK(back.plan.rejChance == 1 && back.plan.rejFrontage == 8 && back.plan.bisectedBlocks == 9 && back.plan.pPlaced == 17 && back.plan.pClipFailed == 23 && back.plan.rejRelief == 24);
