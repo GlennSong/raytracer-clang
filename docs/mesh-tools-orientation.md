@@ -70,7 +70,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 7c95d766 | THE MODEL STUDIO, first piece: `src/editor_app/model_studio.{h,cpp}`, a script pane in the Qt editor whose model the viewport shows and rebuilds on every save; `editor_app --model <name>`; a studio level opens looking at its model |
 | 510f2a7a | the studio keeps the last good model up while the script has a mistake |
 | c14642cd | "what made this?": `ProcPart::line`, `ProcUse::line`, `ModelPiece::line` / `what`; picking a piece in the editor puts the script pane on its line |
-| (this) | the studio's Copy view and Add to lists buttons, line numbers, Lua colouring, the model's numbers; `RT_STUDIO_PRESS=copy|lists` presses a button unattended |
+| 7eddd267 | the studio's Copy view and Add to lists buttons, line numbers, Lua colouring, the model's numbers; `RT_STUDIO_PRESS=copy|lists` presses a button unattended |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
