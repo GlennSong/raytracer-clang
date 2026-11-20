@@ -12,8 +12,18 @@
 --        --set trunk=50 --set steer_front_l=25 --set steer_front_r=25
 local kit = require "vehicle_kit"
 local rigs = require "rigs"
-local name = (args and args.name) or "sedan"
-local level = (args and args.level) or 1
+-- What it takes (the model studio shows these as a form): which kit car, how smooth, and whether to build the
+-- lower levels of detail. The cars are whatever vehicle_kit.lua's SPECS holds.
+local cars = {}
+for car in pairs(kit.SPECS) do cars[#cars + 1] = car end
+table.sort(cars)
+cars.default = "sedan"
+local a = params{
+  name = cars,
+  level = { 1, min = 0, max = 2 },   -- subdivision: 0 the faceted cage, 1 smooth
+  levels = true,                     -- also build the middle and far levels of detail
+}
+local name, level = a.name, a.level
 local P = kit.SPECS[name]()
 local built = kit.build(P, level, { panels = true })
 local lift = built.lift
@@ -84,7 +94,7 @@ end
 --   panel, because the simplifier weighs only how far the surface moves and knows nothing of the kit's lines. The far
 --   level as one crushed mesh: the simplifier eats the small separate shells, the wheels first, and crumples the
 --   thin panels. `simplify` is for things with no recipe to build them lower.)
-if not (args and args.levels == false) then
+if a.levels then
   local low_wheel = kit.wheel(P.wheel_r, P.wheel_w, 0)
   local mid_tire = tire:level(40)
   tire:add(mesh.paint(low_wheel.tyre, { 0.05, 0.05, 0.055 }), "rubber", { level = mid_tire })

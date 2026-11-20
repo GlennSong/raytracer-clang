@@ -911,6 +911,17 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
    part's line is the deepest one in the recipe's own chunk, so a part added in a function the recipe defines
    points at the line in that function, not at the call.
 
+8. DONE the same day (Glenn: "how do I know what the kind is?"): **a recipe says what it takes, and the studio
+   shows a form.** `local a = params{ kind = { "tree", "rock" }, seed = 1, tall = { 8, min = 2, max = 30 }, name =
+   "", solid = true }`: a list of names is a choice (the first, or `default =`), then numbers (a whole one stays
+   whole; limits hold it), texts, yes or no. `a` is the arguments given over the defaults. An argument the recipe
+   does not take, or a choice not on its list, is an error that names what it does take, so a mistyped argument
+   is never quietly ignored. The declaration is kept by the recipe's name (`recipeParams`), even when the
+   arguments given were wrong, and the studio builds a control for each (a drop-down, a number box, a text box, a
+   tick), choices first, in a scrolling strip above the script; moving one rebuilds. The free-text box stays, and
+   shows what the form set. `prop_models.lua` and `car_rig_lab.lua` declare theirs (the car's choice is whatever
+   `vehicle_kit.lua`'s `SPECS` holds).
+
 Still open: finer tags than one line per library call; a "walk" button (Play already does it); typing and clicking in the pane have been
 checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 

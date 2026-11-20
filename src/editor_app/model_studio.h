@@ -21,6 +21,7 @@
 #include <vector>
 
 class QFileSystemWatcher;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -56,6 +57,10 @@ public:
     // ARGUMENTS: run the script with these (a Lua table as text, as a recipe's `args`), and rebuild. Kept with the
     // script's studio level, so they are there the next time the script is opened.
     bool setArguments(const QString& luaTable);
+    // WHAT THE SCRIPT TAKES: its `params{ ... }` as JSON (editor_main asks the engine: recipeParams), for the
+    // form. `recipe` is the script's name. Empty: it declared nothing, and the Arguments box is all there is.
+    std::function<QString(const QString& recipe)> recipeParams;
+    void refreshForm();
     // THE TREE OF THE MODEL: every node under its parent with where it was placed, and under each node what hangs on
     // it. editor_main gives the rows, selects a part's piece in the viewport, and moves a moving node.
     std::function<std::vector<StudioRow>()> modelTree;
@@ -98,6 +103,11 @@ private:
     QPlainTextEdit* edit_ = nullptr;
     QLabel* file_ = nullptr;
     QLineEdit* args_ = nullptr;      // the recipe's arguments, a Lua table
+    QWidget* form_ = nullptr;        // ...and, when the script says what it takes, a control for each
+    QFormLayout* formRows_ = nullptr;
+    QString formJson_;               // what the form was built from
+    QString argsJson_;               // the arguments now in force, as the level carries them
+    void formChanged();              // a control moved: the arguments from the form, applied
     QLabel* status_ = nullptr;
     QFileSystemWatcher* watcher_ = nullptr;
     QString path_;

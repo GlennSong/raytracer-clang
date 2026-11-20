@@ -724,3 +724,70 @@ TEST_CASE(a_lua_table_typed_as_text_becomes_the_json_a_level_carries) {
     CHECK(err.find("table of named values") != std::string::npos);
     CHECK(!luaTableToJson("{ 1, 2, 3 }", json, &err));
 }
+
+TEST_CASE(a_recipe_says_what_arguments_it_takes_and_wrong_ones_are_refused) {
+    Folder f;
+    f.write("test_prefab_params_tmp.lua", R"LUA(
+        local a = params{
+          kind  = { "post", "slab", default = "slab" },
+          seed  = 1,
+          tall  = { 2.0, min = 1, max = 5 },
+          label = "plain",
+          solid = true,
+        }
+        assert(math.type(a.seed) == "integer", "a whole argument stays whole")
+        local m = model.new()
+        m:add(mesh.box{ a.kind == "post" and 0.2 or 2, a.tall, 0.2 })
+        if a.solid then m:shape("body", { box = { 1, a.tall, 1 } }) end
+        m:marker(a.label .. "_" .. a.seed, {})
+        return m
+    )LUA");
+    ModelStore store;
+    std::string err;
+    auto build = [&](const std::string& args) { return obtainRecipeModel("test_prefab_params_tmp", args, f.dir, &err, &store); };
+    // no arguments: every default
+    std::shared_ptr<const ProcModel> m = build("");
+    CHECK(m != nullptr);
+    if (m == nullptr) { std::printf("    %s\n", err.c_str()); return; }
+    CHECK(m->findMarker("plain_1") != nullptr);
+    CHECK(m->colliders.size() == 1);
+    CHECK_APPROX(m->colliders[0].halfExtent.y, 1.0, 1e-9);
+    // some given (as a level carries them: every number a fraction), the rest defaults; a number is held to its limits
+    m = build(R"({"kind":"post","seed":7.0,"tall":99,"solid":false,"label":"x"})");
+    CHECK(m != nullptr);
+    if (m != nullptr) {
+        CHECK(m->findMarker("x_7") != nullptr);
+        CHECK(m->colliders.empty());
+        Real top = 0;
+        for (const Vertex& v : m->parts[0].mesh.vertices) top = std::max(top, v.position.y);
+        CHECK_APPROX(top, 2.5, 1e-6);          // tall 99 held at 5
+    }
+    // what it takes, for a host's form: sorted by name, each with its kind and default
+    const nlohmann::json declared = nlohmann::json::parse(recipeParams("test_prefab_params_tmp"));
+    CHECK(declared.size() == 5);
+    CHECK(declared[0]["name"] == "kind" && declared[0]["type"] == "choice" && declared[0]["default"] == "slab" && declared[0]["choices"].size() == 2);
+    CHECK(declared[1]["name"] == "label" && declared[1]["type"] == "text");
+    CHECK(declared[2]["name"] == "seed" && declared[2]["type"] == "number" && declared[2]["whole"] == true);
+    CHECK(declared[3]["name"] == "solid" && declared[3]["type"] == "bool" && declared[3]["default"] == true);
+    CHECK(declared[4]["name"] == "tall" && declared[4]["min"] == 1 && declared[4]["max"] == 5 && declared[4]["whole"] == false);
+    // wrong arguments say what is wrong and what the recipe does take
+    struct Wrong { const char* args; const char* says; };
+    const Wrong wrongs[] = {
+        {R"({"knd":"post"})", "there is no argument 'knd' (this recipe takes: kind, label, seed, solid, tall)"},
+        {R"({"kind":"tower"})", "the argument 'kind' is one of: post, slab"},
+        {R"({"seed":"many"})", "the argument 'seed' is a number"},
+        {R"({"label":4})", "the argument 'label' is a text"},
+        {R"({"solid":"yes"})", "the argument 'solid' is true or false"},
+    };
+    for (const Wrong& w : wrongs) {
+        err.clear();
+        CHECK(build(w.args) == nullptr);
+        if (err.find(w.says) == std::string::npos) std::printf("    %s said: %s\n", w.args, err.c_str());
+        CHECK(err.find(w.says) != std::string::npos);
+    }
+    CHECK(!recipeParams("test_prefab_params_tmp").empty());      // still known after a refusal
+    CHECK(recipeParams("test_prefab_no_such_recipe_tmp").empty());
+    // the shipped prop models declare theirs
+    CHECK(obtainRecipeModel("prop_models", R"({"kind":"rock"})", std::string(), &err, &store) != nullptr);
+    CHECK(recipeParams("prop_models").find("\"kind\"") != std::string::npos);
+}

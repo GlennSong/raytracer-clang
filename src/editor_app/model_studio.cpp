@@ -3,7 +3,10 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
+#include <QComboBox>
+#include <QFormLayout>
 #include <QDoubleSpinBox>
 #include <QHeaderView>
 #include <QSplitter>
@@ -29,6 +32,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -238,6 +242,20 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     argsRow->addWidget(args_, 1);
     column->addLayout(argsRow);
     QObject::connect(args_, &QLineEdit::returnPressed, [this]() { setArguments(args_->text()); });
+    // the form: a control for each argument the script says it takes (filled by refreshForm after a build)
+    form_ = new QWidget(this);
+    formRows_ = new QFormLayout(form_);
+    formRows_->setContentsMargins(0, 0, 0, 0);
+    formRows_->setLabelAlignment(Qt::AlignRight);
+    // (in a scrolling strip of its own, so a script with many arguments does not push the script out of sight)
+    auto* formScroll = new QScrollArea(this);
+    formScroll->setWidget(form_);
+    formScroll->setWidgetResizable(true);
+    formScroll->setFrameShape(QFrame::NoFrame);
+    formScroll->setMaximumHeight(118);
+    formScroll->hide();
+    form_->setProperty("strip", QVariant::fromValue<QObject*>(formScroll));
+    column->addWidget(formScroll);
     QObject::connect(copyButton, &QPushButton::clicked, [this]() { copyView(); });
     QObject::connect(listButton, &QPushButton::clicked, [this]() { addToLists(); });
 
@@ -386,6 +404,7 @@ bool ModelStudioPanel::writeLevel() {
         return false;
     }
     f.write(QString(kLevel).arg(recipeName(), json.isEmpty() ? QString() : ", \"args\": " + json, kept).toUtf8());
+    argsJson_ = json;
     return true;
 }
 
@@ -482,6 +501,97 @@ void ModelStudioPanel::showPiece(int line, const QString& what) {
     }
 }
 
+void ModelStudioPanel::refreshForm() {
+    const QString json = recipeParams && !path_.isEmpty() ? recipeParams(recipeName()) : QString();
+    const QJsonArray declared = QJsonDocument::fromJson(json.toUtf8()).array();
+    const QJsonObject now = QJsonDocument::fromJson(argsJson_.toUtf8()).object();
+    // the same arguments as before: only put the controls where the arguments now in force say (the user may have
+    // typed in the box); a different set: build the form again
+    if (json != formJson_) {
+        formJson_ = json;
+        while (formRows_->rowCount() > 0) formRows_->removeRow(0);
+        // the choices first (they are usually what decides the rest), then the others, each lot by name
+        QList<QJsonObject> ordered;
+        for (const QJsonValue& v : declared) if (v.toObject().value("type").toString() == "choice") ordered.push_back(v.toObject());
+        for (const QJsonValue& v : declared) if (v.toObject().value("type").toString() != "choice") ordered.push_back(v.toObject());
+        for (const QJsonObject& d : ordered) {
+            const QString name = d.value("name").toString(), type = d.value("type").toString();
+            QWidget* control = nullptr;
+            if (type == "choice") {
+                auto* box = new QComboBox(form_);
+                for (const QJsonValue& c : d.value("choices").toArray()) box->addItem(c.toString());
+                QObject::connect(box, &QComboBox::currentTextChanged, [this](const QString&) { formChanged(); });
+                control = box;
+            } else if (type == "number") {
+                auto* box = new QDoubleSpinBox(form_);
+                const bool whole = d.value("whole").toBool();
+                box->setDecimals(whole ? 0 : 3);
+                box->setSingleStep(whole ? 1.0 : 0.1);
+                if (d.contains("min") && d.contains("max")) box->setRange(d.value("min").toDouble(), d.value("max").toDouble());
+                else box->setRange(-1e9, 1e9);
+                box->setKeyboardTracking(false);
+                QObject::connect(box, &QDoubleSpinBox::valueChanged, [this](double) { formChanged(); });
+                control = box;
+            } else if (type == "bool") {
+                auto* box = new QCheckBox(form_);
+                QObject::connect(box, &QCheckBox::toggled, [this](bool) { formChanged(); });
+                control = box;
+            } else {
+                auto* box = new QLineEdit(form_);
+                QObject::connect(box, &QLineEdit::editingFinished, [this]() { formChanged(); });
+                control = box;
+            }
+            control->setObjectName(name);
+            control->setProperty("type", type);
+            control->setProperty("default", d.value("default").toVariant());
+            control->setProperty("whole", d.value("whole").toBool());
+            formRows_->addRow(name, control);
+        }
+        if (QWidget* strip = qobject_cast<QWidget*>(form_->property("strip").value<QObject*>())) strip->setVisible(!declared.isEmpty());
+    }
+    // each control at the value in force: the argument given, or the default
+    loading_ = true;
+    for (int row = 0; row < formRows_->rowCount(); ++row) {
+        QLayoutItem* item = formRows_->itemAt(row, QFormLayout::FieldRole);
+        QWidget* control = item != nullptr ? item->widget() : nullptr;
+        if (control == nullptr) continue;
+        const QString name = control->objectName();
+        const QVariant value = now.contains(name) ? now.value(name).toVariant() : control->property("default");
+        if (auto* combo = qobject_cast<QComboBox*>(control)) combo->setCurrentText(value.toString());
+        else if (auto* number = qobject_cast<QDoubleSpinBox*>(control)) number->setValue(value.toDouble());
+        else if (auto* check = qobject_cast<QCheckBox*>(control)) check->setChecked(value.toBool());
+        else if (auto* line = qobject_cast<QLineEdit*>(control)) line->setText(value.toString());
+    }
+    loading_ = false;
+}
+
+void ModelStudioPanel::formChanged() {
+    if (loading_ || path_.isEmpty()) return;
+    // the arguments as a Lua table: only what differs from its default (the script's defaults say the rest)
+    QStringList parts;
+    for (int row = 0; row < formRows_->rowCount(); ++row) {
+        QLayoutItem* item = formRows_->itemAt(row, QFormLayout::FieldRole);
+        QWidget* control = item != nullptr ? item->widget() : nullptr;
+        if (control == nullptr) continue;
+        const QString name = control->objectName();
+        const QVariant def = control->property("default");
+        auto quoted = [](QString text) { return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""; };
+        if (auto* combo = qobject_cast<QComboBox*>(control)) {
+            if (combo->currentText() != def.toString()) parts << name + " = " + quoted(combo->currentText());
+        } else if (auto* number = qobject_cast<QDoubleSpinBox*>(control)) {
+            if (std::abs(number->value() - def.toDouble()) > 1e-9)
+                parts << name + " = " + (control->property("whole").toBool() ? QString::number(static_cast<qlonglong>(number->value())) : QString::number(number->value(), 'g', 10));
+        } else if (auto* check = qobject_cast<QCheckBox*>(control)) {
+            if (check->isChecked() != def.toBool()) parts << name + " = " + (check->isChecked() ? "true" : "false");
+        } else if (auto* line = qobject_cast<QLineEdit*>(control)) {
+            if (line->text() != def.toString()) parts << name + " = " + quoted(line->text());
+        }
+    }
+    const QString text = parts.isEmpty() ? QString() : "{ " + parts.join(", ") + " }";
+    if (text == args_->text().trimmed()) return;
+    setArguments(text);
+}
+
 void ModelStudioPanel::refreshTree() {
     tree_->clear();
     if (!modelTree) return;
@@ -572,6 +682,7 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
         const bool old = why.endsWith("(showing the last one that built)");
         if (old) why = why.left(why.size() - 33).trimmed() + "\nThe viewport shows the model as it last built.";
         setStatus(why, true);
+        refreshForm();      // (a script that failed on a wrong argument still said what it takes)
         if (errorLine > 0 && !dirty()) gotoLine(errorLine);
         return;
     }
@@ -581,6 +692,7 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
             setStatus("Built " + recipeName() + ".", false);
         if (modelNumbers) numbers_->setText(modelNumbers());
         refreshTree();
+        refreshForm();
         return;
     }
     if (!isError && line.contains("watch_scripts: change detected")) {

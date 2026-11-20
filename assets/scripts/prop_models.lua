@@ -9,7 +9,17 @@
 --   { kind = "rock", seed = 5, size = 1.6 }                       a boulder: its collision shape is its hull
 --
 -- Every model stands on y = 0 at its own origin and carries the collision shape a copy needs.
-local a = args or {}
+-- What it takes (the model studio shows these as a form). Each kind reads the ones that are its own.
+local a = params{
+  kind    = { "furniture", "street_prop", "lamp", "tree", "rock" },
+  name    = "",                                  -- furniture: a piece's name (office_chair, sofa ...); street_prop: a prop's
+  variant = 0,                                   -- furniture: bits 0-2 the fabric, 3-4 the wood, the rest the piece's own dice
+  shape   = { "oak", "round", "spreading", "columnar", "flowering", "pine", "palm", "maple", "birch", "shrub" },  -- tree
+  seed    = 1,                                   -- tree, rock
+  height  = { 8.0, min = 2, max = 40 },          -- tree, lamp (metres)
+  size    = { 1.5, min = 0.2, max = 10 },        -- rock (metres)
+  family  = { "boulder", "slab", "pebbles", "outcrop" },  -- rock
+}
 local m = model.new()
 
 local builders = {}
@@ -25,7 +35,7 @@ local FINISH = {
   lit_band          = material.new{ roughness = 0.5, emission = { 1, 0.95, 0.85 } },
 }
 function builders.furniture()
-  local piece = furniture.piece{ name = a.name or "office_chair", variant = a.variant or 0 }
+  local piece = furniture.piece{ name = a.name ~= "" and a.name or "office_chair", variant = a.variant }
   local w, h, d = piece.size[1], piece.size[2], piece.size[3]
   for _, e in ipairs(piece) do
     local finish = e.part
@@ -39,7 +49,7 @@ end
 -- A KERB PROP: its mesh and its box, as street_props.lua says them.
 function builders.street_prop()
   local props = require "street_props"
-  local want = a.name or "hydrant"
+  local want = a.name ~= "" and a.name or "hydrant"
   for _, p in ipairs(props) do
     if p.name == want then
       m:add(p.mesh())
@@ -53,7 +63,7 @@ end
 
 -- A STREET LAMP: the kit's lamp, a capsule round its pole, a marker where the light is.
 function builders.lamp()
-  local height = a.height or 6.0
+  local height = a.height
   m:add(streetfurniture.lamp{ height = height })
   local r = 0.09
   m:shape("pole", { capsule = { radius = r, height = height - 2 * r }, pos = { 0, height / 2, 0 } })
@@ -62,7 +72,7 @@ end
 
 -- A TREE: bark and canopy; from 80 m a lighter tree of the same seed (fewer clumps). The trunk is what collides.
 function builders.tree()
-  local seed, shape, height = a.seed or 1, a.shape or "oak", a.height or 8
+  local seed, shape, height = a.seed, a.shape, a.height
   m:material("leaves", material.new{ roughness = 0.9, two_sided = true })
   local far = m:level(80)
   local bark, canopy = stylized.tree(seed, { shape = shape, height = height })
@@ -77,12 +87,10 @@ end
 
 -- A BOULDER: the rock, and its hull to collide with (triangles while it stands still).
 function builders.rock()
-  local rock = stylized.rock(a.seed or 1, { family = a.family or "boulder", size = a.size or 1.5 })
+  local rock = stylized.rock(a.seed, { family = a.family, size = a.size })
   m:add(rock)
   m:shape("rock", { hull = rock })
 end
 
-local build = builders[a.kind or ""]
-if not build then error("prop_models: kind is one of furniture, street_prop, lamp, tree, rock") end
-build()
+builders[a.kind]()
 return m

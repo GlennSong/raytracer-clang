@@ -21,6 +21,11 @@ struct TextureData;
 // city.lua drives both a grid and a radial city). Objects -> keyed tables,
 // arrays -> 1-based tables (so a {r,g,b} colour reads straight back), primitives
 // map across. Call after openProcgenLibrary, before running the recipe.
+// What the recipe that ran in `vm` said it takes (its `params{ ... }`), as JSON: an array of { name, type
+// ("choice" | "number" | "text" | "bool"), default, choices?, whole?, min?, max? }, sorted by name. Empty when it
+// declared nothing. For a host that offers the arguments to a person (the model studio's form).
+std::string declaredParams(ScriptVM& vm);
+
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson);
 
 // Inject a HeightField as a Lua global (e.g. "ground") so a recipe can sample and

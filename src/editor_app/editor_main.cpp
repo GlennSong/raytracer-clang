@@ -981,6 +981,7 @@ int main(int argc, char** argv) {
         error = QString::fromStdString(why);
         return ok;
     };
+    modelStudio->recipeParams = [](const QString& recipe) { return QString::fromStdString(engine::recipeParams(recipe.toStdString())); };
     // "Copy view": where the camera is, and a screenshot of the viewport taken now.
     modelStudio->viewNote = [&]() -> QString {
         const engine::CameraState& cam = app.renderView().camera;

@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
+#include <mutex>
 
 namespace engine {
 
@@ -30,6 +32,9 @@ struct Building {
     std::vector<ModelInput>* inputs;
 };
 thread_local std::vector<Building> t_building;
+
+std::mutex g_paramsMutex;
+std::map<std::string, std::string> g_params;   // a recipe's name -> what it last said it takes (declaredParams)
 
 std::shared_ptr<const ProcModel> obtainFromLine(const std::string& name, const nlohmann::json& line, const std::string& levelDir, std::string* error,
                                                 ModelStore& store, const std::string& listFile);
@@ -181,7 +186,12 @@ std::shared_ptr<const ProcModel> obtainFromLine(const std::string& name, const n
         openModelStore(vm, [&](const std::string& other, std::string* otherError) { return obtainModel(other, levelDir, otherError, &store, listFile); });
         if (line.contains("args") && line["args"].is_object()) setRecipeArgs(vm, line["args"].dump());
         ProcModel out;
-        if (runProcgenModelValue(vm, code, out, &why)) {
+        const bool ran = runProcgenModelValue(vm, code, out, &why);
+        {   // what it takes, whether or not it built (a form can then offer what would mend a wrong argument)
+            const std::lock_guard<std::mutex> lock(g_paramsMutex);
+            g_params[recipe] = declaredParams(vm);
+        }
+        if (ran) {
             built = std::make_shared<ProcModel>(std::move(out));
             built->frozen = false;   // (a recipe that returned a kept model as it is: this is a copy of it)
         } else {
@@ -199,6 +209,12 @@ std::shared_ptr<const ProcModel> obtainFromLine(const std::string& name, const n
 }
 
 }  // namespace
+
+std::string recipeParams(const std::string& recipe) {
+    const std::lock_guard<std::mutex> lock(g_paramsMutex);
+    const std::map<std::string, std::string>::const_iterator it = g_params.find(recipe);
+    return it == g_params.end() ? std::string() : it->second;
+}
 
 std::string recipeModelName(const std::string& recipe, const std::string& argsJson) {
     if (argsJson.empty() || argsJson == "null" || argsJson == "{}") return "recipe:" + recipe;

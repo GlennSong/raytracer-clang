@@ -5390,6 +5390,178 @@ std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
     return *static_cast<MeshPtr*>(ud);
 }
 
+// --- params: what a recipe takes (#191, the model studio) ---------------------------------------------------
+// A recipe says what arguments it takes, each with its default, and gets back the values to use:
+//
+//     local a = params{
+//       kind  = { "furniture", "lamp", "tree" },     -- a choice: one of these names; the first unless `default = "tree"`
+//       seed  = 1,                                   -- a number (a whole one stays whole)
+//       tall  = { 8, min = 2, max = 30 },            -- a number held between limits
+//       name  = "office_chair",                      -- a text
+//       solid = true,                                -- yes or no
+//     }
+//
+// `a.kind`, `a.seed` ... are the recipe's `args` where given and the defaults where not. An argument the recipe
+// does not take, a choice that is not on the list, a number where a text was wanted: each is an error that names
+// what the recipe does take, so a mistyped argument is never quietly ignored. The declaration is also kept for the
+// host (declaredParams below): the model studio turns it into a form.
+constexpr const char* kParamsKey = "engine.procgen.params";
+
+int l_params(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    // the names, sorted, so the form and the error text come out the same every run
+    std::vector<std::string> names;
+    lua_pushnil(L);
+    while (lua_next(L, 1) != 0) {
+        if (lua_type(L, -2) != LUA_TSTRING) return luaL_error(L, "params: each argument has a name: { seed = 1, kind = { \"a\", \"b\" } }");
+        names.push_back(lua_tostring(L, -2));
+        lua_pop(L, 1);
+    }
+    std::sort(names.begin(), names.end());
+    std::string takes;
+    for (const std::string& n : names) takes += (takes.empty() ? "" : ", ") + n;
+
+    // What is wrong with the arguments given, if anything: said only AFTER the whole declaration has been read and
+    // kept, so a host can still show what the recipe takes (and so offer what would mend it).
+    std::string wrong;
+    lua_getglobal(L, "args");
+    const int args = lua_gettop(L);
+    const bool given = lua_istable(L, args);
+    // an argument the recipe does not take
+    if (given) {
+        lua_pushnil(L);
+        while (lua_next(L, args) != 0) {
+            lua_pop(L, 1);
+            if (lua_type(L, -1) != LUA_TSTRING) continue;
+            const std::string name = lua_tostring(L, -1);
+            if (std::find(names.begin(), names.end(), name) == names.end() && wrong.empty())
+                wrong = "there is no argument '" + name + "' (this recipe takes: " + (takes.empty() ? "none" : takes) + ")";
+        }
+    }
+
+    nlohmann::json declared = nlohmann::json::array();
+    lua_newtable(L);
+    const int out = lua_gettop(L);
+    for (const std::string& name : names) {
+        lua_getfield(L, 1, name.c_str());
+        const int decl = lua_gettop(L);
+        nlohmann::json d;
+        d["name"] = name;
+        // what kind of argument, and its default
+        int kind = lua_type(L, decl);     // LUA_TNUMBER, LUA_TSTRING, LUA_TBOOLEAN, or (for a choice) LUA_TTABLE
+        bool whole = false;
+        std::vector<std::string> choices;
+        double lo = 0, hi = 0;
+        bool limited = false;
+        if (kind == LUA_TTABLE) {
+            lua_rawgeti(L, decl, 1);
+            const int first = lua_type(L, -1);
+            if (first == LUA_TSTRING) {
+                lua_pop(L, 1);
+                for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, decl)); i <= n; ++i) {
+                    lua_rawgeti(L, decl, i);
+                    if (lua_type(L, -1) != LUA_TSTRING) return luaL_error(L, "params: '%s' is a choice: a list of names", name.c_str());
+                    choices.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+                std::string def = choices.front();
+                lua_getfield(L, decl, "default");
+                if (lua_type(L, -1) == LUA_TSTRING) def = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                if (std::find(choices.begin(), choices.end(), def) == choices.end()) return luaL_error(L, "params: '%s' has a default that is not one of its choices", name.c_str());
+                d["type"] = "choice";
+                d["choices"] = choices;
+                d["default"] = def;
+                lua_pushstring(L, def.c_str());
+            } else if (first == LUA_TNUMBER) {
+                whole = lua_isinteger(L, -1) != 0;
+                const double def = lua_tonumber(L, -1);
+                lua_pop(L, 1);
+                lua_getfield(L, decl, "min");
+                lua_getfield(L, decl, "max");
+                if (lua_isnumber(L, -2) && lua_isnumber(L, -1)) { lo = lua_tonumber(L, -2); hi = lua_tonumber(L, -1); limited = hi > lo; }
+                lua_pop(L, 2);
+                d["type"] = "number";
+                d["whole"] = whole;
+                d["default"] = def;
+                if (limited) { d["min"] = lo; d["max"] = hi; }
+                kind = LUA_TNUMBER;
+                if (whole) lua_pushinteger(L, static_cast<lua_Integer>(def)); else lua_pushnumber(L, def);
+            } else {
+                return luaL_error(L, "params: '%s' is a number, a text, true or false, a list of names (a choice), or { number, min =, max = }", name.c_str());
+            }
+        } else if (kind == LUA_TNUMBER) {
+            whole = lua_isinteger(L, decl) != 0;
+            d["type"] = "number";
+            d["whole"] = whole;
+            d["default"] = lua_tonumber(L, decl);
+            lua_pushvalue(L, decl);
+        } else if (kind == LUA_TSTRING) {
+            d["type"] = "text";
+            d["default"] = lua_tostring(L, decl);
+            lua_pushvalue(L, decl);
+        } else if (kind == LUA_TBOOLEAN) {
+            d["type"] = "bool";
+            d["default"] = lua_toboolean(L, decl) != 0;
+            lua_pushvalue(L, decl);
+        } else {
+            return luaL_error(L, "params: '%s' is a number, a text, true or false, a list of names (a choice), or { number, min =, max = }", name.c_str());
+        }
+        declared.push_back(d);
+        // (the default is on the stack) the value given, checked, in its place
+        if (given) {
+            lua_getfield(L, args, name.c_str());
+            if (!lua_isnil(L, -1)) {
+                const int got = lua_gettop(L);
+                if (!choices.empty()) {
+                    const std::string v = lua_type(L, got) == LUA_TSTRING ? lua_tostring(L, got) : "";
+                    if (std::find(choices.begin(), choices.end(), v) == choices.end()) {
+                        std::string list;
+                        for (const std::string& c : choices) list += (list.empty() ? "" : ", ") + c;
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is one of: " + list;
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);   // (the default stands in)
+                    }
+                } else if (kind == LUA_TNUMBER) {
+                    if (lua_type(L, got) != LUA_TNUMBER) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is a number";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    } else {
+                        double v = lua_tonumber(L, got);
+                        if (limited) v = std::clamp(v, lo, hi);
+                        // (a level carries every number as a fraction: a whole argument is made whole again)
+                        lua_pop(L, 1);
+                        if (whole && v == std::floor(v)) lua_pushinteger(L, static_cast<lua_Integer>(v)); else lua_pushnumber(L, v);
+                    }
+                } else if (kind == LUA_TSTRING) {
+                    if (lua_type(L, got) != LUA_TSTRING) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is a text";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    }
+                } else if (kind == LUA_TBOOLEAN) {
+                    if (lua_type(L, got) != LUA_TBOOLEAN) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is true or false";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    }
+                }
+                lua_remove(L, -2);       // the default goes; the given value stays
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+        lua_setfield(L, out, name.c_str());
+        lua_settop(L, out);
+    }
+    lua_pushstring(L, declared.dump().c_str());
+    lua_setfield(L, LUA_REGISTRYINDEX, kParamsKey);
+    if (!wrong.empty()) return luaL_error(L, "%s", wrong.c_str());
+    lua_pushvalue(L, out);
+    return 1;
+}
+
 void openProcgenLibrary(ScriptVM& vm) {
     lua_State* L = luaState(vm);
 
@@ -5778,6 +5950,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kModelFns);
     lua_setglobal(L, "model");
+    lua_pushcfunction(L, l_params);
+    lua_setglobal(L, "params");
 
     // Retired with the old meshers (roads-v2 cleanup): `union`, `weld` and
     // `roadbed` wrapped the ribbon-union / SDF roadbed the engine path had already
@@ -5932,6 +6106,14 @@ void openModelFiles(ScriptVM& vm, ModelFileSource source) {
     lua_pushcclosure(L, l_model_from_files, 1);
     lua_setfield(L, -2, "from_files");
     lua_pop(L, 1);
+}
+
+std::string declaredParams(ScriptVM& vm) {
+    lua_State* L = luaState(vm);
+    lua_getfield(L, LUA_REGISTRYINDEX, kParamsKey);
+    const std::string out = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return out;
 }
 
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
