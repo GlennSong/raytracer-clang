@@ -388,6 +388,13 @@ struct ProcModel {
         return f;
     }
 
+    // Does anything move this node: is it, or any node above it, a moving node?
+    bool nodeMoves(int node) const {
+        for (int i = node; i >= 0; i = nodes[static_cast<std::size_t>(i)].parent)
+            if (nodes[static_cast<std::size_t>(i)].motion.kind != ProcMotion::Kind::None) return true;
+        return false;
+    }
+
     // The moving node a pose's name means, through used pieces ("door_fl/window"), or null: no such node, or one
     // that does not move.
     const ProcNode* jointAt(const std::string& path) const;
@@ -458,13 +465,15 @@ struct ProcModel {
 struct ProcPlacedUse {
     const ProcUse* use = nullptr;
     std::vector<Mat4> transforms;
+    std::string prefix;   // the path the piece's own nodes are named by in a pose ("door_fl/")
 };
 
 // Every use of a model at every depth, placed. THE one walk of the uses: the offline bake, the level loader,
 // flatten and the model sheet all read this, so they cannot disagree about where a copy is. A use on the root of the
 // model asked has exactly its placements' matrices. `distance` is how far away the model is seen from: only the
 // uses of the level drawn at that distance are walked, in the model and in each piece (0: the full model).
-std::vector<ProcPlacedUse> placedUses(const ProcModel& m, Real distance = 0);
+// `pose` (null: at rest) moves each moving node, in the model and inside each piece, without making a posed copy.
+std::vector<ProcPlacedUse> placedUses(const ProcModel& m, Real distance = 0, const ProcPose* pose = nullptr);
 
 // One instanced draw of a model: one part of a used piece, and where every copy of it stands in the model. A piece
 // used from four nodes is ONE of these with four transforms (per part of the piece), which is the point of a use.
@@ -476,7 +485,7 @@ struct ProcDrawnPiece {
 
 // Every instanced draw of a model, over `placedUses`: what the offline bake, the level loader, flatten and the model
 // sheet draw. In the order pieces are first met; parts with no triangles are left out.
-std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance = 0);
+std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance = 0, const ProcPose* pose = nullptr);
 
 // ONE DRAW OF A MODEL, WITH THE DISTANCES IT IS SEEN AT (#191, step 7): one part of the model, or one part of one
 // copy of a used piece, where it stands in the model's space, drawn from `from` metres away up to `until`.
@@ -492,8 +501,9 @@ struct ProcModelDraw {
 // each draw carries the band of distances it is seen in, and every draw of the model measures its distance from the
 // same point, so the whole model changes level at once. A used piece changes level at its own distances, so the
 // bands are cut at the model's distances and at every piece's; a part that is the same over several bands is one
-// draw across them. Over `drawnPieces`, the one walk.
-std::vector<ProcModelDraw> modelDraws(const ProcModel& m);
+// draw across them. Over `drawnPieces`, the one walk. In a `pose` (null: at rest) the draws come in the same order
+// with their places moved, so what holds a draw per piece can move each by its number.
+std::vector<ProcModelDraw> modelDraws(const ProcModel& m, const ProcPose* pose = nullptr);
 
 // One mesh of everything the model draws, in the model's space: its parts at their nodes and every copy of every
 // used piece, as seen from `distance` metres away (0: the full model). Bridges a model to single-mesh consumers.

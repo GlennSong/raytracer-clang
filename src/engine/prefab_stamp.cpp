@@ -3,8 +3,11 @@
 
 #include "../log.h"
 #include "asset_manager.h"
+#include "model_motion.h"
 #include "model_spawn.h"
+#include "script_assets.h"
 #include "scripting/model_recipes.h"
+#include "scripting/script_behaviour.h"
 #include "scripting/prefab_list.h"
 
 #include <cstdio>
@@ -23,26 +26,6 @@ DrawClass drawClassNamed(const std::string& name) {
 }
 
 }  // namespace
-
-void placeModelPieces(World& world, Entity instance) {
-    const ModelInstance* mi = world.get<ModelInstance>(instance);
-    const Transform* at = world.get<Transform>(instance);
-    if (mi == nullptr || at == nullptr) return;
-    Transform unscaled = *at;
-    unscaled.scale = Vec3(1, 1, 1);
-    const Mat4 owner = unscaled.matrix();
-    for (Entity e : mi->pieces) {
-        const ModelPiece* piece = world.get<ModelPiece>(e);
-        Transform* t = world.get<Transform>(e);
-        if (piece == nullptr || t == nullptr) continue;
-        *t = transformFromMatrix(owner * piece->local);
-        if (Renderable* r = world.get<Renderable>(e)) {
-            r->lodAnchored = true;
-            r->lodAnchor = at->position;
-            r->lodAnchorReach = (t->position - at->position).length();
-        }
-    }
-}
 
 Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, const Transform& at, const std::string& levelDir, std::string* error,
                    ModelStore* storeOrNull, const std::string& models) {
@@ -92,10 +75,23 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
     }
     if (prefab.body == Prefab::Body::Static) {
         const ProcFrame frame{place.position, place.orientation};
-        instance.bodies = spawnModelColliders(world, *model, &frame, prefab.friction);
+        // A box, sphere or capsule on a node that can move is a kinematic body: ModelMotionSystem carries it with
+        // its node. Each such body says which of the model's shapes it is (ModelShape).
+        std::vector<int> colliderOf;
+        instance.bodies = spawnModelColliders(world, *model, &frame, prefab.friction, /*movingAreKinematic=*/true, &colliderOf);
+        for (std::size_t i = 0; i < instance.bodies.size(); ++i)
+            if (colliderOf[i] >= 0) world.add<ModelShape>(instance.bodies[i], ModelShape{entity, colliderOf[i]});
     }
     world.add<ModelInstance>(entity, std::move(instance));
-    placeModelPieces(world, entity);
+#ifdef RT_ENABLE_SCRIPTING
+    if (!prefab.script.empty()) {
+        ScriptBehaviour behaviour;
+        behaviour.source = loadScriptCode(prefab.script, levelDir);
+        if (behaviour.source.empty()) LOG_WARN << "prefab '" << prefab.name << "': the script '" << prefab.script << "' cannot be read";
+        else world.add<ScriptBehaviour>(entity, behaviour);
+    }
+#endif
+    poseModelPieces(world, entity);
     // A piece has not moved since the step before: its previous place is its place.
     if (const ModelInstance* mi = world.get<ModelInstance>(entity))
         for (Entity e : mi->pieces)

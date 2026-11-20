@@ -2,6 +2,7 @@
 #include "prefab_list.h"
 
 #include "../components.h"      // drawClassName
+#include "../script_assets.h"   // loadScriptCode
 #include "model_recipes.h"      // readScriptList, namedModels
 
 #include <algorithm>
@@ -54,12 +55,12 @@ bool findPrefab(const std::string& name, Prefab& out, const std::string& levelDi
     const std::string where = listFile + ": '" + name + "'";
 
     std::string stray;
-    if (!onlyKeys(line, {"model", "physics", "draw"}, stray)) {
+    if (!onlyKeys(line, {"model", "physics", "draw", "script"}, stray)) {
         // What the design note gives a prefab that is not built yet: say so, so a line is never half obeyed.
-        const std::vector<std::string> later = {"sounds", "lights", "offers", "particles", "script"};
+        const std::vector<std::string> later = {"sounds", "lights", "offers", "particles"};
         if (std::find(later.begin(), later.end(), stray) != later.end())
-            return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, steps 8 and 9)");
-        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw)");
+            return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, step 9)");
+        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script)");
     }
 
     Prefab p;
@@ -97,6 +98,11 @@ bool findPrefab(const std::string& name, Prefab& out, const std::string& levelDi
             if (!draw["distance"].is_number() || draw["distance"].get<double>() <= 0) return fail(where + ": draw.distance is a distance in metres, more than 0");
             p.drawDistance = draw["distance"].get<double>();
         }
+    }
+    if (line.contains("script")) {
+        if (!line["script"].is_string() || line["script"].get<std::string>().empty()) return fail(where + ": `script` is a script's file name");
+        p.script = line["script"].get<std::string>();
+        if (loadScriptCode(p.script, levelDir).empty()) return fail(where + ": the script '" + p.script + "' cannot be read");
     }
     out = p;
     return true;

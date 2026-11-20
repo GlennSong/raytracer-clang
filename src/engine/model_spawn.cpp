@@ -1,6 +1,7 @@
 // A model into the world (#191, step 7). See model_spawn.h.
 #include "model_spawn.h"
 
+#include "../log.h"
 #include "asset_manager.h"
 #include "procgen/surface_maps.h"
 #include "procgen/tree.h"   // leafTexture
@@ -92,8 +93,14 @@ MeshHandle ModelDresser::dress(const ProcMaterial& made, const RenderMesh& mesh,
     return assets_.acquireMesh(tiled, meshKey);
 }
 
-std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, const ProcFrame* at, Real frictionAll) {
+std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, const ProcFrame* at, Real frictionAll, bool movingAreKinematic,
+                                        std::vector<int>* colliderOf) {
     std::vector<Entity> made;
+    if (colliderOf != nullptr) colliderOf->clear();
+    auto note = [&](Entity e, int collider) {
+        made.push_back(e);
+        if (colliderOf != nullptr) colliderOf->push_back(collider);
+    };
     const Mat4 atMatrix = at != nullptr ? at->matrix() : Mat4::identity();
     auto frictionOf = [&](Real own) { return frictionAll >= 0 ? frictionAll : own; };
     auto appendTris = [](MeshCollider& mc, const RenderMesh& rm, const Mat4* xf) {
@@ -115,9 +122,10 @@ std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, co
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         world.add<MeshCollider>(e, std::move(mc));
-        made.push_back(e);
+        note(e, -1);
     };
-    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, const Quat& turn, const ProcCollider& src) {
+    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, const Quat& turn, const ProcCollider& src, int collider = -1,
+                              bool kinematic = false) {
         Entity e = world.create();
         Transform t;
         t.position = center;
@@ -132,9 +140,9 @@ std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, co
         c.friction = frictionOf(src.friction);
         world.add<Collider>(e, c);
         RigidBody rb;
-        rb.motion = src.dynamic ? BodyMotion::Dynamic : BodyMotion::Static;
+        rb.motion = src.dynamic ? BodyMotion::Dynamic : (kinematic ? BodyMotion::Kinematic : BodyMotion::Static);
         world.add<RigidBody>(e, rb);
-        made.push_back(e);
+        note(e, collider);
     };
     // Static triangle-mesh colliders are MERGED by friction into one body each:
     // a city is hundreds of solids (every building, plinth, lawn, the terrain, the
@@ -157,7 +165,12 @@ std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, co
         const Mat4 xf = onRoot ? atMatrix : (at != nullptr ? atMatrix * model.nodeFrame(node).matrix() : model.nodeFrame(node).matrix());
         appendTris(bucketFor(friction), tris, &xf);
     };
-    for (const ProcCollider& pc : model.colliders) {
+    for (std::size_t ci = 0; ci < model.colliders.size(); ++ci) {
+        const ProcCollider& pc = model.colliders[ci];
+        const int index = static_cast<int>(ci);
+        const bool moves = movingAreKinematic && model.nodeMoves(pc.node);
+        if (moves && (pc.kind == ProcCollider::Kind::Mesh || pc.kind == ProcCollider::Kind::Hull))
+            LOG_WARN << "collision shape '" << pc.name << "' is a mesh or hull on a node that moves: it stays where it is at rest (no moving mesh or hull shape yet)";
         // A shape stands at the node it is on. The root's frame is no move and no turn, so a shape on it is where
         // the recipe put it, as every collider was before nodes.
         const bool onRoot = pc.node == 0;
@@ -173,11 +186,11 @@ std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, co
                 appendPlaced(frictionOf(pc.friction), shapeMesh(pc), pc.node);
                 break;
             case ProcCollider::Kind::Box:
-                spawnPrimitive(ColliderShape::Box, placed.position, placed.rotation, pc); break;
+                spawnPrimitive(ColliderShape::Box, placed.position, placed.rotation, pc, index, moves); break;
             case ProcCollider::Kind::Sphere:
-                spawnPrimitive(ColliderShape::Sphere, placed.position, placed.rotation, pc); break;
+                spawnPrimitive(ColliderShape::Sphere, placed.position, placed.rotation, pc, index, moves); break;
             case ProcCollider::Kind::Capsule:
-                spawnPrimitive(ColliderShape::Capsule, placed.position, placed.rotation, pc); break;
+                spawnPrimitive(ColliderShape::Capsule, placed.position, placed.rotation, pc, index, moves); break;
         }
     }
 

@@ -5,6 +5,7 @@
 #include "../src/engine/level_loader.h"
 #include "../src/engine/level_writer.h"
 #include "../src/engine/mesh_uploader.h"
+#include "../src/engine/model_motion.h"
 #include "../src/engine/model_spawn.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/procgen/proc_model.h"
@@ -98,7 +99,8 @@ TEST_CASE(prefab_list_says_what_is_wrong_with_a_line) {
         nomodel = { physics = { body = "static" } },
         ghost   = { model = "nothing" },
         typo    = { model = "box", phisics = { body = "static" } },
-        later   = { model = "box", script = "box.lua" },
+        later   = { model = "box", sounds = { { at = "exhaust", patch = "idle" } } },
+        noscript = { model = "box", script = "test_prefab_no_such_script_tmp.lua" },
         thrown  = { model = "box", physics = { body = "dynamic" } },
         badkey  = { model = "box", physics = { mass = 3 } },
         badcls  = { model = "box", draw = { class = "cloud" } },
@@ -123,7 +125,8 @@ TEST_CASE(prefab_list_says_what_is_wrong_with_a_line) {
         {"nomodel", "needs `model`"},
         {"ghost", "has no model named 'nothing'"},
         {"typo", "has `phisics`, which a prefab does not have"},
-        {"later", "`script` is not built yet"},
+        {"later", "`sounds` is not built yet"},
+        {"noscript", "cannot be read"},
         {"thrown", "a body that moves is not built yet"},
         {"badkey", "physics has `mass`"},
         {"badcls", "draw.class is a draw class's name"},
@@ -243,9 +246,9 @@ TEST_CASE(stamping_a_prefab_makes_an_instance_its_pieces_and_its_bodies) {
         const Transform* t = world.get<Transform>(be);
         CHECK(c != nullptr && rb != nullptr && t != nullptr);
         if (c == nullptr || rb == nullptr || t == nullptr) continue;
-        CHECK(rb->motion == BodyMotion::Static);
         if ((t->position - boomMiddle).length() > 1e-9) continue;
         boomBody = true;
+        CHECK(rb->motion == BodyMotion::Kinematic);    // on a node that can move: its owner carries it
         CHECK(c->shape == ColliderShape::Box);
         CHECK_APPROX(c->halfExtent.z, 2.5, 1e-9);
         // its long side, the model's z, lies along the world's x after the quarter turn
@@ -340,7 +343,7 @@ TEST_CASE(a_stamped_prefabs_pieces_draw_by_band_and_measure_from_the_models_own_
     // Moving the entity and placing its pieces again moves them and their point.
     Transform* t = world.get<Transform>(e);
     t->position = Vec3(0, 0, 0);
-    placeModelPieces(world, e);
+    poseModelPieces(world, e);
     for (Entity pe : pieces) CHECK(world.get<Renderable>(pe)->lodAnchor.length() < 1e-12);
 }
 
@@ -391,12 +394,12 @@ TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
             const Renderable* r = world.get<Renderable>(pe);
             CHECK(r != nullptr && r->mesh.valid() && r->lodAnchored);
         }
-        if (mi.prefab == "crane") ++cranes; else ++cars;
-        if (spec.name == "crane_b") turned = e;
+        if (mi.model->name == "crane" || mi.prefab.rfind("crane", 0) == 0) ++cranes; else ++cars;
+        if (spec.name == "crane_working") turned = e;
     });
     CHECK(cranes == 4);
     CHECK(cars == 4);
-    // crane_b is turned a quarter: its boom, on the model's z, lies along the world's x.
+    // crane_working is turned a quarter: its boom, on the model's z, lies along the world's x.
     CHECK(turned.valid());
     if (turned.valid()) {
         const Transform* t = world.get<Transform>(turned);
@@ -407,7 +410,7 @@ TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
     // Every copy of the crane is the one crane.
     const ProcModel* crane = nullptr;
     world.each<ModelInstance>([&](Entity, ModelInstance& mi) {
-        if (mi.prefab != "crane") return;
+        if (mi.prefab.rfind("crane", 0) != 0) return;
         if (crane == nullptr) crane = mi.model.get();
         CHECK(mi.model.get() == crane);
     });
@@ -424,13 +427,117 @@ TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
         if (ent.value("shape", std::string()) != "prefab") continue;
         ++prefabs;
         CHECK(ent.contains("prefab") && ent["prefab"].is_string());
-        if (ent.value("name", std::string()) == "crane_b") {
+        if (ent.value("name", std::string()) == "crane_working") {
             sawTurned = true;
-            CHECK(ent["prefab"] == "crane");
+            CHECK(ent["prefab"] == "crane_working");
             CHECK(ent.contains("orientation"));
             CHECK_APPROX(ent["position"][2].get<double>(), 6.0, 1e-9);
         }
     }
     CHECK(prefabs == 8);
     CHECK(sawTurned);
+}
+
+TEST_CASE(a_model_instances_nodes_move_toward_their_targets_and_what_hangs_on_them_follows) {
+    World world;
+    ModelStore store;
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    const Transform at = turnedAt(Vec3(12, 0, -3), 90);
+    const Entity e = stampPrefab(world, nullptr, crane, at, std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    const Real deg = 3.14159265358979 / 180.0;
+
+    // At rest the hook marker is under the boom's tip: 5 m out on the boom, which is 0.6 m ahead of the mast and
+    // 5.4 m up; the marker hangs 0.3 m below.
+    Vec3 hook;
+    Quat turn;
+    CHECK(modelMarkerWorld(world, e, "hook", hook, turn));
+    CHECK((hook - at.matrix().transformPoint(Vec3(0, 5.1, 5.6))).length() < 1e-9);
+    CHECK(!modelMarkerWorld(world, e, "no_such_marker", hook, turn));
+
+    // A value given with no speed is there at once, stopped at the model's limit (the boom lifts to 75 degrees).
+    std::string why;
+    CHECK(setModelTarget(world, e, "boom", 200 * deg, 0, &why));
+    CHECK_APPROX(modelValue(world, e, "boom"), 75 * deg, 1e-12);
+    CHECK(setModelTarget(world, e, "boom", 0, 0));
+    CHECK(!setModelTarget(world, e, "mast", 1.0, 0, &why));      // not a node at all
+    CHECK(why.find("no moving node named 'mast'") != std::string::npos);
+    CHECK(!setModelTarget(world, world.create(), "boom", 1.0, 0, &why));
+    CHECK(why.find("not a model instance") != std::string::npos);
+
+    // With a speed it gets there step by step: 90 degrees at 30 a second is three seconds.
+    CHECK(setModelTarget(world, e, "cabin", 90 * deg, 30 * deg));
+    CHECK_APPROX(modelValue(world, e, "cabin"), 0.0, 1e-12);       // not yet
+    int steps = 0;
+    while (advanceModelMotion(world, e, 1.0 / 60.0)) ++steps;
+    CHECK(steps == 180 || steps == 181);      // (the last sixtieth lands on the target, give or take rounding)
+    CHECK_APPROX(modelValue(world, e, "cabin"), 90 * deg, 1e-9);
+    CHECK(world.get<ModelInstance>(e)->target.values.empty());      // met: nothing more to do
+    CHECK(!advanceModelMotion(world, e, 1.0 / 60.0));
+
+    // The cab turned a quarter about the mast: the hook, child of the boom, child of the cab, swung with it. The
+    // rig turns the cab about +y, so the model's +z goes to +x.
+    CHECK(modelMarkerWorld(world, e, "hook", hook, turn));
+    CHECK((hook - at.matrix().transformPoint(Vec3(5.6, 5.1, 0))).length() < 1e-6);
+    // ...and running the hook line out 2 m lowers it 2 m.
+    CHECK(setModelTarget(world, e, "hook", 2.0, 0));
+    Vec3 lower;
+    CHECK(modelMarkerWorld(world, e, "hook", lower, turn));
+    CHECK((lower - (hook - Vec3(0, 2, 0))).length() < 1e-6);
+
+    // The drawn pieces are where the pose puts them: the boom's piece (full level) is at the boom's node.
+    Vec3 boomNode;
+    CHECK(modelNodeWorld(world, e, "boom", boomNode, turn));
+    int atBoom = 0;
+    for (Entity pe : world.get<ModelInstance>(e)->pieces)
+        if ((world.get<Transform>(pe)->position - boomNode).length() < 1e-6) ++atBoom;
+    CHECK(atBoom == 2);      // the boom's mesh at both levels of detail
+
+    // The bodies: the base and mast do not move (static); the cab's and the boom's shapes are on moving nodes
+    // (kinematic), and each knows where it belongs in the pose.
+    int fixed = 0, carried = 0;
+    const Vec3 boomMiddle = at.matrix().transformPoint(Vec3(3.1, 5.4, 0));
+    bool boomFound = false;
+    for (Entity be : world.get<ModelInstance>(e)->bodies) {
+        const RigidBody* rb = world.get<RigidBody>(be);
+        CHECK(world.get<ModelShape>(be) != nullptr);
+        if (rb->motion == BodyMotion::Static) { ++fixed; continue; }
+        CHECK(rb->motion == BodyMotion::Kinematic);
+        ++carried;
+        Vec3 where;
+        CHECK(modelBodyPlace(world, be, where, turn));
+        if ((where - boomMiddle).length() < 1e-6) boomFound = true;
+    }
+    CHECK(fixed == 2);
+    CHECK(carried == 2);
+    CHECK(boomFound);
+}
+
+TEST_CASE(a_moving_node_inside_a_used_piece_is_reached_through_the_node_that_uses_it) {
+    // The sedan's doors are nodes of the car; a tire is a used piece. Opening a door moves the door's pieces and
+    // nothing else.
+    World world;
+    ModelStore store;
+    Prefab sedan;
+    CHECK(findPrefab("parked_sedan", sedan));
+    const Entity e = stampPrefab(world, nullptr, sedan, Transform(), std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    std::vector<Vec3> before;
+    const std::vector<Entity> pieces = world.get<ModelInstance>(e)->pieces;
+    for (Entity pe : pieces) before.push_back(world.get<Transform>(pe)->position);
+    std::string why;
+    const bool ok = setModelTarget(world, e, "door_front_l", 50 * 3.14159265358979 / 180.0, 0, &why);
+    if (!ok) std::printf("    %s\n", why.c_str());
+    CHECK(ok);
+    CHECK(world.get<ModelInstance>(e)->pieces.size() == pieces.size());
+    int moved = 0;
+    for (std::size_t i = 0; i < pieces.size(); ++i) {
+        const Transform* t = world.get<Transform>(pieces[i]);
+        if ((t->position - before[i]).length() > 1e-6 || std::abs(t->orientation.w - 1.0) > 1e-9) ++moved;
+    }
+    CHECK(moved > 0);
+    CHECK(moved < static_cast<int>(pieces.size()) / 2);
 }

@@ -12,8 +12,9 @@
 // draw it (the whole model changing level of detail at once) and its collision bodies, read from the model's shapes.
 // A new kind of thing is a new line in the list. No C++ changes.
 //
-// What a line may say today: `model`, `physics`, `draw`. Sounds, lights and offers at markers, a script, and bodies
-// that move are the later steps of docs/model-record-design.md; a line that names one is refused, not ignored.
+// What a line may say today: `model`, `physics`, `draw`, `script`. Sounds, lights and offers at markers, and bodies
+// that fall or are thrown, are the later steps of docs/model-record-design.md; a line that names one is refused, not
+// ignored.
 
 #include "../../rt_math.h"
 
@@ -34,6 +35,10 @@ struct Prefab {
     // is one in metres that wins over it. Neither: furniture.
     std::string drawClass = "furniture";
     Real drawDistance = 0;
+    // script = "crane_swing.lua": a behaviour script (scripting/script_behaviour.h) every copy runs, found as a
+    // recipe is (the level's own folder first, then assets/scripts). It moves its copy's nodes with
+    // entity.model_set(e, "boom", 40).
+    std::string script;
 };
 
 }  // namespace engine

@@ -13,8 +13,11 @@
 //
 // The pieces and bodies are the instance's: `unstampPrefab` takes them with it.
 //
-// Not here yet (docs/model-record-design.md): a moving node moving its pieces and bodies (step 8), sounds, lights
-// and offers at markers (step 9), many copies drawn as a group (step 10).
+// A copy's moving nodes are moved through engine/model_motion.h (step 8): the pieces follow at once, the bodies of
+// shapes on moving nodes (kinematic) through ModelMotionSystem.
+//
+// Not here yet (docs/model-record-design.md): sounds, lights and offers at markers (step 9), many copies drawn as a
+// group (step 10).
 
 #include "components.h"
 #include "procgen/model_store.h"
@@ -37,10 +40,6 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
 // The same, the prefab found by its name in prefabs.lua.
 Entity stampPrefab(World& world, ModelDresser* dresser, const std::string& name, const Transform& at, const std::string& levelDir = std::string(),
                    std::string* error = nullptr);
-
-// Put every piece of an instance where its owner's Transform and its own place in the model say, and give each the
-// owner's position to measure its distance from. Called by the stamp; call it again after moving the entity.
-void placeModelPieces(World& world, Entity instance);
 
 // Destroy an instance with its pieces and bodies. An entity's physics body does not go with the entity (its owner
 // takes it out, as everywhere in the engine): `removeBody` is called with each body the physics made for this

@@ -233,6 +233,7 @@ add_library(engine_core STATIC
     src/engine/level_loader.cpp
     src/engine/model_spawn.cpp      # a model into the world: materials and collision shapes (#191)
     src/engine/prefab_stamp.cpp     # a prefab stamped as one entity (#191)
+    src/engine/model_motion.cpp     # a model instance's moving nodes (#191)
     src/engine/drawn_road.cpp
     src/engine/level_params.cpp
     src/engine/level_writer.cpp
@@ -289,6 +290,7 @@ add_library(engine_core STATIC
     src/engine/systems/door_system.cpp
     src/engine/systems/ladder_system.cpp
     src/engine/systems/elevator_system.cpp
+    src/engine/systems/model_motion_system.cpp   # moves model instances and their kinematic bodies (#191)
     src/engine/systems/interaction_system.cpp
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
@@ -1300,6 +1302,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_offroad_course.cpp
         tests/test_physics_system.cpp
         tests/test_prefab_physics.cpp   # a stamped crane's boom stops a falling box (#191 step 7)
+        tests/test_prefab_motion_physics.cpp   # a crane's boom, swung, sweeps a box off a post (#191 step 8)
         tests/test_fleet_springs.cpp    # every fleet car put down on its own springs (spawnHeight)
         tests/test_near_tier.cpp        # a physics car carrying out the new driving, against a lane car (ADR-0447)
         tests/test_city_map.cpp

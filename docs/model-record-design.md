@@ -673,8 +673,8 @@ return {
 
 A line may say `model` (a name in `models.lua`), `physics = { body = "static" | "none", friction = n }` and
 `draw = { class = "<a level's draw class>", distance = metres }`. Anything else is refused with a message, never
-half obeyed: a misspelt key names itself, and `sounds`, `lights`, `offers`, `particles`, `script` and a body that
-moves each say they are not built yet. (`distance`, not `until`: `until` is a Lua keyword.) Read by
+half obeyed: a misspelt key names itself, and `sounds`, `lights`, `offers`, `particles` and a body that falls
+each say they are not built yet (`script` came with step 8). (`distance`, not `until`: `until` is a Lua keyword.) Read by
 `scripting/prefab_list.{h,cpp}` (`findPrefab`, `namedPrefabs`) into the plain record `procgen/prefab.h`.
 
 **Stamping** (`engine/prefab_stamp.{h,cpp}`, `stampPrefab`) makes one entity with a `ModelInstance` component: the
@@ -713,14 +713,50 @@ the crane unstamped a box falls through where the boom was.
 
 **What step 7 left alone:**
 
-- **A pose does nothing yet.** `ModelInstance::pose` is there; pieces and bodies are placed at rest. Step 8 moves
-  them, and has to split the merged mesh bodies per node and make a moving node's bodies kinematic.
+- **A pose does nothing yet.** Done in step 8, below.
 - **A copy of a used piece is one entity per part.** Right for one crane; step 10 draws many copies as groups.
 - **Bodies that move** (a bin that can be knocked over) wait for the first port that needs one, with the real hull
   shape.
 - **An occluded piece still casts its shadow from every level** (the renderer's shadow-only draw comes before the
   distance test, as it does for city tiers). Co-located levels cast nearly the same shadow.
 - **`draw.distances`**, overriding the model's own level distances per prefab, is not built.
+
+### Prefab step 8: motion on the entity and the script (2026-11-20)
+
+The model says the boom may tilt 0 to 75 degrees. A copy's `ModelInstance` holds this crane's boom at 40.
+
+- **The words** (`engine/model_motion.{h,cpp}`, no physics needed): `setModelTarget(world, e, "boom", value, speed)`
+  heads a moving node for a value at a speed (no speed: there at once), stopped at the model's limits;
+  `advanceModelMotion` takes one step toward every target; `modelValue` reads a node; `modelNodeWorld` and
+  `modelMarkerWorld` say where a node or a marker is now, in the world. A node inside a used piece is named through
+  the node that uses it, as in a pose.
+- **The pieces follow** without a posed copy of the model: `placedUses`, `drawnPieces` and `modelDraws` take a pose,
+  and give the draws in the same order with their places moved, so piece i is draw i (`poseModelPieces`).
+- **The bodies follow.** A box, sphere or capsule on a node that can move (`ProcModel::nodeMoves`) is stamped as a
+  kinematic body with a `ModelShape` (which of the model's shapes it is). `ModelMotionSystem`
+  (`systems/model_motion_system.{h,cpp}`, in the game's system list after the elevators) advances every instance
+  with a target each fixed step and drives each such body to where its node now is (`moveKinematic`), so it pushes
+  what it meets.
+- **The script.** A prefab line takes `script = "crane_swing.lua"`: a behaviour script (the existing
+  `ScriptBehaviour`, ADR-0024) every copy runs. Its words: `entity.model_set(e, "boom", 40 [, speed])`,
+  `entity.model_get(e, "boom")`, `entity.model_marker(e, "hook")`; degrees for a turn and metres for a slide, per
+  Glenn's call 1. (The design sketched `self.model:set("cabin", 90)`; the script API passes the entity to every
+  hook, so the words sit beside `entity.set_position`.)
+- **Proof.** Unit: a cab driven a quarter turn at 30 degrees a second arrives in three seconds, the hook marker,
+  child of the boom, child of the cab, ends where the turn puts it, and running the line out 2 m lowers it 2 m; the
+  sedan's front door opens and only the door's pieces move. Physics
+  (`tests/test_prefab_motion_physics.cpp`): the boom, swung by the cab, sweeps a box off a post beside the crane.
+  `prefab_lab.json`'s middle crane is `crane_working` and runs `crane_swing.lua`.
+
+**What step 8 left alone:**
+
+- **A mesh or hull shape on a moving node stays where it is at rest**, with a warning at the stamp: the physics has
+  no moving mesh or hull shape yet. Boxes, spheres and capsules move.
+- **A used piece's own per-copy colliders** (the old instance-group kind) do not move.
+- **Two uses that coincide only at rest** would merge into one draw at rest and be two when posed; such an instance
+  keeps its pieces where they were, with a warning. No model does this today.
+- **The hook line leans with the boom,** as the rig says: a line that hangs plumb is a real joint (#311).
+- **Motion clips** (#310) would set targets the same way.
 
 ### The crane Glenn asked for (2026-11-20)
 

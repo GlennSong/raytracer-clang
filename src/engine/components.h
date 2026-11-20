@@ -21,6 +21,7 @@
 #include "procgen/terrain_world_map.h"   // TerrainLodConfig's world maps (ADR-0205, ADR-0208)
 #include "world.h"
 #include <array>
+#include <map>
 #include <unordered_map>
 #include <cmath>
 #include <cstdint>
@@ -192,8 +193,21 @@ struct ModelInstance {
     std::string prefab;                      // its line in prefabs.lua
     std::shared_ptr<const ProcModel> model;  // shared with every other copy (the model store's)
     ProcPose pose;                           // THIS copy's value for each moving node (none given: at rest)
+    // MOTION (#191, step 8; engine/model_motion.h): where each moving node is headed and how fast (radians or
+    // metres a second). A node with no target stays where it is. ModelMotionSystem moves `pose` toward `target`
+    // each fixed step, stopping at the model's limits, and the pieces and bodies follow.
+    ProcPose target;
+    std::map<std::string, Real> speed;
     std::vector<Entity> pieces;              // the entities that draw it (each has a ModelPiece)
     std::vector<Entity> bodies;              // the entities that hold its collision bodies
+};
+
+// One collision body of a model instance that stands for ONE of the model's shapes (a box, sphere or capsule):
+// which shape, so it can be put where the shape's node is in the instance's pose. (Mesh shapes merged into one
+// static body have none.)
+struct ModelShape {
+    Entity owner;
+    int collider = -1;   // an index into the model's colliders
 };
 
 // One drawn piece of a model instance: a part of the model, or a part of one copy of a used piece. Its entity's

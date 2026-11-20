@@ -70,7 +70,13 @@ private:
 // its own. Used pieces that collide stamp theirs at every copy. `at`: where the model stands (null: at the origin,
 // unturned, as a recipe entity's does). `frictionAll` >= 0 gives every shape that friction in place of its own.
 // Returns the entities made.
-std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, const ProcFrame* at = nullptr, Real frictionAll = -1);
+// `movingAreKinematic`: a box, sphere or capsule on a node that can move (ProcModel::nodeMoves) is a KINEMATIC body,
+// one its owner moves, where the others are static. A mesh or hull on such a node stays a static mesh where it is at
+// rest, with a warning: the physics has no moving mesh or hull shape yet. `colliderOf`, when given, is filled beside
+// the returned entities: for each, the index of the model's shape it stands for, or -1 (a merged mesh body, or a
+// used piece's own collider).
+std::vector<Entity> spawnModelColliders(World& world, const ProcModel& model, const ProcFrame* at = nullptr, Real frictionAll = -1,
+                                        bool movingAreKinematic = false, std::vector<int>* colliderOf = nullptr);
 
 }  // namespace engine
 
