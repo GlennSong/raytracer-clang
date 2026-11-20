@@ -103,6 +103,14 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error = nullpt
 ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
                                 std::string* error = nullptr);
 
+// MODEL FILES (#191, model step 6): `model.from_file("crane.glb")` and `model.from_files{ levels = { "crane_high.glb",
+// "crane_low.glb" }, distances = { 0, 80 } }` read a model made outside the engine (procgen/model_file.h says how a
+// file's names are read). As with `require`, a script gives a NAME, never a path: letters, digits, `_`, `-` and `.`
+// only, ending .glb or .gltf. The host maps names to files; the VM never touches the filesystem. Without this call
+// the two words say that this host loads no model files.
+using ModelFileSource = std::function<std::string(const std::string& name)>;   // the file's path, or "" when there is none
+void openModelFiles(ScriptVM& vm, ModelFileSource source);
+
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when
 // the script errors or does not return a Mesh. `openProcgenLibrary` must have

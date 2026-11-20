@@ -1,7 +1,7 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model steps 1 to 5 (nodes; markers and named materials; uses; motion, poses and rig tables; levels of detail) are
-built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model steps 1 to 5 (nodes; markers and named materials; uses; motion, poses and rig tables; levels of detail) and
+most of step 6 (collision shapes, models to and from glTF files; the store is not built) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -539,3 +539,62 @@ Left as they were, on purpose:
 - **A used piece's own shapes are not stamped at its copies.** A use still says how its copies collide
   (`collide =`). The prefab's physics reads the model's shapes through the tree.
 - **Nothing in the game moves a shape with a moving node**, because nothing moves a node in the game yet.
+
+### Model step 6, second piece: a model to a glTF file, and back (2026-11-19)
+
+```
+./build-viewer/rt_model_sheet assets/scripts/car_rig_lab.lua --glb build-viewer/sheets/car.glb    # write it; open in Blender
+./build-viewer/rt_model_sheet build-viewer/sheets/car.glb --out build-viewer/sheets/car.png       # the sheet of a file
+```
+```lua
+local crane = model.from_file("crane.glb")                                  -- one file, levels by `_lod<N>` names
+local crane = model.from_files{ name = "crane",
+                                levels = { "crane_high.glb", "crane_mid.glb", "crane_low.glb" },
+                                distances = { 0, 40, 150 } }                -- or a file per level
+```
+
+- **One convention, both ways.** AGENTS.md "Model file names" says how a file's names are read; a model is written
+  by the same names. The convention grew by what the round trip needed, each a custom property so a file still opens
+  anywhere: `motion` on a joint, `node = true` on a joint with no mesh, `use` on each copy of a shared piece, `levels`
+  on the root, and the root being an object named `root`.
+- **Writing a model is new to the plan** (the design listed only loading). It was added because the loader needs
+  files with trees, empties and named shapes to be tested against, and a model written by the engine is the honest
+  source of them. It also means any recipe's model can be opened and looked at in Blender.
+- **What is written:** every node with its place and turn; a node's parts as one mesh with a material slot each; a
+  joint's motion and limits; markers as empties with `role` and `size`; each collision shape as a `col_` object
+  holding the solid it is; each lower level's parts as a `_lod<N>` object under its node; materials with their
+  numbers and maps; and each copy of a used piece as an object, the first holding the piece and the rest sharing its
+  meshes.
+- **What is read from a file made in Blender:** the same, plus what an artist's file has that ours never does. An
+  object's scale is put into its mesh. A file with no `root` gets one. A level named with no distance gets 40 m and
+  doubling. Each of these is noted (the reader returns notes; a recipe's load logs them).
+- **Levels as separate files** (`model.from_files`): the first file gives the nodes, markers and shapes. Each later
+  file's meshes are matched to those nodes by name and become that level's parts. A mesh on a node the first file
+  lacks hangs on the root where it stood, and is noted.
+- **A script gives a file's name, never a path** (letters, digits, `_`, `-`, `.`, ending `.glb` or `.gltf`), as
+  `require` takes a module's name. The host maps names to files under `assets/models`, then beside the level. A host
+  that opens no model files says so.
+- **The file is true glTF.** Triangles are counter-clockwise and every vertex has its colour, so another tool reads
+  the model right and the engine's plain importer reads the same triangles, facing out.
+- **Proof:** `tests/test_model_file.cpp`. A car with moving joints, markers, each kind of shape, five materials (one
+  with a map, one brighter than glTF allows), three levels and a tire used four times with bolts inside it is
+  written, read, compared field by field, posed, written and read again. Blender 4, headless, reads the kit sedan's
+  file as 80 objects in the right tree with the tire copies sharing one mesh.
+
+Found on the way, not changed:
+
+- **The older exporter writes triangles the engine's way round** (`writeGlb`, the flat one behind the bundle, lanes
+  and sign exports), and the importer turns glTF's the other way on reading. A file written by `writeGlb` and read by
+  `loadCpu` therefore comes back inside out. Nothing has shown it because those files are for looking at in Blender,
+  which draws both sides. `writeGlbTree` writes glTF's way. The two writers should become one.
+- **The plain importer does not read vertex colours.** The model reader does; `loadCpu` was left as it is, because
+  honouring them there would change how every existing glTF asset is drawn.
+
+Left as they were, on purpose:
+
+- **Files hold positions in single precision**, so a model read back agrees with the one written to about a micron.
+- **A model that grades terrain, and a use with a collision mesh of its own, are refused** by the writer with a
+  reason. Nothing is silently left out.
+- **Baked maps beyond albedo and normal** (roughness, occlusion) are read by the importer but a model's material has
+  no slot for them yet: materials work (#309).
+- **The model store** (names, handles, a cache key) is the last piece of step 6.

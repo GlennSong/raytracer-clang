@@ -1269,6 +1269,7 @@ static bool runScriptModel(const json& ent, const std::string& levelDir,
     ScriptVM vm;
     openProcgenLibrary(vm);
     openModuleLoader(vm, makeModuleSource(levelDir, &g_loadedScriptFiles));
+    openModelFiles(vm, makeModelFileSource(levelDir));
     vm.setGlobalNumber("seed", ent.value("seed", 0.0));
     if (ent.contains("opts")) setRecipeArgs(vm, ent["opts"].dump());
     if (ground != nullptr) setGlobalHeightField(vm, "ground", *ground);

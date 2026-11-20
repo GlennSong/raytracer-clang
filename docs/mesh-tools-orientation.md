@@ -42,7 +42,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 5c403683 | the rig's joints renamed to the names the car kit and the game use; `assets/scripts/car_rig_lab.lua`, any kit car as a model on the car rig (model sheet only); the sheet lists nodes in tree order |
 | a4d6aa98 | model step 5, levels of detail: `levelFrom`, a level on parts and uses, `addSimplifiedLevel`, `MeshBuilder::simplifiedSurface`; Lua `m:level`, `{ level = n }`; the sheet's `--at`; `tests/test_model_levels.cpp` |
 | 25780c6d | merge of `claude/island8-batch` into this branch, up to 74cdd74d (the walking road work, ADR-0464 to 0467). Glenn's call: its updates into this one, nothing the other way |
-| (this commit) | model step 6, first piece, collision shapes on nodes: `ProcCollider` gains a name, a node, a rotation and the hull kind; `shapeMesh`; Lua `m:shape` / `n:shape`; the sheet's `--shapes`; `tests/test_model_shapes.cpp` |
+| 268ba601 | model step 6, first piece, collision shapes on nodes: `ProcCollider` gains a name, a node, a rotation and the hull kind; `shapeMesh`; Lua `m:shape` / `n:shape`; the sheet's `--shapes`; `tests/test_model_shapes.cpp` |
+| b0e9dcb7 | second merge of `claude/island8-batch`, up to 23a20eeb (ADR-0468, where a place joins the sidewalks) |
+| (this commit) | model step 6, second piece, a model to a glTF file and back: `procgen/model_file.{h,cpp}`, `writeGlbTree`, `ModelImporter::loadCpuTree`; Lua `model.from_file`, `model.from_files`; the sheet's `--glb` and a `.glb` as input; AGENTS.md "Model file names" brought up to what is built; `tests/test_model_file.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -50,7 +52,8 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 - **Look at it:** `./build-viewer/rt_model_sheet RECIPE.lua --out build-viewer/sheets/x.png`, then open the PNG. The
   `.txt` beside it has the audit. `--set NODE=VALUE` (repeatable) draws a pose: `--set door_front_l=50 --set hood=40`. `--at METRES` draws the
-  level of detail seen from that far. `--shapes` draws the collision shapes in place of the meshes.
+  level of detail seen from that far. `--shapes` draws the collision shapes in place of the meshes. `--glb FILE` also writes the model as a glTF file to
+  open in Blender, and a `.glb` can be given in place of the recipe.
   `assets/scripts/car_rig_lab.lua` (any kit car on the car rig) is the worked example; `build-viewer/sheets/uses.lua`
   (a box car) and `nodes.lua` (a crane) are smaller ones, not tracked. Scratch recipes live in `build-viewer/sheets/` (not tracked).
 - **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles and what
@@ -85,19 +88,18 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 ## What is next
 
-**The rest of model step 6**, three commits:
+**The model store, the last piece of model step 6.** Built models kept under a name so many entities share one; a
+handle into it; a cache key (the recipe, its arguments, the libraries it requires, the toolkit's version, and for a
+loaded model its files). Look first at what already caches built things by key (`procgen/furniture_kit.h`, the bundle
+and lot caches, `AssetManager`), so this is one of those and not a new kind of cache. `ProcModel::name` is there for
+it.
 
-1. **Write a model to a glTF file.** `engine/glb_export.h` writes one flat node per mesh today; it learns parents,
-   transforms and empties, so a model goes out with its node tree, its markers as empties, its shapes as
-   `col_<kind>_<name>` objects and its levels as `<name>_lod<N>` (AGENTS.md "Model file names"). Any recipe's model
-   can then be opened in Blender, and the loader has real files to be tested against. (Not in the design note's
-   list: added because the loader needs test files with trees, empties and named shapes.)
-2. **Load a model from glTF files:** `model.from_files{ name =, levels = {...}, distances = {...} }`. Today's importer
-   (`engine/model_importer.cpp`) walks the file's node tree only to bake each mesh into world space and then drops
-   the tree; it is extended to keep it. The test is a round trip: a model out to a file and back in.
-3. **The model store:** built models kept under a name, a handle, a cache key (the recipe, its arguments, the
-   libraries it requires, the toolkit's version). Look first at what already caches built things by key
-   (`procgen/furniture_kit.h`, the bundle and lot caches, `AssetManager`).
+Then the prefab half of the design note, from step 7: prefab data and stamping one entity (the model instance, its
+drawing by level of detail, physics from the model's shapes).
+
+Two things found on the way that are someone's to decide, both written up in the design note's last section: the
+older glTF writer (`writeGlb`) writes triangles the engine's way round, so its files read back inside out; and the
+plain importer (`loadCpu`) does not read vertex colours.
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 

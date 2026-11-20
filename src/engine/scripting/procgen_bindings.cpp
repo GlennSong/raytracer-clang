@@ -1,4 +1,6 @@
 #include "procgen_bindings.h"
+#include "../procgen/model_file.h"
+#include "../../log.h"
 #include "../mesh_audit.h"
 #include "furniture_library_lua.h"
 
@@ -3680,10 +3682,103 @@ int modelGc(lua_State* L) {
     return 0;
 }
 
-// model.new() -> an empty Model.
+// model.new([name]) -> an empty Model. The name ("tire") is what a file written from it calls each copy of it.
 int l_model_new(lua_State* L) {
-    pushModel(L, std::make_shared<ProcModel>());
+    ModelPtr m = std::make_shared<ProcModel>();
+    if (lua_type(L, 1) == LUA_TSTRING) m->name = lua_tostring(L, 1);
+    pushModel(L, std::move(m));
     return 1;
+}
+
+// m:name() -> the model's name ("" when it has none).
+int l_model_name(lua_State* L) {
+    lua_pushstring(L, checkModel(L, 1).name.c_str());
+    return 1;
+}
+
+// --- model files (procgen/model_file.h) ----------------------------------------------------------------------------
+// Until a host calls openModelFiles, the VM has no way to a file.
+int l_model_from_files_closed(lua_State* L) { return luaL_error(L, "this host loads no model files (openModelFiles)"); }
+
+constexpr const char* kModelFilesMt = "engine.procgen.ModelFileSource";
+int modelFilesGc(lua_State* L) {
+    static_cast<ModelFileSource*>(lua_touserdata(L, 1))->~ModelFileSource();
+    return 0;
+}
+
+// A file's name as a script may give it: letters, digits, `_`, `-`, `.`, ending .glb or .gltf, and no "..".
+bool modelFileNameOk(const std::string& name) {
+    if (name.empty() || name.find("..") != std::string::npos) return false;
+    for (const char c : name)
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) return false;
+    return (name.size() > 4 && name.compare(name.size() - 4, 4, ".glb") == 0) || (name.size() > 5 && name.compare(name.size() - 5, 5, ".gltf") == 0);
+}
+
+// The shared end of both words: the names at stack `namesIdx` (an array) resolved through the host and read. Leaves
+// the model on the stack; on any failure raises a Lua error (with no C++ object alive).
+int loadModelFromLua(lua_State* L, int namesIdx, int distancesIdx, const char* modelName) {
+    const ModelFileSource& source = *static_cast<ModelFileSource*>(lua_touserdata(L, lua_upvalueindex(1)));
+    ModelPtr loaded;
+    {
+        std::string why;
+        std::vector<std::string> paths, notes;
+        std::vector<Real> distances;
+        const lua_Integer n = luaL_len(L, namesIdx);
+        for (lua_Integer i = 1; i <= n && why.empty(); ++i) {
+            lua_geti(L, namesIdx, i);
+            const std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            if (!modelFileNameOk(name)) { why = "'" + name + "' is not a model file's name (letters, digits, _ - . only, ending .glb or .gltf)"; break; }
+            const std::string path = source(name);
+            if (path.empty()) why = "no model file named '" + name + "'";
+            else paths.push_back(path);
+        }
+        if (why.empty() && paths.empty()) why = "no files given";
+        if (why.empty() && distancesIdx != 0) {
+            const lua_Integer d = luaL_len(L, distancesIdx);
+            for (lua_Integer i = 1; i <= d; ++i) {
+                lua_geti(L, distancesIdx, i);
+                distances.push_back(static_cast<Real>(lua_tonumber(L, -1)));
+                lua_pop(L, 1);
+            }
+        }
+        if (why.empty()) {
+            const std::shared_ptr<ProcModel> read = loadModelFiles(paths, distances, &why, &notes);
+            if (read != nullptr) {
+                loaded = read;
+                if (modelName != nullptr) loaded->name = modelName;
+                for (const std::string& note : notes) LOG_WARN << "[model file] " << note;
+            }
+        }
+        if (loaded == nullptr) lua_pushstring(L, why.c_str());   // the reason outlives these strings
+    }
+    if (loaded == nullptr) return luaL_error(L, "model file: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(loaded));
+    return 1;
+}
+
+// model.from_file("crane.glb") -> model : one file, its levels of detail (if any) by `_lod<N>` names inside it.
+int l_model_from_file(lua_State* L) {
+    luaL_checkstring(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, 1);
+    lua_seti(L, -2, 1);
+    return loadModelFromLua(L, lua_gettop(L), 0, nullptr);
+}
+
+// model.from_files{ levels = { "high.glb", "mid.glb", "low.glb" }, distances = { 0, 40, 150 }, name = "crane" } -> model
+// : the full model's file first; each later file is a level of detail, its meshes matched to the first file's nodes
+// by name.
+int l_model_from_files(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "levels");
+    if (!lua_istable(L, -1)) return luaL_error(L, "model.from_files{ levels = { \"file.glb\", ... } }");
+    const int names = lua_gettop(L);
+    lua_getfield(L, 1, "distances");
+    const int distances = lua_istable(L, -1) ? lua_gettop(L) : 0;
+    lua_getfield(L, 1, "name");
+    const char* name = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;   // stays on the stack while it is read
+    return loadModelFromLua(L, names, distances, name);
 }
 
 // What a part is made of, from the argument at `idx`: a Material, the NAME of one the model holds (m:material), or
@@ -5226,6 +5321,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_shape);          lua_setfield(L, -2, "shape");
         lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
         lua_pushcfunction(L, l_model_posed);          lua_setfield(L, -2, "posed");
+        lua_pushcfunction(L, l_model_name);           lua_setfield(L, -2, "name");
         lua_pushcfunction(L, l_model_level);          lua_setfield(L, -2, "level");
         lua_pushcfunction(L, l_model_levels);         lua_setfield(L, -2, "levels");
         lua_pushcfunction(L, l_model_joints);         lua_setfield(L, -2, "joints");
@@ -5491,6 +5587,8 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kModelFns[] = {
         {"new", l_model_new},
+        {"from_file", l_model_from_files_closed},     // openModelFiles replaces these two
+        {"from_files", l_model_from_files_closed},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kModelFns);
@@ -5614,6 +5712,26 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
+
+void openModelFiles(ScriptVM& vm, ModelFileSource source) {
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "model");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }   // openProcgenLibrary first
+    // The host's resolver lives in a userdata the two closures share and Lua frees with the state.
+    void* mem = lua_newuserdatauv(L, sizeof(ModelFileSource), 0);
+    new (mem) ModelFileSource(std::move(source));
+    if (luaL_newmetatable(L, kModelFilesMt)) {
+        lua_pushcfunction(L, modelFilesGc);
+        lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    lua_pushcclosure(L, l_model_from_file, 1);
+    lua_setfield(L, -3, "from_file");
+    lua_pushcclosure(L, l_model_from_files, 1);
+    lua_setfield(L, -2, "from_files");
+    lua_pop(L, 1);
+}
 
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
     nlohmann::json opts = nlohmann::json::parse(optsJson, nullptr, false);

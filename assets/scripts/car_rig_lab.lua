@@ -24,7 +24,7 @@ local COLOR = { glass = { 0.60, 0.66, 0.70 }, trim = { 0.04, 0.04, 0.045 }, gril
                 gasket = { 0.03, 0.03, 0.03 }, liner = { 0.30, 0.29, 0.28 }, steer = { 0.06, 0.06, 0.06 } }
 local LOOK = { body = { roughness = 0.30, metallic = 0.55 }, glass = { roughness = 0.05 }, chrome = { roughness = 0.2, metallic = 0.9 } }
 
-local car = model.new()
+local car = model.new(name)
 local function made_of(mat)                      -- the car's material of that name, made the first time it is asked for
   if not car:has_material(mat) then car:material(mat, material.new(LOOK[mat] or { roughness = 0.6 })) end
   return mat
@@ -58,7 +58,7 @@ end
 
 -- one tire, four wheels
 local wheel = kit.wheel(P.wheel_r, P.wheel_w, level)
-local tire = model.new()
+local tire = model.new("tire")
 tire:material("rubber", material.new{ roughness = 0.9 })
 tire:material("alloy", material.new{ roughness = 0.25, metallic = 0.9 })
 tire:add(mesh.paint(wheel.tyre, { 0.05, 0.05, 0.055 }), "rubber")

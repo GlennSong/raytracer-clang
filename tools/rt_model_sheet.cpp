@@ -4,6 +4,8 @@
 //
 // `--at METRES` draws the level of detail the model shows from that far away; the text counts every level.
 // `--shapes` draws the collision shapes in place of the meshes: what things bump into.
+// `--glb FILE` also writes the model as a glTF file by the engine's naming convention (model_file.h), and a `.glb`
+// can be given in place of the recipe: the sheet of a model made in Blender, or of one just written.
 // `--set` draws the model in a pose: a moving node's value, in degrees for a node that turns and metres for one
 // that slides (`--set boom=40 --set door_fl/window=-0.2`). The text lists every moving node and its limits.
 //
@@ -24,6 +26,7 @@
 #include "engine/bundle/bundle.h"   // fnv1a
 #include "engine/mesh_audit.h"
 #include "engine/mesh_builder.h"
+#include "engine/procgen/model_file.h"
 #include "engine/procgen/proc_model.h"
 #include "engine/script_assets.h"
 #include "engine/scripting/procgen_bindings.h"
@@ -59,15 +62,18 @@ struct Options {
     std::vector<std::pair<std::string, double>> set;   // --set name=value: the pose to draw
     double at = 0;                                     // --at metres: the level of detail seen from that far
     bool shapes = false;                               // --shapes: draw the collision shapes in place of the meshes
+    std::string glb;                                   // --glb file: also write the model as a glTF file
 };
 
 const char* kUsage =
-    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes] [--size N] [--spp N]\n"
+    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes]\n"
+    "                      [--glb model.glb] [--size N] [--spp N]\n"
     "  runs a Lua recipe that returns a mesh or a model and writes four views of it in one PNG,\n"
     "  with its size, triangle counts and mesh audit beside it as a .txt\n"
     "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n"
     "  --at draws the level of detail seen from that many metres away (the full model without it)\n"
-    "  --shapes draws the model's collision shapes in place of its meshes\n";
+    "  --shapes draws the model's collision shapes in place of its meshes\n"
+    "  --glb also writes the model as a glTF file (open it in Blender); a .glb can be given in place of the recipe\n";
 
 bool parse(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; ++i) {
@@ -78,6 +84,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--out") { if (!value(o.out)) return false; }
         else if (a == "--args") { if (!value(o.argsJson)) return false; }
         else if (a == "--shapes") o.shapes = true;
+        else if (a == "--glb") { if (!value(o.glb)) return false; }
         else if (a == "--at") { if (!value(v)) return false; o.at = std::atof(v.c_str()); }
         else if (a == "--set") {
             if (!value(v)) return false;
@@ -480,21 +487,37 @@ int main(int argc, char** argv) {
     Options o;
     if (!parse(argc, argv, o)) { std::fputs(kUsage, stderr); return 2; }
 
-    std::ifstream in(o.recipe);
-    if (!in) { std::fprintf(stderr, "rt_model_sheet: cannot read %s\n", o.recipe.c_str()); return 1; }
-    std::stringstream code;
-    code << in.rdbuf();
-
-    ScriptVM vm;
-    openProcgenLibrary(vm);
-    openModuleLoader(vm, makeModuleSource(""));
-    if (!o.argsJson.empty()) setRecipeArgs(vm, o.argsJson);
-
     ProcModel model;
-    std::string error;
-    if (!runProcgenModelValue(vm, code.str(), model, &error)) {
-        std::fprintf(stderr, "rt_model_sheet: %s: %s\n", o.recipe.c_str(), error.c_str());
-        return 1;
+    const bool fromFile = o.recipe.size() > 4 && (o.recipe.substr(o.recipe.size() - 4) == ".glb" || o.recipe.substr(o.recipe.size() - 5) == ".gltf");
+    if (fromFile) {
+        std::string error;
+        std::vector<std::string> notes;
+        const std::shared_ptr<ProcModel> read = readModelGlb(o.recipe, &error, &notes);
+        if (read == nullptr) { std::fprintf(stderr, "rt_model_sheet: %s\n", error.c_str()); return 1; }
+        for (const std::string& note : notes) std::printf("note: %s\n", note.c_str());
+        model = *read;
+    } else {
+        std::ifstream in(o.recipe);
+        if (!in) { std::fprintf(stderr, "rt_model_sheet: cannot read %s\n", o.recipe.c_str()); return 1; }
+        std::stringstream code;
+        code << in.rdbuf();
+
+        ScriptVM vm;
+        openProcgenLibrary(vm);
+        openModuleLoader(vm, makeModuleSource(""));
+        openModelFiles(vm, makeModelFileSource(""));
+        if (!o.argsJson.empty()) setRecipeArgs(vm, o.argsJson);
+
+        std::string error;
+        if (!runProcgenModelValue(vm, code.str(), model, &error)) {
+            std::fprintf(stderr, "rt_model_sheet: %s: %s\n", o.recipe.c_str(), error.c_str());
+            return 1;
+        }
+    }
+    if (!o.glb.empty()) {
+        std::string error;
+        if (!writeModelGlb(model, o.glb, &error)) { std::fprintf(stderr, "rt_model_sheet: --glb: %s\n", error.c_str()); return 1; }
+        std::printf("wrote %s\n", o.glb.c_str());
     }
     // The recipe's model as built is what the text lists (its moving nodes and their limits); what is measured and
     // drawn is that model held in the pose asked for.

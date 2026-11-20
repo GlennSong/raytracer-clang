@@ -203,6 +203,9 @@ struct ProcUse {
 };
 
 struct ProcModel {
+    // What the model is called ("tire", "crane"); empty when a recipe gave none. A file written from the model names
+    // each copy of a used piece by it, and the model store will keep models under it.
+    std::string name;
     // The model's pieces as a tree. There is always a root, node 0, whose frame is the model's own space and never
     // changes; a model that adds no node is the flat model every recipe built before nodes existed. Colliders and
     // flatten footprints are in the root's space.

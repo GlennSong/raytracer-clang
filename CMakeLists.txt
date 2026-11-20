@@ -113,6 +113,7 @@ add_library(engine_core STATIC
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/proc_model.cpp
+    src/engine/procgen/model_file.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/tree_recipe.cpp
     src/engine/procgen/tree_lods.cpp
@@ -1094,6 +1095,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_model_motion.cpp     # how a node may move, poses, and the rig tables (#191)
         tests/test_model_levels.cpp     # a model's levels of detail (#191)
         tests/test_model_shapes.cpp     # a model's collision shapes on its nodes (#191)
+        tests/test_model_file.cpp       # a model written to a glTF file and read back (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

@@ -55,6 +55,21 @@ std::string loadScriptCode(const std::string& file, const std::string& levelDir)
 }
 
 #ifdef RT_ENABLE_SCRIPTING
+std::function<std::string(const std::string&)> makeModelFileSource(const std::string& levelDir) {
+    return [levelDir](const std::string& name) -> std::string {
+        std::vector<std::string> tries;
+        if (!assetRoot().empty()) tries.push_back(assetPath("assets/models/" + name));
+        tries.push_back("assets/models/" + name);
+        tries.push_back("../assets/models/" + name);
+        if (!levelDir.empty()) tries.push_back(levelDir + "/" + name);
+        for (const std::string& path : tries) {
+            std::ifstream f(path);
+            if (f) return path;
+        }
+        return std::string();
+    };
+}
+
 ScriptModuleSource makeModuleSource(const std::string& levelDir,
                                     std::vector<std::string>* touched) {
     return [levelDir, touched](const std::string& name, std::string& code,

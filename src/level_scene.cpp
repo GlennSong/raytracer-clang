@@ -538,6 +538,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             scriptVm = std::make_unique<ScriptVM>();
             openProcgenLibrary(*scriptVm);
             openModuleLoader(*scriptVm, makeModuleSource(levelDir));
+            openModelFiles(*scriptVm, makeModelFileSource(levelDir));
         }
         return *scriptVm;
     };
