@@ -478,6 +478,23 @@ struct ProcDrawnPiece {
 // sheet draw. In the order pieces are first met; parts with no triangles are left out.
 std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance = 0);
 
+// ONE DRAW OF A MODEL, WITH THE DISTANCES IT IS SEEN AT (#191, step 7): one part of the model, or one part of one
+// copy of a used piece, where it stands in the model's space, drawn from `from` metres away up to `until`.
+struct ProcModelDraw {
+    const ProcPart* part = nullptr;
+    const ProcModel* owner = nullptr;   // the model whose material table the part's material is in
+    Mat4 local;                          // where it stands, in the asked model's space
+    Real from = 0;
+    Real until = 0;                      // 0: no end (the last level)
+};
+
+// Everything a model draws at every distance, for what draws one copy of a model as one thing (a stamped prefab):
+// each draw carries the band of distances it is seen in, and every draw of the model measures its distance from the
+// same point, so the whole model changes level at once. A used piece changes level at its own distances, so the
+// bands are cut at the model's distances and at every piece's; a part that is the same over several bands is one
+// draw across them. Over `drawnPieces`, the one walk.
+std::vector<ProcModelDraw> modelDraws(const ProcModel& m);
+
 // One mesh of everything the model draws, in the model's space: its parts at their nodes and every copy of every
 // used piece, as seen from `distance` metres away (0: the full model). Bridges a model to single-mesh consumers.
 RenderMesh flattenModel(const ProcModel& m, Real distance = 0);

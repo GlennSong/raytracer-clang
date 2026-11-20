@@ -22,27 +22,6 @@ uint64_t hashOfFile(const std::string& path) {
     return bundle::fnv1aFile(path, key) ? key : 0;
 }
 
-// The list, read fresh each time it is asked (it is small): each name's line as JSON.
-bool readList(const std::string& file, const std::string& levelDir, nlohmann::json& out, std::string* error) {
-    const std::string code = loadScriptCode(file, levelDir);
-    if (code.empty()) {
-        if (error != nullptr) *error = file + " cannot be read";
-        return false;
-    }
-    ScriptVM vm;
-    lua_State* L = luaState(vm);
-    if (luaL_loadbuffer(L, code.data(), code.size(), "models.lua") != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
-        if (error != nullptr) *error = std::string("models.lua: ") + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error");
-        return false;
-    }
-    out = luaToJson(L, -1);
-    if (!out.is_object()) {
-        if (error != nullptr) *error = "models.lua must return a table of name = { ... }";
-        return false;
-    }
-    return true;
-}
-
 // What is being built right now on this thread, outermost first: a model that asks for another adds it to its own
 // inputs, and a model that (through others) asks for itself is caught.
 struct Building {
@@ -53,10 +32,31 @@ thread_local std::vector<Building> t_building;
 
 }  // namespace
 
+// A list script's table as JSON, read fresh each time it is asked (a list is small).
+bool readScriptList(const std::string& file, const std::string& levelDir, nlohmann::json& out, std::string* error) {
+    const std::string code = loadScriptCode(file, levelDir);
+    if (code.empty()) {
+        if (error != nullptr) *error = file + " cannot be read";
+        return false;
+    }
+    ScriptVM vm;
+    lua_State* L = luaState(vm);
+    if (luaL_loadbuffer(L, code.data(), code.size(), file.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (error != nullptr) *error = file + ": " + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error");
+        return false;
+    }
+    out = luaToJson(L, -1);
+    if (!out.is_object()) {
+        if (error != nullptr) *error = file + " must return a table of name = { ... }";
+        return false;
+    }
+    return true;
+}
+
 std::vector<std::string> namedModels(const std::string& levelDir, std::string* error, const std::string& listFile) {
     std::vector<std::string> names;
     nlohmann::json list;
-    if (!readList(listFile, levelDir, list, error)) return names;
+    if (!readScriptList(listFile, levelDir, list, error)) return names;
     for (nlohmann::json::const_iterator it = list.begin(); it != list.end(); ++it) names.push_back(it.key());
     std::sort(names.begin(), names.end());
     return names;
@@ -74,7 +74,7 @@ std::shared_ptr<const ProcModel> obtainModel(const std::string& name, const std:
 
     nlohmann::json list;
     std::string why;
-    if (!readList(listFile, levelDir, list, &why)) return fail(why);
+    if (!readScriptList(listFile, levelDir, list, &why)) return fail(why);
     if (!list.contains(name) || !list[name].is_object()) return fail("models.lua has no model named '" + name + "'");
     const nlohmann::json& line = list[name];
     const std::string recipe = line.value("recipe", std::string());

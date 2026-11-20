@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 
 namespace engine {
 
@@ -178,6 +179,54 @@ int addSimplifiedLevel(ProcModel& m, Real distance, double ratio, double maxErro
         m.uses.push_back(std::move(again));
     }
     return level;
+}
+
+namespace {
+
+void levelDistances(const ProcModel& m, std::set<Real>& out) {
+    out.insert(m.levelFrom.begin(), m.levelFrom.end());
+    for (const ProcUse& use : m.uses)
+        if (use.piece != nullptr) levelDistances(*use.piece, out);
+}
+
+bool sameMatrix(const Mat4& a, const Mat4& b) {
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            if (a.m[r][c] != b.m[r][c]) return false;
+    return true;
+}
+
+}  // namespace
+
+std::vector<ProcModelDraw> modelDraws(const ProcModel& m) {
+    std::set<Real> cuts;
+    levelDistances(m, cuts);
+    const std::vector<Real> bands(cuts.begin(), cuts.end());   // the first is 0, the full level's
+    std::vector<ProcModelDraw> out;
+    std::map<const ProcPart*, std::vector<std::size_t>> drawsOf;
+    for (std::size_t b = 0; b < bands.size(); ++b) {
+        const Real from = bands[b];
+        const Real until = b + 1 < bands.size() ? bands[b + 1] : Real(0);
+        // The same part at the same place in the band before: that draw goes on through this one.
+        auto emit = [&](const ProcPart& part, const ProcModel& owner, const Mat4& local) {
+            std::vector<std::size_t>& known = drawsOf[&part];
+            for (std::size_t i : known) {
+                if (out[i].until != from || from == 0 || !sameMatrix(out[i].local, local)) continue;
+                out[i].until = until;
+                return;
+            }
+            known.push_back(out.size());
+            out.push_back(ProcModelDraw{&part, &owner, local, from, until});
+        };
+        const int level = m.levelAt(from);
+        for (const ProcPart& p : m.parts) {
+            if (p.level != level || p.mesh.indices.empty()) continue;
+            emit(p, m, p.node == 0 ? Mat4::identity() : m.nodeFrame(p.node).matrix());
+        }
+        for (const ProcDrawnPiece& d : drawnPieces(m, from))
+            for (const Mat4& xf : d.transforms) emit(*d.part, *d.piece, xf);
+    }
+    return out;
 }
 
 RenderMesh flattenModel(const ProcModel& m, Real distance) {

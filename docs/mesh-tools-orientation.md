@@ -53,8 +53,11 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | d534a3c5 | a door opening's wall stands at the opening only: `solidify` takes `against`; the sedan's 532 edges with three or more faces are gone. Changes kit cars with panels |
 | 55cf9eba | the sheet's shape lines name their part; the survey's findings below |
 | 7a63568e | third merge of `claude/island8-batch`, up to bec6d732 (ADR-0469 to 0473, sidewalks at junctions and road file fixes). Roads only; the car's fingerprint is unchanged |
+| (next) | PREFAB STEP 7, prefab data and stamping one entity: `procgen/prefab.h`, `scripting/prefab_list.{h,cpp}`, `engine/prefab_stamp.{h,cpp}`, `engine/model_spawn.{h,cpp}` (the loader's material and collider code, now shared), `modelDraws`, `ModelInstance` / `ModelPiece`, `Renderable::lodAnchor`; `assets/scripts/prefabs.lua`, `crane.lua`, `assets/levels/prefab_lab.json`; `tests/test_prefab.cpp`, `tests/test_prefab_physics.cpp` |
 
-The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
+The unit suite passed 1585 of 1585 on 55cf9eba. `physics_tests` (built here since 2026-11-20:
+`cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
+level suite has not been run.
 
 ## How to check your work
 
@@ -112,21 +115,27 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 ## What is next
 
-**The prefab half of the design note, from step 7: prefab data and stamping one entity.** A prefab is Lua data: which
-model it shows (a name in `models.lua`) and which components it carries. Stamping one makes an entity with a model
-instance (the model, and this copy's value for each moving node), drawing (one model switching level as one thing),
-and physics from the model's collision shapes. The design note's last section, "The model half, done; what the prefab
-half starts from", lists what step 7 has to build on. Proof asked for: a scene with the crane; a physics test that
-the boom's shape stops a box.
+Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen
+models, then modelling tools.**
 
-Before starting it, ask Glenn: the prefab half changes what the game draws and collides with, which the model half
-never did. Until now every existing level and recipe has been provably unchanged (the fingerprints).
+1. **Step 8, motion on the entity and the script.** A `ModelInstance`'s pose moves its pieces and its bodies; a
+   script sets a node's target. The design note's step 7 section lists what step 7 left for it (mesh bodies are
+   merged per friction, not per node; nothing is kinematic).
+2. **More models through prefabs:** furniture pieces, street props, a tree, a building part. Each is a line in
+   `models.lua` and one in `prefabs.lua`; what breaks is the finding.
+3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"): edge bevel
+   first.
 
-Two things found on the way that are someone's to decide, both written up in the design note: the older glTF writer
-(`writeGlb`) writes triangles the engine's way round, so its files read back inside out; and the plain importer
-(`loadCpu`) does not read vertex colours.
+The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 
-The design note's last section, "What is built", lists what each step left alone and which later step owns it.
+Things found on the way that are someone's to decide:
+
+- The older glTF writer (`writeGlb`) writes triangles the engine's way round, so its files read back inside out;
+  the plain importer (`loadCpu`) does not read vertex colours. Both are written up in the design note.
+- **`near_tier_in_the_crowd_follows_the_player` fails in `physics_tests`** on this branch after the third merge
+  (seven checks, the pinned state hash among them). It fails the same way, with the same hash, with the car kit as
+  it was before this branch's kit fixes, so it is not the kit: it came in with the parent's road commits, or was
+  failing there already. The driving session's to look at.
 
 Not started: edge bevel (deferred until the crane shows whether it is missed), baked maps on instanced objects
 (step 4), the ports, the crane. ADRs are written at merge, when numbers are free.

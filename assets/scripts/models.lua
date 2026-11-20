@@ -14,4 +14,6 @@ return {
   -- the kit cars on the car rig (rigs.lua): the first models with joints, markers, shapes and levels
   sedan = { recipe = "car_rig_lab", args = { name = "sedan" } },
   pickup = { recipe = "car_rig_lab", args = { name = "pickup" } },
+  -- a small crane on the crane rig: the first model stamped as a prefab (prefabs.lua)
+  crane = { recipe = "crane" },
 }

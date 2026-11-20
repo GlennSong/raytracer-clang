@@ -657,6 +657,103 @@ Left as they were, on purpose:
 - **The lab recipe is what the list names.** `car_rig_lab.lua` was written for the model sheet; when the cars are
   ported (step 11) the list names the kit's own recipe.
 
+### Prefab step 7: prefab data and stamping one entity (2026-11-20)
+
+Glenn's go: "Prefabs would come first and then we should test it with various procgen/meshbuilder models."
+
+**The list.** `assets/scripts/prefabs.lua` returns a table of name = line, as `models.lua` does (not the
+`prefab.define{}` call sketched above: one list file reads the same way as the other, and is checked the same way).
+
+```lua
+return {
+  crane = { model = "crane", physics = { body = "static" }, draw = { class = "structure" } },
+  parked_sedan = { model = "sedan", physics = { body = "static" } },
+}
+```
+
+A line may say `model` (a name in `models.lua`), `physics = { body = "static" | "none", friction = n }` and
+`draw = { class = "<a level's draw class>", distance = metres }`. Anything else is refused with a message, never
+half obeyed: a misspelt key names itself, and `sounds`, `lights`, `offers`, `particles`, `script` and a body that
+moves each say they are not built yet. (`distance`, not `until`: `until` is a Lua keyword.) Read by
+`scripting/prefab_list.{h,cpp}` (`findPrefab`, `namedPrefabs`) into the plain record `procgen/prefab.h`.
+
+**Stamping** (`engine/prefab_stamp.{h,cpp}`, `stampPrefab`) makes one entity with a `ModelInstance` component: the
+prefab's name, the model (the store's own, shared by every copy) and this copy's pose. Around it:
+
+- **Pieces.** One entity per part of the model, and per part of each copy of a used piece, each with a `ModelPiece`
+  (its owner, its place in the model, the band of distances it is drawn in) and a `Renderable`. The list comes from
+  `modelDraws` in `procgen/proc_model.cpp`: the model's parts and `drawnPieces` at every distance, cut into bands at
+  the model's level distances and at every used piece's own, a part that is the same across bands being one draw.
+- **One model, one distance.** `Renderable` gains `lodAnchored` / `lodAnchor`: the distance tests measure to that
+  world point, not to the mesh's own bounds. Every piece of an instance is given the entity's position, so the body
+  and the four tires change level at the same moment, and cross-fade the way a city cell's tiers do. The draw index
+  is told how far a piece is from its anchor (`lodAnchorReach`) so it does not cull a cell too soon.
+- **Bodies.** With `physics.body = "static"`, the model's collision shapes become physics entities where the
+  entity's place and each shape's node put them. A box, sphere or capsule is a body of its own; meshes and hulls are
+  merged by friction into one static mesh body each.
+- **A level** places one with `{ "shape": "prefab", "prefab": "crane", "position": [...], "orientation": {...} }`.
+  The stamped entity carries the `SourceSpec`, so the editor saves it back as the same line. The offline tracer
+  bakes the prefab's model at the entity's position (it cannot turn a model yet, and says so).
+- `unstampPrefab` destroys an instance with its pieces and bodies, handing each physics body id to the caller to
+  remove from its physics world.
+
+**One copy of the code that puts a model in a world.** The level loader's recipe entity (`shape: "script"`) had the
+material dressing and the collider building inside it. Both moved to `engine/model_spawn.{h,cpp}` (`ModelDresser`,
+`spawnModelColliders`) and the loader and the stamp both call them. The loader's behaviour is unchanged.
+
+**The crane** is `assets/scripts/crane.lua`, in `models.lua`: boxes on the crane rig, a collision shape on each
+solid node, a far level at 120 m. It is boxes on purpose; see "The crane Glenn asked for" below.
+
+**Proof.** `assets/levels/prefab_lab.json`: four cranes (one turned a quarter, one 200 m off) and four parked kit
+cars. `tests/test_prefab.cpp` (unit): the list and its refusals, the draw bands against `flattenModel` at every
+distance, the stamp's pieces and bodies, the renderer's fields, shared meshes across copies, the sedan with its
+used tires, and the lab level loaded and saved back. `tests/test_prefab_physics.cpp` (physics): a box dropped over a
+turned crane's boom rests on it at 5.78 m; one dropped where the boom would be unturned reaches the floor; with
+the crane unstamped a box falls through where the boom was.
+
+**What step 7 left alone:**
+
+- **A pose does nothing yet.** `ModelInstance::pose` is there; pieces and bodies are placed at rest. Step 8 moves
+  them, and has to split the merged mesh bodies per node and make a moving node's bodies kinematic.
+- **A copy of a used piece is one entity per part.** Right for one crane; step 10 draws many copies as groups.
+- **Bodies that move** (a bin that can be knocked over) wait for the first port that needs one, with the real hull
+  shape.
+- **An occluded piece still casts its shadow from every level** (the renderer's shadow-only draw comes before the
+  distance test, as it does for city tiers). Co-located levels cast nearly the same shadow.
+- **`draw.distances`**, overriding the model's own level distances per prefab, is not built.
+
+### The crane Glenn asked for (2026-11-20)
+
+"The crane would be an interesting test of the rig and building a more complex mesh using the mesh building tools.
+I'd also want to see PBR materials on its surface, actual windows, and the ability to have a pulley and rope with
+some rope physics holding up a steel girder. And then have the ability to rotate it around via entering in a
+control cabin and having a special set of interactions for it." And: "building out the systems are higher
+priority." So the crane is the test at the end, and each wish is a system first:
+
+| The crane needs | The system | Where |
+|---|---|---|
+| a lattice boom and mast, rounded edges, bolts | truss, edge bevel, scatter on a surface | modelling tools, below |
+| actual windows | an opening with a frame and a pane | modelling tools, below |
+| PBR surfaces | materials and decals | #309 |
+| a pulley, a rope, a girder on it | cable mesh (tools), rope physics and joints | #311 |
+| turning it from the cab | motion on the entity and the script | step 8 |
+| entering the cab, its own interactions | offers at markers | step 9 |
+
+### Modelling tools still to build (2026-11-20)
+
+Glenn: modelling tools are "of higher interest" than the crane itself. What the toolkit lacks, in the order
+proposed to him:
+
+1. **Edge bevel:** round or chamfer chosen edges of a hard-surface part.
+2. **Loop cut and bridge** on the quad mesh: add a ring of edges; join two open rings. Also what would let the car
+   cage's hood be more than one quad across.
+3. **Opening with a frame:** cut a hole in a wall or panel and get the frame and the pane back as parts.
+4. **Truss:** chords and diagonals along a path, the section free to taper.
+5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses.
+6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path.
+7. **Cage deform:** move a few control points and the mesh inside follows.
+8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level.
+
 ## The model half, done; what the prefab half starts from
 
 Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of

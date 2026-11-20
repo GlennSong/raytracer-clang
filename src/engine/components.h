@@ -15,6 +15,7 @@
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "weather_cycle.h"               // WeatherClimate (DayNightConfig)
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
+#include "procgen/proc_model.h"         // ProcModel, ProcPose (ModelInstance)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "procgen/terrain_world_map.h"   // TerrainLodConfig's world maps (ADR-0205, ADR-0208)
@@ -172,9 +173,36 @@ struct Renderable {
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;
+    // ONE MODEL, ONE DISTANCE (#191, step 7). lodAnchored: the distance tests above measure to `lodAnchor`, a world
+    // point, not to this mesh's own bounds: every piece of one model instance is given the model's own point, so
+    // the whole model changes level of detail at the same moment (and cross-fades as a lodCell does).
+    // `lodAnchorReach`: how far this piece's bounds centre is from the anchor, for the draw index.
+    bool lodAnchored = false;
+    Vec3 lodAnchor;
+    Real lodAnchorReach = 0;
     // Per-draw DATA on the model's bottom row (Mat4::m[3][0]), as an instance carries it, for a material flag that
     // reads it -- a vehicle's lit-lamp mask under FLAG_LAMP_STATE (ADR-0342). 0: none.
     float instanceData = 0.0f;
+};
+
+// A MODEL INSTANCE (#191, step 7): one copy of a model in the world, made by stamping a prefab (prefab_stamp.h).
+// It is the entity's one reference to its model; what draws it and what collides for it find the model through it.
+// The entity's Transform is where the model's own space stands in the world.
+struct ModelInstance {
+    std::string prefab;                      // its line in prefabs.lua
+    std::shared_ptr<const ProcModel> model;  // shared with every other copy (the model store's)
+    ProcPose pose;                           // THIS copy's value for each moving node (none given: at rest)
+    std::vector<Entity> pieces;              // the entities that draw it (each has a ModelPiece)
+    std::vector<Entity> bodies;              // the entities that hold its collision bodies
+};
+
+// One drawn piece of a model instance: a part of the model, or a part of one copy of a used piece. Its entity's
+// Transform is the owner's times `local`.
+struct ModelPiece {
+    Entity owner;
+    Mat4 local;          // where it stands in the model's space
+    Real from = 0;       // the band of distances it is drawn in (ProcModelDraw); until 0: no end
+    Real until = 0;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).

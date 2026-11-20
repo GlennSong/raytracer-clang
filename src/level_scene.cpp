@@ -18,6 +18,8 @@
 #include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
 #include <map>
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
+#include "engine/scripting/model_recipes.h" // obtainModel (a prefab entity's model)
+#include "engine/scripting/prefab_list.h"   // findPrefab
 #include "engine/level_params.h"            // shared level-JSON -> params readers
 #include "log.h"
 #include <unordered_map>
@@ -798,6 +800,27 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Lua recipe (ADR-0042): run a script returning a composable Model and
         // bake it — the same recipe the viewer runs, so a procgen scene renders
         // offline through the same pipeline (the renderer is the only divergence).
+        // A stamped prefab (#191 step 7; engine/prefab_stamp.h is the realtime twin): its model, baked where the
+        // entity stands. The offline bake places a model by an offset only, so a turned prefab is baked unturned
+        // and says so.
+        if (ent.value("shape", std::string()) == "prefab") {
+#ifdef RT_ENABLE_SCRIPTING
+            Prefab prefab;
+            std::string why;
+            std::shared_ptr<const ProcModel> model;
+            if (findPrefab(ent.value("prefab", std::string()), prefab, levelDir, &why)) model = obtainModel(prefab.model, levelDir, &why);
+            if (model == nullptr) {
+                LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why;
+                continue;
+            }
+            if (ent.contains("orientation") || ent.contains("rotation"))
+                LOG_WARN << "prefab entity '" << ent.value("name", std::string()) << "': the offline bake does not turn a model; baked unturned";
+            bakeProcModel(*model, scene, parseVec3(ent.value("position", json())));
+#else
+            LOG_WARN << "prefab entity skipped (scripting disabled in this build)";
+#endif
+            continue;
+        }
         if (ent.value("shape", std::string()) == "script") {
 #ifdef RT_ENABLE_SCRIPTING
             Vec3 scriptPos = parseVec3(ent.value("position", json()));  // world placement

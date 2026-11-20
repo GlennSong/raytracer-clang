@@ -96,6 +96,8 @@
 #include "procgen/scatter.h"
 #include "procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "procgen/proc_model.h"      // ProcModel (script model cache)
+#include "model_spawn.h"             // the dresser, the model's colliders, the surface texture helpers
+#include "prefab_stamp.h"            // a level's shape:"prefab" entity
 #include "scripting/model_recipes.h" // obtainModel: a recipe's model.get
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
@@ -303,30 +305,6 @@ static RenderMaterial parseMaterial(const json& j) {
     return mat;
 }
 
-// Rewrite a mesh's UVs (and tangent) to a world-planar tiling frame, so a baked
-// tiling texture set repeats at human scale over world-space geometry: v = height
-// up a wall, u = horizontal run; horizontal faces lay it in XZ. The tangent is
-// set along U so a tangent-space normal map resolves correctly. Matches the
-// offline tracer's surfFrame (ADR-0039 Phase B).
-static void applyWorldPlanarUVs(RenderMesh& mesh, double scale) {
-    for (Vertex& vert : mesh.vertices) {
-        const Vec3& p = vert.position;
-        const Vec3& n = vert.normal;
-        double u, v; Vec3 T;
-        if (std::fabs(n.y) > 0.5) {
-            u = p.x * scale; v = p.z * scale; T = Vec3(1, 0, 0);
-        } else {
-            double tx = n.z, tz = -n.x, tl = std::sqrt(tx * tx + tz * tz);
-            if (tl < 1e-6) { tx = 1; tz = 0; tl = 1; }
-            tx /= tl; tz /= tl;
-            u = (p.x * tx + p.z * tz) * scale; v = p.y * scale; T = Vec3(tx, 0, tz);
-        }
-        vert.u = static_cast<float>(u);
-        vert.v = static_cast<float>(v);
-        vert.tangent = T;
-    }
-}
-
 // Surfaces whose geometry bakes its OWN meaningful UVs in the generator —
 // FanTop (centred disc), VentGrille (plate-fitted with a margin), RoofShingle
 // (slope-fitted: u along the eave, v up the slope). A world-planar re-UV would
@@ -335,39 +313,6 @@ static bool surfaceBakesOwnUVs(RenderMaterial::Surface s) {
     return s == RenderMaterial::Surface::FanTop ||
            s == RenderMaterial::Surface::VentGrille ||
            s == RenderMaterial::Surface::RoofShingle;
-}
-
-// One bake+upload per surface, shared across a level load (every brick entity
-// binds the same uploaded set). The cache keys on the surface id.
-using SurfaceTexCache = std::unordered_map<int, std::array<TextureHandle, 4>>;
-static std::array<TextureHandle, 4> bakeSurfaceTextures(
-    Renderer& renderer, RenderMaterial::Surface surf, SurfaceTexCache& cache) {
-    int id = static_cast<int>(surf);
-    auto it = cache.find(id);
-    if (it != cache.end()) return it->second;
-    SurfaceMaps mp = surfaceMaps(surf, 256, 1337u);
-    auto up = [&](const TextureData& td) {
-        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
-    };
-    std::array<TextureHandle, 4> h{up(mp.albedo), up(mp.normal), up(mp.mr), up(mp.ao)};
-    cache[id] = h;
-    return h;
-}
-// Bind a baked set onto a material. The surface flag is kept as provenance (so
-// it round-trips through save/load); the shader skips the analytic applySurface
-// when an albedo map is present, so the textures drive the look, not the flag.
-static void bindSurfaceMaps(RenderMaterial& mat, const std::array<TextureHandle, 4>& h) {
-    mat.albedoMap = h[0];
-    mat.normalMap = h[1];
-    mat.metallicRoughnessMap = h[2];
-    mat.aoMap = h[3];
-}
-
-// The surfaces that exist ONLY as baked maps on the mesh's own UVs (the furniture finishes, buildings M4b): the
-// shader has no analytic version, so a script part that names one must be bound its baked set.
-static bool surfaceIsBakedOnMeshUVs(RenderMaterial::Surface s) {
-    return s == RenderMaterial::Surface::WoodGrain || s == RenderMaterial::Surface::Fabric ||
-           s == RenderMaterial::Surface::Marble || s == RenderMaterial::Surface::Carpet;
 }
 
 // A named material library: the level's top-level "materials" table, so entities
@@ -1438,58 +1383,17 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     }
     const ProcModel& model = *modelPtr;
     const std::string key = "script:" + std::to_string(index);
-    auto upload = [&](const TextureData& td) -> TextureHandle {
-        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
-    };
-
     // Optional world placement: recipe geometry is authored around the origin, so
     // an entity `position` [x,y,z] offsets the whole spawned model. A planet recipe
     // uses it to sit the body in front of the scene-view camera (which starts at a
     // fixed eye) instead of enclosing it. Parts are the render path; recipes that
     // also emit instances/colliders would need the same offset (none do today).
     Vec3 spawnOffset = ent.contains("position") ? parseVec3(ent["position"]) : Vec3(0, 0, 0);
-    SurfaceTexCache scriptSurfTex;   // the baked sets this model's parts bind (one bake per surface)
-
-    // What a mesh is made of, for the renderer: the material's numbers and maps on `out`, and the mesh's handle
-    // (a textured mesh gets its tiling laid on first). The model's parts and every used piece's parts go through
-    // this, so a part looks the same placed once or many times. A material's maps go to the GPU once, however many
-    // meshes are made of it.
-    struct MaterialMaps { TextureHandle albedo{}; TextureHandle normal{}; TextureHandle leaf{}; };
-    std::map<const ProcMaterial*, MaterialMaps> uploaded;
+    // What a mesh is made of, for the renderer (model_spawn.h): the model's parts and every used piece's parts go
+    // through this, so a part looks the same placed once or many times.
+    ModelDresser dresser(renderer, assets);
     auto dress = [&](const ProcMaterial& made, const RenderMesh& mesh, const std::string& meshKey, RenderMaterial& out) -> MeshHandle {
-        out.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
-        out.metallic = made.metallic;
-        out.roughness = made.roughness;
-        out.opacity = made.opacity;
-        out.emission = made.emission;
-        if (made.twoSided)
-            out.flags |= RenderMaterial::FLAG_TWO_SIDED;
-        // Analytic surface library (renderer.h Surface): an id evaluated in-shader
-        // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
-        // road-local u/v baked onto the carriageway. Independent of texture maps,
-        // so it rides whether or not the part is `textured`.
-        if (made.surface != 0)
-            out.setSurface(static_cast<RenderMaterial::Surface>(made.surface));
-        if (!made.textured && surfaceIsBakedOnMeshUVs(out.surface()))
-            bindSurfaceMaps(out, bakeSurfaceTextures(renderer, out.surface(), scriptSurfTex));
-        const bool known = uploaded.count(&made) != 0;
-        MaterialMaps& maps = uploaded[&made];
-        if (!known) {
-            if (made.textured && !made.albedo.pixels.empty()) maps.albedo = upload(made.albedo);
-            if (made.textured && !made.normal.pixels.empty()) maps.normal = upload(made.normal);
-            if (made.alphaFoliage) maps.leaf = upload(leafTexture(128));
-        }
-        if (made.alphaFoliage) {              // alpha-cut leaf cards
-            out.albedoMap = maps.leaf;
-            out.flags |= RenderMaterial::FLAG_ALPHA_TEST;
-        }
-        if (!made.textured) return assets.acquireMesh(mesh, meshKey);
-        RenderMesh tiled = mesh;
-        double tile = made.tile > 1e-6 ? made.tile : 1.0;
-        applyWorldPlanarUVs(tiled, 1.0 / tile);
-        if (!made.albedo.pixels.empty()) out.albedoMap = maps.albedo;
-        if (!made.normal.pixels.empty()) out.normalMap = maps.normal;
-        return assets.acquireMesh(tiled, meshKey);
+        return dresser.dress(made, mesh, meshKey, out);
     };
 
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
@@ -1544,124 +1448,9 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         world.add<InstanceGroup>(world.create(), g);
     }
 
-    // Physics colliders (ADR-0042): procgen scenery is static world geometry, so
-    // collision follows the actual generated mesh. Each ProcCollider becomes the
-    // same Collider/MeshCollider + RigidBody the hand-authored loaders build —
-    // exact triangle meshes for shells/terrain/roads, primitives where the shape
-    // truly is one. (The offline path tracer has no physics and ignores these.)
-    auto appendTris = [](MeshCollider& mc, const RenderMesh& rm, const Mat4* xf) {
-        for (std::size_t i = 0; i + 2 < rm.indices.size(); i += 3) {
-            Vec3 a = rm.vertices[rm.indices[i]].position;
-            Vec3 b = rm.vertices[rm.indices[i + 1]].position;
-            Vec3 c = rm.vertices[rm.indices[i + 2]].position;
-            if (xf) { a = xf->transformPoint(a); b = xf->transformPoint(b); c = xf->transformPoint(c); }
-            if (cross(b - a, c - a).length() < 1e-5) continue;   // skip slivers
-            uint32_t base = static_cast<uint32_t>(mc.vertices.size());
-            mc.vertices.push_back(a); mc.vertices.push_back(b); mc.vertices.push_back(c);
-            mc.indices.push_back(base); mc.indices.push_back(base + 1); mc.indices.push_back(base + 2);
-        }
-    };
-    auto spawnMeshCollider = [&](MeshCollider&& mc) {
-        if (mc.indices.empty()) return;
-        Entity e = world.create();
-        Transform t;
-        world.add<Transform>(e, t);
-        world.add<PrevTransform>(e, PrevTransform{t});
-        world.add<MeshCollider>(e, std::move(mc));
-    };
-    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, const Quat& turn,
-                              const ProcCollider& src) {
-        Entity e = world.create();
-        Transform t;
-        t.position = center;
-        t.orientation = turn;
-        world.add<Transform>(e, t);
-        world.add<PrevTransform>(e, PrevTransform{t});
-        Collider c;
-        c.shape = shape;
-        c.halfExtent = src.halfExtent;
-        c.radius = src.radius;
-        c.halfHeight = src.halfHeight;
-        c.friction = src.friction;
-        world.add<Collider>(e, c);
-        RigidBody rb;
-        rb.motion = src.dynamic ? BodyMotion::Dynamic : BodyMotion::Static;
-        world.add<RigidBody>(e, rb);
-    };
-    // Static triangle-mesh colliders are MERGED by friction into one body each:
-    // a city is hundreds of solids (every building, plinth, lawn, the terrain, the
-    // roads), and one static mesh body per surface keeps the physics broadphase
-    // cheap (a few bodies, each with its own BVH) instead of hundreds of bodies.
-    // Primitives (a round tower, a lamp post) stay per-entity — there are few.
-    std::vector<std::pair<Real, MeshCollider>> meshBuckets;
-    auto bucketFor = [&](Real friction) -> MeshCollider& {
-        for (auto& b : meshBuckets)
-            if (std::abs(b.first - friction) < 1e-4) return b.second;
-        meshBuckets.emplace_back(friction, MeshCollider{});
-        meshBuckets.back().second.friction = friction;
-        return meshBuckets.back().second;
-    };
-    for (const ProcCollider& pc : model.colliders) {
-        // A shape stands at the node it is on. The root's frame is no move and no turn, so a shape on it is where
-        // the recipe put it, as every collider was before nodes.
-        const bool onRoot = pc.node == 0;
-        const ProcFrame at = onRoot ? pc.frame() : model.nodeFrame(pc.node) * pc.frame();
-        switch (pc.kind) {
-            case ProcCollider::Kind::Mesh: {
-                if (onRoot) { appendTris(bucketFor(pc.friction), pc.mesh, nullptr); break; }
-                const Mat4 node = model.nodeFrame(pc.node).matrix();
-                appendTris(bucketFor(pc.friction), pc.mesh, &node);
-                break;
-            }
-            case ProcCollider::Kind::Hull: {
-                // The physics has no hull shape yet: a hull on static scenery is its faces as triangles, which
-                // collide the same. A hull on a body that moves waits for the prefab's physics (#191 step 7).
-                const RenderMesh faces = shapeMesh(pc);
-                if (onRoot) { appendTris(bucketFor(pc.friction), faces, nullptr); break; }
-                const Mat4 node = model.nodeFrame(pc.node).matrix();
-                appendTris(bucketFor(pc.friction), faces, &node);
-                break;
-            }
-            case ProcCollider::Kind::Box:
-                spawnPrimitive(ColliderShape::Box, at.position, at.rotation, pc); break;
-            case ProcCollider::Kind::Sphere:
-                spawnPrimitive(ColliderShape::Sphere, at.position, at.rotation, pc); break;
-            case ProcCollider::Kind::Capsule:
-                spawnPrimitive(ColliderShape::Capsule, at.position, at.rotation, pc); break;
-        }
-    }
-
-    // Colliders of used pieces: stamp a collider at each copy (a lamp per verge).
-    // Mesh stamps merge into the friction buckets; primitives are one body each.
-    for (const ProcPlacedUse& pu : placedUses(model)) {
-        const ProcUse& cg = *pu.use;
-        if (cg.collision == InstanceCollision::None || pu.transforms.empty()) continue;
-        if (cg.collision == InstanceCollision::Mesh) {
-            const RenderMesh whole = cg.collisionProto.vertices.empty() ? flattenModel(*cg.piece) : RenderMesh();
-            const RenderMesh& proto = cg.collisionProto.vertices.empty() ? whole : cg.collisionProto;
-            MeshCollider& mc = bucketFor(cg.colliderFriction);
-            for (const Mat4& xf : pu.transforms) appendTris(mc, proto, &xf);
-            continue;
-        }
-        ColliderShape shape = cg.collision == InstanceCollision::Box ? ColliderShape::Box
-                            : cg.collision == InstanceCollision::Sphere ? ColliderShape::Sphere
-                                                                        : ColliderShape::Capsule;
-        ProcCollider tmpl;
-        tmpl.halfExtent = cg.colliderHalfExtent;
-        tmpl.radius = cg.colliderRadius;
-        tmpl.halfHeight = cg.colliderHalfHeight;
-        tmpl.friction = cg.colliderFriction;
-        // The proto stands on its origin, so lift the collider centre to wrap a
-        // prop sitting on the ground rather than sinking it half-under.
-        Real lift = shape == ColliderShape::Box ? cg.colliderHalfExtent.y
-                  : shape == ColliderShape::Sphere ? cg.colliderRadius
-                                                   : cg.colliderHalfHeight + cg.colliderRadius;
-        for (const Mat4& xf : pu.transforms) {
-            Vec3 pos(xf.m[0][3], xf.m[1][3], xf.m[2][3]);
-            spawnPrimitive(shape, pos + Vec3(0, lift, 0), Quat(), tmpl);
-        }
-    }
-    for (auto& b : meshBuckets) spawnMeshCollider(std::move(b.second));
+    // Physics colliders (ADR-0042): the model's collision shapes and its used pieces', as static world geometry
+    // (model_spawn.h, shared with a stamped prefab).
+    spawnModelColliders(world, model);
 #else
     (void)ent; (void)levelDir; (void)world; (void)renderer; (void)assets; (void)index;
     LOG_WARN << "script entity skipped (scripting disabled in this build)";
@@ -1682,6 +1471,7 @@ static void loadEntities(const json& entities, const json& root, World& world,
     int entityIndex = -1;
     int scriptIndex = 0;
     int roadIndex = 0;
+    ModelDresser prefabDresser(renderer, assets);   // one for the load: a material's maps go up once for every stamped prefab
     for (auto& ent : entities) {
         ++entityIndex;
         // Hero parametric tree: a collidable, textured object (not scatter).
@@ -1710,6 +1500,29 @@ static void loadEntities(const json& entities, const json& root, World& world,
         // the same shape:"script" the offline tracer renders, now in the viewer.
         // An on-terrain recipe was pre-run (for terrain grading) and is spawned
         // from the cache; others run now, with the level ground injected.
+        // A stamped prefab (#191 step 7): { "shape": "prefab", "prefab": "crane", "position": [...] }. One entity of
+        // a line in prefabs.lua: a model instance, the pieces that draw it and its collision bodies
+        // (prefab_stamp.h). The entity itself is the document entity: it carries the SourceSpec the editor saves.
+        if (ent.value("shape", std::string()) == "prefab") {
+#ifdef RT_ENABLE_SCRIPTING
+            const std::string prefabName = ent.value("prefab", std::string());
+            Transform at;
+            if (ent.contains("position")) at.position = parseVec3(ent["position"]);
+            at.orientation = parseOrientation(ent);
+            std::string why;
+            const Entity stamped = stampPrefab(world, &prefabDresser, prefabName, at, levelDir, &why);
+            if (!stamped.valid()) {
+                LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why;
+                continue;
+            }
+            SourceSpec spec = buildSourceSpec(ent, "prefab");
+            spec.recipe = json(prefabName).dump();   // the writer gives it back as "prefab": "<name>"
+            world.add<SourceSpec>(stamped, spec);
+#else
+            LOG_WARN << "prefab entity skipped (scripting disabled in this build)";
+#endif
+            continue;
+        }
         if (ent.value("shape", std::string()) == "script") {
             const ProcModel* pre = nullptr;
             if (scriptCache != nullptr)

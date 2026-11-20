@@ -111,7 +111,7 @@ private:
         Real reach = 0;          // the farthest any member draws from (grows)
         bool unlimited = false;  // ...or one draws at any distance
     };
-    // slack: a member measured from elsewhere than its own box (a lodCell centre) can be that much nearer
+    // slack: a member measured from elsewhere than its own box (a lodCell centre, a model's own point) can be that much nearer
     void note(Cell& c, Real explicitDist, DrawClass cls, Real slack = 0) {
         const Real d = explicitDist > 0 ? explicitDist : (policy_ ? policy_->distanceFor(cls) : Real(0));
         if (d <= 0) c.unlimited = true;
@@ -172,7 +172,7 @@ private:
         transformedAABB(t->matrix(), b.boxMin, b.boxMax, lo, hi);
         const int c = cellFor((lo + hi) * 0.5);
         grow(cells_[static_cast<std::size_t>(c)], lo, hi);
-        note(cells_[static_cast<std::size_t>(c)], r->drawDistance, r->drawClass, r->lodCell);
+        note(cells_[static_cast<std::size_t>(c)], r->drawDistance, r->drawClass, std::max(r->lodCell, r->lodAnchored ? r->lodAnchorReach : Real(0)));
         placeIn(eSlot_, i, c, true);
     }
     void classifyGroup(uint32_t i, SparseSet<InstanceGroup>& gPool) {

@@ -22,6 +22,8 @@
 
 #include "../procgen/model_store.h"
 
+#include <nlohmann/json.hpp>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,6 +39,10 @@ std::shared_ptr<const ProcModel> obtainModel(const std::string& name, const std:
 
 // The names in the list, sorted. Empty with `error` when the list cannot be read.
 std::vector<std::string> namedModels(const std::string& levelDir = std::string(), std::string* error = nullptr, const std::string& list = "models.lua");
+
+// A LIST SCRIPT (models.lua, prefabs.lua): a script that returns a table of name = { ... }, run and given as JSON.
+// False with `error` when it cannot be read, fails, or returns something else.
+bool readScriptList(const std::string& file, const std::string& levelDir, nlohmann::json& out, std::string* error = nullptr);
 
 }  // namespace engine
 

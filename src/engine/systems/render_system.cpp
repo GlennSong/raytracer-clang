@@ -248,9 +248,10 @@ void RenderSystem::render(FrameContext& ctx) {
                     c.z = (std::floor(c.z / r.lodCell) + 0.5) * r.lodCell;
                     c.y = std::clamp(cam.position.y, worldMin.y, worldMax.y);
                 }
+                if (r.lodAnchored) c = r.lodAnchor;   // one model, one distance: every piece measures to the model's point
                 const Real dist = (c - cam.position).length();
                 const bool want = !(drawDist > 0 && dist > drawDist) && !(r.minDistance > 0 && dist <= r.minDistance);
-                const bool fades = r.lodCell > 0 && tierFades && !(r.material.flags & (RenderMaterial::FLAG_LOD_BAND | RenderMaterial::FLAG_GRASS));
+                const bool fades = (r.lodCell > 0 || r.lodAnchored) && tierFades && !(r.material.flags & (RenderMaterial::FLAG_LOD_BAND | RenderMaterial::FLAG_GRASS));
                 if (!fades) {
                     if (!want) return;
                 } else {
@@ -428,7 +429,7 @@ void RenderSystem::render(FrameContext& ctx) {
                 Vec3 lo, hi;
                 transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
                 const Vec3 c = (lo + hi) * 0.5;
-                const Real d = (c - eye).length();
+                const Real d = ((r.lodAnchored ? r.lodAnchor : c) - eye).length();
                 const Real dd = std::min(reach, resolveDistance(r.drawDistance, r.drawClass) > 0 ? resolveDistance(r.drawDistance, r.drawClass) : reach);
                 if (d > dd || (r.minDistance > 0 && d < r.minDistance)) return;
                 if (!ff.containsAABB(lo, hi)) return;
@@ -489,7 +490,7 @@ void RenderSystem::render(FrameContext& ctx) {
                 transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
                 const Real d = std::max<Real>(0.0, ((lo + hi) * 0.5 - eye).length() - (hi - lo).length() * 0.5);
                 // the tier you would see from here, as the draw picks it (a building's far models stay out)
-                const Real c = ((lo + hi) * 0.5 - eye).length();
+                const Real c = ((r.lodAnchored ? r.lodAnchor : (lo + hi) * 0.5) - eye).length();
                 const Real dd = resolveDistance(r.drawDistance, r.drawClass);
                 if ((dd > 0 && c > dd) || (r.minDistance > 0 && c < r.minDistance)) return;
                 if (d <= near) out.emplace_back(d, Renderer::RayInstance{r.mesh, model, r.material});

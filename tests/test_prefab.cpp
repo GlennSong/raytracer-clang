@@ -1,0 +1,436 @@
+// Prefabs (#191, step 7): the list, a model's draws by distance, and stamping one entity.
+#include "test_framework.h"
+
+#include "../src/engine/asset_manager.h"
+#include "../src/engine/level_loader.h"
+#include "../src/engine/level_writer.h"
+#include "../src/engine/mesh_uploader.h"
+#include "../src/engine/model_spawn.h"
+#include "../src/engine/prefab_stamp.h"
+#include "../src/engine/procgen/proc_model.h"
+#include "../src/engine/scripting/model_recipes.h"
+#include "../src/engine/scripting/prefab_list.h"
+#include "../src/engine/mesh_builder.h"
+
+#include <nlohmann/json.hpp>
+
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <string>
+#include <vector>
+
+using namespace engine;
+
+namespace {
+
+struct Folder {
+    std::string dir = "test_prefab_tmp";
+    Folder() { std::filesystem::remove_all(dir); std::filesystem::create_directory(dir); }
+    ~Folder() { std::filesystem::remove_all(dir); }
+    void write(const std::string& file, const std::string& text) const { std::ofstream(dir + "/" + file) << text; }
+};
+const char* kPrefabs = "test_prefab_list_tmp.lua";
+const char* kModels = "test_prefab_models_tmp.lua";
+
+struct StubUploader : MeshUploader {
+    int uploads = 0;
+    uint32_t next = 1;
+    MeshHandle uploadMesh(const RenderMesh&) override { uploads++; return MeshHandle{next++, 1}; }
+    void removeMesh(MeshHandle) override {}
+    BoundingSphere getMeshBounds(MeshHandle) const override { return {}; }
+};
+
+RenderMesh boxMesh(Real size) {
+    return MeshBuilder::box(Vec3(size, size, size));
+}
+
+ProcPart partAt(int level, Real size) {
+    ProcPart p;
+    p.mesh = boxMesh(size);
+    p.level = level;
+    return p;
+}
+
+const ProcModelDraw* drawOf(const std::vector<ProcModelDraw>& draws, const ProcPart* part) {
+    for (const ProcModelDraw& d : draws)
+        if (d.part == part) return &d;
+    return nullptr;
+}
+
+Transform turnedAt(const Vec3& position, Real degrees) {
+    Transform t;
+    t.position = position;
+    t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), degrees * 3.14159265358979 / 180.0);
+    return t;
+}
+
+}  // namespace
+
+TEST_CASE(prefab_list_every_shipped_prefab_reads_and_names_a_model) {
+    std::string err;
+    const std::vector<std::string> names = namedPrefabs(std::string(), &err);
+    CHECK(err.empty());
+    CHECK(!names.empty());
+    for (const std::string& name : names) {
+        Prefab p;
+        err.clear();
+        const bool ok = findPrefab(name, p, std::string(), &err);
+        if (!ok) std::printf("    prefab '%s': %s\n", name.c_str(), err.c_str());
+        CHECK(ok);
+        CHECK(p.name == name);
+        CHECK(!p.model.empty());
+    }
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    CHECK(crane.model == "crane");
+    CHECK(crane.body == Prefab::Body::Static);
+    CHECK(crane.drawClass == "structure");
+}
+
+TEST_CASE(prefab_list_says_what_is_wrong_with_a_line) {
+    Folder f;
+    f.write(kModels, R"LUA(return { box = { recipe = "test_prefab_box_tmp" } })LUA");
+    f.write(kPrefabs, R"LUA(return {
+        plain   = { model = "box" },
+        solid   = { model = "box", physics = { friction = 0.3 }, draw = { class = "scenery", distance = 250 } },
+        nomodel = { physics = { body = "static" } },
+        ghost   = { model = "nothing" },
+        typo    = { model = "box", phisics = { body = "static" } },
+        later   = { model = "box", script = "box.lua" },
+        thrown  = { model = "box", physics = { body = "dynamic" } },
+        badkey  = { model = "box", physics = { mass = 3 } },
+        badcls  = { model = "box", draw = { class = "cloud" } },
+        baddist = { model = "box", draw = { distance = -4 } },
+    })LUA");
+    auto find = [&](const std::string& name, Prefab& p, std::string& err) { return findPrefab(name, p, f.dir, &err, kPrefabs, kModels); };
+    Prefab p;
+    std::string err;
+    CHECK(find("plain", p, err));
+    CHECK(p.body == Prefab::Body::None);      // no `physics`: not solid
+    CHECK(p.friction < 0);
+    CHECK(p.drawClass == "furniture");
+    CHECK(find("solid", p, err));
+    CHECK(p.body == Prefab::Body::Static);    // `physics` given: static unless it says otherwise
+    CHECK_APPROX(p.friction, 0.3, 1e-9);
+    CHECK(p.drawClass == "scenery");
+    CHECK_APPROX(p.drawDistance, 250.0, 1e-9);
+
+    struct Wrong { const char* name; const char* says; };
+    const Wrong wrongs[] = {
+        {"absent", "has no prefab named 'absent'"},
+        {"nomodel", "needs `model`"},
+        {"ghost", "has no model named 'nothing'"},
+        {"typo", "has `phisics`, which a prefab does not have"},
+        {"later", "`script` is not built yet"},
+        {"thrown", "a body that moves is not built yet"},
+        {"badkey", "physics has `mass`"},
+        {"badcls", "draw.class is a draw class's name"},
+        {"baddist", "draw.distance is a distance"},
+    };
+    for (const Wrong& w : wrongs) {
+        Prefab q;
+        q.model = "untouched";
+        err.clear();
+        CHECK(!find(w.name, q, err));
+        if (err.find(w.says) == std::string::npos) std::printf("    '%s' said: %s\n", w.name, err.c_str());
+        CHECK(err.find(w.says) != std::string::npos);
+        CHECK(q.model == "untouched");        // a refused line leaves the record alone
+    }
+    CHECK(!findPrefab("plain", p, f.dir, &err, "test_prefab_no_such_list_tmp.lua", kModels));
+    CHECK(err.find("cannot be read") != std::string::npos);
+}
+
+TEST_CASE(model_draws_carry_the_band_of_distances_each_is_seen_in) {
+    // A model with a lower level from 50 m, using a piece with its own lower level from 20 m.
+    std::shared_ptr<ProcModel> piece = std::make_shared<ProcModel>();
+    CHECK(piece->addLevel(20) == 1);
+    piece->parts.push_back(partAt(0, 1.0));
+    piece->parts.push_back(partAt(1, 0.9));
+    ProcModel m;
+    CHECK(m.addLevel(50) == 1);
+    m.parts.push_back(partAt(0, 2.0));
+    m.parts.push_back(partAt(1, 1.9));
+    ProcPlacement where;
+    where.position = Vec3(3, 0, 0);
+    for (int level = 0; level < 2; ++level) {
+        ProcUse use;
+        use.piece = piece;
+        use.level = level;
+        use.placements.push_back(where);
+        m.uses.push_back(use);
+    }
+    const std::vector<ProcModelDraw> draws = modelDraws(m);
+    CHECK(draws.size() == 4);
+    const ProcModelDraw* full = drawOf(draws, &m.parts[0]);
+    const ProcModelDraw* low = drawOf(draws, &m.parts[1]);
+    const ProcModelDraw* pieceFull = drawOf(draws, &piece->parts[0]);
+    const ProcModelDraw* pieceLow = drawOf(draws, &piece->parts[1]);
+    CHECK(full != nullptr && low != nullptr && pieceFull != nullptr && pieceLow != nullptr);
+    if (full == nullptr || low == nullptr || pieceFull == nullptr || pieceLow == nullptr) return;
+    CHECK_APPROX(full->from, 0.0, 1e-12);
+    CHECK_APPROX(full->until, 50.0, 1e-12);
+    CHECK_APPROX(low->from, 50.0, 1e-12);
+    CHECK_APPROX(low->until, 0.0, 1e-12);            // the last level has no end
+    CHECK(full->owner == &m);
+    // The piece changes level at ITS distance, inside the model's full level...
+    CHECK_APPROX(pieceFull->from, 0.0, 1e-12);
+    CHECK_APPROX(pieceFull->until, 20.0, 1e-12);
+    // ...and its lower level, standing at the same place under the model's lower level, is one draw right through.
+    CHECK_APPROX(pieceLow->from, 20.0, 1e-12);
+    CHECK_APPROX(pieceLow->until, 0.0, 1e-12);
+    CHECK(pieceLow->owner == piece.get());
+    CHECK_APPROX(pieceLow->local.m[0][3], 3.0, 1e-12);
+    // Every distance is covered by exactly the draws of the level seen from there (flattenModel is the reference).
+    for (Real at : {0.0, 10.0, 20.0, 35.0, 50.0, 400.0}) {
+        std::size_t triangles = 0;
+        for (const ProcModelDraw& d : draws)
+            if (at >= d.from && (d.until == 0 || at < d.until)) triangles += d.part->mesh.indices.size() / 3;
+        CHECK(triangles == flattenModel(m, at).indices.size() / 3);
+    }
+    // A flat model with no levels is one draw per part, from 0 with no end.
+    ProcModel flat;
+    flat.parts.push_back(partAt(0, 1.0));
+    const std::vector<ProcModelDraw> one = modelDraws(flat);
+    CHECK(one.size() == 1);
+    if (one.size() == 1) { CHECK_APPROX(one[0].from, 0.0, 1e-12); CHECK_APPROX(one[0].until, 0.0, 1e-12); }
+}
+
+TEST_CASE(stamping_a_prefab_makes_an_instance_its_pieces_and_its_bodies) {
+    World world;
+    ModelStore store;
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    const Transform at = turnedAt(Vec3(10, 0, 5), 90);
+    std::string err;
+    const Entity e = stampPrefab(world, nullptr, crane, at, std::string(), &err, &store);
+    CHECK(e.valid());
+    if (!e.valid()) { std::printf("    %s\n", err.c_str()); return; }
+    const ModelInstance* mi = world.get<ModelInstance>(e);
+    CHECK(mi != nullptr);
+    if (mi == nullptr) return;
+    CHECK(mi->prefab == "crane");
+    CHECK(mi->model != nullptr && mi->model == store.find("crane"));    // the store's one crane, not a copy
+    CHECK(mi->model->frozen);
+    CHECK(mi->pieces.size() == modelDraws(*mi->model).size());
+    CHECK(mi->pieces.size() == 7);          // five parts of the full crane, two of the far one
+    CHECK(mi->bodies.size() == 4);          // base, mast, cabin, boom: each a box
+
+    // A piece stands where the entity's place and its own place in the model put it. The boom's mesh is in the
+    // boom's space; the boom is on the cabin, 0.6 m ahead of and 1 m above the mast's top.
+    bool sawBoom = false;
+    for (Entity pe : mi->pieces) {
+        const ModelPiece* piece = world.get<ModelPiece>(pe);
+        const Transform* t = world.get<Transform>(pe);
+        CHECK(piece != nullptr && t != nullptr);
+        if (piece == nullptr || t == nullptr) continue;
+        CHECK(piece->owner == e);
+        CHECK(world.get<Renderable>(pe) == nullptr);    // no dresser: nothing to draw
+        const Vec3 inModel(piece->local.m[0][3], piece->local.m[1][3], piece->local.m[2][3]);
+        const Vec3 want = at.matrix().transformPoint(inModel);
+        CHECK((t->position - want).length() < 1e-9);
+        if ((inModel - Vec3(0, 5.4, 0.6)).length() < 1e-9) sawBoom = true;
+    }
+    CHECK(sawBoom);
+
+    // The boom's collision shape is on the boom's node: its body is at the boom's middle, turned with the crane.
+    const Vec3 boomMiddle = at.matrix().transformPoint(Vec3(0, 5.4, 3.1));
+    bool boomBody = false;
+    for (Entity be : mi->bodies) {
+        const Collider* c = world.get<Collider>(be);
+        const RigidBody* rb = world.get<RigidBody>(be);
+        const Transform* t = world.get<Transform>(be);
+        CHECK(c != nullptr && rb != nullptr && t != nullptr);
+        if (c == nullptr || rb == nullptr || t == nullptr) continue;
+        CHECK(rb->motion == BodyMotion::Static);
+        if ((t->position - boomMiddle).length() > 1e-9) continue;
+        boomBody = true;
+        CHECK(c->shape == ColliderShape::Box);
+        CHECK_APPROX(c->halfExtent.z, 2.5, 1e-9);
+        // its long side, the model's z, lies along the world's x after the quarter turn
+        const Vec3 along = t->matrix().transformPoint(Vec3(0, 0, 1)) - t->position;
+        CHECK(std::abs(std::abs(along.x) - 1.0) < 1e-9);
+    }
+    CHECK(boomBody);
+
+    // A second copy shares the model and builds nothing; taking a copy away takes its pieces and bodies with it.
+    const std::size_t builds = store.builds();
+    const Entity second = stampPrefab(world, nullptr, crane, turnedAt(Vec3(-30, 0, 0), 0), std::string(), &err, &store);
+    CHECK(second.valid());
+    CHECK(store.builds() == builds);
+    mi = world.get<ModelInstance>(e);      // (a new instance may have moved the others in their pool)
+    CHECK(world.get<ModelInstance>(second)->model == mi->model);
+    const std::vector<Entity> pieces = mi->pieces, bodies = mi->bodies;
+    unstampPrefab(world, e);
+    CHECK(!world.alive(e));
+    for (Entity pe : pieces) CHECK(!world.alive(pe));
+    for (Entity be : bodies) CHECK(!world.alive(be));
+    CHECK(world.alive(second));
+    CHECK(world.alive(world.get<ModelInstance>(second)->pieces.front()));
+
+    // A prefab that is not solid has no bodies; one with a friction gives it to every shape.
+    Prefab ghost = crane;
+    ghost.body = Prefab::Body::None;
+    const Entity g = stampPrefab(world, nullptr, ghost, Transform(), std::string(), &err, &store);
+    CHECK(world.get<ModelInstance>(g)->bodies.empty());
+    Prefab slick = crane;
+    slick.friction = 0.05;
+    const Entity s = stampPrefab(world, nullptr, slick, Transform(), std::string(), &err, &store);
+    for (Entity be : world.get<ModelInstance>(s)->bodies) CHECK_APPROX(world.get<Collider>(be)->friction, 0.05, 1e-9);
+
+    // A prefab whose model cannot be had stamps nothing and says why.
+    Prefab lost = crane;
+    lost.name = "lost";
+    lost.model = "no_such_model";
+    err.clear();
+    CHECK(!stampPrefab(world, nullptr, lost, Transform(), std::string(), &err, &store).valid());
+    CHECK(err.find("prefab 'lost'") != std::string::npos && err.find("no_such_model") != std::string::npos);
+}
+
+TEST_CASE(a_stamped_prefabs_pieces_draw_by_band_and_measure_from_the_models_own_point) {
+    World world;
+    ModelStore store;
+    StubUploader up;
+    AssetManager assets(up);
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    CHECK(renderer != nullptr);
+    if (renderer == nullptr) return;
+    ModelDresser dresser(*renderer, assets);
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    const Transform at = turnedAt(Vec3(40, 2, -7), 30);
+    const Entity e = stampPrefab(world, &dresser, crane, at, std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    const std::vector<Entity> pieces = world.get<ModelInstance>(e)->pieces;   // (a copy: later stamps move the pool)
+    int full = 0, far = 0;
+    for (Entity pe : pieces) {
+        const Renderable* r = world.get<Renderable>(pe);
+        const ModelPiece* piece = world.get<ModelPiece>(pe);
+        CHECK(r != nullptr);
+        if (r == nullptr) continue;
+        CHECK(r->mesh.valid());
+        CHECK(r->drawClass == DrawClass::Structure);            // the prefab's draw class
+        CHECK(r->lodAnchored);                                   // every piece measures to the crane's own point
+        CHECK((r->lodAnchor - at.position).length() < 1e-12);
+        CHECK_APPROX(r->lodAnchorReach, (world.get<Transform>(pe)->position - at.position).length(), 1e-9);
+        CHECK_APPROX(r->minDistance, piece->from, 1e-12);
+        CHECK_APPROX(r->drawDistance, piece->until, 1e-12);
+        if (piece->from == 0) { ++full; CHECK_APPROX(r->drawDistance, 120.0, 1e-12); }
+        else { ++far; CHECK_APPROX(r->minDistance, 120.0, 1e-12); CHECK_APPROX(r->drawDistance, 0.0, 1e-12); }
+        // steel is steel on the renderer's material
+        if (piece->local.m[1][3] > 5.0 && piece->from == 0) CHECK_APPROX(r->material.metallic, 0.6, 1e-6);
+    }
+    CHECK(full == 5);
+    CHECK(far == 2);
+
+    // A second crane uploads no mesh again: the copies share them by the model's build.
+    const int uploads = up.uploads;
+    CHECK(uploads == 7);
+    CHECK(stampPrefab(world, &dresser, crane, Transform(), std::string(), nullptr, &store).valid());
+    CHECK(up.uploads == uploads);
+
+    // `distance` on the prefab ends the last level, and cuts a nearer one short.
+    Prefab near = crane;
+    near.drawDistance = 80;
+    const Entity n = stampPrefab(world, &dresser, near, Transform(), std::string(), nullptr, &store);
+    for (Entity pe : world.get<ModelInstance>(n)->pieces) CHECK_APPROX(world.get<Renderable>(pe)->drawDistance, 80.0, 1e-12);
+
+    // Moving the entity and placing its pieces again moves them and their point.
+    Transform* t = world.get<Transform>(e);
+    t->position = Vec3(0, 0, 0);
+    placeModelPieces(world, e);
+    for (Entity pe : pieces) CHECK(world.get<Renderable>(pe)->lodAnchor.length() < 1e-12);
+}
+
+TEST_CASE(a_model_with_used_pieces_stamps_every_copy_at_every_level) {
+    // The sedan: a body in three levels, four tires that are one piece with levels of its own.
+    World world;
+    ModelStore store;
+    Prefab sedan;
+    CHECK(findPrefab("parked_sedan", sedan));
+    std::string err;
+    const Entity e = stampPrefab(world, nullptr, sedan, Transform(), std::string(), &err, &store);
+    CHECK(e.valid());
+    if (!e.valid()) { std::printf("    %s\n", err.c_str()); return; }
+    const ModelInstance* mi = world.get<ModelInstance>(e);
+    const ProcModel& model = *mi->model;
+    CHECK(model.levelFrom.size() == 3);
+    for (Real at : {0.0, 39.0, 41.0, 149.0, 151.0, 900.0}) {
+        std::size_t triangles = 0;
+        for (Entity pe : mi->pieces) {
+            const ModelPiece* piece = world.get<ModelPiece>(pe);
+            if (at >= piece->from && (piece->until == 0 || at < piece->until)) triangles += 1;
+        }
+        std::size_t want = 0;
+        for (const ProcModelDraw& d : modelDraws(model))
+            if (at >= d.from && (d.until == 0 || at < d.until)) want += 1;
+        CHECK(triangles == want);
+        CHECK(triangles > 0);
+    }
+    CHECK(!mi->bodies.empty());
+}
+
+TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
+    // assets/levels/prefab_lab.json: three cranes and five parked kit cars, each { "shape": "prefab", "prefab": name }.
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    CHECK(LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/prefab_lab.json", world, *renderer, view, assets, false));
+    int cranes = 0, cars = 0;
+    Entity turned;
+    world.each<ModelInstance, SourceSpec>([&](Entity e, ModelInstance& mi, SourceSpec& spec) {
+        CHECK(spec.shape == "prefab");
+        CHECK(mi.model != nullptr);
+        CHECK(!mi.pieces.empty());
+        CHECK(!mi.bodies.empty());
+        for (Entity pe : mi.pieces) {
+            const Renderable* r = world.get<Renderable>(pe);
+            CHECK(r != nullptr && r->mesh.valid() && r->lodAnchored);
+        }
+        if (mi.prefab == "crane") ++cranes; else ++cars;
+        if (spec.name == "crane_b") turned = e;
+    });
+    CHECK(cranes == 4);
+    CHECK(cars == 4);
+    // crane_b is turned a quarter: its boom, on the model's z, lies along the world's x.
+    CHECK(turned.valid());
+    if (turned.valid()) {
+        const Transform* t = world.get<Transform>(turned);
+        CHECK((t->position - Vec3(0, 0, 6)).length() < 1e-9);
+        const Vec3 ahead = t->matrix().transformPoint(Vec3(0, 0, 1)) - t->position;
+        CHECK(std::abs(std::abs(ahead.x) - 1.0) < 1e-6);
+    }
+    // Every copy of the crane is the one crane.
+    const ProcModel* crane = nullptr;
+    world.each<ModelInstance>([&](Entity, ModelInstance& mi) {
+        if (mi.prefab != "crane") return;
+        if (crane == nullptr) crane = mi.model.get();
+        CHECK(mi.model.get() == crane);
+    });
+
+    // Saved, the level names each prefab again, where it stands and how it is turned; pieces and bodies are not saved.
+    const char* tmp = "test_prefab_saved_tmp.json";
+    CHECK(LevelWriter::save(tmp, world));
+    nlohmann::json saved;
+    { std::ifstream in(tmp); in >> saved; }
+    std::remove(tmp);
+    int prefabs = 0;
+    bool sawTurned = false;
+    for (const nlohmann::json& ent : saved["entities"]) {
+        if (ent.value("shape", std::string()) != "prefab") continue;
+        ++prefabs;
+        CHECK(ent.contains("prefab") && ent["prefab"].is_string());
+        if (ent.value("name", std::string()) == "crane_b") {
+            sawTurned = true;
+            CHECK(ent["prefab"] == "crane");
+            CHECK(ent.contains("orientation"));
+            CHECK_APPROX(ent["position"][2].get<double>(), 6.0, 1e-9);
+        }
+    }
+    CHECK(prefabs == 8);
+    CHECK(sawTurned);
+}
