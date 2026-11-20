@@ -62,7 +62,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | e013964e | truss: `assets/scripts/truss.lua` (`truss.build`), a lattice of members along a path; tested in `tests/test_openings.cpp` |
 | 19fd8fc2 | the crane rebuilt with the tools: lattice mast and boom, a cab with framed windows, bevelled edges; the same nodes, markers and shapes |
 | ff719461 | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
-| (this) | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
+| c5d9a860 | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
