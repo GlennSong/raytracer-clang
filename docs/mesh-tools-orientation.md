@@ -65,7 +65,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | c5d9a860 | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
 | bb747fea | cage deform (`assets/scripts/cage.lua`) and un-subdivide (`unsubdivide`, Lua `P:unsubdivide`): the last two of the eight tools |
 | ccaa2c5f | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
-| (this) | B-spline curve and surface: `MeshBuilder::pathBSpline`, `bsplineSurface`; Lua `mesh.path.bspline`, `mesh.bspline_surface`; the libraries along a path |
+| 57f7b4a7 | B-spline curve and surface: `MeshBuilder::pathBSpline`, `bsplineSurface`; Lua `mesh.path.bspline`, `mesh.bspline_surface`; the libraries along a path |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
