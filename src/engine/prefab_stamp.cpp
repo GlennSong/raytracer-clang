@@ -31,7 +31,10 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
                    ModelStore* storeOrNull, const std::string& models) {
     ModelStore& store = storeOrNull != nullptr ? *storeOrNull : modelStore();
     std::string why;
-    const std::shared_ptr<const ProcModel> model = obtainModel(prefab.model, levelDir, &why, &store, models);
+    const bool direct = !prefab.recipe.empty();
+    const std::string modelName = direct ? recipeModelName(prefab.recipe, prefab.recipeArgs) : prefab.model;
+    const std::shared_ptr<const ProcModel> model = direct ? obtainRecipeModel(prefab.recipe, prefab.recipeArgs, levelDir, &why, &store, models)
+                                                          : obtainModel(prefab.model, levelDir, &why, &store, models);
     if (model == nullptr) {
         if (error != nullptr) *error = "prefab '" + prefab.name + "': " + why;
         return Entity();
@@ -39,10 +42,10 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
     // What the model was built from, as one number: a mesh's name to the asset manager carries it, so every copy of
     // one build of the model shares its uploaded meshes, and a rebuilt model does not get the old ones.
     ModelStore::Entry kept;
-    store.entry(prefab.model, kept);
+    store.entry(modelName, kept);
     char build[32];
     std::snprintf(build, sizeof build, "%016llx", static_cast<unsigned long long>(kept.signature));
-    const std::string keyBase = "model:" + prefab.model + ":" + build + ":";
+    const std::string keyBase = "model:" + modelName + ":" + build + ":";
 
     const Entity entity = world.create();
     Transform place = at;

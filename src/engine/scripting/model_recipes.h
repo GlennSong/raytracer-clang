@@ -37,6 +37,21 @@ namespace engine {
 std::shared_ptr<const ProcModel> obtainModel(const std::string& name, const std::string& levelDir = std::string(), std::string* error = nullptr,
                                              ModelStore* store = nullptr, const std::string& list = "models.lua");
 
+// A MODEL STRAIGHT FROM A RECIPE, without a line in the list: the recipe (a script's name, as `require` names one)
+// run with `argsJson` (a JSON object, or empty). Kept in the store like any other, under `recipeModelName`, and
+// built again only when what it was built from has changed. For a model still being written (the editor's model
+// studio), which earns its line in models.lua when it is done.
+std::shared_ptr<const ProcModel> obtainRecipeModel(const std::string& recipe, const std::string& argsJson = std::string(),
+                                                   const std::string& levelDir = std::string(), std::string* error = nullptr,
+                                                   ModelStore* store = nullptr, const std::string& list = "models.lua");
+std::string recipeModelName(const std::string& recipe, const std::string& argsJson = std::string());
+
+// Every file a model is built from, as far as is known: its recipe, the list that names it, each library the recipe
+// required, each file it read, and the same for every model it uses. What a host watches to rebuild on an edit. A
+// model whose recipe failed still gives its recipe's file, so a mistake can be fixed.
+std::vector<std::string> modelSourceFiles(const std::string& name, const std::string& levelDir = std::string(), ModelStore* store = nullptr,
+                                          const std::string& list = "models.lua");
+
 // The names in the list, sorted. Empty with `error` when the list cannot be read.
 std::vector<std::string> namedModels(const std::string& levelDir = std::string(), std::string* error = nullptr, const std::string& list = "models.lua");
 

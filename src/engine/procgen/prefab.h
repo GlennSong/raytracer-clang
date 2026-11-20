@@ -25,6 +25,10 @@ namespace engine {
 struct Prefab {
     std::string name;
     std::string model;                 // a name in models.lua
+    // ...or, for a model still being written, a recipe run directly (scripting/model_recipes.h obtainRecipeModel):
+    // the script's name and its arguments as JSON. `model` is then empty.
+    std::string recipe;
+    std::string recipeArgs;
     // physics = { body = "static" }: the model's collision shapes become bodies that do not move. No `physics`: a
     // copy is not solid.
     enum class Body { None, Static };

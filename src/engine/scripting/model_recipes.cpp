@@ -12,6 +12,7 @@
 #include "script_vm.h"
 
 #include <algorithm>
+#include <cstdio>
 
 namespace engine {
 
@@ -29,6 +30,9 @@ struct Building {
     std::vector<ModelInput>* inputs;
 };
 thread_local std::vector<Building> t_building;
+
+std::shared_ptr<const ProcModel> obtainFromLine(const std::string& name, const nlohmann::json& line, const std::string& levelDir, std::string* error,
+                                                ModelStore& store, const std::string& listFile);
 
 }  // namespace
 
@@ -76,7 +80,18 @@ std::shared_ptr<const ProcModel> obtainModel(const std::string& name, const std:
     std::string why;
     if (!readScriptList(listFile, levelDir, list, &why)) return fail(why);
     if (!list.contains(name) || !list[name].is_object()) return fail("models.lua has no model named '" + name + "'");
-    const nlohmann::json& line = list[name];
+    return obtainFromLine(name, list[name], levelDir, error, store, listFile);
+}
+
+namespace {
+
+std::shared_ptr<const ProcModel> obtainFromLine(const std::string& name, const nlohmann::json& line, const std::string& levelDir, std::string* error,
+                                                ModelStore& store, const std::string& listFile) {
+    auto fail = [&](const std::string& why) -> std::shared_ptr<const ProcModel> {
+        if (error != nullptr) *error = why;
+        return nullptr;
+    };
+    std::string why;
     const std::string recipe = line.value("recipe", std::string());
     const bool fromFiles = line.contains("files") && line["files"].is_array();
     if (recipe.empty() == !fromFiles) return fail("models.lua: '" + name + "' needs a `recipe` or `files`, one of them");
@@ -158,6 +173,65 @@ std::shared_ptr<const ProcModel> obtainModel(const std::string& name, const std:
     ModelStore::Entry now;
     if (!t_building.empty() && store.entry(name, now)) t_building.back().inputs->push_back(ModelInput{"model:" + name, now.signature});
     return model;
+}
+
+}  // namespace
+
+std::string recipeModelName(const std::string& recipe, const std::string& argsJson) {
+    if (argsJson.empty() || argsJson == "null" || argsJson == "{}") return "recipe:" + recipe;
+    char h[24];
+    std::snprintf(h, sizeof h, "%016llx", static_cast<unsigned long long>(bundle::fnv1aStr(argsJson)));
+    return "recipe:" + recipe + ":" + h;
+}
+
+std::shared_ptr<const ProcModel> obtainRecipeModel(const std::string& recipe, const std::string& argsJson, const std::string& levelDir,
+                                                   std::string* error, ModelStore* storeOrNull, const std::string& listFile) {
+    ModelStore& store = storeOrNull != nullptr ? *storeOrNull : modelStore();
+    nlohmann::json line;
+    line["recipe"] = recipe;
+    if (!argsJson.empty()) {
+        const nlohmann::json args = nlohmann::json::parse(argsJson, nullptr, false);
+        if (args.is_object()) line["args"] = args;
+    }
+    const std::string name = recipeModelName(recipe, argsJson);
+    for (const Building& b : t_building)
+        if (b.name == name) {
+            if (error != nullptr) *error = "the recipe '" + recipe + "' needs itself";
+            return nullptr;
+        }
+    return obtainFromLine(name, line, levelDir, error, store, listFile);
+}
+
+std::vector<std::string> modelSourceFiles(const std::string& name, const std::string& levelDir, ModelStore* storeOrNull, const std::string& listFile) {
+    ModelStore& store = storeOrNull != nullptr ? *storeOrNull : modelStore();
+    std::vector<std::string> files;
+    auto add = [&](const std::string& path) {
+        if (!path.empty() && std::find(files.begin(), files.end(), path) == files.end()) files.push_back(path);
+    };
+    std::vector<std::string> todo{name}, seen;
+    while (!todo.empty()) {
+        const std::string at = todo.back();
+        todo.pop_back();
+        if (std::find(seen.begin(), seen.end(), at) != seen.end()) continue;
+        seen.push_back(at);
+        // its recipe: named by the model itself ("recipe:<file>[:args]") or by its line in the list
+        if (at.compare(0, 7, "recipe:") == 0) {
+            const std::string rest = at.substr(7);
+            add(resolveScriptPath(rest.substr(0, rest.find(':')) + ".lua", levelDir));
+        } else {
+            add(resolveScriptPath(listFile, levelDir));
+            nlohmann::json list;
+            if (readScriptList(listFile, levelDir, list, nullptr) && list.contains(at) && list[at].is_object())
+                add(resolveScriptPath(list[at].value("recipe", std::string()) + ".lua", levelDir));
+        }
+        ModelStore::Entry kept;
+        if (!store.entry(at, kept)) continue;
+        for (const ModelInput& in : kept.inputs) {
+            if (in.what.compare(0, 6, "model:") == 0) todo.push_back(in.what.substr(6));
+            else add(in.what);
+        }
+    }
+    return files;
 }
 
 }  // namespace engine

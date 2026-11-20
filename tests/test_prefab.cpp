@@ -541,3 +541,92 @@ TEST_CASE(a_moving_node_inside_a_used_piece_is_reached_through_the_node_that_use
     CHECK(moved > 0);
     CHECK(moved < static_cast<int>(pieces.size()) / 2);
 }
+
+TEST_CASE(a_level_shows_a_model_straight_from_a_recipe_and_watches_what_it_is_built_from) {
+    // The editor's model studio: a level whose one prefab is a script still being written, with no line in
+    // models.lua or prefabs.lua. Its recipe and every library the recipe requires are watched.
+    Folder f;
+    f.write("test_prefab_studio_lib_tmp.lua", "return { size = 1.5 }");
+    f.write("test_prefab_studio_tmp.lua", R"LUA(
+        local lib = require "test_prefab_studio_lib_tmp"
+        local a = args or {}
+        local m = model.new()
+        m:add(mesh.box{ lib.size, a.tall or 1, lib.size })
+        m:shape("body", { box = { lib.size, a.tall or 1, lib.size } })
+        return m
+    )LUA");
+    f.write("studio.json", R"JSON({ "version": 1, "watch_scripts": true, "name": "studio", "entities": [
+        { "id": 1, "name": "it", "shape": "prefab", "prefab": { "recipe": "test_prefab_studio_tmp", "args": { "tall": 3 } }, "position": [2, 0, 0] },
+        { "id": 2, "name": "ghost", "shape": "prefab", "prefab": { "recipe": "test_prefab_studio_tmp", "physics": "none" } }
+    ] })JSON");
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    auto load = [&](World& world) {
+        RenderView view;
+        return LevelLoader::load(f.dir + "/studio.json", world, *renderer, view, assets, false);
+    };
+    {
+        World world;
+        CHECK(load(world));
+        int seen = 0;
+        world.each<ModelInstance, SourceSpec>([&](Entity, ModelInstance& mi, SourceSpec& spec) {
+            ++seen;
+            CHECK(mi.model != nullptr && mi.model->parts.size() == 1);
+            if (spec.name == "it") {
+                CHECK(mi.bodies.size() == 1);
+                CHECK_APPROX(world.get<Collider>(mi.bodies[0])->halfExtent.y, 1.5, 1e-9);   // args.tall = 3
+            } else {
+                CHECK(mi.bodies.empty());                                                    // physics = "none"
+                CHECK_APPROX(mi.model->colliders[0].halfExtent.y, 0.5, 1e-9);               // no args: its own model
+            }
+        });
+        CHECK(seen == 2);
+        const std::vector<std::string>& watched = LevelLoader::lastLoadedScriptFiles();
+        auto watching = [&](const char* file) {
+            for (const std::string& w : watched)
+                if (w.find(file) != std::string::npos) return true;
+            return false;
+        };
+        CHECK(watching("test_prefab_studio_tmp.lua"));
+        CHECK(watching("test_prefab_studio_lib_tmp.lua"));
+        // saved, the entity names its recipe and arguments again
+        const std::string saved = f.dir + "/saved.json";
+        CHECK(LevelWriter::save(saved, world));
+        nlohmann::json j;
+        { std::ifstream in(saved); in >> j; }
+        bool back = false;
+        for (const nlohmann::json& ent : j["entities"])
+            if (ent.value("name", std::string()) == "it") {
+                back = ent["prefab"].is_object() && ent["prefab"]["recipe"] == "test_prefab_studio_tmp" && ent["prefab"]["args"]["tall"] == 3;
+            }
+        CHECK(back);
+    }
+    // The library is edited: loaded again, the model is the new size (nothing else was told).
+    f.write("test_prefab_studio_lib_tmp.lua", "return { size = 4.0 }");
+    {
+        World world;
+        CHECK(load(world));
+        bool wide = false;
+        world.each<ModelInstance, SourceSpec>([&](Entity, ModelInstance& mi, SourceSpec& spec) {
+            if (spec.name == "it") wide = std::abs(world.get<Collider>(mi.bodies[0])->halfExtent.x - 2.0) < 1e-9;
+        });
+        CHECK(wide);
+    }
+    // The recipe is broken: nothing is stamped, the load still succeeds, and the recipe is still watched so it
+    // can be mended.
+    f.write("test_prefab_studio_tmp.lua", "local m = model.new() m:add(mesh.box{ 1, 1 ) return m");
+    {
+        World world;
+        CHECK(load(world));
+        int seen = 0;
+        world.each<ModelInstance>([&](Entity, ModelInstance&) { ++seen; });
+        CHECK(seen == 0);
+        bool still = false;
+        for (const std::string& w : LevelLoader::lastLoadedScriptFiles())
+            if (w.find("test_prefab_studio_tmp.lua") != std::string::npos) still = true;
+        CHECK(still);
+    }
+    modelStore().forget(recipeModelName("test_prefab_studio_tmp", "{\"tall\":3}"));
+    modelStore().forget(recipeModelName("test_prefab_studio_tmp"));
+}

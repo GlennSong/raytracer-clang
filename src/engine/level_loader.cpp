@@ -98,6 +98,7 @@
 #include "procgen/proc_model.h"      // ProcModel (script model cache)
 #include "model_spawn.h"             // the dresser, the model's colliders, the surface texture helpers
 #include "prefab_stamp.h"            // a level's shape:"prefab" entity
+#include "scripting/prefab_list.h"   // findPrefab
 #include "scripting/model_recipes.h" // obtainModel: a recipe's model.get
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_vm.h"
@@ -1505,18 +1506,49 @@ static void loadEntities(const json& entities, const json& root, World& world,
         // (prefab_stamp.h). The entity itself is the document entity: it carries the SourceSpec the editor saves.
         if (ent.value("shape", std::string()) == "prefab") {
 #ifdef RT_ENABLE_SCRIPTING
-            const std::string prefabName = ent.value("prefab", std::string());
+            // "prefab": "<name>" is a line in prefabs.lua. "prefab": { "recipe": "<script>", "args": {...},
+            // "physics": "static" | "none", "script": "<behaviour>" } is a model straight from a recipe, for one
+            // still being written (the editor's model studio): no line in either list yet.
+            const json what = ent.contains("prefab") ? ent["prefab"] : json();
             Transform at;
             if (ent.contains("position")) at.position = parseVec3(ent["position"]);
             at.orientation = parseOrientation(ent);
             std::string why;
-            const Entity stamped = stampPrefab(world, &prefabDresser, prefabName, at, levelDir, &why);
+            Prefab prefab;
+            bool found = false;
+            std::string modelName;
+            if (what.is_object()) {
+                prefab.recipe = what.value("recipe", std::string());
+                prefab.name = prefab.recipe;
+                if (what.contains("args") && what["args"].is_object()) prefab.recipeArgs = what["args"].dump();
+                prefab.body = what.value("physics", std::string("static")) == "none" ? Prefab::Body::None : Prefab::Body::Static;
+                prefab.script = what.value("script", std::string());
+                found = !prefab.recipe.empty();
+                if (!found) why = "\"prefab\": { ... } needs a `recipe`";
+                modelName = recipeModelName(prefab.recipe, prefab.recipeArgs);
+            } else {
+                found = findPrefab(what.is_string() ? what.get<std::string>() : std::string(), prefab, levelDir, &why);
+                modelName = prefab.model;
+            }
+            const Entity stamped = found ? stampPrefab(world, &prefabDresser, prefab, at, levelDir, &why) : Entity();
+            // What it was built from is watched, so an edit to its recipe (or to a library the recipe requires)
+            // reloads the level, and a recipe that failed can be fixed and tried again.
+            if (found) {
+                for (const std::string& path : modelSourceFiles(modelName, levelDir))
+                    if (std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
+                        g_loadedScriptFiles.push_back(path);
+                if (!prefab.script.empty()) {
+                    const std::string behaviour = resolveScriptPath(prefab.script, levelDir);
+                    if (!behaviour.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), behaviour) == g_loadedScriptFiles.end())
+                        g_loadedScriptFiles.push_back(behaviour);
+                }
+            }
             if (!stamped.valid()) {
                 LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why;
                 continue;
             }
             SourceSpec spec = buildSourceSpec(ent, "prefab");
-            spec.recipe = json(prefabName).dump();   // the writer gives it back as "prefab": "<name>"
+            spec.recipe = what.dump();   // the writer gives it back as "prefab": <the same>
             world.add<SourceSpec>(stamped, spec);
 #else
             LOG_WARN << "prefab entity skipped (scripting disabled in this build)";
