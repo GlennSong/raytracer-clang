@@ -107,8 +107,12 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
 // THICKNESS for a skin (ADR-0352: a door, a hood, the body's side of the opening): the region's back -- its faces
 // offset `thickness` inward and turned to face in, in material `mat` -- and a wall along every edge of its outline
 // joining the skin to that back, all as a NEW poly to append. The walls face out of the region, so a door seen
-// edge-on is a solid slab.
-PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat);
+// edge-on is a solid slab. With `against`, a wall is built only where the outline runs along one of THOSE faces: the
+// body's side of a door opening wants its wall at the opening, not a second one buried in the body along the far
+// side of the ring of faces that was thickened (that one shared its edge with two skin faces: three faces on one
+// edge, which no closed skin has).
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat,
+                  const std::vector<int>* against = nullptr);
 // The faces outside `sel` that share a corner with it (one ring round the region).
 std::vector<int> ringAround(const PolyMesh& m, const std::vector<int>& sel);
 

@@ -544,7 +544,8 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
     return out;
 }
 
-PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat) {
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat,
+                  const std::vector<int>* against) {
     PolyMesh out = extractOffset(m, sel, -thickness, true);   // the back: its points first, in nsum order
     const int k = out.matId(mat);
     for (PolyMesh::Face& f : out.faces) f.mat = k;
@@ -565,6 +566,13 @@ PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickne
         const auto& v = m.faces[static_cast<std::size_t>(f)].v;
         for (std::size_t i = 0; i < v.size(); ++i) de.insert(dkey(v[i], v[(i + 1) % v.size()]));
     }
+    std::unordered_set<long long> facing;   // with `against`: the directed edges of the faces a wall may stand along
+    if (against != nullptr) {
+        for (int f : *against) {
+            const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+            for (std::size_t i = 0; i < v.size(); ++i) facing.insert(dkey(v[i], v[(i + 1) % v.size()]));
+        }
+    }
     std::unordered_map<int, int> front;   // skin points on the outline, copied in
     auto frontOf = [&](int i) {
         auto it = front.find(i);
@@ -580,6 +588,7 @@ PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickne
         for (std::size_t i = 0; i < v.size(); ++i) {
             const int a = v[i], b = v[(i + 1) % v.size()];
             if (de.count(dkey(b, a))) continue;
+            if (against != nullptr && !facing.count(dkey(b, a))) continue;   // not along one of the faces asked for
             PolyMesh::Face w;
             w.v = {frontOf(b), frontOf(a), back[a], back[b]};
             w.group = face.group;

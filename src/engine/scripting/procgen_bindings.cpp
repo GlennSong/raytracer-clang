@@ -5157,12 +5157,21 @@ int l_poly_panels(lua_State* L) {
         if (used[i]) { lua_pushstring(L, m.panels[i].c_str()); lua_rawseti(L, -2, ++k); }
     return 1;
 }
-// P:solidify(sel, thickness, mat) -> Poly: the region's back and its edge walls (append it to give the skin depth)
+// P:solidify(sel, thickness, mat [, against]) -> Poly: the region's back and its edge walls (append it to give the
+// skin depth). `against` (a selection): walls only where the region's outline runs along one of those faces.
 int l_poly_solidify(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
     checkSelRange(L, m, sel);
-    pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, luaL_checknumber(L, 3), luaL_optstring(L, 4, "trim"))));
+    const double thickness = luaL_checknumber(L, 3);
+    const char* mat = luaL_optstring(L, 4, "trim");
+    if (lua_isnoneornil(L, 5)) {
+        pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, thickness, mat)));
+    } else {
+        const auto against = checkSel(L, 5);
+        checkSelRange(L, m, against);
+        pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, thickness, mat, &against)));
+    }
     return 1;
 }
 // P:ring(sel) -> sel: the faces round the region (sharing a corner with it)

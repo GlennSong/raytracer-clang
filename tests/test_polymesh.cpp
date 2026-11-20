@@ -222,3 +222,23 @@ TEST_CASE(polymesh_extract_offsets_and_flips_a_region) {
     for (const Vec3& p : in.pts) CHECK_APPROX(p.y, 0.4, 1e-9);   // 10 cm inside the top
     CHECK(in.faceNormal(0).y < -0.9);                             // facing down, into the box
 }
+
+// Thickness for a skin: the region's back and a wall along its outline. With `against`, a wall only where the outline
+// runs along one of those faces (a door opening's side of the body, not the far side of the ring that was thickened).
+TEST_CASE(polymesh_solidify_walls_the_whole_outline_or_only_along_the_faces_asked_for) {
+    PolyMesh c = cube();
+    const std::vector<int> top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    const std::vector<int> front = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.z > 0.9; });
+    CHECK(top.size() == 1 && front.size() == 1);
+    const PolyMesh all = solidify(c, top, 0.1, "body");
+    CHECK(all.faces.size() == 5);                            // the back and a wall on each of the four edges
+    const PolyMesh one = solidify(c, top, 0.1, "body", &front);
+    CHECK(one.faces.size() == 2);                            // the back and the one wall along the front face
+    if (one.faces.size() != 2) return;
+    double z = 0;
+    for (int v : one.faces[1].v) z += one.pts[static_cast<std::size_t>(v)].z / 4.0;
+    CHECK(z > 0.44);                                         // the wall stands at the front edge (the back is offset along the normal only)
+    CHECK(one.faceNormal(1).z > 0.9);                        // and faces out of the region
+    const std::vector<int> none;
+    CHECK(solidify(c, top, 0.1, "body", &none).faces.size() == 1);   // along nothing: the back alone
+}

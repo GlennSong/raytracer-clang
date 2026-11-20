@@ -1249,18 +1249,25 @@ function kit.build(P, level, opts)
     for _, name in ipairs(S:panels()) do
       if name ~= "body" then names[#names + 1] = name; sels[name] = S:select{ panel = name } end
     end
-    local bounds, thick = {}, {}
+    -- The body's side of an opening: the ring of body faces round the panel, given a back, and a wall ONLY along the
+    -- panel (the fourth argument). A wall round the whole ring put a second one inside the body along the ring's far
+    -- side, sharing its edge with two skin faces. A face in two panels' rings (the pillar between two doors) is
+    -- thickened once, by the first, and walled along EVERY panel it meets (so `against` is all the panels' faces).
+    local bounds, thick, jambed, anyPanel = {}, {}, {}, {}
+    for _, name in ipairs(names) do for _, f in ipairs(sels[name]) do anyPanel[#anyPanel + 1] = f end end
     for _, name in ipairs(names) do
       local lo2, hi2 = S:bounds(sels[name])
       bounds[name] = { lo2, hi2 }
       local t = name:sub(1, 5) == "door_" and 0.06 or 0.035
       local skin = solid(sels[name])
       local jamb = {}
-      for _, f in ipairs(S:ring(sels[name])) do if bodyFace[f] and not glassy[f] then jamb[#jamb + 1] = f end end
+      for _, f in ipairs(S:ring(sels[name])) do
+        if bodyFace[f] and not glassy[f] and not jambed[f] then jamb[#jamb + 1] = f; jambed[f] = true end
+      end
       thick[#thick + 1] = { skin, t }
-      thick[#thick + 1] = { jamb, t }
+      thick[#thick + 1] = { jamb, t, anyPanel }
     end
-    for _, th in ipairs(thick) do if #th[1] > 0 then S:append(S:solidify(th[1], th[2], "body")) end end
+    for _, th in ipairs(thick) do if #th[1] > 0 then S:append(S:solidify(th[1], th[2], "body", th[3])) end end
     parts = S:to_parts{ autosmooth = smoothing, panel = "body" }
     panels = {}
     for _, name in ipairs(names) do
