@@ -53,9 +53,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | d534a3c5 | a door opening's wall stands at the opening only: `solidify` takes `against`; the sedan's 532 edges with three or more faces are gone. Changes kit cars with panels |
 | 55cf9eba | the sheet's shape lines name their part; the survey's findings below |
 | 7a63568e | third merge of `claude/island8-batch`, up to bec6d732 (ADR-0469 to 0473, sidewalks at junctions and road file fixes). Roads only; the car's fingerprint is unchanged |
-| (next) | PREFAB STEP 7, prefab data and stamping one entity: `procgen/prefab.h`, `scripting/prefab_list.{h,cpp}`, `engine/prefab_stamp.{h,cpp}`, `engine/model_spawn.{h,cpp}` (the loader's material and collider code, now shared), `modelDraws`, `ModelInstance` / `ModelPiece`, `Renderable::lodAnchor`; `assets/scripts/prefabs.lua`, `crane.lua`, `assets/levels/prefab_lab.json`; `tests/test_prefab.cpp`, `tests/test_prefab_physics.cpp` |
+| 77ce4a76 | PREFAB STEP 7, prefab data and stamping one entity: `procgen/prefab.h`, `scripting/prefab_list.{h,cpp}`, `engine/prefab_stamp.{h,cpp}`, `engine/model_spawn.{h,cpp}` (the loader's material and collider code, now shared), `modelDraws`, `ModelInstance` / `ModelPiece`, `Renderable::lodAnchor`; `assets/scripts/prefabs.lua`, `crane.lua`, `assets/levels/prefab_lab.json`; `tests/test_prefab.cpp`, `tests/test_prefab_physics.cpp` |
 
-The unit suite passed 1585 of 1585 on 55cf9eba. `physics_tests` (built here since 2026-11-20:
+The unit suite passed 1592 of 1592 on 77ce4a76. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
 level suite has not been run.
 
