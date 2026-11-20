@@ -32,7 +32,10 @@ end
 --   6 roof-right    7 roof-left      8 glass-base-left       9 shoulder-left    10 side-left
 local CORNERS = 10
 -- which corner-to-corner run a face belongs to
-local RUN = { bottom = { 1, 2 }, side_r = { 2, 4 }, glass_r = { 5, 6 }, roof = { 6, 7 }, glass_l = { 7, 8 }, side_l = { 8, 10 } }
+local RUN = { bottom = { 1, 2 }, side_r = { 2, 4 }, glass_r = { 5, 6 }, roof = { 6, 7 }, glass_l = { 7, 8 }, side_l = { 9, 1 } }
+-- (side_l is side_r's mirror: corners 4, 3, 2 mirror to 9, 10, 1, so it runs past the section's last point and back
+-- to its first. It was { 8, 10 } once: the ledge and the upper flank, with no sill, and the two flanks' creases
+-- differed, so a subdivided body came out different from left to right.)
 -- FILLET STEPS BY RADIUS: a sharp corner is one point, a small radius two, a big one four. A tiny radius
 -- stepped four times left millimetre strips down the whole body (the fleet test's slivers). The radii are
 -- the same at every station, so every section still has the same count.
@@ -77,6 +80,7 @@ function kit.body(P)
   local B = poly.loft{ sections = sections, stations = stations, cap_start = true, cap_end = true,
                        cap_crease = P.cap_crease or 1.4 }
 
+  local wraps = B:face_count() >= (#stations - 1) * n   -- the section's last quad (point n back to 1) is a face
   -- face index of the quad from ring k (1-based) point i (1-based): (k-1)*n + (i-1), 0-based
   local function face(k, i) return (k - 1) * n + (i - 1) end
   -- the quads of a run between two corners: quad i joins section points i and i+1 (1-based). `straight`
@@ -96,7 +100,8 @@ function kit.body(P)
     local a, b = RUN[name][1], RUN[name][2]
     local out = {}
     local i0, i1 = straight and last[a] or first[a], straight and first[b] - 1 or last[b] - 1
-    for i = i0, i1 do out[#out + 1] = i end
+    if b < a then i1 = i1 + n end                       -- a run that passes the section's last point
+    for i = i0, i1 do out[#out + 1] = (i - 1) % n + 1 end
     return out
   end
   -- `pred(zm, k, z0, z1)`: zm the row's middle, z0/z1 its two stations
@@ -106,7 +111,7 @@ function kit.body(P)
       local zm = 0.5 * (stations[k] + stations[k + 1])
       if pred(zm, k, stations[k], stations[k + 1]) then
         for _, i in ipairs(run(runName, straight)) do
-          if i < n then sel[#sel + 1] = face(k, i) end
+          if i < n or wraps then sel[#sel + 1] = face(k, i) end
         end
       end
     end
@@ -187,7 +192,6 @@ function kit.body(P)
   -- corners. A panel's outline is creased so it reads as a panel line, not a cut.
   local plan = kit.panel_plan(P)
   if plan then
-    local wraps = B:face_count() >= (#stations - 1) * n   -- the section's last quad (point n back to 1) is a face
     local function rows(lo, hi, i0, i1)
       local sel = {}
       for k = 1, #stations - 1 do
