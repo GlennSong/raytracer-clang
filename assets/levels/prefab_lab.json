@@ -2,7 +2,7 @@
   "version": 1,
   "watch_scripts": true,
   "name": "prefab_lab",
-  "_note": "PREFAB LAB (#191 step 7): prefabs stamped from assets/scripts/prefabs.lua. Four cranes, the middle one at work (its script swings the cab, lifts the boom and runs the hook line; its boom is solid as it moves); a row of parked kit cars. Walk away from them to see each change level of detail as one thing (the cars at 40 m and 150 m, the cranes at 120 m); walk into them to meet their collision shapes.",
+  "_note": "PREFAB LAB (#191 step 7): prefabs stamped from assets/scripts/prefabs.lua. Four cranes, the middle one at work (its script swings the cab, lifts the boom and runs the hook line; its boom is solid as it moves); a row of parked kit cars. Walk away from them to see each change level of detail as one thing (the cars at 40 m and 150 m, the cranes at 120 m); walk into them to meet their collision shapes. In front: furniture, a hydrant, a lamp, a boulder and oaks from prop_models.lua, each a prefab.",
   "player": {
     "position": [
       0,
@@ -196,6 +196,137 @@
         10,
         0,
         200
+      ]
+    },
+    {
+      "id": 20,
+      "name": "office_chair_20",
+      "shape": "prefab",
+      "prefab": "office_chair",
+      "position": [
+        -9,
+        0,
+        -10
+      ]
+    },
+    {
+      "id": 21,
+      "name": "office_chair_21",
+      "shape": "prefab",
+      "prefab": "office_chair",
+      "position": [
+        -7.8,
+        0,
+        -10
+      ],
+      "orientation": {
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "angleDeg": 25
+      }
+    },
+    {
+      "id": 22,
+      "name": "sofa_22",
+      "shape": "prefab",
+      "prefab": "sofa",
+      "position": [
+        -5,
+        0,
+        -10
+      ],
+      "orientation": {
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "angleDeg": 180
+      }
+    },
+    {
+      "id": 23,
+      "name": "hydrant_23",
+      "shape": "prefab",
+      "prefab": "hydrant",
+      "position": [
+        -2,
+        0,
+        -10
+      ]
+    },
+    {
+      "id": 24,
+      "name": "street_lamp_24",
+      "shape": "prefab",
+      "prefab": "street_lamp",
+      "position": [
+        0,
+        0,
+        -10
+      ]
+    },
+    {
+      "id": 25,
+      "name": "boulder_25",
+      "shape": "prefab",
+      "prefab": "boulder",
+      "position": [
+        3,
+        0,
+        -10
+      ],
+      "orientation": {
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "angleDeg": 40
+      }
+    },
+    {
+      "id": 26,
+      "name": "oak_26",
+      "shape": "prefab",
+      "prefab": "oak",
+      "position": [
+        9,
+        0,
+        -10
+      ]
+    },
+    {
+      "id": 27,
+      "name": "oak_27",
+      "shape": "prefab",
+      "prefab": "oak",
+      "position": [
+        -16,
+        0,
+        -10
+      ],
+      "orientation": {
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "angleDeg": 120
+      }
+    },
+    {
+      "id": 28,
+      "name": "oak_far",
+      "shape": "prefab",
+      "prefab": "oak",
+      "position": [
+        -20,
+        0,
+        110
       ]
     }
   ]

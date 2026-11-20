@@ -19,4 +19,11 @@ return {
   -- the kit cars as parked, solid scenery: models with used pieces (the tires) and three levels of detail
   parked_sedan = { model = "sedan", physics = { body = "static" } },
   parked_pickup = { model = "pickup", physics = { body = "static" } },
+  -- furniture, kerb props, a tree and a rock (prop_models.lua): each solid where its model's shape says
+  office_chair = { model = "office_chair", physics = { body = "static" } },
+  sofa = { model = "sofa", physics = { body = "static" } },
+  hydrant = { model = "hydrant", physics = { body = "static" } },
+  street_lamp = { model = "street_lamp", physics = { body = "static" } },
+  oak = { model = "oak", physics = { body = "static" }, draw = { class = "scenery" } },
+  boulder = { model = "boulder", physics = { body = "static" }, draw = { class = "scenery" } },
 }

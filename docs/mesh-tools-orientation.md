@@ -54,9 +54,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 55cf9eba | the sheet's shape lines name their part; the survey's findings below |
 | 7a63568e | third merge of `claude/island8-batch`, up to bec6d732 (ADR-0469 to 0473, sidewalks at junctions and road file fixes). Roads only; the car's fingerprint is unchanged |
 | 77ce4a76 | PREFAB STEP 7, prefab data and stamping one entity: `procgen/prefab.h`, `scripting/prefab_list.{h,cpp}`, `engine/prefab_stamp.{h,cpp}`, `engine/model_spawn.{h,cpp}` (the loader's material and collider code, now shared), `modelDraws`, `ModelInstance` / `ModelPiece`, `Renderable::lodAnchor`; `assets/scripts/prefabs.lua`, `crane.lua`, `assets/levels/prefab_lab.json`; `tests/test_prefab.cpp`, `tests/test_prefab_physics.cpp` |
-| (next) | PREFAB STEP 8, motion on the entity and the script: `engine/model_motion.{h,cpp}`, `systems/model_motion_system.{h,cpp}`, a pose through the model's walks, kinematic bodies for shapes on moving nodes (`ModelShape`), a prefab's `script`, Lua `entity.model_set` / `model_get` / `model_marker`; `crane_swing.lua`; `tests/test_prefab_motion_physics.cpp` |
+| 1e90ad41 | PREFAB STEP 8, motion on the entity and the script: `engine/model_motion.{h,cpp}`, `systems/model_motion_system.{h,cpp}`, a pose through the model's walks, kinematic bodies for shapes on moving nodes (`ModelShape`), a prefab's `script`, Lua `entity.model_set` / `model_get` / `model_marker`; `crane_swing.lua`; `tests/test_prefab_motion_physics.cpp` |
 
-The unit suite passed 1592 of 1592 on 77ce4a76. `physics_tests` (built here since 2026-11-20:
+The unit suite passed 1594 of 1594 on 1e90ad41. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
 level suite has not been run.
 
@@ -121,8 +121,11 @@ models, then modelling tools.**
 
 1. **Step 9, sounds, lights and offers at markers** (the design note's order), when Glenn wants it: he put
    modelling tools ahead of the crane's cab interactions.
-2. **More models through prefabs:** furniture pieces, street props, a tree, a building part. Each is a line in
-   `models.lua` and one in `prefabs.lua`; what breaks is the finding.
+2. **More models through prefabs: first batch done** (`assets/scripts/prop_models.lua`: an office chair and a
+   sofa from the furniture kit, the hydrant from `street_props.lua`, a street lamp, an oak with a far level, a
+   boulder whose shape is its hull; each a line in `models.lua` and `prefabs.lua`, all standing in
+   `prefab_lab.json`). Nothing broke. Still to try: a building part, a model from a `.glb`, something with
+   textures baked by the recipe.
 3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"): edge bevel
    first.
 

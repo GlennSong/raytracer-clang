@@ -16,4 +16,11 @@ return {
   pickup = { recipe = "car_rig_lab", args = { name = "pickup" } },
   -- a small crane on the crane rig: the first model stamped as a prefab (prefabs.lua)
   crane = { recipe = "crane" },
+  -- things the toolkit already made, as models with a collision shape each (prop_models.lua)
+  office_chair = { recipe = "prop_models", args = { kind = "furniture", name = "office_chair" } },
+  sofa = { recipe = "prop_models", args = { kind = "furniture", name = "sofa", variant = 41 } },
+  hydrant = { recipe = "prop_models", args = { kind = "street_prop", name = "hydrant" } },
+  street_lamp = { recipe = "prop_models", args = { kind = "lamp" } },
+  oak = { recipe = "prop_models", args = { kind = "tree", shape = "oak", seed = 3 } },
+  boulder = { recipe = "prop_models", args = { kind = "rock", seed = 5 } },
 }

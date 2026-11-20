@@ -398,7 +398,7 @@ TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
         if (spec.name == "crane_working") turned = e;
     });
     CHECK(cranes == 4);
-    CHECK(cars == 4);
+    CHECK(cars == 4 + 9);     // (everything that is not a crane: the kit cars and the props)
     // crane_working is turned a quarter: its boom, on the model's z, lies along the world's x.
     CHECK(turned.valid());
     if (turned.valid()) {
@@ -434,7 +434,7 @@ TEST_CASE(a_level_places_prefabs_and_saves_them_back) {
             CHECK_APPROX(ent["position"][2].get<double>(), 6.0, 1e-9);
         }
     }
-    CHECK(prefabs == 8);
+    CHECK(prefabs == 17);
     CHECK(sawTurned);
 }
 
