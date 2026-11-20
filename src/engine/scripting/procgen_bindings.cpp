@@ -2712,14 +2712,7 @@ int l_mesh_hull(lua_State* L) {
     std::vector<Vec3> pts;
     if (lua_istable(L, 1)) pts = checkVec3List(L, 1);
     else for (const Vertex& v : checkMesh(L, 1).vertices) pts.push_back(v.position);
-    const Vec3 color = optColor(L, 2);
-    auto m = std::make_shared<RenderMesh>();
-    for (const std::array<uint32_t, 3>& t : MeshBuilder::convexHull(pts)) {
-        const Vec3& a = pts[t[0]]; const Vec3& b = pts[t[1]]; const Vec3& c = pts[t[2]];
-        const Vec3 out = cross(b - a, c - a);   // the hull gives its triangles counter-clockwise seen from outside
-        if (out.length() > 0.0) MeshBuilder::emitTri(*m, a, b, c, normalize(out), color);
-    }
-    pushMesh(L, m);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::hullMesh(pts, optColor(L, 2))));
     return 1;
 }
 
@@ -3923,6 +3916,89 @@ int l_model_marker_count(lua_State* L) {
 
 void addUseFromLua(lua_State* L, ProcModel& m, int node);   // below, with the uses
 
+// The shared body of m:shape and n:shape: (name, spec) from stack slot 2, on `node`. A COLLISION SHAPE: a simple solid
+// that stands in for the model when things bump into it, in the node's own space so it goes with the node.
+//   { box = {w, h, d} } | { sphere = radius } | { capsule = { radius =, height = } }   (height: the straight part)
+//   | { hull = mesh } (the convex shape round the mesh's points) | { mesh = mesh } (its triangles; static things only)
+// with pos = {x,y,z}, turn = {x,y,z} in degrees (a capsule's length runs along its own y), friction =.
+void addShapeFromLua(lua_State* L, ProcModel& m, int node) {
+    const char* name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    if (name[0] == '\0') { luaL_error(L, "a collision shape needs a name"); return; }
+    if (m.findShape(name) != nullptr) { luaL_error(L, "the model already has a collision shape named '%s'", name); return; }
+    int kinds = 0;
+    for (const char* key : {"box", "sphere", "capsule", "hull", "mesh"}) {
+        lua_getfield(L, 3, key);
+        kinds += lua_isnil(L, -1) ? 0 : 1;
+        lua_pop(L, 1);
+    }
+    if (kinds != 1) { luaL_error(L, "collision shape '%s': give one of box, sphere, capsule, hull, mesh", name); return; }
+    // every value is read before the shape (which owns memory) is made, so an error leaves nothing half built
+    const Vec3 pos = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+    const Quat turn = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+    const Real friction = static_cast<Real>(optField(L, 3, "friction", ProcCollider{}.friction));
+    ProcCollider::Kind kind = ProcCollider::Kind::Box;
+    Vec3 half(0.5, 0.5, 0.5);
+    Real radius = 0.5, halfHeight = 0.5;
+    const RenderMesh* mesh = nullptr;
+    lua_getfield(L, 3, "box");
+    if (!lua_isnil(L, -1)) half = checkVec3(L, -1) * 0.5;
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "sphere");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Sphere; radius = static_cast<Real>(luaL_checknumber(L, -1)); }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "capsule");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        kind = ProcCollider::Kind::Capsule;
+        const int ct = lua_absindex(L, -1);
+        radius = static_cast<Real>(optField(L, ct, "radius", 0.5));
+        halfHeight = static_cast<Real>(optField(L, ct, "height", 1.0) * 0.5);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "hull");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Hull; mesh = &checkMesh(L, -1); }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "mesh");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Mesh; mesh = &checkMesh(L, -1); }
+    lua_pop(L, 1);
+    if (kind == ProcCollider::Kind::Hull && MeshBuilder::hullMesh([&] {
+            std::vector<Vec3> pts;
+            for (const Vertex& v : mesh->vertices) pts.push_back(v.position);
+            return pts;
+        }()).indices.empty()) {
+        luaL_error(L, "collision shape '%s': the hull's points are too few or all in one plane", name);
+        return;
+    }
+    ProcCollider c;
+    c.kind = kind;
+    c.name = name;
+    c.node = node;
+    if (mesh != nullptr) c.mesh = *mesh;
+    c.center = pos;
+    c.rotation = turn;
+    c.halfExtent = half;
+    c.radius = radius;
+    c.halfHeight = halfHeight;
+    c.friction = friction;
+    m.addShape(c);
+}
+
+// m:shape(name, spec) -> m : a collision shape on the root (see addShapeFromLua). Chainable.
+int l_model_shape(lua_State* L) {
+    addShapeFromLua(L, checkModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// n:shape(name, spec) -> n : a collision shape on this node, in the node's own space. Chainable.
+int l_node_shape(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    addShapeFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
 // n:use(piece [, placements] [, opts]) -> n : place another model (or a mesh) on this node: once at the node, or at
 // each placement given in the node's space. What is inside the piece is reached through this node's name,
 // "wheel_fl/valve". Chainable.
@@ -4257,7 +4333,7 @@ int l_model_add_collider(lua_State* L) {
     ProcCollider c;
     std::string shape = optStrField(L, 2, "shape", "box");
     c.center = optVec3Field(L, 2, "center", c.center);
-    c.yaw = static_cast<Real>(optField(L, 2, "yaw", 0.0));
+    c.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(optField(L, 2, "yaw", 0.0)));
     c.friction = static_cast<Real>(optField(L, 2, "friction", c.friction));
     c.dynamic = optStrField(L, 2, "motion", "static") == std::string("dynamic");
     if (shape == "sphere") {
@@ -5147,6 +5223,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_add_solid);      lua_setfield(L, -2, "add_solid");
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
         lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
+        lua_pushcfunction(L, l_model_shape);          lua_setfield(L, -2, "shape");
         lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
         lua_pushcfunction(L, l_model_posed);          lua_setfield(L, -2, "posed");
         lua_pushcfunction(L, l_model_level);          lua_setfield(L, -2, "level");
@@ -5186,6 +5263,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_node_marker); lua_setfield(L, -2, "marker");
         lua_pushcfunction(L, l_node_use);    lua_setfield(L, -2, "use");
         lua_pushcfunction(L, l_node_motion); lua_setfield(L, -2, "motion");
+        lua_pushcfunction(L, l_node_shape);  lua_setfield(L, -2, "shape");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

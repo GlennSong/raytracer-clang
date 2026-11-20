@@ -1,8 +1,9 @@
 // rt_model_sheet -- THE MODEL SHEET (#191 step 1): one command that shows what a Lua recipe builds.
 //
-//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--size 512] [--spp 48]
+//   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes] [--size 512] [--spp 48]
 //
 // `--at METRES` draws the level of detail the model shows from that far away; the text counts every level.
+// `--shapes` draws the collision shapes in place of the meshes: what things bump into.
 // `--set` draws the model in a pose: a moving node's value, in degrees for a node that turns and metres for one
 // that slides (`--set boom=40 --set door_fl/window=-0.2`). The text lists every moving node and its limits.
 //
@@ -57,14 +58,16 @@ struct Options {
     int samples = 48;
     std::vector<std::pair<std::string, double>> set;   // --set name=value: the pose to draw
     double at = 0;                                     // --at metres: the level of detail seen from that far
+    bool shapes = false;                               // --shapes: draw the collision shapes in place of the meshes
 };
 
 const char* kUsage =
-    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--size N] [--spp N]\n"
+    "usage: rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--set NODE=VALUE]... [--at METRES] [--shapes] [--size N] [--spp N]\n"
     "  runs a Lua recipe that returns a mesh or a model and writes four views of it in one PNG,\n"
     "  with its size, triangle counts and mesh audit beside it as a .txt\n"
     "  --set draws a pose: a moving node's value, degrees for a turn and metres for a slide (--set boom=40)\n"
-    "  --at draws the level of detail seen from that many metres away (the full model without it)\n";
+    "  --at draws the level of detail seen from that many metres away (the full model without it)\n"
+    "  --shapes draws the model's collision shapes in place of its meshes\n";
 
 bool parse(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; ++i) {
@@ -74,6 +77,7 @@ bool parse(int argc, char** argv, Options& o) {
         if (a == "-h" || a == "--help") return false;
         else if (a == "--out") { if (!value(o.out)) return false; }
         else if (a == "--args") { if (!value(o.argsJson)) return false; }
+        else if (a == "--shapes") o.shapes = true;
         else if (a == "--at") { if (!value(v)) return false; o.at = std::atof(v.c_str()); }
         else if (a == "--set") {
             if (!value(v)) return false;
@@ -162,6 +166,25 @@ void addMarkers(Scene& scene, const std::vector<PlacedMarker>& markers, const Bo
         }
     }
     bakeProcModel(bars, scene);
+}
+
+// The model's collision shapes as a model of their own: each shape's triangles on a node standing where the shape's
+// node stands, coloured by kind (box blue, sphere green, capsule yellow, hull orange, mesh grey). Baked in place of
+// the model's parts for --shapes.
+ProcModel shapesModel(const ProcModel& m) {
+    ProcModel out;
+    for (std::size_t i = 0; i < m.colliders.size(); ++i) {
+        const ProcCollider& c = m.colliders[i];
+        ProcPart part;
+        part.mesh = shapeMesh(c);
+        const Vec3 colour = c.kind == ProcCollider::Kind::Box ? Vec3(0.25, 0.45, 0.9) : c.kind == ProcCollider::Kind::Sphere ? Vec3(0.2, 0.7, 0.3)
+                          : c.kind == ProcCollider::Kind::Capsule ? Vec3(0.85, 0.75, 0.15) : c.kind == ProcCollider::Kind::Hull ? Vec3(0.9, 0.5, 0.15)
+                          : Vec3(0.6, 0.6, 0.6);
+        for (Vertex& v : part.mesh.vertices) v.color = colour;
+        part.node = c.node == 0 ? 0 : out.addNode("shape" + std::to_string(i), 0, m.nodeFrame(c.node));
+        out.parts.push_back(std::move(part));
+    }
+    return out;
 }
 
 // One number for "the same triangles": every drawn triangle as it stands in the scene (corners, normals, colours,
@@ -338,6 +361,35 @@ std::string report(const Options& o, const ProcModel& m, const ProcModel& built,
             s << line;
         }
     }
+    if (!m.colliders.empty()) {
+        std::snprintf(line, sizeof line, "collision shapes: %zu%s\n", m.colliders.size(), o.shapes ? " (drawn here in place of the meshes)" : " (--shapes draws them)");
+        s << line;
+        for (const ProcCollider& c : m.colliders) {
+            const Vec3 at = (c.node == 0 ? c.frame() : m.nodeFrame(c.node) * c.frame()).position;
+            const std::string name = c.name.empty() ? "(no name)" : c.name;
+            const std::string& on = m.nodes[static_cast<std::size_t>(c.node)].name;
+            switch (c.kind) {
+                case ProcCollider::Kind::Box:
+                    std::snprintf(line, sizeof line, "  %s on %s: box %.3g x %.3g x %.3g m at (%.3f, %.3f, %.3f)\n", name.c_str(), on.c_str(), c.halfExtent.x * 2,
+                                  c.halfExtent.y * 2, c.halfExtent.z * 2, at.x, at.y, at.z);
+                    break;
+                case ProcCollider::Kind::Sphere:
+                    std::snprintf(line, sizeof line, "  %s on %s: sphere of radius %.3g m at (%.3f, %.3f, %.3f)\n", name.c_str(), on.c_str(), c.radius, at.x, at.y, at.z);
+                    break;
+                case ProcCollider::Kind::Capsule:
+                    std::snprintf(line, sizeof line, "  %s on %s: capsule of radius %.3g m, %.3g m straight, at (%.3f, %.3f, %.3f)\n", name.c_str(), on.c_str(),
+                                  c.radius, c.halfHeight * 2, at.x, at.y, at.z);
+                    break;
+                case ProcCollider::Kind::Hull:
+                    std::snprintf(line, sizeof line, "  %s on %s: hull round %zu points\n", name.c_str(), on.c_str(), c.mesh.vertices.size());
+                    break;
+                case ProcCollider::Kind::Mesh:
+                    std::snprintf(line, sizeof line, "  %s on %s: mesh, %zu triangles\n", name.c_str(), on.c_str(), c.mesh.indices.size() / 3);
+                    break;
+            }
+            s << line;
+        }
+    }
     const std::vector<PlacedMarker> markers = markersOf(m);
     if (!markers.empty()) {
         std::snprintf(line, sizeof line, "markers: %zu (drawn as red x, green y, blue z; blue is the way it faces)\n", markers.size());
@@ -459,12 +511,15 @@ int main(int argc, char** argv) {
         }
         model = *posedModel(built, pose);
     }
-    const Bounds bounds = boundsOf(model, o.at);
+    // --shapes: what is measured and drawn is the collision shapes; the text still reports the model.
+    const ProcModel drawnModel = o.shapes ? shapesModel(model) : model;
+    const Bounds bounds = boundsOf(drawnModel, o.at);
+    if (!bounds.valid() && o.shapes) { std::fprintf(stderr, "rt_model_sheet: %s has no collision shapes\n", o.recipe.c_str()); return 1; }
     if (!bounds.valid()) { std::fprintf(stderr, "rt_model_sheet: %s built no geometry\n", o.recipe.c_str()); return 1; }
 
     Scene scene;
-    bakeProcModel(model, scene, Vec3(), o.at);
-    const uint64_t print = fingerprint(scene, model, o.at);
+    bakeProcModel(drawnModel, scene, Vec3(), o.at);
+    const uint64_t print = fingerprint(scene, drawnModel, o.at);
     addMarkers(scene, markersOf(model), bounds);
     addStage(scene, bounds);
     scene.buildAccelerator();

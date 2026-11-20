@@ -6,6 +6,7 @@
 --     hinge point, its meshes moved into the hinge's space;
 --   * ONE tire model (tyre + rim) used at four wheels, the right-hand ones flipped under their spin joints;
 --   * the kit's lamps and the driver's hip point as markers; the kit's materials by name;
+--   * collision shapes: boxes for the body, the cabin and each panel, a sphere per wheel (--shapes draws them);
 --   * three levels of detail: the full car, a simpler one from 40 m, one mesh from 150 m (--at 60, --at 200).
 -- Try: rt_model_sheet assets/scripts/car_rig_lab.lua --set door_front_l=50 --set door_rear_r=40 --set hood=45 \
 --        --set trunk=50 --set steer_front_l=25 --set steer_front_r=25
@@ -92,6 +93,24 @@ if not (args and args.levels == false) then
   local wheels = {}
   for _, w in ipairs(built.wheels) do wheels[#wheels + 1] = { pos = { w.pos[1], w.pos[2] + lift, w.pos[3] } } end
   car:use(tire, wheels, { level = far })
+end
+
+-- COLLISION SHAPES: a box for the lower body and one for the cabin on the root, a box on each panel's joint (so an
+-- open door is solid where the door is), and a sphere on each wheel's suspension joint.
+do
+  local W, H, L = built.size[1], built.size[2], built.size[3]
+  car:shape("body", { box = { W, H * 0.42, L }, pos = { 0, H * 0.36, 0 } })
+  car:shape("cabin", { box = { W * 0.86, H * 0.36, L * 0.46 }, pos = { 0, H * 0.78, -L * 0.06 } })
+  for _, pname in ipairs(sorted(built.panels)) do
+    local pn = built.panels[pname]
+    local lo, hi, pv = pn.lo, pn.hi, pn.hinge.pivot
+    joint[pname]:shape(pname, { box = { math.max(hi[1] - lo[1], 0.05), math.max(hi[2] - lo[2], 0.05), hi[3] - lo[3] },
+                                pos = { 0.5 * (lo[1] + hi[1]) - pv[1], 0.5 * (lo[2] + hi[2]) - pv[2], 0.5 * (lo[3] + hi[3]) - pv[3] } })
+  end
+  for _, w in ipairs(built.wheels) do
+    local wname = (w.front and "front" or "rear") .. side[w.pos[1] > 0]
+    joint["susp_" .. wname]:shape("wheel_" .. wname, { sphere = P.wheel_r })
+  end
 end
 
 -- markers: the lamps and the driver's hip point

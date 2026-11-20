@@ -506,10 +506,12 @@ TEST_CASE(a_shared_piece_is_mirrored_once_and_some_models_have_no_twin) {
     ProcCollider box;
     box.kind = ProcCollider::Kind::Box;
     box.center = Vec3(2, 1, 0);
-    box.yaw = 0.4;
+    box.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), 0.4);
     boxed.colliders.push_back(box);
     const std::shared_ptr<ProcModel> boxedTwin = mirroredModel(boxed);
-    CHECK(boxedTwin != nullptr && near(boxedTwin->colliders[0].center, Vec3(-2, 1, 0)) && boxedTwin->colliders[0].yaw == -0.4);
+    CHECK(boxedTwin != nullptr && near(boxedTwin->colliders[0].center, Vec3(-2, 1, 0)));
+    // a turn about the vertical runs the other way in the mirror
+    if (boxedTwin != nullptr) CHECK(near(boxedTwin->colliders[0].rotation.rotate(Vec3(0, 0, 1)), Vec3(-std::sin(0.4), 0, std::cos(0.4))));
 
     // Lua: the right door is the left door, mirrored; both hang on the one car.
     ProcModel m;

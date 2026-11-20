@@ -148,16 +148,24 @@ struct ProcPart {
 // the hand-authored loaders build; the offline path tracer (no physics) ignores
 // them. Mesh triangles are world-space; primitives carry their own placement.
 struct ProcCollider {
-    enum class Kind { Mesh, Box, Sphere, Capsule };
+    // Hull: the convex shape wrapped round `mesh`'s points (a moving body's stand-in where a box is too crude).
+    enum class Kind { Mesh, Box, Sphere, Capsule, Hull };
     Kind kind = Kind::Mesh;
-    RenderMesh mesh;                 // Kind::Mesh — exact static triangles
-    Vec3 center{0, 0, 0};            // primitive placement (world)
-    Real yaw = 0;                    // primitive Y rotation (radians)
+    // A COLLISION SHAPE ON A NODE (#191, model step 6): `name` is unique among the model's named shapes (empty for
+    // one a recipe did not name), and the shape is in the space of `node`, so a boom's box goes with the boom.
+    // Node 0, the root, is the model's own space: what every collider was before nodes.
+    std::string name;
+    int node = 0;
+    RenderMesh mesh;                 // Mesh: exact static triangles. Hull: the points it wraps.
+    Vec3 center{0, 0, 0};            // a primitive's or a hull's placement, in the node's space
+    Quat rotation;                   // and its turn there (a capsule's length runs along its own y)
     Vec3 halfExtent{0.5, 0.5, 0.5};  // Box
     Real radius = 0.5;               // Sphere, Capsule
     Real halfHeight = 0.5;           // Capsule (half the cylinder segment)
     Real friction = 0.6;
     bool dynamic = false;            // static world geometry by default
+
+    ProcFrame frame() const { return ProcFrame{center, rotation}; }
 };
 
 // How a used piece collides: each copy stamps a collider. `None` leaves the copies non-solid; `Mesh` bakes the
@@ -315,6 +323,24 @@ struct ProcModel {
     // when the model has no such marker.
     bool markerFrame(const std::string& path, ProcFrame& out) const;
 
+    // --- collision shapes --------------------------------------------------------------------------------------
+    // The collision shape with this name, or null. (Shapes without a name are not found by one.)
+    const ProcCollider* findShape(const std::string& name) const {
+        if (name.empty()) return nullptr;
+        for (const ProcCollider& c : colliders)
+            if (c.name == name) return &c;
+        return nullptr;
+    }
+
+    // Add a collision shape. Returns false (and adds nothing) when its name is taken or its node is not one of
+    // this model's.
+    bool addShape(const ProcCollider& shape) {
+        if (findShape(shape.name) != nullptr) return false;
+        if (shape.node < 0 || shape.node >= static_cast<int>(nodes.size())) return false;
+        colliders.push_back(shape);
+        return true;
+    }
+
     // --- uses ------------------------------------------------------------------------------------------------
     // Does this model hold `other` as a piece, at any depth (or is it `other`)? A model may not use a piece that
     // reaches back to it: there would be no end to drawing it.
@@ -363,7 +389,7 @@ struct ProcModel {
     // Fold another model into this one (composition). The other model's root becomes this model's root, so its flat
     // parts land where they did; its other nodes come across with their parts and markers, keeping their tree, and
     // its materials join this model's table (one entry where both hold the same material). Returns false and changes
-    // nothing when the two models both have a node or a marker of one name, or give one name to two different
+    // nothing when the two models both have a node, a marker or a collision shape of one name, or give one name to two different
     // materials, or have lower levels of detail at different distances, or when `o` holds this model as a piece; `clash`, when given, says which ("node 'door'").
     bool merge(const ProcModel& o, std::string* clash = nullptr) {
         auto refuse = [&](const char* kind, const std::string& name) {
@@ -376,6 +402,8 @@ struct ProcModel {
         for (const ProcNode& n : o.nodes)
             for (const ProcMarker& mk : n.markers)
                 if (findMarker(mk.name) != nullptr) return refuse("marker", mk.name);
+        for (const ProcCollider& c : o.colliders)
+            if (findShape(c.name) != nullptr) return refuse("collision shape", c.name);
         for (const ProcModelMaterial& mm : o.materials) {
             const int mine = findMaterial(mm.name);
             if (mine >= 0 && materials[static_cast<std::size_t>(mine)].material != mm.material) return refuse("material", mm.name);
@@ -405,7 +433,10 @@ struct ProcModel {
         uses.insert(uses.end(), o.uses.begin(), o.uses.end());
         for (std::size_t i = firstUse; i < uses.size(); ++i)
             if (uses[i].node > 0) uses[i].node += base;
+        const std::size_t firstShape = colliders.size();
         colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
+        for (std::size_t i = firstShape; i < colliders.size(); ++i)
+            if (colliders[i].node > 0) colliders[i].node += base;
         flatten.insert(flatten.end(), o.flatten.begin(), o.flatten.end());
         return true;
     }
@@ -456,6 +487,11 @@ int addSimplifiedLevel(ProcModel& m, Real distance, double ratio, double maxErro
 // held apart from its other copies, only where the pose names something inside it. Values past a limit stop at the
 // limit. Returns null, with `why` when given, when the pose names something that is not a moving node.
 std::shared_ptr<ProcModel> posedModel(const ProcModel& m, const ProcPose& pose, std::string* why = nullptr);
+
+// A collision shape as triangles, in its node's space: the box, sphere or capsule it is, a hull's faces, or a
+// mesh's own. What the model sheet draws for a shape, and what a hull is given to the physics as while the physics
+// has no hull shape of its own.
+RenderMesh shapeMesh(const ProcCollider& shape);
 
 // THE MIRRORED TWIN of a model, left to right (across the plane x = 0 through its origin): a right door from the
 // left door, authored once. Every mesh is mirrored and wound to face out again (MeshBuilder::mirrored), and every

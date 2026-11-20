@@ -450,6 +450,8 @@ struct MeshBuilder {
     // Fewer than four non-coplanar points: empty. Incremental (O(n^2)) -- for the small sets of a joint, a cap, a
     // rock (the tree's branch junctions: the hull of the limbs' end rings, ADR-0181).
     static std::vector<std::array<uint32_t, 3>> convexHull(const std::vector<Vec3>& points);
+    // ...and as a mesh: flat shaded, faces wound outward, in `color`. Empty when `convexHull` is.
+    static RenderMesh hullMesh(const std::vector<Vec3>& points, const Vec3& color = Vec3(1, 1, 1));
     // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,

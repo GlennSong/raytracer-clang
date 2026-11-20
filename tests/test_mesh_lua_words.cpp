@@ -55,6 +55,7 @@ const std::map<std::string, std::string> kReach = {
     {"computeTangents", "mesh.tangents"},
     {"cone", "mesh.cone"},
     {"convexHull", "mesh.hull"},
+    {"hullMesh", "mesh.hull"},
     {"crossCards", "mesh.cross_cards"},
     {"cubeSphere", "mesh.cube_sphere"},
     {"cutByPlane", "mesh.cut"},

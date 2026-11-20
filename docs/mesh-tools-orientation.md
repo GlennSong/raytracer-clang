@@ -8,11 +8,14 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 - **Folder:** `.claude/worktrees/tmp-meshtools`, branch `tmp/mesh-tools`, cut from `claude/island8-batch` at 31c6e538.
 - **Never pushed, not merged.** Glenn's call: keep working here until the driving session on `claude/island8-batch`
   is done, then merge into that branch.
+- **Updates from the parent come in by merge** (`git merge claude/island8-batch` here, Glenn's call 2026-11-19), never
+  the other way, and never a rebase: this page names this branch's commits by hash.
 - **Stay inside this folder.** Another session is working in `.claude/worktrees/buildings`. Do not edit, build or
   kill anything there. It also runs `run_tests`: stop only your own process, by its id, after checking
   `/proc/<id>/cwd`.
 - **Build:** `cmake --build build-viewer --target <target>` here. The unit suite is `./build-viewer/run_tests`
-  (about 25 minutes; `RT_TEST_FILTER=<part of a name>` runs a few cases). Do not rebuild `run_tests` while it runs.
+  (about 25 minutes; `RT_TEST_FILTER=<part of a name>` runs a few cases). Do not rebuild `run_tests` or edit source
+  while it runs.
 
 ## What to read
 
@@ -37,7 +40,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 9e36e21c | the mirrored twin: `mirroredModel` in `procgen/proc_model.cpp`, Lua `m:mirrored()`, left to right only |
 | b74d5d99 | model step 4, motion and rigs: `ProcMotion`, `ProcPose`, `posedModel`; Lua `n:motion`, `m:posed`, `m:joints`; the rig tables in `assets/scripts/rigs.lua`; the sheet's `--set`; `tests/test_model_motion.cpp` |
 | 5c403683 | the rig's joints renamed to the names the car kit and the game use; `assets/scripts/car_rig_lab.lua`, any kit car as a model on the car rig (model sheet only); the sheet lists nodes in tree order |
-| (this commit) | model step 5, levels of detail: `levelFrom`, a level on parts and uses, `addSimplifiedLevel`, `MeshBuilder::simplifiedSurface`; Lua `m:level`, `{ level = n }`; the sheet's `--at`; `tests/test_model_levels.cpp` |
+| a4d6aa98 | model step 5, levels of detail: `levelFrom`, a level on parts and uses, `addSimplifiedLevel`, `MeshBuilder::simplifiedSurface`; Lua `m:level`, `{ level = n }`; the sheet's `--at`; `tests/test_model_levels.cpp` |
+| 25780c6d | merge of `claude/island8-batch` into this branch, up to 74cdd74d (the walking road work, ADR-0464 to 0467). Glenn's call: its updates into this one, nothing the other way |
+| (this commit) | model step 6, first piece, collision shapes on nodes: `ProcCollider` gains a name, a node, a rotation and the hull kind; `shapeMesh`; Lua `m:shape` / `n:shape`; the sheet's `--shapes`; `tests/test_model_shapes.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -45,7 +50,7 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 - **Look at it:** `./build-viewer/rt_model_sheet RECIPE.lua --out build-viewer/sheets/x.png`, then open the PNG. The
   `.txt` beside it has the audit. `--set NODE=VALUE` (repeatable) draws a pose: `--set door_front_l=50 --set hood=40`. `--at METRES` draws the
-  level of detail seen from that far.
+  level of detail seen from that far. `--shapes` draws the collision shapes in place of the meshes.
   `assets/scripts/car_rig_lab.lua` (any kit car on the car rig) is the worked example; `build-viewer/sheets/uses.lua`
   (a box car) and `nodes.lua` (a crane) are smaller ones, not tracked. Scratch recipes live in `build-viewer/sheets/` (not tracked).
 - **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles and what
@@ -74,20 +79,25 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   whole test binary dies with no message (its output is buffered when piped: `stdbuf -o0 ./build-viewer/run_tests`
   shows the script error). When running several `RT_TEST_FILTER`s in a loop, check each one printed its own "cases
   passed" line: a crashed one prints nothing, and a missing line is easy to read past.
+- Leave the source alone while the unit suite runs. Some cases read source files at run time (the word list test
+  reads `mesh_builder.h`), so an edit made mid-run fails a case that has nothing wrong with it.
 - Edit source with the edit tools, not shell appends (AGENTS.md).
 
 ## What is next
 
-**Model step 6 in the design note: the model store and loading from files.**
+**The rest of model step 6**, three commits:
 
-- **The store:** built models kept under a name, so many entities share one; a handle into it; a cache key (the
-  recipe, its arguments, the libraries it requires, the toolkit's version). Look first at what already caches built
-  things by key (`procgen/furniture_kit.h`, the bundle and lot caches, `AssetManager`) so this is one of those and
-  not a new kind of cache.
-- **Loading:** `model.from_files{ name =, levels = { "crane_high.glb", ... }, distances = {...} }`. The first file's
-  node tree is the rig, its empties are markers, and names say the rest (AGENTS.md "Model file names": `col_<kind>_`
-  for a collision shape, `_lod<N>` for a level). Today's importer (`engine/model_importer.h`) returns a flat list of
-  meshes and materials and is extended, not replaced.
+1. **Write a model to a glTF file.** `engine/glb_export.h` writes one flat node per mesh today; it learns parents,
+   transforms and empties, so a model goes out with its node tree, its markers as empties, its shapes as
+   `col_<kind>_<name>` objects and its levels as `<name>_lod<N>` (AGENTS.md "Model file names"). Any recipe's model
+   can then be opened in Blender, and the loader has real files to be tested against. (Not in the design note's
+   list: added because the loader needs test files with trees, empties and named shapes.)
+2. **Load a model from glTF files:** `model.from_files{ name =, levels = {...}, distances = {...} }`. Today's importer
+   (`engine/model_importer.cpp`) walks the file's node tree only to bake each mesh into world space and then drops
+   the tree; it is extended to keep it. The test is a round trip: a model out to a file and back in.
+3. **The model store:** built models kept under a name, a handle, a cache key (the recipe, its arguments, the
+   libraries it requires, the toolkit's version). Look first at what already caches built things by key
+   (`procgen/furniture_kit.h`, the bundle and lot caches, `AssetManager`).
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 

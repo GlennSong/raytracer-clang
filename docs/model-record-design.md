@@ -208,8 +208,7 @@ boom:add(boom_mesh, paint)
 
 Left as they were, on purpose, for the steps that own them:
 
-- **Colliders and flatten footprints** are in the root's space. Collision shapes on nodes come with the model's
-  `shapes` (used first in step 7).
+- **Flatten footprints** are in the root's space. (Collision shapes went onto nodes at step 6.)
 - **A textured part's tiling** is laid in its node's space in the game (so the pattern stays with the piece) and in
   the world's space in the path tracer. The two differ only for a textured part on a node that is not the root. The
   game and the path tracer lay a tiled map by two separate pieces of code today, so making them one is materials
@@ -508,3 +507,35 @@ Left as they were, on purpose:
 - **A prefab's own distances** (the design's `draw = { distances = ... }`) come with the prefab.
 - **A level's materials are entries of the model's one table.** A far level that wants a single baked map names one
   more entry; baking it is materials work (#309).
+
+### Model step 6, first piece: collision shapes on nodes (2026-11-19)
+
+```lua
+car:shape("body", { box = { 1.8, 0.6, 4.6 }, pos = { 0, 0.5, 0 } })
+joint.door_front_l:shape("door_front_l", { box = { 0.1, 1.0, 1.1 }, pos = { 0.05, 0, -0.55 } })   -- goes with the door
+joint.susp_front_l:shape("wheel_front_l", { sphere = 0.33 })
+boom:shape("boom", { capsule = { radius = 0.2, height = 5 }, pos = { 0, 0, 2.5 }, turn = { 90, 0, 0 } })
+rock:shape("rock", { hull = rock_mesh })
+```
+
+- **The record:** the model's colliders (`ProcCollider`, ADR-0042) are extended, as the instance group was. A
+  collider gains a `name`, the `node` it sits on, a full rotation where it had only a turn about the vertical, and
+  one more kind, the hull. The older colliders are the case "no name, on the root".
+- **A name is unique among the model's named shapes**, so a prefab's physics or an offer can say "the cabin".
+  Unnamed shapes are allowed, as many as wanted, for the recipes that used the older words.
+- **Kinds:** a box, a sphere, a capsule (its length along its own y), a hull (the convex shape round a mesh's
+  points) and a mesh (its triangles as they are, for static things).
+- **Lua:** `m:shape(name, spec)` on the root, `n:shape(name, spec)` on a node. `m:add_collider`, `m:collide` and
+  `m:add_solid` are unchanged.
+- **A shape goes with its node:** in a pose, in the mirrored twin, and when two models are merged.
+- **The game** stands each shape's collider where its node stands, turned as the node and the shape are. (A capsule
+  collider used to ignore its turn.)
+- **The model sheet** lists the shapes, and `--shapes` draws them in place of the meshes, coloured by kind.
+
+Left as they were, on purpose:
+
+- **The physics has no hull shape.** A hull is handed to it as its faces, which is right for static scenery. A hull
+  on a body that moves needs a real convex shape in the physics, with the prefab's physics (step 7).
+- **A used piece's own shapes are not stamped at its copies.** A use still says how its copies collide
+  (`collide =`). The prefab's physics reads the model's shapes through the tree.
+- **Nothing in the game moves a shape with a moving node**, because nothing moves a node in the game yet.

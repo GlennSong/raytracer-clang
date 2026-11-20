@@ -1566,12 +1566,12 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         world.add<PrevTransform>(e, PrevTransform{t});
         world.add<MeshCollider>(e, std::move(mc));
     };
-    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, Real yaw,
+    auto spawnPrimitive = [&](ColliderShape shape, const Vec3& center, const Quat& turn,
                               const ProcCollider& src) {
         Entity e = world.create();
         Transform t;
         t.position = center;
-        if (std::abs(yaw) > 1e-9) t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+        t.orientation = turn;
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Collider c;
@@ -1599,15 +1599,32 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         return meshBuckets.back().second;
     };
     for (const ProcCollider& pc : model.colliders) {
+        // A shape stands at the node it is on. The root's frame is no move and no turn, so a shape on it is where
+        // the recipe put it, as every collider was before nodes.
+        const bool onRoot = pc.node == 0;
+        const ProcFrame at = onRoot ? pc.frame() : model.nodeFrame(pc.node) * pc.frame();
         switch (pc.kind) {
-            case ProcCollider::Kind::Mesh:
-                appendTris(bucketFor(pc.friction), pc.mesh, nullptr); break;
+            case ProcCollider::Kind::Mesh: {
+                if (onRoot) { appendTris(bucketFor(pc.friction), pc.mesh, nullptr); break; }
+                const Mat4 node = model.nodeFrame(pc.node).matrix();
+                appendTris(bucketFor(pc.friction), pc.mesh, &node);
+                break;
+            }
+            case ProcCollider::Kind::Hull: {
+                // The physics has no hull shape yet: a hull on static scenery is its faces as triangles, which
+                // collide the same. A hull on a body that moves waits for the prefab's physics (#191 step 7).
+                const RenderMesh faces = shapeMesh(pc);
+                if (onRoot) { appendTris(bucketFor(pc.friction), faces, nullptr); break; }
+                const Mat4 node = model.nodeFrame(pc.node).matrix();
+                appendTris(bucketFor(pc.friction), faces, &node);
+                break;
+            }
             case ProcCollider::Kind::Box:
-                spawnPrimitive(ColliderShape::Box, pc.center, pc.yaw, pc); break;
+                spawnPrimitive(ColliderShape::Box, at.position, at.rotation, pc); break;
             case ProcCollider::Kind::Sphere:
-                spawnPrimitive(ColliderShape::Sphere, pc.center, 0, pc); break;
+                spawnPrimitive(ColliderShape::Sphere, at.position, at.rotation, pc); break;
             case ProcCollider::Kind::Capsule:
-                spawnPrimitive(ColliderShape::Capsule, pc.center, 0, pc); break;
+                spawnPrimitive(ColliderShape::Capsule, at.position, at.rotation, pc); break;
         }
     }
 
@@ -1638,7 +1655,7 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
                                                    : cg.colliderHalfHeight + cg.colliderRadius;
         for (const Mat4& xf : pu.transforms) {
             Vec3 pos(xf.m[0][3], xf.m[1][3], xf.m[2][3]);
-            spawnPrimitive(shape, pos + Vec3(0, lift, 0), 0, tmpl);
+            spawnPrimitive(shape, pos + Vec3(0, lift, 0), Quat(), tmpl);
         }
     }
     for (auto& b : meshBuckets) spawnMeshCollider(std::move(b.second));

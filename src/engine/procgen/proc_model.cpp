@@ -96,6 +96,26 @@ std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance) {
     return out;
 }
 
+RenderMesh shapeMesh(const ProcCollider& shape) {
+    RenderMesh out;
+    switch (shape.kind) {
+        case ProcCollider::Kind::Mesh: return shape.mesh;   // exact triangles, already in the node's space
+        case ProcCollider::Kind::Box: out = MeshBuilder::box(shape.halfExtent * 2.0); break;
+        case ProcCollider::Kind::Sphere: out = MeshBuilder::sphere(static_cast<float>(shape.radius), 12, 16); break;
+        case ProcCollider::Kind::Capsule:
+            out = MeshBuilder::capsule(static_cast<float>(shape.radius), static_cast<float>(shape.halfHeight * 2.0), 8, 16);
+            break;
+        case ProcCollider::Kind::Hull: {
+            std::vector<Vec3> points;
+            for (const Vertex& v : shape.mesh.vertices) points.push_back(v.position);
+            out = MeshBuilder::hullMesh(points);
+            break;
+        }
+    }
+    MeshBuilder::transform(out, shape.frame().matrix());
+    return out;
+}
+
 const ProcNode* ProcModel::jointAt(const std::string& path) const {
     const std::size_t slash = path.find('/');
     const int node = findNode(path.substr(0, slash));
@@ -214,8 +234,10 @@ std::shared_ptr<ProcModel> mirrorInto(const ProcModel& m, MirrorMemo& memo, std:
         if (c.kind == ProcCollider::Kind::Mesh) {
             twin.mesh = MeshBuilder::mirrored(c.mesh, kLeftRight);
         } else {
-            twin.center = reflect(c.center, kLeftRight);
-            twin.yaw = -c.yaw;   // a turn about the vertical runs the other way in the mirror
+            if (c.kind == ProcCollider::Kind::Hull) twin.mesh = MeshBuilder::mirrored(c.mesh, kLeftRight);
+            const ProcFrame f = reflectFrame(c.frame());   // a box, a sphere and a capsule are their own mirror images
+            twin.center = f.position;
+            twin.rotation = f.rotation;
         }
         out->colliders.push_back(std::move(twin));
     }
