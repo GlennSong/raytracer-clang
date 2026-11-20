@@ -69,6 +69,21 @@ namespace roads::lanes {
 // again to see what the lane level makes of it.
 LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& m, const LaneGraphOptions& opts);
 
+// LAYS THE MODEL'S WALKWAYS (RoadModel::walkways, ADR-0475) INTO ITS LANE LEVEL, after the walks buildLaneLevel laid; called
+// by road_model.h stateWalkways, the one place they are supplied. Needs no build: only the model and its lane level.
+//   - each walkway becomes a walk of its own (Walk::modelWalkway; its kind is the walkway's), its line and heights as
+//     stated;
+//   - each end lands where it says, found by the model's own answers, never by distance: on a street, the sidewalk walk
+//     on that kerb holding the station (RoadModel::walkJoinOn, the one answer for a place on a street); on another
+//     walkway, its walk at the metres along it. A walk landed on part way along is cut there into two walks (the same
+//     ids of the model; a sidewalk's stations or a walkway's metres at the cut), joined to each other and to the end;
+//     one landed on at its end joins everything already meeting that end;
+//   - a stated dead end meets nothing and is no fault; an end that does not land meets nothing and is returned, with
+//     why. A walkway wrong as a whole (no id, no line, a kind the path users' table lacks...) is not laid.
+// Nothing is done (and nothing returned) when the model states no walkway, so a level without them is unchanged byte
+// for byte.
+std::vector<WalkwayProblem> layWalkways(RoadModel& m);
+
 // THE LINE A MODEL LANE IS DRIVEN ALONG (ADR-0450, #302), point for point with its own points (RoadModel::lanePoints,
 // in the lane's own order along its road): its own points, but a through lane the kerb parking band overlaps
 // (road_graph_spec.h drivenLine) moved across toward its centre-line side by the builder's own frame of its road

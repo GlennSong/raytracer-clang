@@ -23245,3 +23245,67 @@ Words:
 **For players:** nothing changes.
 
 **Revisit when** piece 6 switches the walks over (doors then ask `walkJoinOn` from this); when S6 makes walkways (the walkway slot gets filled); or if a building should state the street from its final site rather than from where it was turned.
+
+## ADR-0475 — The road model holds walkways: paths for people on foot beside no street, each stated with where its two ends land, laid in the lane level as walks and joined there, never by distance (#306 task 4, piece 9, S6a)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: people on foot can now be given paths that run beside no street (through a park, across a plaza, between two buildings), and the road model holds them like its sidewalks. Whoever draws such a path says, once, where each end of it lands: on a street's sidewalk, on another such path, or nowhere. The lane level (the table of paths the router walks) lays each path as a walk and joins it exactly there. Nothing is joined by "these two ends are close". No level has one yet: the next sitting (S6b) makes the lot pass state the paths it draws today, and deletes its second walking network.
+
+Words:
+- **Walkway:** a path for people on foot that is not a street's sidewalk: a park's path, a plaza's, a cut-through between buildings. Today these live only in the lot pass (`LotBuilding::walks`) and the old street map joins them to the sidewalks by distance (`NavGraph::appendFootpaths`).
+- **Walk:** one piece of path a person can take in the lane level, either way (ADR-0466): a sidewalk's stretch, a corner, a crossing, a turn-round, a footway's stretch, and now a walkway's stretch.
+- **Join:** the lane level's statement that a person at one walk's end may go on along another walk from its end.
+- **Station:** metres along a street's centre line. **Kerb:** which side of the street (+1: beside the traffic running along the centre line; -1: the other).
+- **The architect:** whoever draws the walkway. In S6b, the lot pass.
+- **Cut:** splitting one walk into two at a point along it, so a third walk can join both halves there.
+
+**The model** (`road_model.h`):
+- `ModelWalkway`: an id, a kind, a width, a centre line with a height at each point, and two ends (`WalkwayEnd`).
+- **Its kind** is a row of the path users' table (`assets/data/path_users.json`), which says who may use it: `footway` (already the word for a footway road, ADR-0465) for a path between buildings or across a plaza, and a new row `park_path` for a path through a park. Both are open to the walker and to no vehicle. A new kind is a new row (Kinds Are Data).
+- **An end** (`WalkwayEnd`) is the record a door already uses, `StatedFrontage` (ADR-0474), plus one flag:
+  - (a) a street's id, station and kerb: "this end lands on that street's sidewalk, there";
+  - (b) a walkway's id and metres along it: "this end lands on that walkway, there";
+  - (c) `deadEnd`: "this end meets nothing", said on purpose.
+  An end stating none of these, or two, is a fault.
+- `RoadModel::walkways` holds them, saved with the model (`kRoadModelFormat` 18).
+- **The one place they are supplied:** `stateWalkways(model, walkways)`. It keeps them and lays them in the model's lane level at once. It needs only the built model, not the road build: the lot pass runs after the road model is made, so S6b will state its walkways on the level's model after it is made (at load, and in the bake's lot producer), as one step.
+
+**The lane level** (`layWalkways`, `lanes/lane_level.cpp`, after the walks ADR-0466 lays):
+- Each walkway becomes a walk of its own (`Walk::modelWalkway`; its kind is asked of the model, `walkKind`, as for every walk). A walkway's walk keeps the metres along the walkway in `stationFrom` / `stationTo`, the fields a sidewalk's walk keeps its stations in.
+- **An end on a street** asks `walkJoinOn` (ADR-0468, the one answer for "where does a place on this street and kerb join the sidewalk") for the walk and the metres along it. Where that is part way along the sidewalk walk, the walk is cut there in two, the two halves joined to each other and to the walkway's end, the same way a corner's walk meets a sidewalk at a kerb end. Where it is the sidewalk walk's own end, the walkway joins everything already meeting that end.
+- **An end on another walkway** lands on that walkway's walk at the metres stated, cut and joined the same way. Two ends landing within a millimetre of each other make one cut.
+- **A dead end** meets nothing, and nothing reports it.
+- **A cut** keeps the walk's id for its first half and adds its other halves at the end of the list; the halves keep the model's ids (its sidewalk, its street) and their stations; what met the whole walk's far end now meets the last half's. No car path or other walk moves.
+- **What does not land is a fault, with why** (`WalkwayProblem`: the walkway, which end, `WalkwayFault`, and a sentence with the numbers), returned by `stateWalkways`. The end is left meeting nothing; the walkway is still laid. A walkway wrong as a whole is not laid at all.
+  - An end: names a street the model does not have; a station off that street; a kerb with no sidewalk there (the street has none on that kerb, or none at all); a station past where the sidewalk on that kerb runs (nearer a junction than where a person steps off the kerb: the architect should state the kerb end's station); a walkway the model does not have, its own walkway, a walkway that was not laid, or metres off that walkway's line; nothing at all, or two things.
+  - A whole walkway: no id, an id already used, a line of fewer than two points or no length or a height missing, no width, a kind the path users' table does not list.
+  - On a planned-only model (no lane level), or a lane level that already holds walkways: refused as a whole, nothing changed. To state them anew, lay the lane level again.
+- The walk ends ADR-0466 lists as meeting nothing (`LaneGraphBuild::walkEndsAlone`) never include a walkway's: a walkway's lone end is either stated a dead end, or one of the faults returned.
+
+**A door on a walkway:** `walkJoinOn(StatedFrontage)` (new) answers from what a place states. A walkway and metres along it: the walk of that walkway holding those metres (on either side of a cut), `held` when past its ends, `WalkJoin::walkway` set and no street. A street: the street's answer, as before (it calls `walkJoinOn(frontageOn(...))`). Neither: "fronts no street". A walkway the lane level does not hold: `NoWalkway`. `walkJoinNear` stays the one fallback by position.
+
+**The router** walks them with no case of its own: a walkway's walk is a plain walk, open or closed to a mover by its kind (`openTo`), joined by the lane level's joins (`findWalkRoute`, `bindWalker` unchanged).
+
+**Every level is unchanged:** with no walkway stated, `layWalkways` returns at once, and nothing else reads the new fields. `lanes_tool lanegraph` on traffic_lab and river_town gives the same lane graph dump, problems, reach and corner faults as the tool at 8c97b5da (built before the change). The road meshes are untouched (no builder code changed). No bake key, `kLanesBuildTag`, lots tag or `kLaneGraphBuildVersion` moved: what the road build makes is the same. The saved road model's format (18) and the lane graph's (LGRF 17) moved, and the path users' table's bytes (part of the saved road model's key), so each level's saved road model (`cache/roadmodel`) is made again once.
+
+**Tests** (`lanes_tests`):
+- `road_model_43_walkways_are_stated_and_laid_as_walks_joined_where_their_ends_land`, on the T of ADR-0466's tests with two walkways north of it:
+  - a walkway from the east street's north sidewalk at station 50 to the west street's at station 50: each sidewalk cut at station 50 into two walks, both meeting each other and the walkway's end, at the sidewalk point there; what met the sidewalks' ends before still does;
+  - a T of two walkways: a stem leaving the first where it passes x = 0 cuts it in two, and its start meets both halves; its other end is a stated dead end, meets nothing and is no fault;
+  - cars may use none of the walkway walks, the walker all; a pedestrian allowed sidewalks and walkways but no corner or crossing walks from one street to the other over the walkway (203 m), and, with footways shut, not at all; from the stem's dead end, down the stem and the walkway;
+  - a door stated on the walkway: either side of the cut, held past its end, closed to the mover, a walkway nobody stated; a door stated on a street answers as the street's question does;
+  - saved and read back whole; stating walkways a second time refused, nothing changed.
+- `road_model_44_a_walkway_end_that_does_not_land_is_a_fault_with_why`: one walkway per fault above, each said with its end and why; the faulty-ended ones laid with that end alone, the wrong-as-a-whole ones not laid; no sidewalk cut; a planned-only model refused.
+- `road_model_28b`: `park_path` is the walker's and no vehicle's.
+- Suites: full build; lanes_tests 152/152; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513. No pinned value or hash moved. Level tests not run and no level baked (no level states a walkway).
+
+**One model:**
+- Concepts touched: roads (walkways: paths for people on foot, where their ends land), paths' users (a new kind row).
+- A walkway's end reuses the door's record (`StatedFrontage`), and a street end lands by the one answer for a place on a street (`walkJoinOn`), not a second search. Its walks are the lane level's own, in its one list of walks, joined by its one list of joins. No road fact is computed outside `roads/`, and no second graph is made.
+- The lot pass's walks (`LotBuilding::walks`) and the street map's `appendFootpaths` remain the second walking network until S6b deletes them. Nothing here reads them.
+
+**For players:** nothing changes.
+
+**Left for S6b:** the lot pass states its paths as walkways (a kind per path: `park_path` for a park's, `footway` for the quad's and cut-throughs'), each end looked up once when drawn (the street, station and kerb by `frontageOnLine`, as a door's; another path by its id and metres; else a dead end); a door on a path records it in `StatedFrontage`'s walkway slot; the loader and the bake's lot producer call `stateWalkways` on the level's model and log the faults; then the street map's `appendFootpaths` and `LotBuilding::walks` go. A walkway that crosses a street's carriageway is not checked (nothing says where it may cross); S6b should draw none, or state a crossing.
+
+**Revisit when** S6b states the lot pass's paths (the faults then get counted per level); when a walkway should cross a street (a crossing of its own kind); or when a mover other than the walker may use a walkway (a row in the path users' table).

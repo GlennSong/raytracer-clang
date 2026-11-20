@@ -1302,5 +1302,286 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     return out;
 }
 
+// ---- THE WALKWAYS (ADR-0475) ------------------------------------------------------------------------------------------
+
+namespace {
+// The stretch of a walk's curve between two distances along it (from < to), with its heights read off it: one piece of a
+// walk cut where a walkway lands on it.
+void walkPiece(const LaneGraph& G, const Walk& k, double from, double to, std::vector<Vec2>& xy, std::vector<double>& z) {
+    const std::vector<Vec2> pts(G.points.begin() + k.curve.first, G.points.begin() + k.curve.end());
+    const std::vector<double> s(G.along.begin() + k.curve.first, G.along.begin() + k.curve.end());
+    const std::vector<double> h(G.heights.begin() + k.curve.first, G.heights.begin() + k.curve.end());
+    xy = sliceAtStations(pts, s, from, to, kSliceGap);
+    z.clear();
+    for (const double v : stations(xy)) z.push_back(interp(s, h, from + v));
+}
+// ONE WALKWAY END THAT LANDS: on walk `walk` as the lane level stood before any cut, `along` metres along it; `station`
+// is what a cut there states (a sidewalk's or footway's station along its street, or the metres along a walkway).
+struct Landing {
+    uint32_t walkway = 0;
+    int end = 0;
+    uint32_t walk = 0;
+    double along = 0, station = 0;
+};
+bool walkEndBefore(const WalkEnd& a, const WalkEnd& b) {
+    return a.walk.index != b.walk.index ? a.walk.index < b.walk.index : a.end < b.end;
+}
+}  // namespace
+
+std::vector<WalkwayProblem> layWalkways(RoadModel& model) {
+    std::vector<WalkwayProblem> out;
+    const RoadModel& m = model;
+    if (m.walkways.empty()) return out;
+    LaneGraph& G = model.laneLevel;
+    const auto fault = [&](uint32_t walkway, int end, WalkwayFault f, const std::string& detail) {
+        WalkwayProblem p;
+        p.walkway = walkway;
+        p.end = end;
+        p.fault = f;
+        p.why = std::string(walkwayFaultWord(f)) + (detail.empty() ? std::string() : ": " + detail);
+        out.push_back(p);
+    };
+    if (!m.built || (G.paths.empty() && G.walks.empty())) {
+        fault(kNoIndex, -1, WalkwayFault::NoLaneLevel, std::string());
+        return out;
+    }
+    // every walk end's joins as a list of its own while walks are cut and joined; written back flat at the end
+    std::vector<std::vector<WalkEnd>> joins(G.walks.size() * 2);
+    for (uint32_t w = 0; w < G.walks.size(); ++w)
+        for (uint32_t end = 0; end < 2; ++end) {
+            const Range r = G.walks[w].joins(static_cast<int>(end));
+            joins[w * 2 + end].assign(G.walkJoins.begin() + r.first, G.walkJoins.begin() + r.end());
+        }
+    const auto slotOf = [](const WalkEnd& e) { return static_cast<std::size_t>(e.walk.index) * 2 + e.end; };
+
+    // ---- each walkway laid whole, as a walk of its own ---------------------------------------------------------------
+    std::vector<uint32_t> walkOf(m.walkways.size(), kNoIndex);
+    std::map<std::string, uint32_t> byId;
+    for (uint32_t i = 0; i < m.walkways.size(); ++i) {
+        const ModelWalkway& W = m.walkways[i];
+        if (W.id.empty()) {
+            fault(i, -1, WalkwayFault::NoId, std::string());
+            continue;
+        }
+        const std::pair<std::map<std::string, uint32_t>::iterator, bool> named = byId.emplace(W.id, i);
+        if (!named.second) {
+            fault(i, -1, WalkwayFault::SameId, fmt("%s, first stated as walkway %u", W.id.c_str(), named.first->second));
+            continue;
+        }
+        if (W.line.size() < 2 || W.heights.size() != W.line.size() || !(stations(W.line).back() > kSliceGap)) {
+            fault(i, -1, WalkwayFault::NoLine, W.id);
+            continue;
+        }
+        if (!(W.width > 0)) {
+            fault(i, -1, WalkwayFault::NoWidth, W.id);
+            continue;
+        }
+        if (!pathUsers().usersOf(W.kind)) {
+            fault(i, -1, WalkwayFault::KindNotListed, W.id + ": \"" + W.kind + "\"");
+            continue;
+        }
+        Walk k;
+        k.modelWalkway = i;
+        k.curve = G.addCurve(W.line, W.heights);
+        k.length = G.along[k.curve.end() - 1];
+        k.width = W.width;
+        k.stationFrom = 0;
+        k.stationTo = k.length;
+        walkOf[i] = static_cast<uint32_t>(G.walks.size());
+        G.walks.push_back(k);
+    }
+    joins.resize(G.walks.size() * 2);
+
+    // ---- where each end lands, by the model's own answers, on the walks as they stand before any cut ----------------
+    std::vector<Landing> landings;
+    for (uint32_t i = 0; i < m.walkways.size(); ++i) {
+        if (walkOf[i] == kNoIndex) continue;
+        const ModelWalkway& W = m.walkways[i];
+        for (int end = 0; end < 2; ++end) {
+            const WalkwayEnd& E = W.ends[static_cast<std::size_t>(end)];
+            const int named = (E.meets.onStreet() ? 1 : 0) + (E.meets.onWalkway() ? 1 : 0) + (E.deadEnd ? 1 : 0);
+            if (named != 1) {
+                fault(i, end, named == 0 ? WalkwayFault::StatesNothing : WalkwayFault::StatesTwo, W.id);
+                continue;
+            }
+            if (E.deadEnd) continue;   // stated: meets nothing, and that is no fault
+            Landing L;
+            L.walkway = i;
+            L.end = end;
+            if (E.meets.onStreet()) {
+                const ModelStreetId s = streetNamed(m, E.meets.street);
+                if (!s.valid()) {
+                    fault(i, end, WalkwayFault::NoSuchStreet, W.id + " names " + E.meets.street);
+                    continue;
+                }
+                const ModelStreet& S = m.streets[s.index];
+                const double lo = std::min(S.from, S.to), hi = std::max(S.from, S.to);
+                if (strictlyBefore(E.meets.station, lo, kWrittenStation) || strictlyPast(E.meets.station, hi, kWrittenStation)) {
+                    fault(i, end, WalkwayFault::OffStreet,
+                          fmt("%s: station %.2f on %s, which runs %.2f to %.2f", W.id.c_str(), E.meets.station, S.id.c_str(), lo, hi));
+                    continue;
+                }
+                // THE ONE ANSWER for a place on a street's kerb (ADR-0468): the sidewalk walk on that kerb holding the station
+                const WalkJoin j = m.walkJoinOn(m.frontageOn(s, E.meets.station, E.meets.dir));
+                if (!j.valid() || j.across) {
+                    fault(i, end, WalkwayFault::NoSidewalk,
+                          fmt("%s: %s kerb %+d, %s", W.id.c_str(), S.id.c_str(), E.meets.dir,
+                              j.valid() ? "only the other kerb has one" : walkJoinWhyWord(j.why)));
+                    continue;
+                }
+                if (j.held > 0) {
+                    fault(i, end, WalkwayFault::PastSidewalk,
+                          fmt("%s: station %.2f on %s kerb %+d, %.2f m past the sidewalk's end at %.2f", W.id.c_str(),
+                              E.meets.station, S.id.c_str(), E.meets.dir, j.held, j.station));
+                    continue;
+                }
+                L.walk = j.at.walk.index;
+                L.along = j.at.along;
+                L.station = j.station;
+            } else {
+                const std::map<std::string, uint32_t>::const_iterator t = byId.find(E.meets.walkway);
+                if (t == byId.end()) {
+                    fault(i, end, WalkwayFault::NoSuchWalkway, W.id + " names " + E.meets.walkway);
+                    continue;
+                }
+                if (t->second == i) {
+                    fault(i, end, WalkwayFault::OwnWalkway, W.id);
+                    continue;
+                }
+                if (walkOf[t->second] == kNoIndex) {
+                    fault(i, end, WalkwayFault::WalkwayNotLaid, W.id + " names " + E.meets.walkway);
+                    continue;
+                }
+                const double length = G.walks[walkOf[t->second]].length;
+                if (strictlyBefore(E.meets.along, 0, kWrittenStation) || strictlyPast(E.meets.along, length, kWrittenStation)) {
+                    fault(i, end, WalkwayFault::OffWalkway,
+                          fmt("%s: %.2f m along %s, which is %.2f m long", W.id.c_str(), E.meets.along, E.meets.walkway.c_str(), length));
+                    continue;
+                }
+                L.walk = walkOf[t->second];
+                L.along = std::min(std::max(E.meets.along, 0.0), length);
+                L.station = L.along;
+            }
+            landings.push_back(L);
+        }
+    }
+
+    // ---- the cuts: each walk landed on part way along is cut there (landings within kCutTolerance cut once) ---------
+    // where each landing lies on its walk: kAtStart, kAtEnd, or the number of the cut it made along that walk
+    constexpr int kAtStart = -1, kAtEnd = -2;
+    std::vector<int> place(landings.size(), kAtStart);
+    std::map<uint32_t, std::vector<std::pair<double, double>>> cutsOf;   // walk -> each cut's (along, station), in order
+    for (std::size_t k = 0; k < landings.size(); ++k) {
+        const Landing& L = landings[k];
+        const double length = G.walks[L.walk].length;
+        if (atOrBefore(L.along, 0, kCutTolerance)) place[k] = kAtStart;
+        else if (atOrPast(L.along, length, kCutTolerance)) place[k] = kAtEnd;
+        else cutsOf[L.walk].emplace_back(L.along, L.station);
+    }
+    for (std::pair<const uint32_t, std::vector<std::pair<double, double>>>& c : cutsOf) {
+        std::vector<std::pair<double, double>>& cuts = c.second;
+        std::sort(cuts.begin(), cuts.end());
+        std::vector<std::pair<double, double>> once;
+        for (const std::pair<double, double>& x : cuts)
+            if (once.empty() || strictlyPast(x.first, once.back().first, kCutTolerance)) once.push_back(x);
+        cuts = once;
+    }
+    for (std::size_t k = 0; k < landings.size(); ++k) {
+        const Landing& L = landings[k];
+        const std::map<uint32_t, std::vector<std::pair<double, double>>>::const_iterator c = cutsOf.find(L.walk);
+        if (c == cutsOf.end() || place[k] == kAtEnd || atOrBefore(L.along, 0, kCutTolerance)) continue;
+        for (std::size_t n = 0; n < c->second.size(); ++n)
+            if (atOrBefore(std::fabs(c->second[n].first - L.along), 0, kCutTolerance)) place[k] = static_cast<int>(n);
+    }
+    std::map<uint32_t, std::vector<uint32_t>> piecesOf;   // walk cut -> its pieces in order (the first keeps its id)
+    for (const std::pair<const uint32_t, std::vector<std::pair<double, double>>>& c : cutsOf) {
+        const uint32_t w = c.first;
+        const Walk whole = G.walks[w];
+        std::vector<double> at = {0.0}, st = {whole.stationFrom};
+        for (const std::pair<double, double>& x : c.second) {
+            at.push_back(x.first);
+            st.push_back(x.second);
+        }
+        at.push_back(whole.length);
+        st.push_back(whole.stationTo);
+        std::vector<uint32_t> pieces;
+        for (std::size_t p = 0; p + 1 < at.size(); ++p) {
+            std::vector<Vec2> xy;
+            std::vector<double> z;
+            walkPiece(G, whole, at[p], at[p + 1], xy, z);
+            Walk k = whole;
+            k.curve = G.addCurve(xy, z);
+            k.length = G.along[k.curve.end() - 1];
+            k.stationFrom = st[p];
+            k.stationTo = st[p + 1];
+            k.atStart = k.atEnd = Range{};
+            if (p == 0) {
+                G.walks[w] = k;
+                pieces.push_back(w);
+            } else {
+                pieces.push_back(static_cast<uint32_t>(G.walks.size()));
+                G.walks.push_back(k);
+            }
+        }
+        joins.resize(G.walks.size() * 2);
+        // what met the whole walk's end now meets its last piece's
+        const WalkEnd was{WalkId(w), 1}, now{WalkId(pieces.back()), 1};
+        joins[slotOf(now)] = joins[slotOf(was)];
+        joins[slotOf(was)].clear();
+        for (const WalkEnd& o : joins[slotOf(now)])
+            for (WalkEnd& e : joins[slotOf(o)])
+                if (e == was) e = now;
+        piecesOf[w] = pieces;
+    }
+    const auto lastPiece = [&](uint32_t w) {
+        const std::map<uint32_t, std::vector<uint32_t>>::const_iterator p = piecesOf.find(w);
+        return p == piecesOf.end() ? w : p->second.back();
+    };
+
+    // ---- the joins: at each place landed on, every walk end there meets every other, and what already met it ---------
+    std::map<std::pair<uint32_t, int>, std::vector<WalkEnd>> places;
+    for (std::size_t k = 0; k < landings.size(); ++k) {
+        const Landing& L = landings[k];
+        std::vector<WalkEnd>& ends = places[std::make_pair(L.walk, place[k])];
+        if (ends.empty()) {
+            if (place[k] == kAtStart) {
+                ends.push_back(WalkEnd{WalkId(L.walk), 0});
+            } else if (place[k] == kAtEnd) {
+                ends.push_back(WalkEnd{WalkId(lastPiece(L.walk)), 1});
+            } else {
+                const std::vector<uint32_t>& pieces = piecesOf[L.walk];
+                const std::size_t n = static_cast<std::size_t>(place[k]);
+                ends.push_back(WalkEnd{WalkId(pieces[n]), 1});
+                ends.push_back(WalkEnd{WalkId(pieces[n + 1]), 0});
+            }
+        }
+        const uint32_t own = walkOf[L.walkway];
+        ends.push_back(L.end == 0 ? WalkEnd{WalkId(own), 0} : WalkEnd{WalkId(lastPiece(own)), 1});
+    }
+    for (const std::pair<const std::pair<uint32_t, int>, std::vector<WalkEnd>>& at : places) {
+        std::vector<WalkEnd> all = at.second;
+        for (const WalkEnd& e : at.second) all.insert(all.end(), joins[slotOf(e)].begin(), joins[slotOf(e)].end());
+        std::sort(all.begin(), all.end(), walkEndBefore);
+        all.erase(std::unique(all.begin(), all.end()), all.end());
+        for (const WalkEnd& a : all) {
+            std::vector<WalkEnd>& j = joins[slotOf(a)];
+            j.clear();
+            for (const WalkEnd& b : all)
+                if (!(a == b)) j.push_back(b);
+        }
+    }
+
+    // ---- written back flat, walk by walk, start then end ---------------------------------------------------------------
+    G.walkJoins.clear();
+    for (uint32_t w = 0; w < G.walks.size(); ++w)
+        for (uint32_t end = 0; end < 2; ++end) {
+            const std::vector<WalkEnd>& j = joins[w * 2 + end];
+            const Range r{static_cast<uint32_t>(G.walkJoins.size()), static_cast<uint32_t>(j.size())};
+            G.walkJoins.insert(G.walkJoins.end(), j.begin(), j.end());
+            (end == 0 ? G.walks[w].atStart : G.walks[w].atEnd) = r;
+        }
+    return out;
+}
+
 }  // namespace roads::lanes
 }  // namespace engine

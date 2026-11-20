@@ -14,6 +14,8 @@
     "             turn (a pocket), slip, aux, ramp) and the path through a junction (connector). The walking kinds are",
     "             the walks the lane level lays for people on foot (ADR-0466): along a sidewalk, round a corner",
     "             (RoadModel::corners), over a crosswalk, across a dead end's road end, and along a footway road.",
+    "             A WALKWAY (a path beside no street: RoadModel::walkways, ADR-0475) names its kind from here too:",
+    "             footway for a path between buildings or across a plaza, park_path for a path through a park.",
     "             A kind not listed here is open to nobody.",
     "  dead_end   joined_by: the kind of path that joins a dead end's two sidewalks across the road's end",
     "             (RoadModel::deadEnds, turnRound); null: a dead end's sidewalks are not joined, and each simply ends.",
@@ -36,7 +38,8 @@
     "corner": ["walker"],
     "crossing": ["walker"],
     "turn_round": ["walker"],
-    "footway": ["walker"]
+    "footway": ["walker"],
+    "park_path": ["walker"]
   },
   "dead_end": {"joined_by": "turn_round"}
 }
