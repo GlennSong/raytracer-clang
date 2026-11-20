@@ -790,8 +790,9 @@ proposed to him:
 1. **Edge bevel:** round or chamfer chosen edges of a hard-surface part. BUILT 2026-11-20 as a chamfer: `bevel` in
    `procgen/polymesh.{h,cpp}`, Lua `P:bevel(width [, angle [, sel]])`. Every edge whose faces turn more than the
    angle is cut back to a flat strip, each face keeping its plane; a corner where three or more meet gets a small
-   face. Bevel twice (a second, smaller width) for a rounder edge. It does not round in one go, does not stop a
-   width wider than a face from folding it, and leaves the open border of a mesh alone.
+   face. Bevel twice (a second, smaller width) for a rounder edge. A fifth argument, `rounds`, rounds the edge in more passes (2: three
+   facets, 3: seven; added the same day). A width wider than a face has room for is held back, corner by corner,
+   so no face folds over. It leaves the open border of a mesh alone.
 2. **Loop cut and bridge** on the quad mesh: add a ring of edges; join two open rings. Also what would let the car
    cage's hood be more than one quad across. BUILT 2026-11-20, in `procgen/polymesh.{h,cpp}`:
    - `P:loop_cut(at_a, at_b [, t])`: a ring of edges through the quads, starting across the edge whose ends are
@@ -811,12 +812,13 @@ proposed to him:
    `assets/scripts/truss.lua`: `truss.build{ path, bay, section, size, size_end, chord, brace, pattern, ... }` gives
    one mesh and `info` (counts, the length, every joint frame by frame, for hanging things on it). Square,
    triangular or your own section; zigzag, crossed or no diagonals; the path may bend. Members are round tubes that
-   pass through each other at the joints (no gusset plates, no welded nodes).
+   pass through each other at the joints; `nodes = true` puts a ball on every joint, which covers that (no gusset
+   plates; round members only).
 5. **Scatter on a surface:** copies of one piece (bolts, rivets) along edges or over faces, as uses. BUILT
    2026-11-20 as a Lua library, `assets/scripts/scatter.lua`: `scatter.ring`, `scatter.along`, `scatter.grid`,
    `scatter.faces` and `scatter.join` each give a list of placements for `m:use(piece, placements)`. A placement
-   may now say `up = {x,y,z}` (and `spin`) in place of `turn`: the piece's own +y stands along it. Even spacing
-   only; nothing random, and nothing that follows a curved surface between the points given.
+   may now say `up = {x,y,z}` (and `spin`) in place of `turn`: the piece's own +y stands along it. `scatter.jitter(list, { seed,
+   move, spin, scale, drop })` nudges a list by a seed. Nothing follows a curved surface between the points given.
 6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path. BUILT 2026-11-20 as a
    Lua library, `assets/scripts/cable.lua`: `cable.hang(a, b, { sag })` gives the points of a hanging curve (the
    true one when the ends are level), `cable.wire` one round wire along points, `cable.rope` strands twisted along
@@ -828,9 +830,8 @@ proposed to him:
    surface by less than it moved.
 8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level. BUILT 2026-11-20:
    `unsubdivide` in `procgen/polymesh.{h,cpp}`, Lua `P:unsubdivide([near])`. A mesh with a subdivided mesh's
-   pattern loses a level: a quarter of the faces, the same grid. The points that stay do not move. It refuses a
-   mesh with a face that is not a quad or with an open border, so a kit car's body with its open panels is not
-   yet a customer.
+   pattern loses a level: a quarter of the faces, the same grid. The points that stay do not move. A mesh with an open border works (added the same
+   day); one with a face that is not a quad is refused. Not yet tried on a kit car's body.
 
 All eight tools on this list are built. What each does not do is said in its line.
 

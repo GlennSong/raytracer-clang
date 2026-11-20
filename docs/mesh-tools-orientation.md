@@ -64,6 +64,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | ff719461 | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
 | c5d9a860 | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
 | bb747fea | cage deform (`assets/scripts/cage.lua`) and un-subdivide (`unsubdivide`, Lua `P:unsubdivide`): the last two of the eight tools |
+| (this) | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -140,8 +141,10 @@ models, then modelling tools.**
    (`procgen/polymesh.{h,cpp}`); the Lua libraries are `openings.lua`, `truss.lua`, `scatter.lua`, `cable.lua`,
    `cage.lua` in `assets/scripts`, tested in `tests/test_openings.cpp`. Scratch recipes that show each:
    `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua`, `bolts.lua`, `cables.lua`,
-   `deform.lua` (not tracked). What each tool does not do is in the design note; those gaps are the next tool
-   work if Glenn wants more (round bevels, arched openings, gusset plates, un-subdivide with open borders).
+   `deform.lua` (not tracked). What each tool does not do is in the design note; the gaps still open are: arched or round openings and
+   openings in curved walls, a bridge between rims of different point counts, truss members that are not round
+   and gusset plates, scatter that follows a curved surface, a cage that is not a box, and un-subdivide tried on
+   a kit car's body.
 
 The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 

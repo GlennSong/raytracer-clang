@@ -114,6 +114,13 @@ TEST_CASE(truss_builds_a_lattice_along_a_path) {
         local audit = mesh.audit(mast)
         assert(audit.tris > 0 and audit.degenerate == 0)
 
+        -- a ball at every joint, when asked
+        local _, noded = truss.build{ path = { { 0, 0, 0 }, { 0, 0, 4 } }, bay = 1.0, nodes = true }
+        assert(noded.nodes == 5 * 4)
+        local plain = truss.build{ path = { { 0, 0, 0 }, { 0, 0, 4 } }, bay = 1.0 }
+        local balled = truss.build{ path = { { 0, 0, 0 }, { 0, 0, 4 } }, bay = 1.0, nodes = 0.08 }
+        assert(mesh.audit(balled).tris > mesh.audit(plain).tris)
+
         -- crossed diagonals are two a side; none is none; no braces is chords only
         local _, cross = truss.build{ path = { { 0, 0, 0 }, { 0, 0, 4 } }, bay = 1.0, pattern = "cross" }
         assert(cross.diagonals == 4 * 4 * 2)
@@ -185,6 +192,31 @@ TEST_CASE(scatter_gives_placements_that_stand_each_copy_along_the_surface) {
         assert(#tops == 1 and near(tops[1].pos[2], 0.5) and near(tops[1].up[2], 1))
         assert(#scatter.faces(box, box:select{ all = true }) == 6)
         assert(#scatter.join(ring, grid) == 14)
+        -- jitter: the same seed gives the same list; each place stays within `move` of where it was, flat on its
+        -- surface; `drop` leaves some out without moving the rest
+        local j1 = scatter.jitter(grid, { seed = 7, move = 0.02, spin = 180, scale = 0.2 })
+        local j2 = scatter.jitter(grid, { seed = 7, move = 0.02, spin = 180, scale = 0.2 })
+        local j3 = scatter.jitter(grid, { seed = 8, move = 0.02, spin = 180, scale = 0.2 })
+        assert(#j1 == #grid)
+        local differs = false
+        for i = 1, #grid do
+          assert(near(j1[i].pos[1], j2[i].pos[1]) and near(j1[i].spin, j2[i].spin) and near(j1[i].scale, j2[i].scale))
+          if not near(j1[i].pos[1], j3[i].pos[1]) then differs = true end
+          assert(near(j1[i].pos[2], grid[i].pos[2]), "it stays on its surface")
+          assert(math.abs(j1[i].pos[1] - grid[i].pos[1]) <= 0.02 and math.abs(j1[i].pos[3] - grid[i].pos[3]) <= 0.02)
+          assert(j1[i].scale >= 0.8 and j1[i].scale <= 1.2 and math.abs(j1[i].spin) <= 180)
+        end
+        assert(differs, "another seed, another list")
+        local many = scatter.grid{ origin = { 0, 0, 0 }, u = { 4, 0, 0 }, v = { 0, 0, -4 }, count = { 20, 20 } }
+        local thinned = scatter.jitter(many, { seed = 3, drop = 0.5, move = 0.01 })
+        assert(#thinned > 140 and #thinned < 260, "about half are left: " .. #thinned)
+        local whole = scatter.jitter(many, { seed = 3, move = 0.01 })
+        local k = 1
+        for _, p in ipairs(whole) do
+          if thinned[k] and near(p.pos[1], thinned[k].pos[1]) and near(p.pos[3], thinned[k].pos[3]) then k = k + 1 end
+        end
+        assert(k - 1 == #thinned, "the ones kept are where they would have been anyway")
+
         local ok1, why = pcall(scatter.ring, { at = { 0, 0, 0 } })
         assert(not ok1 and why:find("give at, radius and count"))
 

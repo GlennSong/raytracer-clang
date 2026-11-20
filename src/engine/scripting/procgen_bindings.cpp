@@ -5059,7 +5059,7 @@ int l_poly_crease_corners(lua_State* L) {
     creaseCorners(m, sel, luaL_optnumber(L, 3, 40.0), static_cast<float>(luaL_optnumber(L, 4, PolyMesh::kInfCrease)));
     return 0;
 }
-// P:bevel(width [, angle = 30 [, sel]]) -> sel: cut every edge whose faces turn more than `angle` degrees back to a
+// P:bevel(width [, angle = 30 [, sel [, rounds = 1]]]) -> sel (rounds 2 or more: a rounded edge, 3 or 7 facets ...): cut every edge whose faces turn more than `angle` degrees back to a
 // flat strip `width` metres from the edge on each face (procgen/polymesh.h bevel). `sel` limits it to the edges of
 // those faces. Returns the strips and corner faces, which are also the group "bevel".
 int l_poly_bevel(lua_State* L) {
@@ -5071,7 +5071,9 @@ int l_poly_bevel(lua_State* L) {
         sel = checkSel(L, 4);
         checkSelRange(L, m, sel);
     }
-    pushSel(L, bevel(m, width, luaL_optnumber(L, 3, 30.0), sel));
+    const int rounds = static_cast<int>(luaL_optinteger(L, 5, 1));
+    if (rounds < 1 || rounds > 5) return luaL_error(L, "bevel: rounds is 1 to 5");
+    pushSel(L, bevel(m, width, luaL_optnumber(L, 3, 30.0), sel, rounds));
     return 1;
 }
 // P:loop_cut(at_a, at_b [, t = 0.5]) -> count: a new ring of edges through the quads, starting across the edge whose

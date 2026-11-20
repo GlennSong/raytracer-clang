@@ -661,7 +661,25 @@ void creaseCorners(PolyMesh& m, const std::vector<int>& sel, double angleDeg, fl
     }
 }
 
-std::vector<int> bevel(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel) {
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel, int rounds) {
+    std::vector<int> made = bevelFlat(m, width, angleDeg, sel);
+    // ROUNDING: cut the strip's own two edges back, and then the edges that leaves, each pass by the width that
+    // makes the facets across the bend equal (worked out for a square edge; near enough for others). Each pass is
+    // kept to the edges of the faces the bevel has made, so nothing else in the mesh is touched.
+    double facet = width * std::sqrt(2.0), apex = 135.0;
+    for (int pass = 1; pass < rounds && !made.empty(); ++pass) {
+        const double half = apex * 0.5 * M_PI / 180.0;
+        const double cut = facet / (2.0 + 2.0 * std::sin(half));
+        const double turn = 180.0 - apex;                        // how far the surface turns at each edge now
+        const std::vector<int> more = bevelFlat(m, cut, turn * 0.6, made);
+        made.insert(made.end(), more.begin(), more.end());
+        facet = 2.0 * cut * std::sin(half);
+        apex = (apex + 180.0) * 0.5;
+    }
+    return made;
+}
+
+std::vector<int> bevelFlat(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel) {
     std::vector<int> made;
     if (width <= 0 || m.faces.empty()) return made;
     const int nf = static_cast<int>(m.faces.size());
@@ -756,9 +774,13 @@ std::vector<int> bevel(PolyMesh& m, double width, double angleDeg, const std::ve
             const Vec3 a = into(first, first.prev), b = into(last, last.next);
             // the move that is `width` from both edges: x a + y b with (x a + y b).a = (x a + y b).b = width
             const double ab = dot(a, b);
+            // NO FOLDING: a face is drawn back from both ends of an edge, so each end may take a little under half
+            // of the shortest edge it runs along. A width asked wider than that is held to it here.
+            const double room = 0.45 * std::min((was[static_cast<std::size_t>(first.prev)] - here).length(), (was[static_cast<std::size_t>(last.next)] - here).length());
+            const double w = std::min(width, room);
             Vec3 move;
-            if (1.0 - ab * ab < 1e-6) move = normalize(a + b) * width;       // the two edges run on in a line
-            else move = (a + b) * (width / (1.0 + ab));
+            if (1.0 - ab * ab < 1e-6) move = normalize(a + b) * w;           // the two edges run on in a line
+            else move = (a + b) * (w / (1.0 + ab));
             int point;
             if (!reusedOwn) { point = v; reusedOwn = true; }
             else { point = static_cast<int>(m.pts.size()); m.pts.push_back(here); }
@@ -876,22 +898,38 @@ bool unsubdivide(PolyMesh& m, int keep) {
         }
     }
     // Round each point: its faces in order (the walk goes clockwise seen from outside), and in each the point after
-    // it (a neighbour along an edge) and the point across the face from it.
-    struct Ring { std::vector<int> next, across, face; };
+    // it (a neighbour along an edge) and the point across the face from it. A point on the mesh's open border has a
+    // fan of faces from one border edge to the other, not a ring; `nbrs` are its neighbours along edges, in order.
+    struct Ring { std::vector<int> next, across, face, nbrs; bool closed = true; };
     std::vector<Ring> rings(static_cast<std::size_t>(np));
     for (int p = 0; p < np; ++p) {
         if (firstCorner[static_cast<std::size_t>(p)].first < 0) continue;      // a point no face uses
-        std::pair<int, int> at = firstCorner[static_cast<std::size_t>(p)];
         Ring& r = rings[static_cast<std::size_t>(p)];
+        // on a border, begin at the face whose edge INTO p has no face on its other side
+        std::pair<int, int> begin = firstCorner[static_cast<std::size_t>(p)];
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::vector<int>& fv = m.faces[static_cast<std::size_t>(begin.first)].v;
+            const int prev = fv[static_cast<std::size_t>((begin.second + 3) % 4)];
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator back = owner.find(dkey(p, prev));
+            if (back == owner.end()) { r.closed = false; r.nbrs.push_back(prev); break; }
+            begin = back->second;                                               // that face has p -> prev: p is its corner
+            if (begin == firstCorner[static_cast<std::size_t>(p)]) break;       // all the way round: no border here
+            if (guard == 4095) return false;
+        }
+        std::pair<int, int> at = begin;
         for (int guard = 0; guard < 4096; ++guard) {
             const std::vector<int>& fv = m.faces[static_cast<std::size_t>(at.first)].v;
             r.next.push_back(fv[static_cast<std::size_t>((at.second + 1) % 4)]);
             r.across.push_back(fv[static_cast<std::size_t>((at.second + 2) % 4)]);
             r.face.push_back(at.first);
+            r.nbrs.push_back(r.next.back());
             const std::unordered_map<long long, std::pair<int, int>>::const_iterator twin = owner.find(dkey(r.next.back(), p));
-            if (twin == owner.end()) return false;                              // an open border
+            if (twin == owner.end()) {
+                if (r.closed) return false;                                     // a border met only one way round
+                break;
+            }
             at = {twin->second.first, (twin->second.second + 1) % 4};
-            if (at == firstCorner[static_cast<std::size_t>(p)]) break;
+            if (at == begin) break;
             if (guard == 4095) return false;
         }
     }
@@ -899,10 +937,10 @@ bool unsubdivide(PolyMesh& m, int keep) {
     std::vector<int> colour(static_cast<std::size_t>(np), -1);
     std::vector<int> queue{keep};
     colour[static_cast<std::size_t>(keep)] = 0;
-    if (rings[static_cast<std::size_t>(keep)].next.empty()) return false;
+    if (rings[static_cast<std::size_t>(keep)].nbrs.empty()) return false;
     for (std::size_t q = 0; q < queue.size(); ++q) {
         const int p = queue[q];
-        for (int n : rings[static_cast<std::size_t>(p)].next) {
+        for (int n : rings[static_cast<std::size_t>(p)].nbrs) {
             if (colour[static_cast<std::size_t>(n)] < 0) { colour[static_cast<std::size_t>(n)] = 1 - colour[static_cast<std::size_t>(p)]; queue.push_back(n); }
             else if (colour[static_cast<std::size_t>(n)] == colour[static_cast<std::size_t>(p)]) return false;
         }
@@ -918,9 +956,16 @@ bool unsubdivide(PolyMesh& m, int keep) {
     for (int p = 0; p < np; ++p) {
         if (colour[static_cast<std::size_t>(p)] != 1) continue;
         const Ring& r = rings[static_cast<std::size_t>(p)];
-        if (r.next.size() != 4) return false;
-        parent[static_cast<std::size_t>(find(r.next[0]))] = find(r.next[2]);
-        parent[static_cast<std::size_t>(find(r.next[1]))] = find(r.next[3]);
+        // inside the mesh an edge middle has four edges, two straight-through pairs; on the border it has three:
+        // the two along the border are the pair, the third goes in to a face middle
+        if (r.closed && r.nbrs.size() == 4) {
+            parent[static_cast<std::size_t>(find(r.nbrs[0]))] = find(r.nbrs[2]);
+            parent[static_cast<std::size_t>(find(r.nbrs[1]))] = find(r.nbrs[3]);
+        } else if (!r.closed && r.nbrs.size() == 3) {
+            parent[static_cast<std::size_t>(find(r.nbrs[0]))] = find(r.nbrs[2]);
+        } else {
+            return false;
+        }
     }
     const int kept = find(keep);
     auto stays = [&](int p) { return colour[static_cast<std::size_t>(p)] == 0 && find(p) == kept; };
@@ -940,7 +985,7 @@ bool unsubdivide(PolyMesh& m, int keep) {
     for (int p = 0; p < np; ++p) {
         if (colour[static_cast<std::size_t>(p)] != 0 || stays(p) || rings[static_cast<std::size_t>(p)].next.empty()) continue;
         const Ring& r = rings[static_cast<std::size_t>(p)];
-        if (r.across.size() < 3) return false;
+        if (!r.closed || r.across.size() < 3) return false;
         PolyMesh::Face nf = m.faces[static_cast<std::size_t>(r.face[0])];
         nf.v.assign(r.across.rbegin(), r.across.rend());
         faces.push_back(std::move(nf));
@@ -950,8 +995,8 @@ bool unsubdivide(PolyMesh& m, int keep) {
     for (int p = 0; p < np; ++p) {
         if (colour[static_cast<std::size_t>(p)] != 1) continue;
         const Ring& r = rings[static_cast<std::size_t>(p)];
-        for (int k = 0; k < 2; ++k) {
-            const int a = r.next[static_cast<std::size_t>(k)], b = r.next[static_cast<std::size_t>(k + 2)];
+        for (int k = 0; k < (r.closed ? 2 : 1); ++k) {
+            const int a = r.nbrs[static_cast<std::size_t>(k)], b = r.nbrs[static_cast<std::size_t>(k + 2)];
             if (!stays(a) || !stays(b)) continue;
             const float sa = m.crease(a, p), sb = m.crease(p, b);
             if (sa <= 0.0f || sb <= 0.0f) continue;

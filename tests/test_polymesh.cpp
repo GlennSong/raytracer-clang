@@ -513,13 +513,94 @@ TEST_CASE(polymesh_unsubdivide_takes_a_level_back_out) {
     CHECK(dual.faces.size() == 8);
     CHECK(isClosed(dual) && signedVolume(dual) > 0);
 
-    // not the pattern: a face that is not a quad, or an open border
+    // not the pattern: a face that is not a quad
     PolyMesh tri = cube();
     bevel(tri, 0.1);
     const std::size_t before = tri.faces.size();
     CHECK(!unsubdivide(tri));
     CHECK(tri.faces.size() == before);
     const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
-    PolyMesh open = subdivide(loft({sq, sq}, {-0.5, 0.5}, false, false), 1);
-    CHECK(!unsubdivide(open));
+    // an open tube (no caps) keeps its two open ends: four faces and eight points again
+    const PolyMesh tube = loft({sq, sq}, {-0.5, 0.5}, false, false);
+    PolyMesh open = subdivide(tube, 1);
+    CHECK(open.faces.size() == 16);
+    CHECK(unsubdivide(open));
+    CHECK(open.faces.size() == tube.faces.size());
+    CHECK(open.pts.size() == tube.pts.size());
+    CHECK(!isClosed(open));
+    Vec3 olo, ohi;
+    bounds(open, olo, ohi);
+    CHECK_APPROX(olo.z, -0.5, 1e-9);          // the border's corners stayed on the border
+    CHECK_APPROX(ohi.z, 0.5, 1e-9);
+    // a cube with one face lifted out, two levels in and out
+    PolyMesh lidless = cube();
+    lidless.creases.clear();
+    lidless.faces.erase(lidless.faces.begin());
+    PolyMesh fine2 = subdivide(lidless, 2);
+    CHECK(unsubdivide(fine2) && unsubdivide(fine2));
+    CHECK(fine2.faces.size() == 5);
+    CHECK(fine2.pts.size() == 8);
+}
+
+TEST_CASE(polymesh_bevel_rounds_an_edge_in_more_passes) {
+    PolyMesh flat = cube();
+    flat.creases.clear();
+    bevel(flat, 0.1);
+    PolyMesh round2 = cube();
+    round2.creases.clear();
+    const std::vector<int> made2 = bevel(round2, 0.1, 30.0, {}, 2);
+    PolyMesh round3 = cube();
+    round3.creases.clear();
+    bevel(round3, 0.1, 30.0, {}, 3);
+    CHECK(isClosed(round2) && isClosed(round3));
+    CHECK(round2.faces.size() > flat.faces.size());
+    CHECK(round3.faces.size() > round2.faces.size());
+    CHECK(made2.size() == round2.faces.size() - 6);
+    // each pass cuts the strip's corners back, so a little more comes off each time, and less each time
+    const double v1 = signedVolume(flat), v2 = signedVolume(round2), v3 = signedVolume(round3);
+    CHECK(v1 > v2 && v2 > v3);
+    CHECK(v1 - v2 > v2 - v3);
+    CHECK(v3 > 0.9);
+    // the six flat faces are still in their planes and now 0.8 across
+    Vec3 lo, hi;
+    bounds(round3, lo, hi);
+    CHECK_APPROX(lo.x, -0.5, 1e-9);
+    CHECK_APPROX(hi.z, 0.5, 1e-9);
+    // across a square edge two rounds leave three facets of the same width
+    std::vector<double> widths;
+    for (std::size_t f = 6; f < round2.faces.size(); ++f) {
+        const std::vector<int>& q = round2.faces[f].v;
+        if (q.size() != 4) continue;
+        const double e0 = (round2.pts[static_cast<std::size_t>(q[1])] - round2.pts[static_cast<std::size_t>(q[0])]).length();
+        const double e1 = (round2.pts[static_cast<std::size_t>(q[2])] - round2.pts[static_cast<std::size_t>(q[1])]).length();
+        if (std::max(e0, e1) > 0.5) widths.push_back(std::min(e0, e1));      // the long strips along the cube's edges
+    }
+    CHECK(widths.size() == 36);                                               // three to an edge
+    for (double w : widths) CHECK_APPROX(w, widths[0], 2e-3);
+    // a width wider than the faces have room for is held back: no face folds over, the solid stays inside the cube
+    PolyMesh wide = cube();
+    wide.creases.clear();
+    bevel(wide, 5.0);
+    CHECK(isClosed(wide));
+    CHECK(signedVolume(wide) > 0.15 && signedVolume(wide) < 1.0);   // (nearly all edge: about a quarter of the cube is left)
+    bounds(wide, lo, hi);
+    CHECK(lo.x >= -0.5 - 1e-9 && hi.x <= 0.5 + 1e-9 && lo.y >= -0.5 - 1e-9 && hi.z <= 0.5 + 1e-9);
+    for (std::size_t f = 0; f < 6; ++f) {
+        const Vec3 n = wide.faceNormal(static_cast<int>(f));
+        CHECK(std::fabs(std::fabs(n.x) + std::fabs(n.y) + std::fabs(n.z) - 1.0) < 1e-9);   // each still faces along its axis
+        CHECK(dot(n, wide.faceCentroid(static_cast<int>(f))) > 0.49);                        // ...and outward
+    }
+    // a thin slab bevelled wider than it is thick: the same
+    const std::vector<Vec2> thin = {Vec2(-0.5, -0.02), Vec2(0.5, -0.02), Vec2(0.5, 0.02), Vec2(-0.5, 0.02)};
+    PolyMesh slab = loft({thin, thin}, {-0.5, 0.5}, true, true);
+    slab.creases.clear();
+    bevel(slab, 0.1, 30.0, {}, 2);
+    CHECK(isClosed(slab));
+    CHECK(signedVolume(slab) > 0.02 && signedVolume(slab) < 0.04);
+
+    // one round is the flat bevel
+    PolyMesh one = cube();
+    one.creases.clear();
+    bevel(one, 0.1, 30.0, {}, 1);
+    CHECK(one.faces.size() == flat.faces.size());
 }

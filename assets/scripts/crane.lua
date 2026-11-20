@@ -30,13 +30,13 @@ end
 -- THE BASE, on the root: a slab with its edges cut back
 local base = poly.box{ 2, 0.4, 2 }
 base:translate{ 0, 0.2, 0 }
-base:bevel(0.04)
+base:bevel(0.04, 30, nil, 2)
 m:add(solid(base, grey))
 m:shape("base", { box = { 2, 0.4, 2 }, pos = { 0, 0.2, 0 }, friction = 0.9 })
 
 -- THE MAST: a square lattice from the base to the cab (it runs straight up, so its section's "up" is z)
 local mast = truss.build{ path = { { 0, 0.4, 0 }, { 0, 4.4, 0 } }, up = { 0, 0, 1 }, bay = 0.5, size = { 0.44, 0.44 },
-                          chord = 0.03, brace = 0.015, color = yellow }
+                          chord = 0.03, brace = 0.015, nodes = true, color = yellow }
 m:add(mast, "steel")
 m:add(box({ 0.5, 4.4, 0.5 }, { 0, 2.2, 0 }, yellow), "steel", { level = far })
 m:shape("mast", { box = { 0.5, 4, 0.5 }, pos = { 0, 2.4, 0 } })
@@ -83,7 +83,7 @@ joint.cabin:marker("lamp_top", { pos = { 0, 1.05, 0 }, turn = { -90, 0, 0 }, rol
 
 -- THE BOOM: a lattice 5 m long, tapering to its tip, in the boom's own space (it runs along +z)
 local boom = truss.build{ path = { { 0, 0, 0 }, { 0, 0, 5 } }, bay = 0.5, size = { 0.34, 0.34 }, size_end = { 0.14, 0.14 },
-                          chord = 0.022, brace = 0.012, color = yellow }
+                          chord = 0.022, brace = 0.012, nodes = true, color = yellow }
 joint.boom:add(boom, "steel")
 joint.boom:add(box({ 0.3, 0.3, 5 }, { 0, 0, 2.5 }, yellow), "steel", { level = far })
 joint.boom:shape("boom", { box = { 0.3, 0.3, 5 }, pos = { 0, 0, 2.5 } })
@@ -91,7 +91,7 @@ joint.boom:shape("boom", { box = { 0.3, 0.3, 5 }, pos = { 0, 0, 2.5 } })
 -- THE HOOK BLOCK
 local block = poly.box{ 0.3, 0.3, 0.3 }
 block:translate{ 0, -0.15, 0 }
-block:bevel(0.03)
+block:bevel(0.03, 30, nil, 2)
 joint.hook:add(solid(block, grey), "steel")
 joint.hook:marker("hook", { pos = { 0, -0.3, 0 }, turn = { 90, 0, 0 }, role = "hook" })
 return m

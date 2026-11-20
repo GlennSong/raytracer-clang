@@ -14,6 +14,7 @@
 --       rows and columns over the flat patch origin + [0,1] u + [0,1] v, `margin` metres in from its edges
 --   scatter.faces(P, sel)
 --       one at the middle of each selected face of a quad mesh, standing along the face
+--   scatter.jitter(list, { seed, move, spin, scale, drop })   the same list nudged, by a seed (see below)
 --   scatter.join(a, b, ...)           several lists as one
 local M = {}
 
@@ -97,6 +98,31 @@ function M.faces(P, sel)
   P:select{ where = function(c, n) k = k + 1; mids[k] = { pos = { c[1], c[2], c[3] }, up = { n[1], n[2], n[3] } }; return false end }
   for i, f in ipairs(all) do
     if want[f] then out[#out + 1] = mids[i] end
+  end
+  return out
+end
+
+-- scatter.jitter(list, { seed = 1, move = 0.01, spin = 180, scale = 0.1, drop = 0 }) -> a new list, each placement
+-- nudged: up to `move` metres sideways (flat on its surface), turned up to `spin` degrees about its `up`, grown or
+-- shrunk by up to `scale` (0.1: 90% to 110%), and left out with a chance of `drop` (0 to 1). The same seed gives the
+-- same result: weeds between paving stones, rivets set by hand, studs with their heads at any angle.
+function M.jitter(list, o)
+  o = o or {}
+  local r = rng.new(o.seed or 1)
+  local move, spin, scale, drop = o.move or 0, o.spin or 0, o.scale or 0, o.drop or 0
+  local out = {}
+  for _, p in ipairs(list) do
+    -- (every placement draws the same count of numbers, kept or not, so dropping one does not move the others)
+    local gone = r:next() < drop
+    local a, b, turn, size = r:range(-1, 1), r:range(-1, 1), r:range(-1, 1), r:range(-1, 1)
+    if not gone then
+      local n = unit(p.up or { 0, 1, 0 }, "up")
+      local side = math.abs(n[2]) < 0.9 and { 0, 1, 0 } or { 1, 0, 0 }
+      local u = unit(cross(side, n))
+      local v = cross(n, u)
+      out[#out + 1] = { pos = add(p.pos, add(mul(u, a * move), mul(v, b * move))), up = n,
+                        spin = (p.spin or 0) + turn * spin, scale = (p.scale or 1) * (1 + size * scale) }
+    end
   end
   return out
 end

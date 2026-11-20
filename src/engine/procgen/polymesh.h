@@ -141,10 +141,17 @@ PolyMesh subdivide(const PolyMesh& m, int levels);
 // colour of a face beside them. `sel`, when not empty, limits the bevel to edges between two faces of the selection
 // or on its outline (so one panel's rim can be bevelled alone).
 //
-// What it does not do: round the strip (subdivide after it, or bevel twice, for a softer edge); stop a width wider
-// than a face from folding the face over (keep `width` under half the narrowest face); keep creases on the edges it
-// cuts (they are gone with the edge). An edge on the open border of a mesh is left alone.
-std::vector<int> bevel(PolyMesh& m, double width, double angleDeg = 30.0, const std::vector<int>& sel = {});
+// A width wider than a face has room for is held back, corner by corner, to a little under half the shortest edge
+// there, so a face is never folded over (the strip is then narrower than asked at that corner).
+//
+// What it does not do: keep creases on the edges it cuts (they are gone with the edge). An edge on the open border
+// of a mesh is left alone.
+//
+// `rounds` > 1 rounds the edge: after the first cut the strip's own edges are cut back, and then theirs, each pass
+// by the width that keeps the facets across the bend equal. 1: one flat strip. 2: three facets. 3: seven.
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg = 30.0, const std::vector<int>& sel = {}, int rounds = 1);
+// One flat cut (what `bevel` does once per round).
+std::vector<int> bevelFlat(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel);
 
 // LOOP CUT (#191): a new ring of edges through a run of quads. Starting at the edge between points `a` and `b`, the
 // cut crosses each quad to the edge opposite, on and on, until it comes back round, reaches the mesh's open border,
@@ -179,8 +186,10 @@ std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vecto
 // default the set holding point 0, which is the one `subdivide` wrote first). A crease that ran along both halves
 // of an edge runs along the whole edge, one level sharper.
 //
-// Returns false, and changes nothing, when the mesh does not have the pattern: a face that is not a quad, an open
-// border, or loops that do not pair off.
+// A mesh with an open border works too (a car body with a panel lifted out): the border keeps every second point.
+//
+// Returns false, and changes nothing, when the mesh does not have the pattern: a face that is not a quad, or loops
+// that do not pair off.
 bool unsubdivide(PolyMesh& m, int keep = 0);
 
 // The point nearest to `at` (for naming an edge to loopCut by where its ends are).

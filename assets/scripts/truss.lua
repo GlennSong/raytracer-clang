@@ -13,6 +13,8 @@
 --     brace = 0.03,                   -- radius of the frames and diagonals (0: chords only)
 --     pattern = "zigzag",             -- the diagonals on each side: "zigzag", "cross" or "none"
 --     frames = true,                  -- a ring of members round the section at every bay
+--     nodes = true,                   -- a ball at every joint (true: 1.6 x the chord's radius; or a radius), which
+--                                     --   covers the members' open ends and their crossings
 --     sides = 6,                      -- how round a member is
 --     up = { 0, 1, 0 },               -- the section's "up" (for a path that runs straight up, give another)
 --     color = { 0.8, 0.6, 0.1 },
@@ -123,6 +125,17 @@ function M.build(o)
           if pattern == "cross" or not flip then member(corners[i][k], corners[i + 1][k2], brace); info.diagonals = info.diagonals + 1 end
           if pattern == "cross" or flip then member(corners[i][k2], corners[i + 1][k], brace); info.diagonals = info.diagonals + 1 end
         end
+      end
+    end
+  end
+  -- a ball at every joint: it covers the members' open ends and where they run through each other, as a welded
+  -- node or a cast joint does
+  local node = o.nodes == true and chord * 1.6 or o.nodes
+  if node and node > 0 then
+    for i = 1, #corners do
+      for k = 1, n do
+        parts[#parts + 1] = mesh.paint(mesh.translate(mesh.scale(mesh.icosphere(1), { node, node, node }), corners[i][k]), color)
+        info.nodes = (info.nodes or 0) + 1
       end
     end
   end
