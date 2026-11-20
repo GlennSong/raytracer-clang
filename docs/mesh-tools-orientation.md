@@ -67,7 +67,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | ccaa2c5f | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
 | 57f7b4a7 | B-spline curve and surface: `MeshBuilder::pathBSpline`, `bsplineSurface`; Lua `mesh.path.bspline`, `mesh.bspline_surface`; the libraries along a path |
 | c63f7af7 | a prefab entity may name a recipe directly (`"prefab": { "recipe": ... }`, `obtainRecipeModel`); the loader watches what a prefab's model is built from (`modelSourceFiles`) |
-| (this) | THE MODEL STUDIO, first piece: `src/editor_app/model_studio.{h,cpp}`, a script pane in the Qt editor whose model the viewport shows and rebuilds on every save; `editor_app --model <name>`; a studio level opens looking at its model |
+| 7c95d766 | THE MODEL STUDIO, first piece: `src/editor_app/model_studio.{h,cpp}`, a script pane in the Qt editor whose model the viewport shows and rebuilds on every save; `editor_app --model <name>`; a studio level opens looking at its model |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
