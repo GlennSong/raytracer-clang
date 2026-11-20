@@ -3918,6 +3918,7 @@ void addMarkerFromLua(lua_State* L, ProcModel& m, int node) {
     ProcMarker marker;
     marker.name = name;
     marker.role = role;
+    marker.line = recipeLine(L);
     marker.frame = frame;
     marker.size = size;
     m.addMarker(node, marker);
@@ -4023,6 +4024,7 @@ int addNodeFromLua(lua_State* L, const ModelPtr& model, int parent) {
         lua_pop(L, 1);
     }
     const int index = model->addNode(name, parent, frame);
+    if (index >= 0) model->nodes[static_cast<std::size_t>(index)].line = recipeLine(L);
     model->nodes[static_cast<std::size_t>(index)].motion = motion;
     pushNode(L, model, index);
     return 1;
@@ -4156,6 +4158,7 @@ void addShapeFromLua(lua_State* L, ProcModel& m, int node) {
     c.radius = radius;
     c.halfHeight = halfHeight;
     c.friction = friction;
+    c.line = recipeLine(L);
     m.addShape(c);
 }
 

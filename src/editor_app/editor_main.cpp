@@ -30,6 +30,7 @@
 #include "bake_dialog.h"
 #include "level_cache_panel.h"
 #include "model_studio.h"
+#include "../engine/model_motion.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #ifdef RT_ROADS_LANES
@@ -965,6 +966,11 @@ int main(int argc, char** argv) {
         modelDock->show();
         modelDock->raise();
         if (modelDock->width() < 560) mainWindow.resizeDocks({modelDock}, {620}, Qt::Horizontal);
+        // ...and height for the script and the model's tree under it (the bottom docks give way)
+        // (the level cache panel has nothing to say about a studio level and is the tall one down there: put away
+        // while the studio is open; View > it, or opening another level's cache, brings it back)
+        levelCacheDock->hide();
+        mainWindow.resizeDocks({modelDock, assetsDock}, {700, 170}, Qt::Vertical);
     };
     // "Copy view": where the camera is, and a screenshot of the viewport taken now.
     modelStudio->viewNote = [&]() -> QString {
@@ -1006,6 +1012,127 @@ int main(int argc, char** argv) {
         text += QString("; %1 pieces drawn; %2 collision shapes (%3 bodies); %4 nodes (%5 moving); %6 markers")
                     .arg(pieces).arg(model->colliders.size()).arg(bodies).arg(model->nodes.size()).arg(moving).arg(model->markerCount());
         return text;
+    };
+    // The model's tree: its nodes, each under its parent, and what hangs on each.
+    auto studioInstance = [&]() -> engine::Entity {
+        engine::Entity found;
+        if (engine::World* world = bridge.world())
+            world->each<engine::ModelInstance>([&](engine::Entity e, engine::ModelInstance&) { if (!found.valid()) found = e; });
+        return found;
+    };
+    modelStudio->modelTree = [&]() -> std::vector<StudioRow> {
+        std::vector<StudioRow> rows;
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi == nullptr || mi->model == nullptr) return rows;
+        const engine::ProcModel& model = *mi->model;
+        const std::vector<engine::ProcModelDraw> draws = engine::modelDraws(model);
+        auto xyz = [](const Vec3& v) { return QString("%1, %2, %3").arg(v.x, 0, 'g', 4).arg(v.y, 0, 'g', 4).arg(v.z, 0, 'g', 4); };
+        auto placed = [&](const engine::ProcFrame& f) {
+            QString text = "at " + xyz(f.position);
+            Vec3 axis;
+            Real angle = 0;
+            f.rotation.toAxisAngle(axis, angle);
+            if (std::abs(angle) > 1e-6) text += QString(", turned %1 deg about %2").arg(angle * 180.0 / 3.14159265358979, 0, 'f', 1).arg(xyz(axis));
+            return text;
+        };
+        const double deg = 180.0 / 3.14159265358979323846;
+        std::function<void(int, int)> walk = [&](int node, int depth) {
+            const engine::ProcNode& n = model.nodes[static_cast<std::size_t>(node)];
+            StudioRow row;
+            row.depth = depth;
+            row.kind = "node";
+            row.name = QString::fromStdString(n.name);
+            row.line = n.line;
+            row.detail = node == 0 ? QString("the model's own space") : placed(n.frame) + " under " + QString::fromStdString(model.nodes[static_cast<std::size_t>(n.parent)].name);
+            if (n.motion.kind != engine::ProcMotion::Kind::None) {
+                row.turn = n.motion.kind == engine::ProcMotion::Kind::Turn;
+                const double unit = row.turn ? deg : 1.0;
+                row.joint = QString::fromStdString(n.name);
+                row.lo = n.motion.limited ? n.motion.min * unit : 0.0;
+                row.hi = n.motion.limited ? n.motion.max * unit : 0.0;
+                row.value = mi->pose.of(n.name) * unit;
+                row.detail += QString(row.turn ? "; turns about %1" : "; slides along %1").arg(xyz(n.motion.axis));
+                row.detail += n.motion.limited ? QString(", %1 to %2 %3").arg(row.lo, 0, 'g', 4).arg(row.hi, 0, 'g', 4).arg(row.turn ? "deg" : "m") : QString(", without end");
+            }
+            rows.push_back(row);
+            for (std::size_t i = 0; i < model.parts.size(); ++i) {
+                const engine::ProcPart& part = model.parts[i];
+                if (part.node != node || part.mesh.indices.empty()) continue;
+                StudioRow r;
+                r.depth = depth + 1;
+                r.kind = "part";
+                const std::string& material = model.materials[static_cast<std::size_t>(part.material)].name;
+                r.name = QString::fromStdString(material.empty() ? "plain" : material);
+                r.detail = QString("%L1 triangles").arg(static_cast<qulonglong>(part.mesh.indices.size() / 3));
+                if (part.level > 0) r.detail += QString(", the level from %1 m").arg(model.levelFrom[static_cast<std::size_t>(part.level)], 0, 'f', 0);
+                r.line = part.line;
+                for (std::size_t d = 0; d < draws.size(); ++d)
+                    if (draws[d].part == &part) { r.piece = static_cast<int>(d); break; }
+                rows.push_back(r);
+            }
+            for (const engine::ProcUse& use : model.uses) {
+                if (use.node != node || use.piece == nullptr) continue;
+                StudioRow r;
+                r.depth = depth + 1;
+                r.kind = "use";
+                r.name = QString::fromStdString(use.piece->name.empty() ? "a piece" : use.piece->name);
+                r.detail = QString("%1 %2, %L3 triangles each").arg(use.placements.size()).arg(use.placements.size() == 1 ? "copy" : "copies")
+                               .arg(static_cast<qulonglong>(engine::flattenModel(*use.piece).indices.size() / 3));
+                if (use.placements.size() == 1) r.detail += ", " + placed(engine::ProcFrame{use.placements[0].position, use.placements[0].rotation});
+                if (use.level > 0) r.detail += QString(", the level from %1 m").arg(model.levelFrom[static_cast<std::size_t>(use.level)], 0, 'f', 0);
+                r.line = use.line;
+                rows.push_back(r);
+            }
+            for (const engine::ProcMarker& mk : n.markers) {
+                StudioRow r;
+                r.depth = depth + 1;
+                r.kind = "marker";
+                r.name = QString::fromStdString(mk.name);
+                r.detail = QString::fromStdString(mk.role) + ", " + placed(mk.frame);
+                r.line = mk.line;
+                rows.push_back(r);
+            }
+            for (const engine::ProcCollider& c : model.colliders) {
+                if (c.node != node) continue;
+                StudioRow r;
+                r.depth = depth + 1;
+                r.kind = "shape";
+                r.name = QString::fromStdString(c.name.empty() ? "(unnamed)" : c.name);
+                switch (c.kind) {
+                    case engine::ProcCollider::Kind::Box: r.detail = "box " + xyz(c.halfExtent * 2.0) + " m"; break;
+                    case engine::ProcCollider::Kind::Sphere: r.detail = QString("sphere, radius %1 m").arg(c.radius, 0, 'g', 4); break;
+                    case engine::ProcCollider::Kind::Capsule: r.detail = QString("capsule, radius %1 m, %2 m between its ends").arg(c.radius, 0, 'g', 4).arg(c.halfHeight * 2.0, 0, 'g', 4); break;
+                    case engine::ProcCollider::Kind::Hull: r.detail = "hull"; break;
+                    case engine::ProcCollider::Kind::Mesh: r.detail = QString("mesh, %L1 triangles").arg(static_cast<qulonglong>(c.mesh.indices.size() / 3)); break;
+                }
+                r.detail += ", " + placed(c.frame());
+                r.line = c.line;
+                rows.push_back(r);
+            }
+            for (std::size_t child = 1; child < model.nodes.size(); ++child)
+                if (model.nodes[child].parent == node) walk(static_cast<int>(child), depth + 1);
+        };
+        walk(0, 0);
+        return rows;
+    };
+    modelStudio->selectPiece = [&](int piece) {
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi != nullptr && piece >= 0 && piece < static_cast<int>(mi->pieces.size())) bridge.select(mi->pieces[static_cast<std::size_t>(piece)]);
+    };
+    modelStudio->setJoint = [&](const QString& joint, double value) {
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi == nullptr || mi->model == nullptr) return;
+        const engine::ProcNode* node = mi->model->jointAt(joint.toStdString());
+        if (node == nullptr) return;
+        const double unit = node->motion.kind == engine::ProcMotion::Kind::Turn ? 3.14159265358979323846 / 180.0 : 1.0;
+        std::string why;
+        if (!engine::setModelTarget(*world, instance, joint.toStdString(), value * unit, 0, &why)) LOG_WARN << "[studio] " << why;
     };
     // Assets: double-clicking a .lua under assets/scripts opens it in the studio (a level still opens as a level).
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&, modelStudio, assetsModel](const QModelIndex& index) {
@@ -1570,6 +1697,12 @@ int main(int argc, char** argv) {
         const std::string which = press;
         QTimer::singleShot(4000, [modelStudio, which]() {
             if (which == "lists") modelStudio->addToLists();
+            // "pose": move the model's first two moving nodes (as the tree's boxes do)
+            if (which == "pose") {
+                int moved = 0;
+                for (const StudioRow& row : modelStudio->modelTree())
+                    if (!row.joint.isEmpty() && moved++ < 2) modelStudio->setJoint(row.joint, row.turn ? 40.0 : 1.0);
+            }
             if (which == "copy") {
                 modelStudio->copyView();
                 LOG_INFO << "[studio] copied:\n" << QApplication::clipboard()->text().toStdString();

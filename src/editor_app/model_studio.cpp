@@ -4,6 +4,10 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QDoubleSpinBox>
+#include <QHeaderView>
+#include <QSplitter>
+#include <QTreeWidget>
 #include <QPainter>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
@@ -231,7 +235,30 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     edit_->setLineWrapMode(QPlainTextEdit::NoWrap);
     edit_->setTabStopDistance(edit_->fontMetrics().horizontalAdvance(' ') * 2);
     edit_->setPlaceholderText("Open a model script (a .lua under assets/scripts), or start a new one.");
-    column->addWidget(edit_, 1);
+    // the script above, the model's tree below, the bar between them draggable
+    tree_ = new QTreeWidget(this);
+    tree_->setColumnCount(3);
+    tree_->setHeaderLabels({"Model", "Placed / what it is", "Line"});
+    tree_->header()->setStretchLastSection(false);
+    tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    tree_->setToolTip("The model's nodes, each under its parent, and what hangs on each. Click a row to go to the script line that made it;\n"
+                      "a part is also selected in the viewport. A node that can move has a box to move it.");
+    auto* split = new QSplitter(Qt::Vertical, this);
+    split->addWidget(edit_);
+    split->addWidget(tree_);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 2);
+    column->addWidget(split, 1);
+    QObject::connect(tree_, &QTreeWidget::itemClicked, [this](QTreeWidgetItem* item, int) {
+        const int line = item->data(0, Qt::UserRole).toInt();
+        const int piece = item->data(0, Qt::UserRole + 1).toInt();
+        if (line > 0) gotoLine(line);
+        if (piece >= 0 && selectPiece) selectPiece(piece);
+        pickedLine_ = line;
+        pickedWhat_ = item->text(0) + ": " + item->text(1);
+    });
 
     status_ = new QLabel(this);
     status_->setWordWrap(true);
@@ -410,6 +437,45 @@ void ModelStudioPanel::showPiece(int line, const QString& what) {
     }
 }
 
+void ModelStudioPanel::refreshTree() {
+    tree_->clear();
+    if (!modelTree) return;
+    std::vector<QTreeWidgetItem*> parents;     // the last row at each depth
+    for (const StudioRow& row : modelTree()) {
+        QTreeWidgetItem* parent = row.depth > 0 && row.depth - 1 < static_cast<int>(parents.size()) ? parents[static_cast<std::size_t>(row.depth - 1)] : nullptr;
+        QTreeWidgetItem* item = parent != nullptr ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree_);
+        item->setText(0, row.kind == "node" ? row.name : row.kind + "  " + row.name);
+        item->setText(1, row.detail);
+        item->setText(2, row.line > 0 ? QString::number(row.line) : QString());
+        item->setData(0, Qt::UserRole, row.line);
+        item->setData(0, Qt::UserRole + 1, row.piece);
+        if (row.kind == "node") {
+            QFont bold = item->font(0);
+            bold.setBold(true);
+            item->setFont(0, bold);
+        }
+        parents.resize(static_cast<std::size_t>(row.depth) + 1);
+        parents[static_cast<std::size_t>(row.depth)] = item;
+        // a node that can move: a box to move it (degrees for a turn, metres for a slide), held to its limits
+        if (!row.joint.isEmpty()) {
+            auto* box = new QDoubleSpinBox(tree_);
+            const bool limited = row.hi > row.lo;
+            box->setRange(limited ? row.lo : -100000.0, limited ? row.hi : 100000.0);
+            box->setDecimals(row.turn ? 1 : 3);
+            box->setSingleStep(row.turn ? 5.0 : 0.05);
+            box->setSuffix(row.turn ? " deg" : " m");
+            box->setValue(row.value);
+            box->setKeyboardTracking(false);
+            const QString joint = row.joint;
+            QObject::connect(box, &QDoubleSpinBox::valueChanged, [this, joint](double value) {
+                if (setJoint) setJoint(joint, value);
+            });
+            tree_->setItemWidget(item, 2, box);
+        }
+    }
+    tree_->expandAll();
+}
+
 void ModelStudioPanel::copyView() {
     if (path_.isEmpty()) { setStatus("Open a script first.", true); return; }
     QString text = "Model studio: " + QDir::current().relativeFilePath(path_) + (dirty() ? " (the pane has edits not yet saved)" : "") + "\n";
@@ -466,6 +532,7 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
         if (!status_->property("bad").toBool() || status_->text().startsWith("Saved") || status_->text().startsWith("Building"))
             setStatus("Built " + recipeName() + ".", false);
         if (modelNumbers) numbers_->setText(modelNumbers());
+        refreshTree();
         return;
     }
     if (!isError && line.contains("watch_scripts: change detected")) {

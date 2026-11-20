@@ -18,10 +18,28 @@
 #include <QWidget>
 #include <functional>
 #include <string>
+#include <vector>
 
 class QFileSystemWatcher;
 class QLabel;
 class QPlainTextEdit;
+class QTreeWidget;
+
+// One row of the studio's tree of the model (editor_main fills these from the engine's model; the panel only shows
+// them). `depth` nests it: a node under its parent, and what hangs on a node under the node.
+struct StudioRow {
+    int depth = 0;
+    QString kind;          // "node", "part", "marker", "shape", "use"
+    QString name;          // the node's or marker's or shape's name; what a part is made of
+    QString detail;        // where it was placed and what it is, in words
+    int line = 0;          // the script line that made it (0: not known)
+    int piece = -1;        // for a part: which drawn piece it is, to select it in the viewport (-1: none)
+    // a node that can move: its name as a pose names it, how (a turn in degrees, or a slide in metres), its limits
+    // (lo == hi: none) and where it is now
+    QString joint;
+    bool turn = true;
+    double lo = 0, hi = 0, value = 0;
+};
 
 class ModelStudioPanel : public QWidget {
 public:
@@ -31,6 +49,12 @@ public:
     std::function<void(const std::string&)> openLevel;
     // Where the viewport's camera is and a screenshot just asked for, as lines of text (editor_main knows both).
     std::function<QString()> viewNote;
+    // THE TREE OF THE MODEL: every node under its parent with where it was placed, and under each node what hangs on
+    // it. editor_main gives the rows, selects a part's piece in the viewport, and moves a moving node.
+    std::function<std::vector<StudioRow>()> modelTree;
+    std::function<void(int piece)> selectPiece;
+    std::function<void(const QString& joint, double value)> setJoint;
+    void refreshTree();
     // The model in the viewport in numbers, one line: its size, triangles, pieces, shapes (editor_main reads the world).
     std::function<QString()> modelNumbers;
 
@@ -69,6 +93,7 @@ private:
     QLabel* status_ = nullptr;
     QFileSystemWatcher* watcher_ = nullptr;
     QString path_;
+    QTreeWidget* tree_ = nullptr;    // the model's nodes and what hangs on them
     QLabel* numbers_ = nullptr;      // the model in numbers, under the status
     int pickedLine_ = 0;             // what was last picked in the viewport
     QString pickedWhat_;

@@ -63,6 +63,7 @@ struct ProcMarker {
     std::string role = "point";   // what kind of thing hooks on: "seat", "lamp", "hook"...; "point" when none is said
     ProcFrame frame;              // relative to the node it is on
     Real size = 0;                // metres; 0 when the recipe gave none
+    int line = 0;                 // the recipe line that made it (see ProcPart::line)
 };
 
 // HOW A NODE MAY MOVE (#191, model step 4): the rig of a machine. A door turns about its hinge between closed and
@@ -111,6 +112,7 @@ struct ProcNode {
     ProcFrame frame;       // relative to the parent
     std::vector<ProcMarker> markers;
     ProcMotion motion;     // how it may move, if it may
+    int line = 0;          // the recipe line that made it (see ProcPart::line)
 };
 
 // One material of a model, in the model's table (#191, model step 2). A part says which one it is made of, so forty
@@ -167,6 +169,7 @@ struct ProcCollider {
     Real halfHeight = 0.5;           // Capsule (half the cylinder segment)
     Real friction = 0.6;
     bool dynamic = false;            // static world geometry by default
+    int line = 0;                    // the recipe line that made it (see ProcPart::line)
 
     ProcFrame frame() const { return ProcFrame{center, rotation}; }
 };

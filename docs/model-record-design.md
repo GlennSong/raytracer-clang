@@ -894,7 +894,15 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
 5. DONE the same day: line numbers, Lua colouring, and the model's numbers under the pane (size, triangles per
    level, pieces, collision shapes, nodes, markers).
 
-Still open: nodes, markers and shapes recording their lines; finer tags than one line per library call; arguments
+6. DONE the same day (Glenn: "would it help to also show a tree of all the nodes and how they were placed?"):
+   **the model's tree** under the script. Every node under its parent with where it was placed (position and
+   turn relative to the parent) and, for one that moves, how and between what limits, with a box to move it (the
+   viewport follows: swing the cab, open a door). Under each node what hangs on it: parts (material, triangles,
+   level), used pieces (copies), markers (role, place), collision shapes (kind, size, place). Every row has its
+   script line (nodes, markers and shapes record theirs now, as parts do); clicking a row goes to the line and,
+   for a part, selects its piece in the viewport. `RT_STUDIO_PRESS=pose` moves two nodes unattended.
+
+Still open: finer tags than one line per library call; arguments
 for a recipe that takes them; a "walk" button (Play already does it); typing and clicking in the pane have been
 checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 

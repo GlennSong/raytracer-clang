@@ -680,6 +680,9 @@ TEST_CASE(a_stamped_piece_knows_the_recipe_line_that_made_it) {
     CHECK(model->parts[1].line == 6);        // made inside the library: the recipe's line that called it
     CHECK(model->parts[2].line == 8);
     CHECK(model->uses.size() == 1 && model->uses[0].line == 11);
+    // a node, and (below) a marker and a collision shape, know their lines too
+    CHECK(model->findNode("arm") > 0 && model->nodes[static_cast<std::size_t>(model->findNode("arm"))].line == 7);
+    CHECK(model->nodes[0].line == 0);        // the root was not made by a line
 
     World world;
     Prefab prefab;
