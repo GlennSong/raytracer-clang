@@ -465,4 +465,92 @@ std::string describeStreetMap(const StreetMapReport& r) {
     return out;
 }
 
+NavGraph::FootpathReport appendWalkways(NavGraph& map, const RoadModel& m, int city) {
+    NavGraph::FootpathReport rep;
+    const std::size_t n = m.walkways.size();
+    if (n == 0) return rep;
+    constexpr Real kAtWalkwayEnd = 0.05;   // a landing this near a walkway's end is at that end (no cut)
+    std::map<std::string, std::size_t> byId;
+    std::vector<std::vector<Real>> st(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        byId.emplace(m.walkways[i].id, i);
+        st[i] = stations(m.walkways[i].line);
+    }
+    // the walkways' ends, 2i + end, made one where the model says they meet
+    std::vector<std::size_t> root(2 * n);
+    for (std::size_t k = 0; k < root.size(); ++k) root[k] = k;
+    const std::function<std::size_t(std::size_t)> find = [&](std::size_t k) { return root[k] == k ? k : root[k] = find(root[k]); };
+    const auto unite = [&](std::size_t a, std::size_t b) { root[find(a)] = find(b); };
+    std::vector<std::vector<std::pair<Real, std::size_t>>> cuts(n);   // per walkway: (metres along, the end landing there)
+    struct ToStreet { std::size_t end; ModelStreetId street; Real station; int dir; };
+    std::vector<ToStreet> toStreet;
+    for (std::size_t i = 0; i < n; ++i) {
+        const ModelWalkway& W = m.walkways[i];
+        if (W.line.size() < 2) continue;
+        for (std::size_t e = 0; e < 2; ++e) {
+            const WalkwayEnd& E = W.ends[e];
+            if (E.meets.onWalkway()) {
+                const std::map<std::string, std::size_t>::const_iterator j = byId.find(E.meets.walkway);
+                if (j == byId.end() || j->second == i || m.walkways[j->second].line.size() < 2) { ++rep.unjoined; continue; }
+                const Real length = st[j->second].back();
+                if (atOrBefore(E.meets.along, 0, kAtWalkwayEnd)) unite(2 * i + e, 2 * j->second);
+                else if (atOrPast(E.meets.along, length, kAtWalkwayEnd)) unite(2 * i + e, 2 * j->second + 1);
+                else {
+                    cuts[j->second].emplace_back(E.meets.along, 2 * i + e);
+                    ++rep.tees;
+                }
+            } else if (E.meets.onStreet()) {
+                const ModelStreetId s = streetNamed(m, E.meets.street);
+                if (s.valid()) toStreet.push_back(ToStreet{2 * i + e, s, E.meets.station, E.meets.dir});
+                else ++rep.unjoined;
+            } else {
+                ++rep.unjoined;   // a dead end
+            }
+        }
+    }
+    for (std::vector<std::pair<Real, std::size_t>>& c : cuts) {   // two landings at one place along are one node
+        std::sort(c.begin(), c.end());
+        for (std::size_t k = 1; k < c.size(); ++k)
+            if (atOrBefore(c[k].first - c[k - 1].first, 0, kAtWalkwayEnd)) unite(c[k].second, c[k - 1].second);
+    }
+    NavGraph::FootpathPlan plan;
+    std::map<std::size_t, int> nodeOf;   // a root end -> its node in the plan
+    const auto node = [&](std::size_t end) {
+        const std::size_t r = find(end);
+        const std::map<std::size_t, int>::const_iterator it = nodeOf.find(r);
+        if (it != nodeOf.end()) return it->second;
+        const ModelWalkway& W = m.walkways[r / 2];
+        plan.nodes.push_back(r % 2 == 0 ? W.line.front() : W.line.back());
+        nodeOf.emplace(r, static_cast<int>(plan.nodes.size()) - 1);
+        return static_cast<int>(plan.nodes.size()) - 1;
+    };
+    for (std::size_t j = 0; j < n; ++j) {
+        if (m.walkways[j].line.size() < 2) continue;
+        std::vector<int> chain{node(2 * j)};
+        for (const std::pair<Real, std::size_t>& c : cuts[j]) {
+            const int v = node(c.second);
+            if (v != chain.back()) chain.push_back(v);
+        }
+        chain.push_back(node(2 * j + 1));
+        for (std::size_t k = 0; k + 1 < chain.size(); ++k) plan.walks.push_back(NavGraph::FootpathPlan::Walk{chain[k], chain[k + 1]});
+    }
+    // an end on a street: the street map's link along that street holding the station, the pavement on the stated kerb
+    for (const ToStreet& t : toStreet) {
+        int link = -1;
+        for (int li = 0; li < map.streetLinkCount() && link < 0; ++li) {
+            const NavLink& L = map.links[static_cast<std::size_t>(li)];
+            if (L.city != city || L.street != static_cast<int>(t.street.index) || L.footpath || !L.walkable) continue;
+            const Real lo = std::min(L.stationFrom, L.stationTo), hi = std::max(L.stationFrom, L.stationTo);
+            if (atOrPast(t.station, lo, kWrittenStation) && atOrBefore(t.station, hi, kWrittenStation)) link = li;
+        }
+        if (link < 0) { ++rep.unjoined; continue; }
+        plan.streetJoins.push_back(NavGraph::FootpathPlan::StreetJoin{node(t.end), link, m.frontageOn(t.street, t.station, t.dir).towards});
+    }
+    const NavGraph::FootpathReport added = map.appendFootpaths(plan);
+    rep.nodes = added.nodes;
+    rep.links = added.links;
+    rep.streetJoins = added.streetJoins;
+    return rep;
+}
+
 }  // namespace engine

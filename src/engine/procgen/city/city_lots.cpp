@@ -85,6 +85,21 @@ void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts,
     }
 }
 
+// A PATH DRAWN FOR THE WALKERS (ADR-0476): one of the lot's walkways, a to b, `width` wide, of `kind` (a row of the path
+// users' table, assets/data/path_users.json, which says who may use it: the drawing says what it draws). Its id, heights
+// and where its ends land are stated once every lot stands (stateLotPaths). `streetEnds` false: neither end may land on
+// a street (marked a dead end until another path is found there).
+constexpr const char* kParkPathKind = "park_path";   // a path through a park
+constexpr const char* kFootwayKind = "footway";      // a walk across a quad, down a paseo, into an open lot
+static void addPath(LotBuilding& g, const Vec2& a, const Vec2& b, Real width, const char* kind, bool streetEnds = true) {
+    ModelWalkway w;
+    w.kind = kind;
+    w.width = width;
+    w.line = {a, b};
+    w.ends[0].deadEnd = w.ends[1].deadEnd = !streetEnds;
+    g.walkways.push_back(std::move(w));
+}
+
 // PARK SCULPTING (device: "sculpting building lots to include landscaping
 // and walking paths"): a park lot is a designed green, not a bare pad — a
 // centre PLAZA, walking-path SPOKES out to the surrounding streets, a stone
@@ -160,7 +175,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         if (ar.halfL > 4.0 && ar.halfW > 3.0 && A > 300.0) g.areas.push_back(ar);
     }
     for (int k = 0; k < PN; ++k)                // ...and a ring across it for the walkers' network
-        g.walks.push_back({c + (rim[k] - c) * 0.6, c + (rim[(k + 1) % PN] - c) * 0.6, 1.2});
+        addPath(g, c + (rim[k] - c) * 0.6, c + (rim[(k + 1) % PN] - c) * 0.6, 1.2, kParkPathKind);
     // Walking-path SPOKES: from the plaza out to the midpoints of the longest
     // lot edges — the desire lines to the surrounding sidewalks.
     struct Spoke { Vec2 a, b; };
@@ -189,7 +204,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         {   // sealed: no grass on the walk; and a line for the walkers' network, from the plaza's ring to the street
             const Vec2 pe = p0 + dir * (len - r0 * 0.85);
             g.sealed.push_back({p0 - perp * hw, p0 + perp * hw, pe + perp * hw, pe - perp * hw});
-            g.walks.push_back({c + dir * (r0 * 0.6), pe, hw * 2});
+            addPath(g, c + dir * (r0 * 0.6), pe, hw * 2, kParkPathKind);
         }
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
@@ -462,7 +477,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     auto inside = [&](const Vec2& q) { return pointInPolygon(poly, q); };
     const Real segLen = std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
     // a walk from a to b, `w` wide: a ribbon jointed every terrain cell (it is draped), sealed
-    auto walk = [&](Vec2 a, Vec2 b, Real w, const Vec3& col) {
+    auto walk = [&](Vec2 a, Vec2 b, Real w, const Vec3& col, bool streetEnds = true) {
         const Vec2 d = b - a;
         const Real L = d.length();
         if (L < 0.5) return;
@@ -474,7 +489,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
                                   Vec3(q1.x + perp.x * w / 2, py, q1.y + perp.y * w / 2), Vec3(q1.x - perp.x * w / 2, py, q1.y - perp.y * w / 2), up, col);
         }
         g.sealed.push_back({a - perp * (w / 2), a + perp * (w / 2), b + perp * (w / 2), b - perp * (w / 2)});
-        g.walks.push_back({a, b, w});
+        addPath(g, a, b, w, kFootwayKind, streetEnds);
     };
     // a paved disc, sealed -- in RINGS a terrain cell apart: it is draped, and a fan from its centre to a 7 m rim
     // hung its middle 0.4 m over a sloping courtyard
@@ -524,7 +539,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
         const int n = 12;
         for (int k = 0; k < n; ++k) {
             const Real a0 = 6.2831853 * k / n, a1 = 6.2831853 * (k + 1) / n;
-            g.walks.push_back({c + Vec2(std::cos(a0), std::sin(a0)) * (R - 0.6), c + Vec2(std::cos(a1), std::sin(a1)) * (R - 0.6), 1.2});
+            addPath(g, c + Vec2(std::cos(a0), std::sin(a0)) * (R - 0.6), c + Vec2(std::cos(a1), std::sin(a1)) * (R - 0.6), 1.2, kFootwayKind);
         }
     }
     // THE WALKS run on past the quad until they meet the SIDEWALK (Glenn: "those ribbons should go to the edges where
@@ -564,8 +579,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
         const Vec2 d = axis - foot;
         if (d.length() < 2.0 || d.length() > hw + 30.0) continue;
         const Vec2 dir = normalize(d);
-        walk(foot, axis - dir * (wMain / 2 - 0.1), wDiag, stone * 0.97);
-        g.walks.back().streetEnds = false;
+        walk(foot, axis - dir * (wMain / 2 - 0.1), wDiag, stone * 0.97, false);
         diags.push_back({foot, axis});
     }
     auto offWalks = [&](const Vec2& q, Real clear) {
@@ -700,7 +714,7 @@ static void sculptPaseo(LotBuilding& g, const Poly2& poly, uint32_t seed, std::v
         return from + dir * t;
     };
     auto walkLine = [&](Vec2 a, Vec2 b, Real w, bool paint) {
-        g.walks.push_back({a, b, w});
+        addPath(g, a, b, w, kFootwayKind);
         if (!paint) return;
         // out past the paseo (an end, a passage): paved too, a ribbon jointed every terrain cell
         const Vec2 d = b - a;
@@ -1383,7 +1397,7 @@ static void openWalkOut(LotBuilding& g, RenderMesh& m, const Poly2& poly, const 
     Poly2 s{f.W(x - hw, yOut), f.W(x + hw, yOut), f.W(x + hw, f.y0), f.W(x - hw, f.y0)};
     ensureCCW(s);
     g.sealed.push_back(s);
-    g.walks.push_back({f.W(x, yOut), f.W(x, f.y0 + 1.0), hw * 2});
+    addPath(g, f.W(x, yOut), f.W(x, f.y0 + 1.0), hw * 2, kFootwayKind);
 }
 
 // A fence round the frame rectangle with a gap of `gate` metres at x = gx on the street side. `kind` 0: low painted
@@ -1576,7 +1590,7 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     }
     const Real gx = (f.x0 + f.x1) * 0.5;
     openWalkOut(g, m, poly, f, gx, 0.9, Vec3(0.72, 0.68, 0.60));
-    g.walks.push_back({f.W(gx, f.y0), f.W(gx, f.y0 + D * 0.5), 1.8, false});
+    addPath(g, f.W(gx, f.y0), f.W(gx, f.y0 + D * 0.5), 1.8, kFootwayKind, false);
     BuildingMesh kit;
     openFence(g, kit, f, gx, 1.8, 0);
     // the equipment, in bright powder-coated colours, in slots along the rectangle behind a strip for the benches
@@ -1799,7 +1813,7 @@ static bool sculptCommunityGarden(LotBuilding& g, const Poly2& poly, Vec2 fronta
         g.furniture.push_back(outdoorPiece(Piece::Bench, posHash(at), at, f.v, 0.03, true));
         g.sitSpots.push_back({at + f.v * 0.33, f.v, 0.45});
     }
-    g.walks.push_back({f.W(gx, f.y0), f.W(gx, f.y1 - 1.5), 1.6, false});
+    addPath(g, f.W(gx, f.y0), f.W(gx, f.y1 - 1.5), 1.6, kFootwayKind, false);
     for (const Vec2 t : {Vec2(f.x0 - 2.0, f.y1 - 1.0), Vec2(f.x1 + 2.0, f.y1 - 1.0)}) {
         const Vec2 w = f.W(t.x, t.y);
         Poly2 in = inset(poly, 1.6);
@@ -1979,6 +1993,8 @@ public:
         return s;
     }
     StatedFrontage frontageOf(const Vec2& from) const { return frontageOf(nearestFrontable(from), from); }
+    // The road a search found (null: none).
+    const LotRoad* roadOf(const Found& f) const { return f.road >= 0 ? &in_->roads[static_cast<std::size_t>(f.road)] : nullptr; }
     // The road model's id of a road found (empty: none).
     const std::string& idOf(const Found& f) const {
         static const std::string none;
@@ -2105,6 +2121,135 @@ private:
     std::vector<LineBox> boxes_;   // each road's centre line's bounding box, beside the inputs' roads
     bool anyNotToFront_ = false;
 };
+
+// WHERE THE LOTS' PATHS AND DOORS LAND, stated once every lot stands (ADR-0476; Glenn's option 1: draw as before, then
+// look up ONCE where each end lands and record it). Each path becomes a walkway with an id, heights and two stated ends:
+//   - another path (its id and the metres along it): an end within kPathEndsMeet of another path's end, or within reach
+//     of another path's middle (a tee) -- the first such path in the lots' order;
+//   - else, for an end that may reach a street, the street a building may front nearest it within kPathStreetReach of its
+//     centre line, its station and kerb (LotRoads::frontageOf: the road model's one rule, line_frontage.h);
+//   - else a dead end.
+// A door on a path (its foot within kDoorOnPathReach of one, and kDoorFarFromStreet or more past the street's pavement)
+// states that walkway and the metres along it instead of a street; every other door states its street (ADR-0474).
+// Counted for the log: what each end landed on, and the paths that cross a carriageway (drawn as before, and said).
+static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoads& roads, const std::function<Real(Real, Real)>& ground) {
+    constexpr Real kShortestPath = 0.5;       // a path shorter than this is no path (as the street map dropped them)
+    constexpr Real kPathEndsMeet = 0.8;       // two ends this near are one meeting point
+    constexpr Real kTeeReach = 1.6;           // an end this near another path's middle tees into it (or half its width + 0.2)
+    constexpr Real kTeeEdge = 0.02;           // ...and not within this fraction of that path's ends (an end meets there)
+    constexpr Real kPathStreetReach = 14.0;   // a loose end this near a street's centre line lands on its sidewalk
+    constexpr Real kDoorOnPathReach = 4.0;    // a door this near a path opens onto it ...
+    constexpr Real kDoorFarFromStreet = 6.0;  // ... when it stands this far or more past the street's pavement
+    constexpr Real kCrossStep = 0.5;          // a path is looked along at this spacing for a carriageway under it
+    constexpr Real kKerbEndReach = 3.0;       // an end this far past the sidewalk's kerb end is stated there; farther, a dead end
+    LotPathCounts n;
+    struct Ref { std::size_t lot, path; };
+    std::vector<Ref> all;
+    for (std::size_t li = 0; li < out.size(); ++li) {
+        std::vector<ModelWalkway>& ws = out[li].walkways;
+        std::vector<ModelWalkway> kept;
+        for (ModelWalkway& w : ws) {
+            if (w.line.size() < 2 || !strictlyPast((w.line.back() - w.line.front()).length(), kShortestPath, kSamePoint)) {
+                ++n.dropped;
+                continue;
+            }
+            w.id = "lot" + std::to_string(li) + ".p" + std::to_string(kept.size());
+            w.heights.clear();
+            for (const Vec2& q : w.line) w.heights.push_back(ground ? ground(q.x, q.y) : out[li].groundY);
+            kept.push_back(std::move(w));
+        }
+        ws = std::move(kept);
+        for (std::size_t k = 0; k < ws.size(); ++k) all.push_back(Ref{li, k});
+    }
+    auto pathOf = [&](const Ref& r) -> ModelWalkway& { return out[r.lot].walkways[r.path]; };
+    std::vector<std::vector<Real>> st(all.size());   // each path's stations along its line
+    for (std::size_t i = 0; i < all.size(); ++i) st[i] = stations(pathOf(all[i]).line);
+    // where a point lies along path i: the metres along it, and how far off its line
+    auto along = [&](std::size_t i, const Vec2& q, Real& off) {
+        const PolylineNearest near = nearestOnPolyline(q, pathOf(all[i]).line);
+        off = near.dist;
+        return st[i][near.seg] + (st[i][near.seg + 1] - st[i][near.seg]) * near.t;
+    };
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        ModelWalkway& W = pathOf(all[i]);
+        for (int e = 0; e < 2; ++e) {
+            const Vec2 q = e == 0 ? W.line.front() : W.line.back();
+            WalkwayEnd& E = W.ends[static_cast<std::size_t>(e)];
+            const bool mayReachStreet = !E.deadEnd;
+            E = WalkwayEnd();
+            // another path's end here, else another path's middle
+            for (std::size_t j = 0; j < all.size() && !E.meets.onWalkway(); ++j) {
+                if (j == i) continue;
+                const ModelWalkway& O = pathOf(all[j]);
+                if (strictlyBefore((O.line.front() - q).length(), kPathEndsMeet, kSamePoint)) { E.meets.walkway = O.id; E.meets.along = 0; }
+                else if (strictlyBefore((O.line.back() - q).length(), kPathEndsMeet, kSamePoint)) { E.meets.walkway = O.id; E.meets.along = st[j].back(); }
+            }
+            for (std::size_t j = 0; j < all.size() && !E.meets.onWalkway(); ++j) {
+                if (j == i) continue;
+                const ModelWalkway& O = pathOf(all[j]);
+                const Real length = st[j].back();
+                Real off = 0;
+                const Real a = along(j, q, off);
+                if (atOrBefore(a, length * kTeeEdge, kSamePoint) || atOrPast(a, length * (1 - kTeeEdge), kSamePoint)) continue;
+                if (strictlyPast(off, std::max(kTeeReach, O.width * Real(0.5) + Real(0.2)), kSamePoint)) continue;
+                E.meets.walkway = O.id;
+                E.meets.along = a;
+            }
+            if (E.meets.onWalkway()) { ++n.onWalkway; continue; }
+            if (mayReachStreet) {
+                const LotRoads::Found f = roads.nearestFrontable(q);
+                if (f.road >= 0 && strictlyBefore(f.distance, kPathStreetReach, kSamePoint)) {
+                    E.meets = roads.frontageOf(f, q);
+                    // a station past where that kerb's sidewalk runs (by a junction, nearer it than where a person steps
+                    // off the kerb): stated at the kerb end when that is near; farther, the path meets no sidewalk there
+                    const LotRoad* road = roads.roadOf(f);
+                    if (E.meets.onStreet() && road && !std::isnan(road->sidewalkFrom) && !std::isnan(road->sidewalkTo)) {
+                        const Real lo = std::min(road->sidewalkFrom, road->sidewalkTo), hi = std::max(road->sidewalkFrom, road->sidewalkTo);
+                        const Real kerbEnd = std::min(std::max(E.meets.station, lo), hi);
+                        const Real past = std::fabs(E.meets.station - kerbEnd);
+                        if (strictlyPast(past, kKerbEndReach, kSamePoint)) {
+                            E.meets = StatedFrontage();
+                            ++n.pastKerbEnd;
+                        } else if (strictlyPast(past, 0, kSamePoint)) {
+                            E.meets.station = kerbEnd;
+                            ++n.heldToKerbEnd;
+                        }
+                    }
+                    if (E.meets.onStreet()) { ++n.onStreet; continue; }
+                    if (road && road->insideJunction) ++n.insideJunction;
+                }
+            }
+            E.deadEnd = true;
+            ++n.deadEnds;
+        }
+        // a path over a carriageway (between its ends: an end may stand on the sidewalk by the kerb)
+        const Real length = st[i].back();
+        bool crosses = false;
+        for (Real t = kCrossStep; t < length - kCrossStep && !crosses; t += kCrossStep)
+            crosses = roads.onOrWithin(pointAtStation(W.line.data(), st[i].data(), W.line.size(), t), 0);
+        n.crossCarriageway += crosses ? 1 : 0;
+    }
+    n.walkways = static_cast<int>(all.size());
+    // the doors that open onto a path
+    for (LotBuilding& lb : out)
+        for (BuildingUnit& u : lb.units)
+            for (DoorSpec& d : u.doors) {
+                if (strictlyBefore(roads.shortOfPavement(d.foot), kDoorFarFromStreet, kSamePoint)) continue;
+                Real best = kDoorOnPathReach, at = 0;
+                const ModelWalkway* on = nullptr;
+                for (std::size_t i = 0; i < all.size(); ++i) {
+                    Real off = 0;
+                    const Real a = along(i, d.foot, off);
+                    if (strictlyBefore(off, best, kSamePoint)) { best = off; at = a; on = &pathOf(all[i]); }
+                }
+                if (!on) continue;
+                d.frontage = StatedFrontage();
+                d.frontage.walkway = on->id;
+                d.frontage.along = at;
+                ++n.doorsOnWalkway;
+            }
+    return n;
+}
 
 // A WALK FROM EVERY DOOR TO THE PAVEMENT (Glenn, 2026-09-21: "If it can't [face the
 // street] it would be nice to have a walk way to the door and the walk way should be on
@@ -2882,6 +3027,10 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     b.color = Vec3(1, 1, 1);   // the surfaces carry the plaza's look
 }
 }  // namespace
+
+LotPathCounts stateLotPaths(std::vector<LotBuilding>& lots, const LotRoadInputs* roads, const std::function<Real(Real, Real)>& ground) {
+    return stateLotPathsOn(lots, LotRoads(roads, 0), ground);
+}
 
 std::vector<ParkingStall> surfaceStallsOf(const Poly2& lotP, Vec2 facing, Vec2* portal, Vec2* out) {
     std::vector<ParkingStall> st;
@@ -7042,6 +7191,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (LotBuilding& lb : out)
             for (BuildingUnit& u : lb.units)
                 for (DoorSpec& d : u.doors) d.frontage = lotRoads.frontageOf(d.foot);
+    // ...AND WHERE EACH PATH'S ENDS LAND, and the doors that open onto a path (ADR-0476)
+    {
+        const LotPathCounts pc = stateLotPathsOn(out, lotRoads, p.ground);
+        LOG_INFO << "[citylots] paths stated as walkways: " << pc.walkways << " (" << pc.dropped << " too short dropped); ends on another "
+                 << "path " << pc.onWalkway << ", on a street " << pc.onStreet << ", dead ends " << pc.deadEnds << " (" << pc.insideJunction
+                 << " of them nearest a stretch inside a junction, " << pc.pastKerbEnd << " too far past a sidewalk's kerb end); "
+                 << pc.heldToKerbEnd << " street ends stated at the kerb end they came just past; " << pc.crossCarriageway << " paths cross a carriageway; "
+                 << pc.doorsOnWalkway << " doors open onto a path";
+    }
     // The SKYLINE lines: storeys, towers, footprint shape and open space —
     // the same census the loader prints on a warm load (which grows nothing).
     {

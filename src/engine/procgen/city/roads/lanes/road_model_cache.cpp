@@ -306,6 +306,14 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const std::s
     return out;
 }
 
+std::vector<std::shared_ptr<RoadModel>> levelPlannedRoadModels(const bundle::LevelInputs& in, std::vector<std::string>* notes) {
+    std::vector<std::shared_ptr<RoadModel>> out;
+    std::vector<std::string> said;
+    for (const CityEntity& c : cityEntities(in.level)) out.push_back(plannedCity(c, said, nullptr));
+    if (notes) notes->insert(notes->end(), said.begin(), said.end());
+    return out;
+}
+
 namespace {
 
 void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::string& cacheDir,

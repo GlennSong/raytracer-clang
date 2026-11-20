@@ -23,6 +23,7 @@
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/roads/road_entity.h"
 #include "../../engine/procgen/city/roads/lanes/road_model_cache.h"   // the level's built road model, from its cache
+#include "../../engine/procgen/city/roads/street_map.h"   // appendWalkways: the model's walkways on the street map (ADR-0476)
 #include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../engine/procgen/noise.h"             // Noise (carved-terrain sampler)
@@ -257,7 +258,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         debugWidgets_ = c.debugWidgets;
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
-        footpaths_ = c.footpaths;     // the parks' and the quad's walks
         jogLoops_ = c.jogLoops;       // the tracks to run
         activityAreas_ = c.activityAreas;   // the pitches, the lawns
         sitSpots_ = c.sitSpots;             // a fountain's rim
@@ -672,15 +672,29 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // streets' own analyses and the places (link and node indices so far are unchanged) and before the sim reads it.
     // Footpaths are walker-only (vehicle routing skips them; nearestNode never answers with one), so a route on foot
     // simply finds the quad when it is the shorter way.
-    if (!footpaths_.empty() && !std::getenv("RT_NO_FOOTPATHS")) {
-        std::vector<std::array<Real, 5>> segs;
-        segs.reserve(footpaths_.size());
-        for (const auto& f : footpaths_) segs.push_back({f[0], f[1], f[2], f[3], f[4]});
+    // THEY ARE THE ROAD MODEL'S WALKWAYS (ADR-0476), read through it with where each end lands as the lot pass stated
+    // it (street_map.h appendWalkways): EVERY city's model that holds walkways, as the loader published them, each city's
+    // walks joined to that city's streets.
+    std::vector<std::pair<int, std::shared_ptr<const engine::RoadModel>>> walkModels;
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+        if (!walkModels.empty()) return;
+        for (std::size_t c = 0; c < m.cities.size(); ++c)
+            if (m.cities[c] && !m.cities[c]->walkways.empty()) walkModels.emplace_back(static_cast<int>(c), m.cities[c]);
+    });
+    if (!walkModels.empty() && !std::getenv("RT_NO_FOOTPATHS")) {
         const auto tf0 = std::chrono::steady_clock::now();
-        const engine::NavGraph::FootpathReport fr = nav_.appendFootpaths(segs);
+        engine::NavGraph::FootpathReport fr;
+        for (const std::pair<int, std::shared_ptr<const engine::RoadModel>>& wm : walkModels) {
+            const engine::NavGraph::FootpathReport one = engine::appendWalkways(nav_, *wm.second, wm.first);
+            fr.nodes += one.nodes;
+            fr.links += one.links;
+            fr.tees += one.tees;
+            fr.streetJoins += one.streetJoins;
+            fr.unjoined += one.unjoined;
+        }
         LOG_INFO << "[citysim] footpaths joined in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tf0).count() << " s";
         LOG_INFO << "[citysim] footpaths: " << fr.links << " walk links over " << fr.nodes << " nodes, " << fr.tees
-                 << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends with no street in reach";
+                 << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends joined to nothing (dead ends)";
         // a paseo's shops: their doors are on its walks, not the street round the block (every shopper stood at the
         // end of the paseo, by the restaurant there)
         LOG_INFO << "[citysim] places entered from a walk: " << places_.snapToWalks(nav_);

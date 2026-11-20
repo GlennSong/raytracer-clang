@@ -62,6 +62,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"        // Turn; bundle::BinWriter
 #include "engine/procgen/city/roads/road_model_parts.h"  // junctions, arms, streets: the types the road file is read into
+#include "engine/procgen/city/roads/walkway.h"           // ModelWalkway: a path for people on foot beside no street
 
 #include <nlohmann/json.hpp>
 
@@ -490,30 +491,8 @@ struct ModelDeadEnd {
     bool turnRound = false;
 };
 
-// ---- WALKWAYS (ADR-0475, #306 task 4 piece 9) -------------------------------------------------------------------------
-// A WALKWAY is a path for people on foot that runs beside no street: a park's path, a plaza's, a cut-through between two
-// buildings. Whoever draws it (the lot pass, S6b) STATES it, once: its line and where each of its two ends lands, looked
-// up when it was drawn. The road model holds it, and the lane level lays it as walks (its kind's, from the path users'
-// table) joined where the ends say -- never by distance.
-//
-// WHERE AN END LANDS: one of
-//   - a street's sidewalk: the street's id, the station along its centre line and the kerb (`meets` as a StatedFrontage
-//     names a street: the same three facts a door states, road_network.h, ADR-0474);
-//   - another walkway: its id and the metres along it (`meets` naming a walkway);
-//   - nothing: a dead end, stated (`deadEnd`), so it is no fault that nothing meets it.
-// Stating neither, or both, is a fault the lane level reports.
-struct WalkwayEnd {
-    StatedFrontage meets;
-    bool deadEnd = false;
-};
-struct ModelWalkway {
-    std::string id;                  // unique among the model's walkways; what a door on it names (StatedFrontage::walkway)
-    std::string kind;                // a kind of path of assets/data/path_users.json ("footway", "park_path"): who may use it
-    Real width = 0;                  // metres
-    std::vector<Vec2> line;          // its centre line in plan, from its end 0 to its end 1
-    std::vector<Real> heights;       // ...each point's height (as many as `line`)
-    std::array<WalkwayEnd, 2> ends{};
-};
+// ---- WALKWAYS (ADR-0475, #306 task 4 piece 9): ModelWalkway and WalkwayEnd, in roads/walkway.h (the lot pass states
+// them, ADR-0476, and cannot include this header) ------------------------------------------------------------------------
 // WHAT IS WRONG WITH A STATED WALKWAY (or one of its ends), as the lane level found it laying it. A walkway wrong as a
 // whole is not laid; an end that does not land is left meeting nothing, and said.
 enum class WalkwayFault : uint8_t {

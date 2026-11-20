@@ -50,6 +50,7 @@
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
 #include "engine/procgen/city/lot_cache.h"                   // regions-lots: the lots the bundle stores
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // regions-lots: the built model the lots' paths are stated on
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include <set>
@@ -853,6 +854,31 @@ int main(int argc, char** argv) {
                 }
         }
         std::printf("frontage: %zu of %zu buildings and %zu of %zu doors state the street they front\n", buildingsStated, buildings, doorsStated, doors);
+        // the lots' paths as walkways (ADR-0476): where their ends land, the doors on them, and what the built model
+        // says does not land
+        {
+            std::size_t ways = 0, onStreet = 0, onWalkway = 0, deadEnd = 0, doorsOnPath = 0;
+            for (const LotBuilding& lb : grown.lots) {
+                ways += lb.walkways.size();
+                for (const ModelWalkway& w : lb.walkways)
+                    for (const WalkwayEnd& e : w.ends) {
+                        onStreet += e.meets.onStreet() ? 1 : 0;
+                        onWalkway += e.meets.onWalkway() ? 1 : 0;
+                        deadEnd += e.deadEnd ? 1 : 0;
+                    }
+                for (const BuildingUnit& u : lb.units)
+                    for (const DoorSpec& d : u.doors) doorsOnPath += d.frontage.onWalkway() ? 1 : 0;
+            }
+            std::printf("walkways: %zu; ends on a street %zu, on another walkway %zu, dead ends %zu; doors on a walkway %zu\n", ways, onStreet,
+                        onWalkway, deadEnd, doorsOnPath);
+            const LevelBuiltRoads built = obtainLevelRoadModel(in, levelRoadModelCacheDir());
+            const std::vector<WalkwayProblem> faults = stateLotWalkways(built.cities, grown.lots);
+            const int c = lotsCity(built.cities);
+            std::printf("stated on city %d's road model: %zu walkways, %zu faults%s%s\n", c,
+                        c >= 0 && built.cities[static_cast<std::size_t>(c)] ? built.cities[static_cast<std::size_t>(c)]->walkways.size() : 0,
+                        faults.size(), faults.empty() ? "" : ": ", describeWalkwayProblems(faults).c_str());
+            for (std::size_t k = 0; k < faults.size() && k < 12; ++k) std::printf("  %s\n", faults[k].why.c_str());
+        }
         std::printf("wrote %s/lots_grown.txt, lots_stored.txt\n", outDir.c_str());
         return 0;
     }

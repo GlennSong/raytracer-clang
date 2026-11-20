@@ -4,6 +4,7 @@
 #include "architect.h"      // ArchetypeBook (the Lua-authored selection layer)
 #include "polygon.h"        // Poly2, Vec2
 #include "road_network.h"   // RoadClass (a road's class, as the lot pass reads it)
+#include "roads/walkway.h"  // ModelWalkway: a lot's paths, stated as the road model's walkways (ADR-0476)
 #include "road_mesh.h"      // RoadDeckField (the drawn deck the lot pass keeps off)
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "site_plan.h"      // OpenSpace (the lot's ground around the building)
@@ -136,12 +137,13 @@ struct LotBuilding {
     // SEALED GROUND on a park (the quad, a park's walks): its paths and plazas, world XZ -- the host keeps grass off
     // them (a meadow grew over every path once the grass came to the city).
     std::vector<Poly2> sealed;
-    // ITS WALKS as lines (a park's paths, the quad's walks): centre a -> b and width, world XZ. The citysim joins
-    // them into its walking network (NavGraph::appendFootpaths), so people cross the parks and the quad.
-    // streetEnds false: its loose ends are not joined to a street (a walk to a hall's quad door: the nearest street is
-    // through the hall)
-    struct Walk { Vec2 a, b; Real width = 2.0; bool streetEnds = true; };
-    std::vector<Walk> walks;
+    // ITS PATHS, STATED AS WALKWAYS of the one road model (ADR-0476): a park's paths, the quad's walks, a paseo's, an
+    // open lot's. Drawn as lines with a kind and a width; once every lot stands, each gets its id, its heights and where
+    // each end lands (another path, a street's sidewalk, or a dead end), looked up once. The host hands every lot's to
+    // the level's road model (lots_producer.h stateLotWalkways); nothing joins them by distance after.
+    // (While drawing, an end already marked a dead end is one that may not land on a street: a walk to a hall's quad
+    // door, whose nearest street is through the hall.)
+    std::vector<ModelWalkway> walkways;
     // LOOPS to run (a sports field's track: the middle of its first lane), closed polylines, world XZ: the citysim's
     // jog spots (activities.h)
     std::vector<Poly2> loops;
@@ -519,6 +521,10 @@ struct LotRoad {
     // road's are its lengths from the first point (lotRoadsFromLines)
     std::vector<Real> stations;
     bool insideJunction = false;   // a stretch of road inside a junction (`id` is the junction's): no street to front
+    // where its sidewalks run, as stations: from the kerb end at its first junction to the one at its last (the model's
+    // kerbEndStation; the street's own ends where it meets no junction). A path ending past them lands at the kerb end.
+    // NaN: not known (a hand-made road), and nothing is moved.
+    Real sidewalkFrom = std::numeric_limits<Real>::quiet_NaN(), sidewalkTo = std::numeric_limits<Real>::quiet_NaN();
     Real halfWidth = 0;      // from the centre line to the carriageway's edge (travel lanes and shoulder)
     Real sidewalk = 0;         // the sidewalk's width beyond that edge (0: none)
     RoadClass klass = RoadClass::Local;
@@ -534,7 +540,19 @@ struct LotRoadInputs {
 // For a test or a hand-made scene with no road build: the roads as given, and a deck drawn from the same lines at the
 // same half widths (flat, at height 0).
 LotRoadInputs lotRoadsFromLines(std::vector<LotRoad> roads);
-// One straight road from a to b, for the same.
+// WHERE THE LOTS' PATHS LAND (ADR-0476): the step growLotBuildings ends with, once every lot stands. Each lot's drawn
+// paths (LotBuilding::walkways) get an id ("lot<i>.p<k>"), a height per point (`ground`; none: the lot's groundY) and
+// both ends stated, looked up once: another path's end or middle, else the street a building may front nearest within
+// reach (its station and kerb, by the road model's one rule), else a dead end. A door on a path states it in its
+// frontage's walkway slot. What landed where, counted:
+struct LotPathCounts {
+    int walkways = 0, dropped = 0, onWalkway = 0, onStreet = 0, deadEnds = 0, insideJunction = 0, crossCarriageway = 0;
+    int doorsOnWalkway = 0;
+    int heldToKerbEnd = 0;   // street ends past the sidewalk's kerb end, stated at it (within reach)
+    int pastKerbEnd = 0;     // ...too far past it: dead ends
+};
+LotPathCounts stateLotPaths(std::vector<LotBuilding>& lots, const LotRoadInputs* roads, const std::function<Real(Real, Real)>& ground);
+// One straight road from a to b, for a test or a hand-made scene.
 LotRoad lotRoadSegment(const Vec2& a, const Vec2& b, Real halfWidth, RoadClass klass = RoadClass::Local, Real sidewalk = 0);
 // A building's graded pad: its plan dilated by `apron` (the foundation ring and entrance steps sit just
 // outside the plan) as a flat TerrainFlatten at groundY with the given feather. One derivation for the

@@ -616,6 +616,34 @@ TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
 // does; nearestNode never answers with a walk node; a walk's end joins the street at its pavement, not its middle; a
 // tee joins a walk to another's middle; a walk marked off-street (a quad door's) stays off the streets.
 #include "../src/engine/ai/pathfind.h"
+namespace {
+// THE WALKS AS A CALLER STATES THEM (ADR-0476: the street map is told where each walk meets what, never by distance; on
+// a level that is roads/street_map.h appendWalkways, from the road model's walkways): a diagonal across the block from
+// a to b, each end joined to the street link `nearestLink` answers there, from the pavement on the walk's side; and,
+// with `spur`, a walk off its middle to `spurEnd`, whose far end joins nothing (a door).
+NavGraph::FootpathPlan statedDiagonal(const NavGraph& nav, const Vec2& a, const Vec2& b, bool spur, const Vec2& spurEnd) {
+    NavGraph::FootpathPlan plan;
+    plan.nodes = {a, b};
+    if (spur) {
+        plan.nodes.push_back((a + b) * 0.5);
+        plan.nodes.push_back(spurEnd);
+        plan.walks = {{0, 2}, {2, 1}, {2, 3}};
+    } else {
+        plan.walks = {{0, 1}};
+    }
+    for (int end : {0, 1}) {
+        const Vec2 q = plan.nodes[static_cast<std::size_t>(end)];
+        const int link = nav.nearestLink(q);
+        const NavLink& S = nav.links[static_cast<std::size_t>(link)];
+        const Vec2 A = nav.nodes[static_cast<std::size_t>(S.from)], B = nav.nodes[static_cast<std::size_t>(S.to)];
+        const Vec2 dir = normalize(B - A);
+        Vec2 side(-dir.y, dir.x);
+        if (dot(q - A, side) < 0) side = side * -1.0;
+        plan.streetJoins.push_back({end, link, side});
+    }
+    return plan;
+}
+}  // namespace
 TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
     // Twelve grids, each corner jittered its own way (ADR-0265): a square block's diagonal saves 29 %, a skewed one
     // 13 %, and on every one the walk takes it. (Walkers were costed by the cars' class speed, so a collector round
@@ -630,15 +658,16 @@ TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
         for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
         const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
         const Vec2 d = normalize(p11 - p00);
-        std::vector<std::array<Real, 5>> segs = {
-            {p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0},   // the diagonal, its ends short of the corners
-            // a spur off its middle, toward a door (its far end must not be joined to a street)
-            {(p00.x + p11.x) * 0.5 + 0.6, (p00.y + p11.y) * 0.5 - 0.6, (p00.x + p11.x) * 0.5 + 20.0, (p00.y + p11.y) * 0.5 - 20.0, -2.0}};
-        const NavGraph::FootpathReport rep = nav.appendFootpaths(segs);
-        std::printf("    [footpaths] seed %u: %d nodes, %d links, %d tees, %d street joins; street walk %.0f m\n", seed, rep.nodes, rep.links, rep.tees,
+        // the diagonal, its ends short of the corners, and a spur off its middle toward a door (its far end joins nothing)
+        const Vec2 mid = (p00 + p11) * 0.5;
+        const NavGraph::FootpathReport rep =
+            nav.appendFootpaths(statedDiagonal(nav, p00 + d * 8.0, p11 - d * 8.0, true, mid + Vec2(19.4, -19.4)));
+        std::printf("    [footpaths] seed %u: %d nodes, %d links, %d street joins; street walk %.0f m\n", seed, rep.nodes, rep.links,
                     rep.streetJoins, walkBefore);
-        CHECK(rep.tees == 1);
+        CHECK(rep.nodes == 4);
         CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
+        // three walks each way; two ends each joined to a street link's nodes (both, unless one is over 80 m off), each way
+        CHECK(rep.links >= 3 * 2 + 2 * 2 && rep.links <= 3 * 2 + 2 * 2 * 2);
         // a walker cuts across; the walk is shorter than the streets round the block
         const Route after = findRoute(nav, c00, c11, true);
         Real walkAfter = 0;
@@ -804,7 +833,7 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
     const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
     const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
     const Vec2 d = normalize(p11 - p00);
-    nav.appendFootpaths({{p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0}});
+    nav.appendFootpaths(statedDiagonal(nav, p00 + d * 8.0, p11 - d * 8.0, false, Vec2()));
     CitySim sim;
     sim.build(nav, 60, 21);
     PlaceMap places;

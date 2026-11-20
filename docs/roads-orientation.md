@@ -29,8 +29,10 @@ the stage that states it and never worked out again. It has two layers:
 `lanes/road_model_cache.h`. It returns one model per lane-built city: the first city's built model (read from
 `cache/roadmodel` or built and saved) when its road file states what the lane level needs, otherwise its planned
 layer; every later city's planned layer. The loader calls it once a load (`lanesLevelRoads` in `level_loader.cpp`) and
-publishes the result as `LevelRoadModel` (components.h). The lot pass grown at load and the driving host read that
-object. The bake's lot producer and the offline tracer run without the loader and call the same function. Nothing else
+publishes the result as `LevelRoadModel` (components.h). The driving host reads that object. THE LOT PASS READS THE
+PLANNED MODEL ONLY (ADR-0476: `levelPlannedRoadModels(in)`, each city's planned layer from its road file, no build): the
+lots are grown before the built model is assembled, and their paths are stated on the built one after. The bake's lot
+producer and the offline tracer do the same. Nothing else
 makes a road model for a level. A tool or a test that has a road file and no level calls `plannedRoadModel` or
 `assembleRoadModel` itself.
 
@@ -89,7 +91,7 @@ move the loop into it; never a private loop in the reader.
 | The space nearest a point within a distance | `RoadModel::nearestKerbSpace(point, reach)` |
 | How far along a lane path a station of its spine falls | `RoadModel::alongPathAt(path, station)` |
 | Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, for what states nothing); `frontageOn(street, station, dir)` (stated facts); the station and kerb from a search's hit on a centre line, the one statement both the model and the lot pass use: `frontageOnLine` (`line_frontage.h`, ADR-0474) |
-| Where a lot's building and each door front, recorded at plan time (ADR-0474) | `LotBuilding::frontage`, `DoorSpec::frontage`, `AuthoredPlace::frontage` (`StatedFrontage`, road_network.h: street id, station, kerb; or a walkway id and metres along it, ADR-0475, filled from S6b) |
+| Where a lot's building and each door front, recorded at plan time (ADR-0474) | `LotBuilding::frontage`, `DoorSpec::frontage`, `AuthoredPlace::frontage` (`StatedFrontage`, road_network.h: street id, station, kerb; or a walkway id and metres along it, ADR-0475: a door on a lot's path, ADR-0476) |
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
 | Where a place (a marker, a door) joins the walks: a point on a walk along its street, its kerb, and whether held to a sidewalk's end, across the road, cut off (ADR-0468, THE ONE ANSWER for placing a place, starting and ending a walk; built layer) | `RoadModel::walkJoinOn(frontage, openWalks, parts)` (stated: `frontageOn`; or straight from what a place states, `walkJoinOn(StatedFrontage, ...)`, which also answers a door on a walkway: ADR-0475); the one fallback by position `walkJoinNear(point, ...)` (`frontageAt`, then the same); `WalkJoin`, `WalkJoinWhy`; a station's place on a walk: `walkAlongAt(walk, station)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
@@ -99,7 +101,7 @@ move the loop into it; never a private loop in the reader.
 | The walks the road build laid (ADR-0465): each kerb's sidewalk lane along each road, each corner's walk along the drawn pavement (a spread junction's pairs across its points too), and why a ring pair has none | `RoadModel::walks` (`ModelLane`: kind `sidewalk` with `dir` the kerb, or `corner`), `ModelCorner::walk`, `ModelCorner::spread`; in the build, `LaneSet::walks` and `Result::walkCorners` (`WalkCorner::why`, and its kind `WalkCorner::fault`: a kerb end out in the paved junction, or the drawn sidewalk in two pieces; ADR-0469), laid by `layWalks` (`lanes/walk_lanes.h`). A footway's lane is a car lane's record of kind `footway`. Read by the lane level (next row) |
 | Where a person steps off the kerb at an arm (a station along its road) | `kerbEndStation(m, junction, arm)` (ADR-0466): the corner walks end there and the lane level cuts the sidewalks and footways there |
 | The walks of the lane level (ADR-0466): each sidewalk's stretch per street and kerb, each corner walk, a crossing over each crosswalk people use, a turn-round across each joined dead end, each footway's stretch per street; which walk ends meet; every end that meets nothing, with why | `LaneGraph::walks` (`Walk`: its curve, and one of `modelWalk`, `modelLane`, `modelCrosswalk`, `modelDeadEnd`), `Walk::atStart` / `atEnd` into `LaneGraph::walkJoins` (`WalkEnd`), `LaneGraphBuild::walkEndsAlone` (a kerb end whose ring pair the build tried and could not lay says so with the build's fault, a spread junction's pair too, never "no corner is stated": ADR-0469); laid by `layWalkPaths` in `lanes/lane_level.cpp`, the lane level's last step |
-| Paths for people on foot beside no street (ADR-0475): a park's path, a plaza's, a cut-through. Each states its kind (a path users' row: `footway`, `park_path`), width, line with heights, and where each end lands: a street's sidewalk (street id, station, kerb: a `StatedFrontage`), another walkway (id, metres along), or a stated dead end. Laid in the lane level as walks (`Walk::modelWalkway`), the sidewalk or walkway landed on cut there and joined; an end that does not land is a fault with why | `RoadModel::walkways` (`ModelWalkway`, `WalkwayEnd`), supplied ONLY by `stateWalkways(model, walkways)` on a built model (returns `WalkwayProblem`s: `WalkwayFault` and why), which calls `layWalkways` (`lanes/lane_level.h`). No level states one until S6b (the lot pass) |
+| Paths for people on foot beside no street (ADR-0475): a park's path, a plaza's, a cut-through. Each states its kind (a path users' row: `footway`, `park_path`), width, line with heights, and where each end lands: a street's sidewalk (street id, station, kerb: a `StatedFrontage`), another walkway (id, metres along), or a stated dead end. Laid in the lane level as walks (`Walk::modelWalkway`), the sidewalk or walkway landed on cut there and joined; an end that does not land is a fault with why | `RoadModel::walkways` (`ModelWalkway`, `WalkwayEnd`), supplied ONLY by `stateWalkways(model, walkways)` on a built model (returns `WalkwayProblem`s: `WalkwayFault` and why), which calls `layWalkways` (`lanes/lane_level.h`). The types live in `roads/walkway.h`. The lot pass states its paths as them (ADR-0476: `city_lots.h stateLotPaths`, handed over by `lots_producer.h stateLotWalkways`); the street map reads them (`street_map.h appendWalkways`) |
 | The kind of a lane path or walk; every lane path and walk a mover may use (the one mover filter); the parts of the walks a person can get round | `RoadModel::pathKind(path)`, `walkKind(walk)`, `openTo(mover, users)` (`OpenPaths`: per path, per walk); `reachableWalks(g, open)` (`lane_graph.h`) |
 | Who may use which kind of path; how a dead end is joined; the wait a mover adds for stepping onto a kind (a crossing's) | `pathUsers()` (`PathUsers::usersOf`, `mayUse`, `mover`, `deadEndJoin`; `PathMover::waitOn`), from `assets/data/path_users.json`; read by `RoadModel::openTo` and the router's `bindWalker` |
 | A route between two places on the lane level (the one route-finder, ADR-0467): a car's over the lane paths (legs, turns, which lanes lead on); a walker's over the walks (the walks taken with their direction, metres, seconds, the crosswalks crossed and from which kerb end) | `route.h`: `findRoute(model, studyRoads(model), RouteClass, PathPoint, PathPoint)`; `findWalkRoute(model, bindWalker(model, mover, pace), WalkPoint, WalkPoint)` (`WalkRoute`, `WalkStep`, `WalkCrossing`). A place: `PathPoint` / `WalkPoint` (`lane_graph.h`); a walk's point: `LaneGraph::pointAt(WalkId, along)` |
@@ -159,9 +161,12 @@ arm a link arrives by is not kept; ask `armReachedAt`.
 
 **Walkways** (ADR-0475). A path for people on foot beside no street is stated by whoever draws it (S6b: the lot pass),
 with where each end lands looked up once when drawn. `stateWalkways` is the one way in; the lane level trusts the ends,
-cuts the walk each lands on and joins there, and returns what did not land. Nothing joins a walkway by distance. Until S6b
-the lot pass's own walks (`LotBuilding::walks`, joined into the street map by `appendFootpaths`) are the second walking
-network: no new reader of them.
+cuts the walk each lands on and joins there, and returns what did not land. Nothing joins a walkway by distance.
+Since ADR-0476 the lot pass states every path it draws (`LotBuilding::walkways`, ids `lot<i>.p<k>`, kinds `park_path` /
+`footway`, each end looked up once by `stateLotPaths`: another path, a street by `frontageOf`, or a dead end; a door on a
+path states it in its walkway slot), and the loader hands them to the built model it publishes (`lots_producer.h
+stateLotWalkways`); the bake's lot producer does the same only to log the faults. The street map reads them from the
+model (`street_map.h appendWalkways`); `NavGraph::appendFootpaths` joins only what it is told (`FootpathPlan`).
 
 ## 2. File map
 

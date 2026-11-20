@@ -5173,3 +5173,80 @@ TEST_CASE(road_model_44_a_walkway_end_that_does_not_land_is_a_fault_with_why) {
     const std::vector<WalkwayProblem> none = stateWalkways(planned, {cases[0].w});
     CHECK(none.size() == 1u && none[0].fault == WalkwayFault::NoLaneLevel && planned.laneLevel.walks.empty());
 }
+
+// ---- 45. a lot's paths are stated as walkways, their ends looked up once (ADR-0476) -----------------------------------
+
+TEST_CASE(road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_states) {
+    // THE T of test 43, and a lot north of it whose path runs, as the lot pass draws one, in three straight pieces: up
+    // from the east road's north sidewalk at station 50, west along y = 30, and down to the west road's north sidewalk at
+    // station 50; and a door on the middle piece, far from any street. The lot pass states where every end lands
+    // (city_lots.h stateLotPaths), the model lays them (lots_producer.h stateLotWalkways), and a walker crosses over them.
+    BuiltScene s = builtScene(walkTee());
+    CHECK(s.report.error.empty());
+    RoadModel& m = s.m;
+    const RoadFrontage eastN = m.frontageAt(Vec2(50, 20)), westN = m.frontageAt(Vec2(-50, 20));
+    Vec2 eastAt, westAt;
+    CHECK(eastN.valid() && westN.valid() && m.sidewalkBeside(eastN, eastAt) && m.sidewalkBeside(westN, westAt));
+    if (!eastN.valid() || !westN.valid()) return;
+    const LotRoadInputs roads = lotRoadInputs(m, RoadDeckField());
+    std::vector<LotBuilding> lots(1);
+    LotBuilding& lot = lots[0];
+    lot.type = "park";
+    const Vec2 ne(eastAt.x, 30), nw(westAt.x, 30);
+    for (const std::pair<Vec2, Vec2>& piece : {std::make_pair(eastAt, ne), std::make_pair(ne, nw), std::make_pair(nw, westAt)}) {
+        ModelWalkway w;   // (as the lot pass draws a path: a kind, a width, two points; city_lots.cpp addPath)
+        w.kind = "footway";
+        w.width = 2.0;
+        w.line = {piece.first, piece.second};
+        lot.walkways.push_back(w);
+    }
+    BuildingUnit hut;
+    DoorSpec door;
+    door.foot = Vec2(0, 31.5);
+    door.normal = Vec2(0, -1);
+    hut.doors.push_back(door);
+    lot.units.push_back(hut);
+
+    const LotPathCounts counts = stateLotPaths(lots, &roads, nullptr);
+    CHECK(counts.walkways == 3 && counts.onStreet == 2 && counts.onWalkway == 4 && counts.deadEnds == 0 && counts.doorsOnWalkway == 1);
+    CHECK(lot.walkways.size() == 3u);
+    if (lot.walkways.size() != 3u) return;
+    const ModelWalkway &up = lot.walkways[0], &across = lot.walkways[1], &down = lot.walkways[2];
+    CHECK(up.id == "lot0.p0" && across.id == "lot0.p1" && down.id == "lot0.p2" && up.heights.size() == 2u);
+    // the two street ends: each street's id, the station level with the end, its own kerb (frontageOnLine's answer)
+    const WalkwayEnd &east = up.ends[0], &west = down.ends[1];
+    CHECK(east.meets.street == m.streets[eastN.street.index].id && approxEqual(east.meets.station, eastN.station, kWrittenStation) &&
+          east.meets.dir == eastN.dir && !east.deadEnd);
+    CHECK(west.meets.street == m.streets[westN.street.index].id && approxEqual(west.meets.station, westN.station, kWrittenStation) &&
+          west.meets.dir == westN.dir && !west.deadEnd);
+    // the corners: each piece's end on the next piece's start (or its end), by id and metres along
+    CHECK(up.ends[1].meets.walkway == "lot0.p1" && approxEqual(up.ends[1].meets.along, 0.0, kWrittenStation));
+    CHECK(down.ends[0].meets.walkway == "lot0.p1" && approxEqual(down.ends[0].meets.along, distance(ne, nw), kWrittenStation));
+    CHECK(across.ends[0].meets.onWalkway() && across.ends[1].meets.onWalkway());
+    // the door states the path and where along it, not a street
+    const StatedFrontage& onPath = lot.units[0].doors[0].frontage;
+    CHECK(onPath.walkway == "lot0.p1" && !onPath.onStreet() && approxEqual(onPath.along, ne.x, kWrittenStation));
+
+    // HANDED TO THE MODEL: every end lands, no fault
+    const std::vector<WalkwayProblem> problems = stateLotWalkways(m, lots);
+    printWalkwayProblems(problems);
+    CHECK(problems.empty() && m.walkways.size() == 3u);
+    CHECK(validate(m.laneLevel).empty());
+    // a walker who may use sidewalks and footways but no corner gets from one street to the other over the lot's path
+    StatedFrontage from, to;
+    from.street = east.meets.street;
+    from.station = 80;
+    from.dir = eastN.dir;
+    to.street = west.meets.street;
+    to.station = 20;
+    to.dir = westN.dir;
+    const WalkJoin a = m.walkJoinOn(from), b = m.walkJoinOn(to);
+    CHECK(a.valid() && b.valid());
+    const route::RouteWalker pedestrian = route::bindWalker(m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "footway"}));
+    const route::WalkRoute r = route::findWalkRoute(m, pedestrian, a.at, b.at);
+    printWalkRoute(m, r);
+    CHECK(r.found && stepsOfKind(m, r, "footway") == 3u && stepsOfKind(m, r, "corner") == 0u);
+    // and the door is answered on the path by the one query
+    const WalkJoin j = m.walkJoinOn(onPath);
+    CHECK(j.valid() && j.walkway == 1u && !j.street.valid() && j.held == 0);
+}

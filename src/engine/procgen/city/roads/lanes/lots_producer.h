@@ -61,10 +61,25 @@ LotsCityInputs lotsCityInputs(const CityProducts& p);
 // width (travel lanes, median gap and shoulder), its sidewalk and its class, copied from the model; and the drawn
 // deck. Tracks and footways are left out (no building fronts one). A look-up: made on request, never saved.
 LotRoadInputs lotRoadInputs(const RoadModel& model, const RoadDeckField& deck);
-// ...for a level: of its last lane-built city (the one whose blocks the lots grow on), out of the level's one road
-// model as road_model_cache.h obtainLevelRoadModel returns it and the loader publishes it (`cities`; ADR-0435). No
+// ...for a level: of its last lane-built city (the one whose blocks the lots grow on), out of the level's PLANNED road
+// model (road_model_cache.h levelPlannedRoadModels: the lots grow before the built model is assembled, ADR-0476). No
 // city, or one whose road file could not be read: no roads.
 LotRoadInputs lotRoadInputs(const std::vector<std::shared_ptr<RoadModel>>& cities, const RoadDeckField& deck);
+// THE LOTS' PATHS HANDED TO THE ROAD MODEL (ADR-0476): every lot's walkways, in the lots' order, stated on the level's
+// built model (road_model.h stateWalkways, the one place walkways are supplied), once the model is assembled. Returns
+// what did not land, with why. The loader calls it on the model it publishes; the bake's lot producer on the model it
+// obtains, to say the faults.
+std::vector<WalkwayProblem> stateLotWalkways(RoadModel& built, const std::vector<LotBuilding>& lots);
+// ...for a level: on the model of THE CITY THE LOTS GROW ON (lotsCity), the same one lotRoadInputs(cities, ...) reads
+// their streets from, so every street end names a street of the model it is stated on. That model not built (a later
+// city's planned layer: stateWalkways refuses it, NoLaneLevel) or missing: nothing is stated, and a fault says so.
+std::vector<WalkwayProblem> stateLotWalkways(const std::vector<std::shared_ptr<RoadModel>>& cities, const std::vector<LotBuilding>& lots);
+// WHICH OF A LEVEL'S LANE-BUILT CITIES THE LOTS GROW ON (an index into its road model's `cities`; -1: none): the last.
+// A level runs one lot pass, on all its blocks, reading that city's streets (as the lots producer reads that city's
+// products); its paths are stated on that city's model and the street map reads them from there.
+int lotsCity(const std::vector<std::shared_ptr<RoadModel>>& cities);
+// The faults in one line, counted by kind ("12 the end's station is past where ..., 3 ..."); empty when none.
+std::string describeWalkwayProblems(const std::vector<WalkwayProblem>& problems);
 // What of a road file the lot pass reads besides what the city's own key already holds (the roads and their classes):
 // its streets' and its junctions' inside stretches' ids, roads and stations. The lots key hashes it.
 std::string lotRoadsKeyText(const nlohmann::json& roadFile);

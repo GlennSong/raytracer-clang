@@ -298,50 +298,14 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
     return g;
 }
 
-NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<Real, 5>>& segs, Real connect) {
+NavGraph::FootpathReport NavGraph::appendFootpaths(const FootpathPlan& plan) {
     FootpathReport rep;
-    if (segs.empty() || nodes.empty()) return rep;
+    if (plan.nodes.empty() || nodes.empty()) return rep;
     const int firstNew = nodeCount(), firstLink = linkCount();
     if (streetNodes < 0) streetNodes = firstNew;
     if (streetLinks < 0) streetLinks = firstLink;
     footNode.resize(nodes.size(), 0);
-    // the walk nodes: every end, merged within 0.8 m
-    std::vector<Vec2> pts;
-    auto nodeAt = [&](const Vec2& q) {
-        for (std::size_t i = 0; i < pts.size(); ++i)
-            if ((pts[i] - q).lengthSquared() < 0.8 * 0.8) return static_cast<int>(i);
-        pts.push_back(q);
-        return static_cast<int>(pts.size()) - 1;
-    };
-    struct Seg { int a, b; Real w; std::vector<std::pair<Real, int>> cuts; };
-    std::vector<uint8_t> noStreet;   // per walk node: an end of a walk that must not be joined to a street
-    std::vector<Seg> ss;
-    for (const auto& s : segs) {
-        const Vec2 a(s[0], s[1]), b(s[2], s[3]);
-        if ((b - a).length() < 0.5) continue;
-        Seg g; g.a = nodeAt(a); g.b = nodeAt(b); g.w = std::fabs(s[4]);
-        noStreet.resize(pts.size(), 0);
-        if (s[4] < 0) noStreet[static_cast<std::size_t>(g.a)] = noStreet[static_cast<std::size_t>(g.b)] = 1;
-        if (g.a != g.b) ss.push_back(g);
-    }
-    // TEES: an end that met no other end but lies on another walk's middle joins it there
-    std::vector<int> degree(pts.size(), 0);
-    for (const Seg& g : ss) { ++degree[static_cast<std::size_t>(g.a)]; ++degree[static_cast<std::size_t>(g.b)]; }
-    for (std::size_t p = 0; p < pts.size(); ++p) {
-        if (degree[p] != 1) continue;
-        for (Seg& g : ss) {
-            if (g.a == static_cast<int>(p) || g.b == static_cast<int>(p)) continue;
-            const Vec2 A = pts[static_cast<std::size_t>(g.a)], B = pts[static_cast<std::size_t>(g.b)], ab = B - A;
-            const Real L2 = ab.lengthSquared();
-            const Real t = L2 > 1e-9 ? dot(pts[p] - A, ab) / L2 : 0;
-            if (t <= 0.02 || t >= 0.98) continue;
-            if ((A + ab * t - pts[p]).length() > std::max(Real(1.6), g.w * 0.5 + 0.2)) continue;
-            g.cuts.push_back({t, static_cast<int>(p)});
-            ++degree[p];
-            ++rep.tees;
-            break;
-        }
-    }
+    const std::vector<Vec2>& pts = plan.nodes;
     // the nodes go in, flagged as walk nodes
     for (const Vec2& q : pts) {
         nodes.push_back(q);
@@ -373,45 +337,26 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
         links.push_back(L);
         ++rep.links;
     };
-    for (Seg& g : ss) {
-        std::sort(g.cuts.begin(), g.cuts.end());
-        std::vector<int> chain{g.a};
-        for (const auto& c : g.cuts) chain.push_back(c.second);
-        chain.push_back(g.b);
-        for (std::size_t k = 0; k + 1 < chain.size(); ++k) {
-            const int u = firstNew + chain[k], v = firstNew + chain[k + 1];
-            addWalk(u, v, nodes[static_cast<std::size_t>(u)], nodes[static_cast<std::size_t>(v)], true);
-            addWalk(v, u, nodes[static_cast<std::size_t>(v)], nodes[static_cast<std::size_t>(u)], true);
-        }
+    for (const FootpathPlan::Walk& w : plan.walks) {
+        if (w.a < 0 || w.b < 0 || w.a == w.b || w.a >= rep.nodes || w.b >= rep.nodes) continue;
+        const int u = firstNew + w.a, v = firstNew + w.b;
+        addWalk(u, v, nodes[static_cast<std::size_t>(u)], nodes[static_cast<std::size_t>(v)], true);
+        addWalk(v, u, nodes[static_cast<std::size_t>(v)], nodes[static_cast<std::size_t>(u)], true);
     }
-    // LOOSE ENDS to the street: the nearest street SEGMENT (one a walker uses) within `connect` -- its nodes can be
-    // far apart, so the end joins BOTH of its nodes, each connector running from that node's pavement on the walk's
-    // side of the street, not from the middle of the road
-    noStreet.resize(pts.size(), 0);
-    auto streetLink = [&](int li) { const NavLink& L = links[static_cast<std::size_t>(li)]; return L.walkable && !L.footpath; };
-    for (std::size_t p = 0; p < pts.size(); ++p) {
-        if (degree[p] != 1 || noStreet[p]) continue;
-        const int fp = firstNew + static_cast<int>(p);
-        int bestLink = -1;
-        Real bestD = connect;
-        for (int li = 0; li < firstLink; ++li) {
-            if (!streetLink(li)) continue;
-            const NavLink& L = links[static_cast<std::size_t>(li)];
-            const Real dd = distToSegment(pts[p], nodes[static_cast<std::size_t>(L.from)], nodes[static_cast<std::size_t>(L.to)]);
-            if (dd < bestD) { bestD = dd; bestLink = li; }
-        }
-        if (bestLink < 0) { ++rep.unjoined; continue; }
-        const NavLink& S = links[static_cast<std::size_t>(bestLink)];
-        const Vec2 a = nodes[static_cast<std::size_t>(S.from)], b = nodes[static_cast<std::size_t>(S.to)];
-        const Vec2 d = normalize(b - a);
-        Vec2 side(-d.y, d.x);
-        if (dot(pts[p] - a, side) < 0) side = side * -1.0;
+    // A STREET JOIN: the stated street link's two nodes -- they can be far apart, so the end joins BOTH, each connector
+    // running from that node's pavement on the stated side of the street, not from the middle of the road
+    for (const FootpathPlan::StreetJoin& j : plan.streetJoins) {
+        if (j.node < 0 || j.node >= rep.nodes || j.link < 0 || j.link >= firstLink) continue;
+        constexpr Real kFarthestJoin = 80.0;   // a street node farther than this from the walk node is not joined
+        const int fp = firstNew + j.node;
+        const Vec2 at = nodes[static_cast<std::size_t>(fp)];
+        const NavLink S = links[static_cast<std::size_t>(j.link)];   // (a copy: addWalk grows the links)
         const Real off = S.width * 0.5 + 1.0;
         for (int n : {S.from, S.to}) {
-            const Vec2 pave = nodes[static_cast<std::size_t>(n)] + side * off;
-            if ((pave - pts[p]).length() > 80.0) continue;
-            addWalk(n, fp, pave, pts[p], true);   // each way keeps to its own side: a class coming out of the
-            addWalk(fp, n, pts[p], pave, true);   // quad meets one going in side by side, not head on
+            const Vec2 pave = nodes[static_cast<std::size_t>(n)] + j.side * off;
+            if ((pave - at).length() > kFarthestJoin) continue;
+            addWalk(n, fp, pave, at, true);   // each way keeps to its own side: a class coming out of the
+            addWalk(fp, n, at, pave, true);   // quad meets one going in side by side, not head on
         }
         ++rep.streetJoins;
     }

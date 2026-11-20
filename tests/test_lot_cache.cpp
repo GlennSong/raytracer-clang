@@ -63,7 +63,15 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     a.padMesh = MeshBuilder::box(Vec3(3, 0.2, 2)); a.padMesh.vertices[0].color = Vec3(0.9, 0.1, 0.1);   // a varying vertex colour survives
     a.treeSpots = {Vec3(1, 2, 3), Vec3(4, 5, 6)}; a.fenceSegs = {{Vec2(0, 0), Vec2(5, 0)}, {Vec2(5, 0), Vec2(5, 5)}};
     a.sealed = {{Vec2(0, 0), Vec2(2, 0), Vec2(2, 1)}};
-    a.walks = {{Vec2(1, 2), Vec2(3, 4), 2.5}};
+    {   // its paths as walkways (format 7): every field, both ends of each kind
+        ModelWalkway k;
+        k.id = "lot0.p0"; k.kind = "park_path"; k.width = 2.5; k.line = {Vec2(1, 2), Vec2(3, 4), Vec2(5, 4)}; k.heights = {0.5, 0.75, 1.0};
+        k.ends[0].meets.street = "s7"; k.ends[0].meets.station = 12.5; k.ends[0].meets.dir = -1;
+        k.ends[1].meets.walkway = "lot0.p1"; k.ends[1].meets.along = 3.25;
+        ModelWalkway d = k;
+        d.id = "lot0.p1"; d.ends[0] = WalkwayEnd(); d.ends[0].deadEnd = true;
+        a.walkways = {k, d};
+    }
     a.loops = {{Vec2(0, 0), Vec2(5, 0), Vec2(5, 5), Vec2(0, 5)}};
     a.areas = {{"pitch", Vec2(1, 2), Vec2(0, 1), 25.0, 17.0}};
     a.sitSpots = {{Vec2(3, 4), Vec2(0, -1), 0.53}};
@@ -96,7 +104,14 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK_APPROX(x.padMesh.vertices[0].color.x, 0.9, 1e-6); CHECK_APPROX(x.padMesh.vertices[3].position.x, static_cast<float>(a.padMesh.vertices[3].position.x), 0.0);
         CHECK(x.treeSpots.size() == 2 && x.treeSpots[1].z == 6 && x.fenceSegs.size() == 2 && x.fenceSegs[1].second.y == 5);
         CHECK(x.sealed.size() == 1 && x.sealed[0].size() == 3 && x.sealed[0][2].y == 1);
-        CHECK(x.walks.size() == 1 && x.walks[0].b.y == 4 && x.walks[0].width == 2.5);
+        CHECK(x.walkways.size() == 2);
+        if (x.walkways.size() == 2) {
+            const ModelWalkway& k = x.walkways[0];
+            CHECK(k.id == "lot0.p0" && k.kind == "park_path" && k.width == 2.5 && k.line.size() == 3 && k.line[2].x == 5 && k.heights.size() == 3 && k.heights[1] == 0.75);
+            CHECK(k.ends[0].meets.street == "s7" && k.ends[0].meets.station == 12.5 && k.ends[0].meets.dir == -1 && !k.ends[0].deadEnd);
+            CHECK(k.ends[1].meets.walkway == "lot0.p1" && k.ends[1].meets.along == 3.25 && !k.ends[1].meets.onStreet());
+            CHECK(x.walkways[1].id == "lot0.p1" && x.walkways[1].ends[0].deadEnd && !x.walkways[1].ends[0].meets.onStreet() && !x.walkways[1].ends[0].meets.onWalkway());
+        }
         CHECK(x.loops.size() == 1 && x.loops[0].size() == 4 && x.loops[0][2].x == 5);
         CHECK(x.areas.size() == 1 && x.areas[0].kind == "pitch" && x.areas[0].axis.y == 1 && x.areas[0].halfW == 17.0);
         CHECK(x.sitSpots.size() == 1 && x.sitSpots[0].face.y == -1 && x.sitSpots[0].hip == 0.53);

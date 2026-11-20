@@ -23309,3 +23309,66 @@ Words:
 **Left for S6b:** the lot pass states its paths as walkways (a kind per path: `park_path` for a park's, `footway` for the quad's and cut-throughs'), each end looked up once when drawn (the street, station and kerb by `frontageOnLine`, as a door's; another path by its id and metres; else a dead end); a door on a path records it in `StatedFrontage`'s walkway slot; the loader and the bake's lot producer call `stateWalkways` on the level's model and log the faults; then the street map's `appendFootpaths` and `LotBuilding::walks` go. A walkway that crosses a street's carriageway is not checked (nothing says where it may cross); S6b should draw none, or state a crossing.
 
 **Revisit when** S6b states the lot pass's paths (the faults then get counted per level); when a walkway should cross a street (a crossing of its own kind); or when a mover other than the walker may use a walkway (a row in the path users' table).
+
+## ADR-0476 — The lot pass states its paths as walkways of the one road model, each end looked up once; its own list of walks and the street map's joining by distance are gone (#306 task 4, piece 9, S6b)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: the paths the lot pass draws through parks, across the campus quad, down a paseo and into open lots used to be kept as loose line pieces on each lot (`LotBuilding::walks`), and the old street map stitched them to each other and to the sidewalks afterwards by "these ends are close". Now the lot pass hands them to the road model as walkways (ADR-0475): each path gets an id, a kind and its heights, and for each of its two ends the lot pass says, once, where it lands: on another path, on a street's sidewalk (which street, how far along, which side), or nowhere. The road model lays them as walks, and the street map reads them from the model. Nothing joins paths by distance after the lot pass has drawn them. The lot pass also now reads only the planned road model, so the lots never depend on the built one.
+
+Words:
+- **Walkway:** a path for people on foot beside no street (ADR-0475). **Walk:** one piece of path the walking router can take.
+- **Planned model:** the road model read straight from the road file, in milliseconds (streets, junctions, centre lines). **Built model:** the planned model plus everything the road build and the lane level add (lanes, turns, sidewalk walks); about 16 s to make, so it is cached.
+- **Station / kerb:** metres along a street's centre line / which side of it (ADR-0474).
+- **Tee:** a path's end landing part way along another path.
+- **Street map:** the old graph the city sim's people route on (`NavGraph`), to be removed in piece 10.
+
+**What changed:**
+- **The lot pass states its paths** (`city_lots.cpp`). Every place that drew a walk now calls `addPath`, giving a kind: `park_path` for a park's ring and spokes, `footway` for the quad's walks and round, the paseo's walks and an open lot's walk in and its inner paths. The drawing says what it draws; the kind is a row of `assets/data/path_users.json`. A walk that may not land on a street (the walk to a hall's quad door; a playground's and a garden's inner path) is drawn with both ends marked "no street".
+- **Where each end lands, looked up once** (`stateLotPaths`, the last step of the lot pass, after every unit stands; Glenn's option 1: draw as before, then look up once and record):
+  - each path gets the id `lot<i>.p<k>` and a height per point (the ground the lots grow on);
+  - an end within 0.8 m of another path's end lands on that path at its end; else an end within 1.6 m (or half the other's width and 0.2 m) of another path's middle lands there (a tee). The same numbers the street map joined by, now used once, by the architect, and written down;
+  - else, unless marked "no street", the street a building may front nearest the end within 14 m of its centre line: its id, station and kerb by `LotRoads::frontageOf`, the road model's own rule (`frontageOnLine`, ADR-0474);
+    - where that station lies past where the street's sidewalks run (by a junction, nearer it than where a person steps off the kerb), the end states the kerb end's station instead, if it is no more than 3 m past (`kKerbEndReach`); farther, a dead end. Where the sidewalks run comes from the model, not from the lot pass: `lotRoadInputs` records each street's two kerb ends (`LotRoad::sidewalkFrom` / `sidewalkTo`, from `kerbEndStation` at each end's junction arm, the station the lane level cuts the sidewalk at; the street's own end where it meets no junction);
+  - else a stated dead end. (An end whose nearest road is a stretch inside a junction is a dead end too: no street.)
+  - A door whose foot is within 4 m of a path and 6 m or more past the street's pavement opens onto that path: its `StatedFrontage` names the walkway and the metres along it, and no street (the paseo's shop doors, a hall's quad door).
+  - Each path is also looked along every 0.5 m between its ends for a carriageway under it; a path that crosses one is counted in the log. None does on river_town.
+  - Paths shorter than 0.5 m are dropped, as the street map dropped them.
+- **Handed to the model** (`lots_producer.h stateLotWalkways`, which calls `stateWalkways`, the one place walkways are supplied): every lot's walkways in the lots' order, on the model of THE CITY THE LOTS GROW ON.
+  - **How lots are tied to a city today:** a level runs ONE lot pass, over all its blocks, and it reads the streets of its LAST lane-built city (`lotRoadInputs(cities)`, as the lots producer reads that city's products). Every shipped level has exactly one lane-built city (island_8's towns are all one city, one road file), so that is the first city too. The rule is now one named function, `lotsCity(cities)`, which `lotRoadInputs`, `stateLotWalkways(cities, lots)` and the tool all use, so street ends always name streets of the model they are stated on. On a level with several cities whose lots' city is not the built one, `stateWalkways` refuses (no lane level) and the fault is logged, never dropped silently.
+  - The loader states them on that city's model as it publishes it, once a load, straight after the lots are read or grown, and logs the faults by kind (`describeWalkwayProblems`).
+  - The bake's lot producer states them on the model it obtains, only to say the faults (the saved road model holds no walkways; the loader states them again at every load). The count goes in the producer's report (`walkwayFaults`).
+- **The loop untangled** (the "lots read the planned model" decision). Before: the lot pass read the BUILT model (`obtainLevelRoadModel`'s cities) in the bake's producer, the loader's grow in place and the offline tracer, though it used only planned facts (each street's and junction inside stretch's centre line, stations, widths, class: `roadLines`). Now all three read `levelPlannedRoadModels(in)` (road_model_cache.h, new: each city's planned layer from its road file, no build, no cache). The lot output is the same: river_town's lot dump is byte-identical to S5's and the part meshes hash the same (below). It was small: about 20 lines.
+- **The second walking network is deleted:**
+  - `LotBuilding::walks` (and its `Walk` type) gone; `LotBuilding::walkways` (the road model's own `ModelWalkway`, moved to `roads/walkway.h` so the lot pass can hold it without the whole road model) in its place, saved in the lot record.
+  - `CitySimConfig::footpaths` and the loader's copy into it gone; `CityRenderSystem::footpaths_` gone.
+  - `NavGraph::appendFootpaths`' distance joining gone (merging ends within 0.8 m, teeing within 1.6 m, joining loose ends to the nearest street link within 14 m). It now takes a `FootpathPlan` the caller states: nodes, the walks between them, and which node joins which street link on which side.
+  - The street map gets its walks from the model: `appendWalkways(map, model, city)` (street_map.h, new) reads `RoadModel::walkways` and their stated ends: an end on another walkway is one node with it (cutting it part way for a tee); an end on a street joins the street map's link along that street holding its station, from the pavement on the stated kerb (`frontageOn(...).towards`); a dead end joins nothing. The city sim calls it for EVERY city whose model holds walkways, each joined to that city's own streets on the map.
+- **Every reader moved:** the loader (no `cfg.footpaths`; states the walkways), `CityRenderSystem` (`appendWalkways` instead of `appendFootpaths(segs)`), `PlaceMap::snapToWalks` (unchanged: it reads the street map's footpath links, which now come from the model), `lanes_tool regions-lots` (prints the walkways' counts and the faults), the tests below. Nothing else read `LotBuilding::walks`.
+
+**river_town, grown in memory** (`RT_BUNDLE_WRITE=0 lanes_tool regions-lots assets/levels/river_town.json`, nothing written):
+- 626 lots; the per-lot dump byte-identical to S5's; parts 70 meshes, 13,837,642 vertices, hash `afe8a5402046cc6f`; flat parts hash `fb1f1e49993f74c2` (both as S5).
+- 1,465 walkways (none dropped). Their 2,930 ends: 2,871 on another walkway, 29 on a street, 30 dead ends (1 because the nearest road is a stretch inside a junction, 1 because it lands too far past a sidewalk's kerb end).
+- 25 doors open onto a walkway; the doors stating a street go 858 -> 833 of 863.
+- 0 paths cross a carriageway.
+- Stated on city 0's model: 1,465 walkways, 0 faults.
+- The two paths of lot 557 that reach s329 (kerb -1) by a junction: before the kerb-end rule both were faults, landing past the sidewalk's end at station 69.30. Now `lot557.p2` (0.77 m past) states station 69.30, the kerb end, and lands there; `lot557.p8` (6.10 m past) is a stated dead end.
+
+**Format and caches:** `kLotsFormatVersion` 6 -> 7, `kLotsVersion` 15 -> 16 (the lot record holds walkways, not walks), `kLotsBuildTag` 2026-11-20.1 -> 2026-11-20.2. The road model's format is unchanged (S6a already saves walkways; the saved model holds none). No level was baked; the level tests were not run (S7 re-bakes).
+
+**Pins that read the footpaths** (level_tests, not run; they may move and are retaken at S7): `river_town_crowd` (its crowd hash, `0x83b99189cfc16fbd`), `level_walk_join_the_street_maps_lookups_beside_the_one_query` (river_town's door counts: 136 doors snapped to a park's or the quad's footpath), `level_brain_crowd_...` (its places and walks), `metro_pedestrians_walk_and_keep_apart` and every level whose crowd walks a park or the quad. No unit-suite pin moved.
+
+**Tests:**
+- `road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_states` (lanes_tests): the T of test 43 and a lot whose path runs in three pieces from the east road's north sidewalk to the west road's, with a door on its middle piece. Both street ends state the right street, station 50 and kerb (as `frontageAt` answers); the corners state the next piece and metres along; the door states the middle walkway and the metres along it, no street; handed to the model, nothing is a fault; a walker allowed sidewalks and footways only gets from one street to the other over the three pieces (203 m); `walkJoinOn` answers the door on its walkway.
+- `lot_cache` round trip: two walkways, every field, an end on a street, on a walkway and a dead end.
+- `footpaths_are_walked_across_a_block_and_never_driven`, `a_crowd_walks_a_footpath_to_work` (run_tests): the street map is told its walks by a stated plan (`FootpathPlan`), not by segments it joins itself. Re-pinned: `rep.tees == 1` dropped (tees are the caller's to count now) and the link count checked as a range (a street node over 80 m from the walk's end is not joined, as before); every other check unchanged and passing.
+- The driving's and the brain's include boundaries (`driving_includes_nothing_past_its_boundary`, `brain_includes_nothing_past_its_boundary`) list `roads/walkway.h`, which road_model.h now brings.
+- Suites: full build; lanes_tests 153/153; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes).
+
+**One model:**
+- Concepts touched: roads (walkways and where their ends land), places (a door on a path), the street map (its walks).
+- The lot pass states facts once (where its paths' ends land) and the road model holds them; the road model's own rule gives a street end's station and kerb. No road fact is computed outside `roads/` except by those shared functions. The lot pass's second list of walks and the street map's distance joining are deleted, not kept beside the new ones.
+- Not yet one: the street map itself (piece 10), and the doors' walkway slot is read by nobody until piece 6.
+
+**For players:** after S7's re-bake, people cross parks, the quad and the paseos as before; one path of lot 557 on river_town (p8) ends at nothing where it reaches the street by a junction.
+
+**Revisit when** piece 6 starts places and walks from `walkJoinOn` (the doors on walkways then count); when a path ending far past a kerb end should be drawn to the kerb end instead (lot557.p8); when a level has several lane-built cities with lots of their own (a lot pass per city); or when a path must cross a street (a crossing of its own kind).

@@ -196,13 +196,21 @@ struct NavGraph {
     // kerb side of travel (rightOf: the driver's left). `verge` is the extra offset beyond the carriageway edge.
     Vec2 sidewalkPoint(int link, Real t, Real verge = 1.0) const;
 
-    // THE WALKS (campus gap pass; Glenn: students should cross the quad): footpath segments (world XZ, a -> b, their
-    // width) joined into this graph as walker-only links (NavLink::footpath; vehicle routing skips them). Ends that meet
-    // (within 0.8 m) share a node; an end on another walk's middle (within 1.6 m) tees into it; a loose end within
-    // `connect` m of a street segment is joined to both its nodes, from that street's pavement -- unless its width is NEGATIVE (|width|; the
-    // walk to a hall's quad door, whose nearest street is through the hall). Returns what was added.
+    // THE WALKS (campus gap pass; Glenn: students should cross the quad), AS STATED (ADR-0476): walk nodes, the walks
+    // between them, and which nodes join a street link, all said by the caller (roads/street_map.h appendWalkways, from
+    // the road model's walkways and where their ends land) -- nothing here joins by distance. Each walk goes in as a
+    // walker-only link each way (NavLink::footpath; vehicle routing skips them); a street join runs from the walk node
+    // to both nodes of the street link, from that street's pavement on `side`. Returns what was added (`tees` and
+    // `unjoined` are the caller's to count).
+    struct FootpathPlan {
+        std::vector<Vec2> nodes;
+        struct Walk { int a = -1, b = -1; };
+        std::vector<Walk> walks;
+        struct StreetJoin { int node = -1, link = -1; Vec2 side; };
+        std::vector<StreetJoin> streetJoins;
+    };
     struct FootpathReport { int nodes = 0, links = 0, streetJoins = 0, tees = 0, unjoined = 0; };
-    FootpathReport appendFootpaths(const std::vector<std::array<Real, 5>>& segs, Real connect = 14.0);
+    FootpathReport appendFootpaths(const FootpathPlan& plan);
 
     // Nearest node / nearest link to a world point — for snapping trip ends.
     // Return -1 if the graph is empty.

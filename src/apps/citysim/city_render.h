@@ -562,7 +562,6 @@ private:
     // list of N units indexed a 1-entry table when the player swung from the street to the top floors)
     struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; std::vector<double> units; };
     std::unordered_map<int, BuildingPeople> buildingPlace_;
-    std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
     std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
     std::vector<std::array<double, 5>> sitSpots_;

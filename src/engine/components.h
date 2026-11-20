@@ -1218,9 +1218,8 @@ struct CitySimConfig {
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.
     // Empty for levels that don't author any (the generator emits them later).
     std::vector<AuthoredPlace> places;
-    // THE WALKS (parks' paths, the campus quad's): ax, az, bx, bz, width -- a negative width keeps the walk's loose
-    // ends off the streets (NavGraph::appendFootpaths). The citysim joins them into its walking network.
-    std::vector<std::array<double, 5>> footpaths;
+    // (THE WALKS -- parks' paths, the campus quad's -- are the road model's walkways, ADR-0476: the citysim reads them
+    // there, street_map.h appendWalkways)
     // LOOPS to run (a sports field's track), closed polylines world XZ: the citysim's jog spots.
     std::vector<std::vector<std::array<double, 2>>> jogLoops;
     // AREAS an activity happens on (a pitch): kind, centre x z, long axis x z, half length, half width.

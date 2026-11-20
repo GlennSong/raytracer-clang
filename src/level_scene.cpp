@@ -598,14 +598,12 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                     const roads::RoadProducts built = rb.build(in);   // a bundle hit, not a rebuild
                     if (!built.holes.empty()) {
                         cityHoles = built.holes;
-                        // the roads the lot pass reads: the level's one road model (the offline tracer runs without the
-                        // loader, so it asks the one function that makes it, as the bake does: ADR-0435)
+                        // the roads the lot pass reads: the level's planned road model, as the bake's lot pass reads it
+                        // (ADR-0476)
                         engine::bundle::LevelInputs levelInputs;
                         std::string inputsErr;
                         if (engine::bundle::loadLevelInputs(levelPath, levelInputs, &inputsErr))
-                            cityRoads = engine::roads::lanes::lotRoadInputs(
-                                engine::roads::lanes::obtainLevelRoadModel(levelInputs, engine::roads::lanes::levelRoadModelCacheDir()).cities,
-                                built.deck);
+                            cityRoads = engine::roads::lanes::lotRoadInputs(engine::roads::lanes::levelPlannedRoadModels(levelInputs), built.deck);
                         else
                             LOG_WARN << "[citylots] the level's road file could not be read for the lot pass: " << inputsErr;
                         cityPavedSidewalk = built.bands.sidewalkWidth;

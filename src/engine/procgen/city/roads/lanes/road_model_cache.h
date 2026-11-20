@@ -137,6 +137,10 @@ struct LevelBuiltRoads {
 // `vehicles`: null, the level's own fleet (levelVehicles); a test names its own.
 LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const std::string& cacheDir,
                                      const LaneGraphOptions* vehicles = nullptr);
+// THE LEVEL'S PLANNED ROAD MODEL: each lane-built city's planned layer, read from its road file alone (no road build, no
+// cache), in the order the level lists them; null where a file could not be read (`notes` says which). WHAT THE LOT PASS
+// READS (ADR-0476): the lots are grown before the built model is assembled, and their paths are stated on it after.
+std::vector<std::shared_ptr<RoadModel>> levelPlannedRoadModels(const bundle::LevelInputs& in, std::vector<std::string>* notes = nullptr);
 // One line for the load's log and for `lanegraph?`: the summary, then where it came from and how long it took.
 std::string describeLevelRoadModel(const LevelBuiltRoads& lg);
 
