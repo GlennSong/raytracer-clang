@@ -60,9 +60,9 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | e4d21119 | loop cut, slice and bridge: `loopCut`, `slice`, `bridge` in `procgen/polymesh.{h,cpp}`, Lua `P:loop_cut`, `P:slice`, `P:bridge` |
 | 4bf5527f | openings: `assets/scripts/openings.lua` (`openings.window`, `openings.hole`), a hole through a wall with a frame and a pane; `bridge` lets a hole reach the solid's edge; `tests/test_openings.cpp` |
 | e013964e | truss: `assets/scripts/truss.lua` (`truss.build`), a lattice of members along a path; tested in `tests/test_openings.cpp` |
-| (this) | the crane rebuilt with the tools: lattice mast and boom, a cab with framed windows, bevelled edges; the same nodes, markers and shapes |
+| 19fd8fc2 | the crane rebuilt with the tools: lattice mast and boom, a cab with framed windows, bevelled edges; the same nodes, markers and shapes |
 
-The unit suite passed 1594 of 1594 on 1e90ad41. `physics_tests` (built here since 2026-11-20:
+The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
 level suite has not been run.
 
