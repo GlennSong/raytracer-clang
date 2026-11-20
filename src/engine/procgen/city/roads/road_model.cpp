@@ -1384,6 +1384,89 @@ std::vector<KerbSpaceNear> RoadModel::kerbSpacesNear(const RoadFrontage& f, Real
     return out;
 }
 
+const char* walkJoinWhyWord(WalkJoinWhy why) {
+    switch (why) {
+    case WalkJoinWhy::None: return "joined";
+    case WalkJoinWhy::NoStreet: return "fronts no street (none near, or a stretch of road inside a junction)";
+    case WalkJoinWhy::NoWalk: return "no walk is laid along its street";
+    case WalkJoinWhy::NotOpen: return "the walks along its street are closed to the mover";
+    }
+    return "?";
+}
+
+Real RoadModel::walkAlongAt(WalkId walk, Real station) const {
+    if (walk.index >= laneLevel.walks.size()) return 0;
+    const Walk& k = laneLevel.walks[walk.index];
+    const ModelLane* L = k.modelWalk < walks.size() ? &walks[k.modelWalk] : k.modelLane < lanes.size() ? &lanes[k.modelLane] : nullptr;
+    if (!L || k.street == kNoIndex || L->curve.count < 2 || L->curve.end() > spineStations.size() ||
+        L->curve.end() > lanePoints().size())
+        return 0;
+    // (the lane's points in the order of rising stations, measured from the first: as the lane level cut the walk)
+    std::vector<Vec2> xy(lanePoints().begin() + L->curve.first, lanePoints().begin() + L->curve.end());
+    std::vector<Real> st(spineStations.begin() + L->curve.first, spineStations.begin() + L->curve.end());
+    if (st.front() > st.back()) {
+        std::reverse(xy.begin(), xy.end());
+        std::reverse(st.begin(), st.end());
+    }
+    const std::vector<Real> s = stations(xy);
+    const Real along = roads::lanes::interp(st, s, station) - roads::lanes::interp(st, s, k.stationFrom);
+    return std::min(std::max(along, Real(0)), k.length);
+}
+
+WalkJoin RoadModel::walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>& openWalks, const ReachableParts* parts) const {
+    WalkJoin j;
+    if (!f.valid() || !f.street.valid() || f.street.index >= streets.size()) {
+        j.why = WalkJoinWhy::NoStreet;
+        return j;
+    }
+    // a sidewalk's stretch runs beside its model walk's kerb; a footway's (its lane's) is its middle, beside both (0)
+    const auto kerbOf = [&](const Walk& k) { return k.modelWalk < walks.size() ? walks[k.modelWalk].dir : 0; };
+    bool anyWalk = false;
+    for (int pass = 0; pass < 2 && !j.valid(); ++pass) {
+        const int kerb = pass == 0 ? f.dir : -f.dir;
+        uint32_t best = kNoIndex;
+        Real bestHeld = std::numeric_limits<Real>::infinity(), bestAt = 0;
+        for (uint32_t w = 0; w < laneLevel.walks.size(); ++w) {
+            const Walk& k = laneLevel.walks[w];
+            if (k.street != f.street.index) continue;
+            const int on = kerbOf(k);
+            if (on != 0 && on != kerb) continue;
+            anyWalk = true;
+            if (!openWalks.empty() && (w >= openWalks.size() || !openWalks[w])) continue;
+            const Real lo = std::min(k.stationFrom, k.stationTo), hi = std::max(k.stationFrom, k.stationTo);
+            const Real at = std::min(std::max(f.station, lo), hi);
+            const Real held = std::fabs(f.station - at);
+            if (best == kNoIndex || strictlyBefore(held, bestHeld, kWrittenStation)) {
+                best = w;
+                bestHeld = held;
+                bestAt = at;
+            }
+        }
+        if (best == kNoIndex) continue;
+        j.at.walk = WalkId(best);
+        j.at.along = walkAlongAt(j.at.walk, bestAt);
+        j.street = f.street;
+        j.dir = kerbOf(laneLevel.walks[best]) != 0 ? kerb : f.dir;
+        j.station = bestAt;
+        j.point = laneLevel.pointAt(j.at.walk, j.at.along);
+        j.held = atOrBefore(bestHeld, 0, kWrittenStation) ? Real(0) : bestHeld;
+        j.across = pass == 1;
+        if (parts && best < parts->partOf.size()) {
+            j.part = parts->partOf[best];
+            j.cutOff = j.part != parts->largest;
+        }
+    }
+    if (!j.valid()) j.why = anyWalk ? WalkJoinWhy::NotOpen : WalkJoinWhy::NoWalk;
+    return j;
+}
+
+WalkJoin RoadModel::walkJoinNear(const Vec2& p, const std::vector<uint8_t>& openWalks, const ReachableParts* parts) const {
+    WalkJoin j = walkJoinOn(frontageAt(p), openWalks, parts);
+    j.searched = true;
+    if (j.valid()) j.distance = (p - j.point).length();
+    return j;
+}
+
 std::vector<ModelLaneId> lanesOf(const RoadModel& m, ModelStreetId s) {
     if (!s.valid() || s.index >= m.streets.size()) return {};
     return m.streets[s.index].lanes;

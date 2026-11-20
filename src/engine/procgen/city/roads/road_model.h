@@ -243,6 +243,41 @@ struct RoadFrontage {
     bool valid() const { return section != nullptr; }
 };
 
+// ---- WHERE A PLACE JOINS THE WALKS (ADR-0468, issue #300) --------------------------------------------------------------
+// THE POINT ON THE WALKS A PLACE (A MARKER, A DOOR) JOINS: a place on a walk of the lane level (the walk and how far along
+// it, LaneGraph::walks), the street it runs along and the kerb it runs beside. Where a walker's route to or from that place
+// begins or ends (route.h findWalkRoute). Asked by RoadModel::walkJoinOn (stated facts) or walkJoinNear (the fallback, by
+// position). Only a walk that runs ALONG a street is joined: a sidewalk's stretch, or a footway's. A corner, a crossing or
+// a turn-round runs round or across a junction or a road end, and no place fronts one.
+//
+// Not valid (`at.walk` not valid): `why` says why. Valid, it may still need saying: `held` (the place lies past where the
+// sidewalk on its kerb stops, so it joins at that sidewalk's end), `across` (its own kerb has no walk the mover may use,
+// so it joins the other kerb's: the person must cross the road there), `cutOff` (the walk is not in the largest part of
+// the walks the mover can get round, when the parts were handed in).
+enum class WalkJoinWhy : uint8_t {
+    None,       // joined
+    NoStreet,   // the frontage names no street: no road a building may front is near, or the nearest is a stretch of road
+                // inside a junction (a spread junction's), along which no walk is laid
+    NoWalk,     // the lane level lays no walk along that street (its class has no sidewalk, a planned-only model, ...)
+    NotOpen,    // it lays walks along that street, but none the mover may use
+};
+const char* walkJoinWhyWord(WalkJoinWhy why);
+struct WalkJoin {
+    WalkPoint at;                    // the walk and metres along it from its start (not valid: none; `why`)
+    ModelStreetId street;            // the street that walk runs along
+    int dir = 1;                     // the kerb it runs beside (a footway's walk is its middle: the asked kerb)
+    Real station = 0;                // where along the street's road's spine it joins (the asked station, held to the walk)
+    Vec2 point;                      // where that is on the walk (LaneGraph::pointAt)
+    Real held = 0;                   // metres along the spine from the asked station to the walk's end it joins at (0: beside it)
+    bool across = false;             // joined on the other kerb: the asked kerb has no walk the mover may use there
+    bool searched = false;           // asked by position (walkJoinNear, the fallback): `distance` is from the asked point
+    Real distance = 0;               // ...how far the asked point is from `point` (stated facts: 0)
+    uint32_t part = kNoIndex;        // the walk's part on foot (ReachableParts::partOf), when the parts were handed in
+    bool cutOff = false;             // ...and it is not the largest
+    WalkJoinWhy why = WalkJoinWhy::None;
+    bool valid() const { return at.walk.valid(); }
+};
+
 // One lane's stretch on one street.
 struct ModelLaneSpan {
     ModelStreetId street;
@@ -662,6 +697,31 @@ struct RoadModel {
     // made from stated facts; the walker's real path comes from the street map when the walk is planned. Ties: by
     // street, kerb and index.
     std::vector<KerbSpaceNear> kerbSpacesNear(const RoadFrontage& f, Real reach, std::size_t most) const;
+
+    // ---- WHERE A PLACE JOINS THE WALKS (ADR-0468, issue #300) -----------------------------------------------------------
+    // THE ONE ANSWER to "where does this place join the sidewalks", for placing a place, starting a walk from it and
+    // ending one at it (WalkJoin above). Built layer only (it reads the lane level's walks).
+    //
+    // FROM STATED FACTS: a frontage stated as a street, a station along its spine and a kerb (frontageOn). The walk
+    // along that street on that kerb whose stretch of spine holds the station; past the stretch (a place by a junction,
+    // nearer it than where a person steps off the kerb; a sidewalk that stops short), the nearest end of that kerb's
+    // walk along the street, `held` saying how far. Where that kerb has no walk the mover may use, the other kerb's,
+    // `across`. A footway's walk serves both kerbs. `openWalks`: per walk, non-zero where the mover may use it
+    // (RoadModel::openTo(mover).walks; empty: every walk); `parts`, when given, the parts of the walks the mover can get
+    // round (reachableWalks over the same open walks), so the answer says when it lies in a part cut off from the rest.
+    // Ties: the lower walk id.
+    WalkJoin walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>& openWalks = {},
+                        const ReachableParts* parts = nullptr) const;
+    // THE FALLBACK, BY POSITION: only where nothing states a place's frontage (a lot's door: the lot pass records no
+    // street; a person standing anywhere). The frontage is the one search by position (frontageAt: the nearest road a
+    // building may front, never a freeway or a ramp), then walkJoinOn; `searched` set and `distance` the metres from
+    // `p` to the point joined. It never joins a walk the mover may not use, and says when it is in a cut-off part.
+    WalkJoin walkJoinNear(const Vec2& p, const std::vector<uint8_t>& openWalks = {},
+                          const ReachableParts* parts = nullptr) const;
+    // HOW FAR ALONG A WALK THAT RUNS ALONG A STREET a station of that street's road's spine falls (metres from the walk's
+    // start, held to the walk): read off the stations of the sidewalk or footway lane it was cut from, point by point,
+    // as the lane level cut it (lanes/lane_level.cpp). A walk along no street: 0.
+    Real walkAlongAt(WalkId walk, Real station) const;
 
     // ---- CROSSWALKS (ADR-0452) ------------------------------------------------------------------------------------------
     // THE CROSSWALK ACROSS AN ARM of a junction (null: none stated there).

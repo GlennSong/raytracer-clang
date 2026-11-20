@@ -791,6 +791,42 @@ public:
         agents_[agentIndex].tethered = false;
     }
 
+    // WHERE A WALK STARTS AND ENDS ON THE STREET MAP: the look-ups sendAgentTo makes, named so that a test can set them
+    // beside the road model's one answer (RoadModel::walkJoinOn / walkJoinNear, ADR-0468, issue #300). They go with the
+    // street map: piece 6 of #306 task 4 walks people by the walks, piece 10 deletes the map. No new reader of it.
+    //
+    // THE NODE A WALK FROM `p` LEAVES FROM: the nearest node, unless no walkable link leaves it (NavLink::walkable: a
+    // ramp's or a freeway's node), and a walk from it never routes -- measured on brain_crowd: people at a place beside an
+    // arterial, 10 m from a ramp's node, could not walk anywhere and stood for good (ADR-0446). Then the first of the
+    // nearest kWalkStartNodes a walkable link leaves; none: the nearest, as before. -1: no node.
+    int walkStartNode(engine::Vec2 p) const {
+        if (!nav_) return -1;
+        const int nearest = nav_->nearestNode(p);
+        if (nearest < 0) return nearest;
+        const auto walked = [&](int n) {
+            for (const int l : nav_->outLinks[static_cast<std::size_t>(n)])
+                if (nav_->links[static_cast<std::size_t>(l)].walkable) return true;
+            return false;
+        };
+        if (walked(nearest)) return nearest;
+        for (const int n : nav_->nearestNodes(p, kWalkStartNodes))
+            if (walked(n)) return n;
+        return nearest;
+    }
+    // THE LINK OF A STREET'S PAIR WHOSE PAVEMENT `p` IS ON: link `l`, or its twin (the same street the other way) where
+    // `p` lies on the twin's kerb side. A street is two links, one each way, and a walker walks a link on its kerb side
+    // (rightOf its direction). -1 stays -1.
+    int kerbSideLink(int l, engine::Vec2 p) const {
+        if (nav_ && l >= 0 && static_cast<std::size_t>(l) < twinOf_.size() && twinOf_[static_cast<std::size_t>(l)] >= 0 &&
+            !nav_->links[static_cast<std::size_t>(l)].footpath &&
+            dot(p - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(l)].from)],
+                engine::rightOf(nav_->direction(l))) < 0)
+            return twinOf_[static_cast<std::size_t>(l)];
+        return l;
+    }
+    // THE LINK A WALK FROM OR TO `p` IS ALONG: the nearest link (whatever it carries), on `p`'s pavement (kerbSideLink).
+    int kerbLinkNear(engine::Vec2 p) const { return nav_ ? kerbSideLink(nav_->nearestLink(p), p) : -1; }
+
     // Send an agent to a world position (possession, ADR-0079): route from
     // where they are to the nearest node and walk/drive there — startTrip with
     // snapped endpoints, in the same public index-based idiom as the tether
@@ -814,24 +850,7 @@ public:
              a.leg < static_cast<int>(a.route.links.size()))
                 ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
         Real keepDist = a.distOnLeg;
-        int from = legLink >= 0 ? nav_->links[static_cast<std::size_t>(legLink)].to : nav_->nearestNode(a.pos);
-        // A WALKER LEAVES FROM A NODE PEOPLE WALK: the nearest node can be a ramp's or a freeway's, none of whose links
-        // is walkable (NavLink::walkable), and a walk from it never routes -- measured on brain_crowd: people at a place
-        // beside an arterial, 10 m from a ramp's node, could not walk anywhere and stood for good (ADR-0446). The
-        // nearest few nodes are looked at for the first a walkable link leaves; none: the nearest, as before.
-        if (legLink < 0 && from >= 0) {
-            const auto walked = [&](int n) {
-                for (const int l : nav_->outLinks[static_cast<std::size_t>(n)])
-                    if (nav_->links[static_cast<std::size_t>(l)].walkable) return true;
-                return false;
-            };
-            if (!walked(from))
-                for (const int n : nav_->nearestNodes(a.pos, kWalkStartNodes))
-                    if (walked(n)) {
-                        from = n;
-                        break;
-                    }
-        }
+        int from = legLink >= 0 ? nav_->links[static_cast<std::size_t>(legLink)].to : walkStartNode(a.pos);
         if (from < 0) return false;
         // A DESTINATION THAT ROUTES. The single nearest node to `dest` can have
         // no path from here at all — 394 -> 86 in metro are 32 m apart with no
@@ -848,14 +867,7 @@ public:
         // ...ON THE DESTINATION'S SIDE OF IT. A street is two links, one each way, and a walker walks a link on
         // its kerb side (rightOf its direction); the nearest link is either of the pair, so half the errands
         // ended on the far pavement, a carriageway from the door (measured: 24.9 m from a civic entrance).
-        auto sideLink = [&](int l, engine::Vec2 p) {
-            if (l >= 0 && static_cast<std::size_t>(l) < twinOf_.size() && twinOf_[static_cast<std::size_t>(l)] >= 0 &&
-                !nav_->links[static_cast<std::size_t>(l)].footpath &&
-                dot(p - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(l)].from)],
-                    engine::rightOf(nav_->direction(l))) < 0)
-                return twinOf_[static_cast<std::size_t>(l)];
-            return l;
-        };
+        auto sideLink = [&](int l, engine::Vec2 p) { return kerbSideLink(l, p); };
         auto stationOn = [&](int l, engine::Vec2 p) {   // metres along link l level with p
             const engine::NavLink& L = nav_->links[static_cast<std::size_t>(l)];
             const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)];

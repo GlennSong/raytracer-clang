@@ -4044,3 +4044,169 @@ TEST_CASE(road_model_35_the_one_router_on_the_shipped_levels) {
         }
     }
 }
+
+// ---- 36. where a place joins the walks: one query (ADR-0468, issue #300) -------------------------------------------------
+
+namespace {
+// The first street of a road-file edge (none: it has none).
+ModelStreetId streetOfRoad(const RoadModel& m, const std::string& road) {
+    for (uint32_t s = 0; s < m.streets.size(); ++s)
+        if (m.streets[s].road == road) return ModelStreetId(s);
+    return ModelStreetId();
+}
+bool sameJoin(const WalkJoin& a, const WalkJoin& b) {
+    return a.at == b.at && a.street == b.street && a.dir == b.dir && a.station == b.station && a.point.x == b.point.x &&
+           a.point.y == b.point.y && a.held == b.held && a.across == b.across && a.searched == b.searched &&
+           a.distance == b.distance && a.part == b.part && a.cutOff == b.cutOff && a.why == b.why;
+}
+void printJoin(const char* what, const RoadModel& m, const WalkJoin& j) {
+    if (!j.valid()) {
+        std::printf("      %s: none (%s)\n", what, walkJoinWhyWord(j.why));
+        return;
+    }
+    std::printf("      %s: walk %u (%s) %.2f m along, street %s kerb %+d, station %.2f, at (%.2f, %.2f); held %.2f m%s%s, %.2f m away\n",
+                what, j.at.walk.index, m.walkKind(j.at.walk).c_str(), j.at.along, m.streets[j.street.index].id.c_str(), j.dir,
+                j.station, j.point.x, j.point.y, j.held, j.across ? ", across" : "", j.cutOff ? ", cut off" : "", j.distance);
+}
+}  // namespace
+
+TEST_CASE(road_model_36_where_a_place_joins_the_walks_is_one_query) {
+    // A T (walkTee): the east road runs from the junction at (0, 0) to (100, 0), its station x; local, 5 m sidewalks
+    BuiltScene s = builtScene(walkTee());
+    CHECK(s.report.error.empty());
+    const LaneGraph& G = s.m.laneLevel;
+    const ModelStreetId east = streetOfRoad(s.m, "east");
+    const uint32_t eastNear = sidewalkOf(s.m, "east", +1), eastFar = sidewalkOf(s.m, "east", -1);
+    CHECK(east.valid() && eastNear != kNoIndex && eastFar != kNoIndex);
+    if (!east.valid() || eastNear == kNoIndex || eastFar == kNoIndex) return;
+    const std::vector<uint8_t> open = s.m.openTo("walker").walks;
+    const ReachableParts parts = reachableWalks(G, open);
+
+    // A DOOR ON A STATED STREET: east, station 50, each kerb. It lands on that kerb's sidewalk, at station 50, where the
+    // sidewalk's middle is (the model's sidewalkBeside), 50 m less the kerb end's station along the walk; in the one part.
+    for (const int kerb : {+1, -1}) {
+        const RoadFrontage f = s.m.frontageOn(east, 50.0, kerb);
+        const WalkJoin j = s.m.walkJoinOn(f, open, &parts);
+        printJoin(kerb > 0 ? "east 50 along" : "east 50 against", s.m, j);
+        Vec2 middle;
+        CHECK(s.m.sidewalkBeside(f, middle));
+        CHECK(j.valid() && j.why == WalkJoinWhy::None);
+        CHECK(j.at.walk.index == (kerb > 0 ? eastNear : eastFar));
+        CHECK(j.street == east && j.dir == kerb && approxEqual(j.station, 50.0, kWrittenStation));
+        CHECK(j.held == 0 && !j.across && !j.searched && j.distance == 0 && !j.cutOff && j.part == parts.largest);
+        CHECK(approxEqual(j.at.along, 50.0 - G.walks[j.at.walk.index].stationFrom, kWrittenStation));
+        CHECK(distance(j.point, middle) < 0.01);
+        CHECK(distance(G.pointAt(j.at.walk, j.at.along), j.point) < kSamePoint);
+    }
+    // A DOOR AT THE CORNER: east, station 1, nearer the junction than where a person steps off the kerb. It joins the
+    // sidewalk's end there (along 0), held by the metres to the kerb end, where the corner walk and the crossing meet it.
+    {
+        const WalkJoin j = s.m.walkJoinOn(s.m.frontageOn(east, 1.0, +1), open, &parts);
+        printJoin("east 1 along (the corner)", s.m, j);
+        const Walk& k = G.walks[eastNear];
+        CHECK(j.valid() && j.at.walk.index == eastNear && j.at.along == 0 && !j.across);
+        CHECK(approxEqual(j.station, k.stationFrom, kWrittenStation) && approxEqual(j.held, k.stationFrom - 1.0, kWrittenStation));
+        CHECK(j.held > 1.0);
+        uint32_t corners = 0;
+        for (uint32_t e = k.atStart.first; e < k.atStart.end(); ++e) corners += s.m.walkKind(G.walkJoins[e].walk) == "corner" ? 1u : 0u;
+        CHECK(corners >= 1u);
+        // ...and one past the far end of the road, held back to the sidewalk's other end
+        const WalkJoin far = s.m.walkJoinOn(s.m.frontageOn(east, 100.0, +1), open, &parts);
+        CHECK(far.valid() && far.at.walk.index == eastNear && approxEqual(far.at.along, k.length, kWrittenStation));
+    }
+    // THE FALLBACK BY POSITION: a point 15 m out from east's centre line at station 50, on the +1 kerb's side, with nothing
+    // stated: the same walk and station, `searched`, and the 6.5 m from the point to the sidewalk's middle reported.
+    {
+        const RoadFrontage f = s.m.frontageOn(east, 50.0, +1);
+        const Vec2 p = f.on + f.towards * 15.0;
+        const WalkJoin stated = s.m.walkJoinOn(f, open, &parts), near = s.m.walkJoinNear(p, open, &parts);
+        printJoin("15 m out at east 50 (by position)", s.m, near);
+        CHECK(near.valid() && near.searched && near.at.walk == stated.at.walk && approxEqual(near.at.along, stated.at.along, kWrittenStation));
+        CHECK(approxEqual(near.distance, distance(p, near.point), kSamePoint) && near.distance > 6.4 && near.distance < 6.6);
+        // DETERMINISM: the same answer every time it is asked, and on the same scene built again
+        CHECK(sameJoin(near, s.m.walkJoinNear(p, open, &parts)) && sameJoin(stated, s.m.walkJoinOn(f, open, &parts)));
+        BuiltScene again = builtScene(walkTee());
+        const std::vector<uint8_t> open2 = again.m.openTo("walker").walks;
+        const ReachableParts parts2 = reachableWalks(again.m.laneLevel, open2);
+        CHECK(sameJoin(near, again.m.walkJoinNear(p, open2, &parts2)));
+    }
+    // ONLY WALKS THE MOVER MAY USE. Its own kerb's sidewalk shut: the other kerb's, `across` (the person crosses there).
+    // Every walk shut: none, and why. A mover may use nothing: the vehicles.
+    {
+        std::vector<uint8_t> shut = open;
+        shut[eastNear] = 0;
+        const WalkJoin j = s.m.walkJoinOn(s.m.frontageOn(east, 50.0, +1), shut);
+        CHECK(j.valid() && j.at.walk.index == eastFar && j.across && j.dir == -1);
+        const WalkJoin none = s.m.walkJoinOn(s.m.frontageOn(east, 50.0, +1), std::vector<uint8_t>(open.size(), 0));
+        CHECK(!none.valid() && none.why == WalkJoinWhy::NotOpen);
+        CHECK(!s.m.walkJoinNear(Vec2(50, 15), s.m.openTo("vehicles").walks).valid());
+        // a part cut off: only the sidewalks open, each its own part; a door on a sidewalk not in the largest says so
+        std::vector<uint8_t> sidewalksOnly(open.size(), 0);
+        for (uint32_t w = 0; w < G.walks.size(); ++w) sidewalksOnly[w] = s.m.walkKind(WalkId(w)) == "sidewalk" ? 1 : 0;
+        const ReachableParts apart = reachableWalks(G, sidewalksOnly);
+        const WalkJoin nearKerb = s.m.walkJoinOn(s.m.frontageOn(east, 50.0, +1), sidewalksOnly, &apart),
+                       farKerb = s.m.walkJoinOn(s.m.frontageOn(east, 50.0, -1), sidewalksOnly, &apart);
+        CHECK(nearKerb.valid() && farKerb.valid() && nearKerb.part != farKerb.part);
+        CHECK(nearKerb.cutOff != (nearKerb.part == apart.largest) && farKerb.cutOff != (farKerb.part == apart.largest));
+        CHECK(nearKerb.cutOff || farKerb.cutOff);
+        // a frontage on no street (a stretch inside a junction, or none at all)
+        CHECK(s.m.walkJoinOn(RoadFrontage(), open).why == WalkJoinWhy::NoStreet);
+    }
+    // A STREET WITH A SIDEWALK ON ONE KERB ONLY: the T's south road states "along". A door on its other kerb joins the
+    // sidewalk across the road; one on its own kerb joins its own. With "none", no walk: none, and why.
+    {
+        BuiltScene one = builtScene(walkTee("along"));
+        CHECK(one.report.error.empty());
+        const ModelStreetId south = streetOfRoad(one.m, "south");
+        const uint32_t along = sidewalkOf(one.m, "south", +1);
+        CHECK(south.valid() && along != kNoIndex && sidewalkOf(one.m, "south", -1) == kNoIndex);
+        const std::vector<uint8_t> o = one.m.openTo("walker").walks;
+        const WalkJoin bare = one.m.walkJoinOn(one.m.frontageOn(south, 50.0, -1), o), own = one.m.walkJoinOn(one.m.frontageOn(south, 50.0, +1), o);
+        printJoin("one-sided south 50, the bare kerb", one.m, bare);
+        CHECK(bare.valid() && bare.at.walk.index == along && bare.across && bare.dir == +1 && approxEqual(bare.station, 50.0, kWrittenStation));
+        CHECK(own.valid() && own.at.walk.index == along && !own.across && own.dir == +1);
+        BuiltScene none = builtScene(walkTee("none"));
+        const ModelStreetId southNone = streetOfRoad(none.m, "south");
+        const WalkJoin j = none.m.walkJoinOn(none.m.frontageOn(southNone, 50.0, -1), none.m.openTo("walker").walks);
+        printJoin("no sidewalk, south 50", none.m, j);
+        CHECK(southNone.valid() && !j.valid() && j.why == WalkJoinWhy::NoWalk);
+    }
+    // A RAMP, WHICH HAS NO SIDEWALK (merge_taper: three ramps from local feeder streets onto a freeway). No walk is laid
+    // along a ramp or the freeway, so nothing joins one. A point on the middle of ramp_one's lane: the search by position
+    // never answers a ramp or a freeway (frontageAt: what a building may front), so it joins the nearest street a building
+    // may front, a feeder, and says how far that is. A frontage stated on a ramp's street, if it has one: no walk.
+    {
+        nlohmann::json g = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/lanelab/merge_taper.json"));
+        g.erase("junctions");
+        g.erase("streets");
+        writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+        for (nlohmann::json& jn : g["junctions"]) jn["control"] = "unmarked";   // (as road_model_13 lays its lane level)
+        g["lane_rules"] = {{"solid_before_stop_line", 20.0}};
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        LaneGraphBuild lg;
+        const RoadModel m = assembleRoadModel(*r, oneCar(), &lg);
+        CHECK(lg.error.empty());
+        if (!lg.error.empty()) std::printf("      merge_taper's lane level: %s\n", lg.error.c_str());
+        const std::vector<uint8_t> o = m.openTo("walker").walks;
+        uint32_t onFast = 0, laid = 0;
+        for (const Walk& k : m.laneLevel.walks) {
+            if (k.street >= m.streets.size()) continue;
+            ++laid;
+            const std::string& road = m.streets[k.street].road;
+            onFast += road.rfind("ramp_", 0) == 0 || road == "mainline" ? 1u : 0u;
+        }
+        CHECK(laid > 0u && onFast == 0u);
+        const ModelLane& ramp = m.lanes[laneNamed(m, "ramp_one.f0").index];
+        const Vec2 mid = m.lanePoints()[ramp.curve.first + ramp.curve.count / 2];
+        const WalkJoin j = m.walkJoinNear(mid, o);
+        printJoin("on ramp_one's middle (by position)", m, j);
+        CHECK(j.valid() && j.searched && m.streets[j.street.index].road.rfind("feed_", 0) == 0 && j.distance > 0);
+        const ModelStreetId rampStreet = streetOfRoad(m, "ramp_one");
+        CHECK(rampStreet.valid());
+        if (rampStreet.valid()) {
+            const WalkJoin onRamp = m.walkJoinOn(m.frontageOn(rampStreet, m.streets[rampStreet.index].from + 10.0, +1), o);
+            printJoin("stated on ramp_one's street", m, onRamp);
+            CHECK(!onRamp.valid() && onRamp.why == WalkJoinWhy::NoWalk);
+        }
+    }
+}

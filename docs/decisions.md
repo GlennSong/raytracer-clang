@@ -22764,3 +22764,100 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** piece 6 puts walkers on routes (their pace, and waiting at a crosswalk by `WalkRoute::crossings`); when the driving's test roads state their lanes' kinds (then the car search can ask `openTo` too); when the lone walk ends behind the long detours are joined; or when a mover other than a walker states waits.
+
+## ADR-0468 — One answer to where a place joins the sidewalks: a point on a walk, from the place's stated street, station and kerb, with one fallback by position (#306 task 4, piece 5; issue #300)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: the road model now answers, in one place, "where does this place (a marker, a door) join the sidewalks": a point on one walk of the lane level, with the street that walk runs along and the kerb it runs beside. Today three parts of the city sim each find the walking network their own way, and they disagree (issue #300). This piece adds the one answer and sets the three beside it on the shipped scenes. Nobody walks differently yet: piece 6 switches the three over.
+
+Words:
+- **Place:** a point people go to: one of the agent brain's markers (ADR-0441; the crowd's places, ADR-0446), or a building's door.
+- **Frontage:** where a place fronts the road: a street, a **station** (metres along the road's centre line, its **spine**) and a **kerb** (+1: the kerb of the traffic running along the spine; -1: the other).
+- **Walk:** a path a person on foot takes in the lane level (ADR-0466): a sidewalk's stretch along one kerb of one street, a corner, a crossing, a turn-round or a footway.
+- **Street map:** the old graph people walk on today (`NavGraph`), nodes every 60 m with a link each way along each street. Its **link** is one straight piece one way; a walker walks it on its traffic's kerb. Deleted in piece 10.
+- **Part (on foot):** a set of walks a person can get round, going from one to the next where their ends meet (ADR-0466, `reachableWalks`).
+- **Fallback:** the answer used only when nothing states the frontage.
+
+**What is stated about a place's frontage today** (checked in the code):
+- **The brain's markers: stated.** A marker states its street (by the road file's id), station and kerb (`CityMarker`; `markers/traffic_lab.json`: 7 of its 8; the crowd's places: all, made from `frontageOn` in `city_crowd.cpp`). One traffic_lab marker (`south`) is a plan point, looked up by position.
+- **A lot's building and its door: nothing.** `LotBuilding` holds no street, station or kerb; `DoorSpec` holds a foot point, a normal, a width and a height. The lot pass finds the nearest street a building may front (`LotRoads::nearestFrontable`, over the road model's streets: `LotRoad::id` is the model's street id) to turn the building, then throws the answer away (`city_lots.cpp`, the facing step). `kLotCitysimFields` names nothing about frontage. The old sim's places (`PlaceMap::add`) snap each door to the nearest link's pavement of the street map, by scanning every link.
+- **Recording it on the lots was not done** (the brief's stop rule): three fields on `LotBuilding` (street id, station, kerb), written at the facing step from the same `nearestFrontable` answer, would move `kLotsFormatVersion` 5 to 6 and re-bake every level that grows lots. Options for Glenn are under "Left for later".
+
+**The query** (`road_model.h`, `RoadModel`; built layer only, since it reads the lane level's walks):
+- `walkJoinOn(frontage, openWalks, parts)`: **from stated facts**. The frontage is `frontageOn(street, station, kerb)`. It answers the walk along that street on that kerb whose stretch of spine holds the station.
+  - Past the stretch (a place by a junction, nearer it than where a person steps off the kerb; a sidewalk that stops short), it answers that kerb's walk's nearest end, and `held` says how many metres along the spine.
+  - Where that kerb has no walk the mover may use (a street with a sidewalk on one kerb only), it answers the other kerb's walk at the station, `across` set: the person must cross the road there.
+  - A footway's walk is its middle and serves both kerbs.
+  - Only a walk that runs ALONG a street is joined (a sidewalk's or footway's stretch: `Walk::street` set). A corner, crossing or turn-round runs round or across a junction or a road end, and no place fronts one. This is by the walk's ids, not by kind names (Kinds Are Data).
+  - `openWalks` is the mover's open walks (`RoadModel::openTo(mover).walks`); a closed walk is never answered. `parts`, when handed in (`reachableWalks` over the same open walks), lets the answer say `cutOff`: its walk is not in the largest part.
+  - Not joined: `why`, one of: no street (the frontage is a stretch inside a junction, or none), no walk laid along the street, its walks closed to the mover (`walkJoinWhyWord`).
+  - Ties: the lower walk id.
+- `walkJoinNear(point, openWalks, parts)`: **the one fallback, by position**, for a place that states nothing (a lot's door; a person standing anywhere). It is `frontageAt(point)` (the existing search the lot pass faces its doors by: the nearest road a building may front, so never a freeway or a ramp), then `walkJoinOn`. It sets `searched` and reports `distance`, the metres from the point to the point joined.
+- `walkAlongAt(walk, station)`: where a station falls along a walk that runs along a street, read off the stations of the sidewalk or footway lane it was cut from, point by point, as the lane level cut it. Not a proportion: exact on a bend.
+- The result, `WalkJoin`: the `WalkPoint` (walk and metres along), street, kerb, station, the point, `held`, `across`, `searched`, `distance`, `part`, `cutOff`, `why`. A `WalkPoint` is what the one route-finder takes (`findWalkRoute`, ADR-0467).
+
+**The three uses, set beside it** (`level_walk_join_the_street_maps_lookups_beside_the_one_query`, level_tests, 29 s). What each use does today:
+- **Placing a place** (the crowd's usable test, `city_render.cpp`): the nearest link people walk within 25 m (now named `CityRenderSystem::nearestWalkableLink`), in the street map's main part. It takes no kerb (either link of a street's pair).
+- **Starting a walk** (`CitySim::sendAgentTo`): the nearest link on the place's pavement (now named `CitySim::kerbLinkNear` / `kerbSideLink`), and the node the walk leaves from (now named `CitySim::walkStartNode`: the nearest, or the first of the nearest 8 a walkable link leaves).
+- **Finishing a walk** (`sendAgentTo`'s destination): the same nearest link, the walk stopping beside the place only when the place is within 15 m of that link; else it ends at a node.
+- They were inline; they are now named functions, called by the same code in the same order (the hashes below did not move), so the test asks exactly what the sim asks.
+- "Agree" is the same street and, where the use takes one, the same kerb. "Apart" is metres between the street map's pavement point (its first walking file, 1 m in from the kerb) and the model's point (the sidewalk's middle).
+
+| | brain_crowd (traffic_lab's roads) | river_town |
+|---|---|---|
+| Places (stated) | 451 (450): traffic_lab/brain_lab's 8 markers + the crowd's 443 | 799 (799), the crowd's |
+| Joined by the model | 451 | 799 |
+| ...held past a sidewalk's end / across the road | 0 / 0 | 0 / 0 |
+| ...in a cut-off part on foot | 4 (3 one-walk parts: s33 twice, s147, s208) | **98** (5 parts: 41 on s10, s44, s284, s320; 28 on s135; 22 on s78, s139; 6 on s312; 1 on s345) |
+| Placing: agree | 445 (98.7%) | 751 (94.0%) |
+| ...cross street at a corner | 6 | 30 |
+| ...a park's or the quad's footpath | 0 | 11 |
+| ...a link inside a junction | 0 | 7 |
+| Starting: agree | 405 (89.8%) | 749 (93.7%) |
+| ...a one-way street: the street map walks only its traffic's kerb | 38 | 0 |
+| ...a ramp's or freeway's link, which nobody walks | 2 (`far`, shop_15) | 2 |
+| ...cross street at a corner / footpath / inside a junction | 6 / 0 / 0 | 30 / 11 / 7 |
+| Start node not the nearest (the nearest is a ramp's) | 1 (`far`) | 0 |
+| Start node from the model's point: median / 95th / worst | 18.7 / 26.7 / 31.9 m | 17.2 / 25.2 / 32.9 m |
+| Finishing: agree | 405 (89.8%) | 746 (93.4%) |
+| ...ends at a node, the place over 15 m off its link | 0 | 3 |
+| Apart where they agree (starting): median / 95th / worst | 0.76 / 1.50 / 2.36 m | 1.62 / 2.62 / 11.82 m |
+| The fallback by position gives the stated walk | 445 of 451 (the other 6: the cross street at a corner) | 764 of 799 (worst 6.65 m apart); the other 35: 28 the cross street at a corner, 7 another street |
+| traffic_lab/brain_lab's 8 markers: placing / starting | 8 / 7 (`far`: a ramp's link) | |
+
+**Buildings' doors** (river_town, nothing stated, so the fallback against the old sim's door snap): 913 doors, 902 joined (26 in a cut-off part), 11 not joined (the nearest road a building may front is a stretch inside a spread junction); door to the point joined: median 3.6 m, 95th 15.8 m, worst 55.1 m. Agree with the street map's snap: 746 (81.7%); 136 snap to a park's or the quad's footpath, 14 to the other kerb, 5 to the cross street at a corner, 1 to another street.
+
+**The disagreements, by cause:**
+- **Corners** (6 and 30, and 5 doors): a place near a junction is about as near the cross street's centre line as its own; the nearest link (and the fallback by position, which agrees with it there) picks the cross street. The stated street is the place's own. Piece 6 should ask from the stated facts.
+- **One-way streets** (38 on brain_crowd, the ring road): the street map has one link along a one-way street, walked on its traffic's kerb, so a place on the other kerb starts and ends 11-12 m away across the carriageway. The model lays a sidewalk on both kerbs and joins the place's own.
+- **Ramp nodes and ramp links** (issue #300's first case; `far`, shop_15 and 2 on river_town): the nearest link is a ramp's or freeway's, which nobody walks, and `far`'s nearest node is a ramp's (ADR-0446's work-around picks the next node). The model's answer is never a ramp or freeway: no walk is laid along one, and the fallback's search never answers one.
+- **Walks ending past where the sidewalk stops** (issue #300's second case, ADR-0446's 25-32 m): the street map starts and ends a walk at a node, which lies up to 31.9 m (brain_crowd) and 32.9 m (river_town) from the place's sidewalk point, and 3 river_town walks end at a node because the place is over 15 m off its link. The model answers a point on the place's own sidewalk, 0 m along the spine from it at every one of the 1,250 places.
+- **Footpaths and links inside junctions** (river_town): the street map's walks through the parks and the quad (`appendFootpaths`, from the lot pass's `LotBuilding::walks`) and its links inside spread junctions. The lane level has no park or quad walk: those are lot facts, not road facts, and are not in the one lane level. **Piece 6 must decide where they go** (136 doors snap to one today).
+- **Cut-off parts** (4 and 98, and 26 doors): places the street map lets people walk to and from, whose sidewalk the model's walks do not join to the rest: ADR-0466's lone walk ends (corners with no walk, unstated corners, carry-ons into streets with no walk). On river_town that is 12% of the crowd's places. **If piece 6 switched over today, those 98 people would find no way.** They are said (`cutOff`), not hidden.
+
+**Tests:**
+- `road_model_36_where_a_place_joins_the_walks_is_one_query` (lanes_tests), on small scenes built through the model:
+  - a door stated on the T's east road at station 50, each kerb: that kerb's sidewalk, station 50, at the sidewalk's middle (`sidewalkBeside`), 41.5 m along (50 less the kerb end's 8.5), in the one part;
+  - a door at the corner (station 1): the sidewalk's end there (along 0), held 7.5 m, where a corner walk meets it; one past the road's far end: the other end;
+  - the fallback 15 m out: the same walk and station, 6.5 m away; the same answer asked twice and on the scene built again;
+  - its own kerb's sidewalk closed: the other kerb's, `across`; every walk closed: none, "closed to the mover"; the vehicles' mover: none; only sidewalks open (each its own part): a door on one not the largest says `cutOff`; no street: "fronts no street";
+  - a street with a sidewalk on one kerb only (`"sidewalks": "along"`): a door on the bare kerb joins the other, `across`; with `"none"`: none, "no walk is laid along its street";
+  - a ramp with no sidewalk (merge_taper): no walk is laid along any ramp or the freeway; a point on the middle of ramp_one's lane joins feed_one's sidewalk (95 m away, said); a frontage stated on ramp_one's own street: none, "no walk is laid along its street".
+  - Checked to bite by breaking the code on purpose: the kerb not asked (6 checks fail), the closed walks taken (3 fail), the station not held to the walk (2 fail). Put back, all pass.
+- `level_walk_join_the_street_maps_lookups_beside_the_one_query` (level_tests): the table above, its counts pinned (places, cut off, agreeing per use, fallback agreeing, ramp nodes, ends at a node, doors).
+
+**Hashes and caches:** no format, bake key or lots tag moved; no builder code touched. The look-ups named in the sim are the same code; the hashes held: brain_crowd 0xf0003605a4cb6ba2, river_town crowd 0x83b99189cfc16fbd, traffic_lab v2 five minutes 0x55109fe9a8e247b1, near crowd 0x59168988decd4c99.
+
+**Suites:** full build; lanes_tests 144/144; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513; level_tests brain_lab 12/12, first_cars 1/1, river_town crowd 1/1, walk_join 1/1. Failing as before only: brain_crowd's kerb-wait share (line 275), the near crowd's off-lane worst (line 1108), v2_drives's two limits (lines 1002, 1026).
+
+**One model:**
+- Concepts touched: roads (where a place joins the walks; a station's place along a walk). The answer is in `roads/` (`road_model.h/.cpp`), from the model's own streets, walks and the existing `frontageOn` / `frontageAt`; no second structure (a scan of the lane level's walks, no index of its own).
+- The street map's three look-ups are named, not added to: no new fact on it, and the only new reader is the comparison test, which goes with it.
+- No road fact is computed outside `roads/`.
+
+**For players:** nothing changes on any level.
+
+**Left for later:**
+- **Piece 6** switches the three uses to `walkJoinOn` (markers) and `walkJoinNear` (anything unstated), after the cut-off parts above are joined or decided, and after the parks' and quad's walks have a home.
+- **A lot's frontage, for Glenn to choose:** (a) record street id, station and kerb on `LotBuilding` at the facing step (the same `nearestFrontable` answer; lot format 5 to 6, every lots level re-baked); then doors ask `walkJoinOn` and the corners case goes. (b) Leave doors unstated and use the fallback (measured on the crowds' stated places: it gives the stated walk for 1,209 of 1,250; of the other 41, 34 pick the cross street at a corner and 7 another street). Note the lot pass faces a building by its centroid, the fallback asks from the door.
+- `RouteWalker` (route.h) could carry its parts, so a caller need not compute them.

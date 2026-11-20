@@ -1097,6 +1097,7 @@ add_executable(level_tests
     tests/test_brain_lab.cpp        # one resident with the agent brain makes a whole trip between markers (ADR-0441)
     tests/test_brain_crowd.cpp      # a crowd of 200 residents made from the roads drives the lab (ADR-0446)
     tests/test_river_town_crowd.cpp # river_town's crowd on the new driving; the old drives nothing (ADR-0457)
+    tests/test_walk_join_levels.cpp # where a place joins the walks: the street map's look-ups beside the one query (ADR-0468)
     # Drives the real LevelLoader, which needs a Renderer. NullRenderer
     # satisfies Renderer::create() without a GPU (exactly one create() is linked
     # per target, and this target links no backend).
