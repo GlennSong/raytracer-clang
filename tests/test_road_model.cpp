@@ -3259,8 +3259,9 @@ TEST_CASE(road_model_31_the_shipped_levels_walks) {
         for (const WalkCorner& wc : r->walkCorners) {
             if (wc.lane < 0) {
                 ++whys[wc.why.find("kerb end lies") != std::string::npos ? std::string("a kerb end lies out in the paved junction") : wc.why];
-                std::printf("        no walk: junction %s arms %u-%u%s: %s\n", m.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB,
-                            wc.spread ? " (across its points)" : "", wc.why.c_str());
+                std::printf("        no walk: junction %s arms %u-%u%s: %s; kerb ends (%.2f, %.2f) and (%.2f, %.2f)\n",
+                            m.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB, wc.spread ? " (across its points)" : "",
+                            wc.why.c_str(), wc.anchorA.x, wc.anchorA.y, wc.anchorB.x, wc.anchorB.y);
                 continue;
             }
             ++laid;
@@ -3748,10 +3749,13 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         // a lone end is counted where its corner has no walk AND no crosswalk people use, and more crosswalks now lie clear of
         // the other road; sidewalks cut off 4 -> 0 / 25 -> 14. The kerb ends still out are at the junctions the next one
         // stands too close to (road_model_39), and four river_town corners at j19, j116 and j119)
+        // (ADR-0472, the bands mitred at a kink: two pieces 1 -> 0 / 5 -> 1. The one left is river_town j90 0-1, whose arm 0
+        // kerb end lies on a scrap of s228's sidewalk inside s227's carriageway: road_model_41. Sidewalks cut off unchanged,
+        // 0 / 14: the parts still cut off are bounded by kerb ends out.)
         const bool lab = std::string(level) == "traffic_lab";
         const std::map<std::string, uint32_t> pinned =
-            lab ? std::map<std::string, uint32_t>{{"kerb end out", 4}, {"two pieces", 1}, {"meets another road", 2}}
-                : std::map<std::string, uint32_t>{{"kerb end out", 22}, {"two pieces", 5}, {"carry-on", 16}};
+            lab ? std::map<std::string, uint32_t>{{"kerb end out", 4}, {"meets another road", 2}}
+                : std::map<std::string, uint32_t>{{"kerb end out", 22}, {"two pieces", 1}, {"carry-on", 16}};
         CHECK(cause == pinned);
         CHECK(kinds.count("turn_round") && kinds.at("turn_round") == (lab ? 16u : 31u));
         CHECK(sidewalks - inLargest == (lab ? 0u : 14u));
@@ -4531,5 +4535,256 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         CHECK(pairs > 500u && short_ == 0u && past == 0u);
         const std::string known = std::string(level) == "agent_lab" ? "river_town" : level;   // (agent_lab has river_town's roads)
         CHECK(squeezed == knownSqueezed.at(known));
+    }
+}
+
+// ---- 40. the bands at a kink: each road's asphalt, shoulder and sidewalk mitred on the bisector (ADR-0472) ---------------
+
+namespace {
+// TWO LOCAL ROADS MEETING END TO END AT (0, 0): `a` from the west, `b` leaving `turnDeg` counter-clockwise of east, so the
+// outside of the bend lies to the south (a's right, b's right). The file says a carries on as b. Both carry a planned
+// profile, so their heights are as given: `a` at 0 m and `b` at `riseB`.
+nlohmann::json kinkScene(double turnDeg, double riseB = 0) {
+    nlohmann::json g;
+    g["name"] = "kink";
+    const Vec2 far = directionOf(turnDeg) * 100.0;
+    auto road = [](const std::string& id, const Vec2& p, const Vec2& q, double z) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{p.x, p.y}, {q.x, q.y}}}}},
+                              {"profile", {{"step", 1.0}, {"z", std::vector<double>(101, z)}}}};
+    };
+    g["edges"] = nlohmann::json::array({road("a", Vec2(-100, 0), Vec2(0, 0), 0.0), road("b", Vec2(0, 0), far, riseB)});
+    g["junctions"] = nlohmann::json::array();
+    g["streets"] = nlohmann::json::array(
+        {{{"id", "a"}, {"road", "a"}, {"from", 0.0}, {"to", 100.0}, {"junctions", {nullptr, nullptr}}, {"carries_on", {nullptr, "b"}}},
+         {{"id", "b"}, {"road", "b"}, {"from", 0.0}, {"to", 100.0}, {"junctions", {nullptr, nullptr}}, {"carries_on", {"a", nullptr}}}});
+    return g;
+}
+// THE DRAWN PAVEMENT OF A BUILD AGAIN, from its own lanes and heights: as the build drew it, or (`stated` false) with the
+// file's statements of where road ends meet -- its streets and junctions -- taken away, which is how every kink was drawn
+// before ADR-0472 (each band cut square at its road's end).
+Pavement redrawn(const Result& r, bool stated) {
+    RoadLabGraph g = r.graph;
+    if (!stated) {
+        g.streets.clear();
+        g.junctions.clear();
+    }
+    Pavement p;
+    buildFootprints(g, r.lanes, *r.heights, p);
+    return p;
+}
+// The way out of kinkScene's bend from (0, 0): half way round its outside, from a's way back west to b's way out.
+Vec2 kinkOutside(double turnDeg) { return directionOf(-90.0 + turnDeg * 0.5); }
+// A T whose street kinks at the junction: `west` ends at (0, 0) from the west, `east` leaves it `turnDeg` clockwise of
+// east, and the stem `south` comes up from the south, on the inside of the bend. Nothing stands on the north side, the
+// outside. Laid out as the layout tool would state it.
+nlohmann::json kinkTee(double turnDeg) {
+    nlohmann::json g;
+    g["name"] = "kink_tee";
+    auto road = [](const std::string& id, const Vec2& p, const Vec2& q) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{p.x, p.y}, {q.x, q.y}}}}}};
+    };
+    g["edges"] = nlohmann::json::array({road("west", Vec2(-100, 0), Vec2(0, 0)), road("east", Vec2(0, 0), directionOf(-turnDeg) * 100.0),
+                                        road("south", Vec2(0, -100), Vec2(0, 0))});
+    writeLayout(g, deriveLayout(RoadLabGraph::fromJson(g), LayoutSource::Inferred));
+    return g;
+}
+// Two polygon sets the same to the bit (a byte-for-byte check of the drawn pavement, so an exact compare is the point).
+bool samePolySets(const PolySet& x, const PolySet& y) {
+    auto sameRing = [](const Ring& p, const Ring& q) {
+        if (p.size() != q.size()) return false;
+        for (std::size_t i = 0; i < p.size(); ++i)
+            if (!(p[i].x == q[i].x && p[i].y == q[i].y)) return false;
+        return true;
+    };
+    if (x.size() != y.size()) return false;
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        if (!sameRing(x[i].outer, y[i].outer) || x[i].holes.size() != y[i].holes.size()) return false;
+        for (std::size_t h = 0; h < x[i].holes.size(); ++h)
+            if (!sameRing(x[i].holes[h], y[i].holes[h])) return false;
+    }
+    return true;
+}
+// How many points along the broken line `pts` (every 10 cm) lie off a polygon set.
+uint32_t offAlong(const PolySet& s, const std::vector<Vec2>& pts) {
+    uint32_t off = 0;
+    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+        const int n = std::max(1, static_cast<int>(distance(pts[i], pts[i + 1]) / 0.1));
+        for (int k = 0; k <= n; ++k) off += contains(s, lerp(pts[i], pts[i + 1], static_cast<Real>(k) / n)) ? 0u : 1u;
+    }
+    return off;
+}
+}  // namespace
+
+TEST_CASE(road_model_40_the_bands_are_mitred_at_a_kink) {
+    // A CARRY-ON KINKED 40 DEGREES. The file says a carries on as b, so the two ends are one kink. Each band runs on to the
+    // bisector on the outside of the bend: the carriageway is asphalt out to its mitre (no bay left for the asphalt's
+    // rounding to bite out of the kerb), the sidewalk is unbroken from that kerb to its own mitre, the sidewalk is in one
+    // piece each side, and a walk along the middle of the outside sidewalk stays on it across the kink. The same build drawn
+    // again with nothing stated about where the ends meet shows the old wedge: bare ground across the bisector, the outside
+    // sidewalk in two pieces.
+    {
+        const double turn = 40;
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(turn)));
+        const Pavement drawn = redrawn(*r, true), unstated = redrawn(*r, false);
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() != 1u) return;
+        CHECK(samePolySets(drawn.sidewalk, r->pavement.sidewalk) && samePolySets(drawn.surface, r->pavement.surface));
+        CHECK(g.edges[static_cast<std::size_t>(kinks[0].edgeA)].id == "a" && kinks[0].endA == 1);
+        CHECK(g.edges[static_cast<std::size_t>(kinks[0].edgeB)].id == "b" && kinks[0].endB == 0);
+        CHECK(approxEqual(kinks[0].turn, turn * DEG_TO_RAD, 1e-9));
+        const EdgeSpec& a = g.edges[static_cast<std::size_t>(g.index.at("a"))];
+        const Real kerb = g.carriagewayHalfWidth(a), outer = g.sidewalkOuterHalfWidth(a), middle = (kerb + outer) * 0.5;
+        const Real reach = 1.0 / std::cos(turn * 0.5 * DEG_TO_RAD);   // how far out along the bisector a band's edge meets its twin's, per metre
+        const Vec2 out = kinkOutside(turn);
+        CHECK(contains(r->pavement.surface, out * (kerb * reach - 0.05)));
+        CHECK(!contains(r->pavement.sidewalk, out * (kerb * reach - 0.05)));   // (the kerb is not drawn into the carriageway)
+        CHECK(!contains(unstated.surface, out * (kerb * reach - 0.05)));
+        std::vector<Vec2> across;
+        for (Real d = kerb * reach + 0.05; d < outer * reach - 0.05; d += 0.1) across.push_back(out * d);
+        uint32_t bare = 0, bareBefore = 0;
+        for (const Vec2& p : across) {
+            bare += contains(r->pavement.sidewalk, p) ? 0u : 1u;
+            bareBefore += contains(unstated.sidewalk, p) ? 0u : 1u;
+        }
+        std::printf("      a 40-degree carry-on: %zu points across the bisector, kerb to back: %u off the sidewalk (stated nothing: %u)\n",
+                    across.size(), bare, bareBefore);
+        CHECK(!across.empty() && bare == 0u && bareBefore == across.size());
+        CHECK(!contains(r->pavement.sidewalk, out * (outer * reach + 0.05)));
+        std::printf("      sidewalk pieces: %zu (stated nothing: %zu)\n", r->pavement.sidewalk.size(), unstated.sidewalk.size());
+        CHECK(r->pavement.sidewalk.size() == 2u && unstated.sidewalk.size() == 3u);
+        // the outside sidewalk's middle: along a, to the bisector, along b
+        const Vec2 bOut = directionOf(turn);
+        const std::vector<Vec2> walkLine = {Vec2(-20, -middle), out * (middle * reach), bOut * 20.0 - perp(bOut) * middle};
+        CHECK(offAlong(r->pavement.sidewalk, walkLine) == 0u);
+        CHECK(offAlong(unstated.sidewalk, walkLine) > 0u);
+    }
+    // A T WHOSE STREET KINKS 25 DEGREES AT THE JUNCTION, the stem on the inside of the bend: the two street ends with
+    // nothing between them on the outside are a kink, and the corner walk round the outside, which found the drawn sidewalk
+    // in two pieces before (ADR-0469's B2), is laid. Every corner has its walk, on the drawn sidewalk.
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkTee(25)));
+        const std::vector<BandKink> kinks = bandKinks(r->graph);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() == 1u)
+            CHECK(r->graph.edges[static_cast<std::size_t>(kinks[0].edgeA)].id == "east" &&
+                  r->graph.edges[static_cast<std::size_t>(kinks[0].edgeB)].id == "west");
+        const PreparedSet walk(drawnWalk(*r));
+        uint32_t laid = 0;
+        for (const WalkCorner& wc : r->walkCorners) {
+            if (wc.lane < 0) std::printf("      no walk: arms %u-%u: %s\n", wc.armA, wc.armB, wc.why.c_str());
+            CHECK(wc.fault == WalkCornerFault::None);
+            if (wc.lane < 0) continue;
+            ++laid;
+            CHECK(offTheWalk(r->lanes.walks[static_cast<std::size_t>(wc.lane)], walk) == 0u);
+        }
+        CHECK(laid == 3u);
+    }
+    // A SHARP KINK, 150 DEGREES: the mitre's point would reach out 3.9 times the band's half width; it is cut off square
+    // across the bisector at kMitreLimit times it. The sidewalk is drawn up to the cut and not past it.
+    {
+        const double turn = 150;
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(turn)));
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        CHECK(kinks.size() == 1u);
+        if (kinks.size() != 1u) return;
+        const EdgeSpec& a = g.edges[static_cast<std::size_t>(g.index.at("a"))];
+        const Real outer = g.sidewalkOuterHalfWidth(a), cap = kMitreLimit * outer;
+        const Vec2 out = kinkOutside(turn);
+        Real farthest = 0;
+        for (const Ring& piece : mitrePieces(g, kinks[0], outer, outer))
+            for (const Vec2& q : piece) farthest = std::max(farthest, dot(q, out));
+        std::printf("      a 150-degree kink: the sidewalk's mitre reaches %.2f m out (cut at %.2f; uncut it would reach %.2f)\n", farthest,
+                    cap, outer / std::cos(turn * 0.5 * DEG_TO_RAD));
+        CHECK(approxEqual(farthest, cap, kSamePoint));
+        CHECK(contains(r->pavement.sidewalk, out * (cap - 0.1)));
+        CHECK(!contains(r->pavement.sidewalk, out * (cap + 0.1)));
+    }
+    // ENDS AT DIFFERENT HEIGHTS ARE NOT JOINED: the same 40-degree carry-on with b 5 m up (more than sameLevelDz) is no
+    // kink, and the outside stays as each road draws it
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(40, 5.0)));
+        CHECK(r->graph.rules.sameLevelDz < 5.0);
+        CHECK(bandKinks(r->graph).empty());
+        const EdgeSpec& a = r->graph.edges[static_cast<std::size_t>(r->graph.index.at("a"))];
+        const Real middle = (r->graph.carriagewayHalfWidth(a) + r->graph.sidewalkOuterHalfWidth(a)) * 0.5;
+        CHECK(!contains(r->pavement.sidewalk, kinkOutside(40) * (middle / std::cos(20 * DEG_TO_RAD))));
+    }
+    // A STRAIGHT CARRY-ON IS UNCHANGED: no kink, a mitre of nothing, and the drawn pavement the same to the bit as the same
+    // build drawn with nothing stated about where the ends meet
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(kinkScene(0)));
+        const Pavement drawn = redrawn(*r, true), unstated = redrawn(*r, false);
+        CHECK(bandKinks(r->graph).empty());
+        BandKink straight;
+        straight.edgeA = r->graph.index.at("a");
+        straight.endA = 1;
+        straight.edgeB = r->graph.index.at("b");
+        straight.endB = 0;
+        for (const Ring& piece : mitrePieces(r->graph, straight, 9.0, 9.0)) CHECK(piece.empty());
+        CHECK(samePolySets(drawn.surface, unstated.surface));
+        CHECK(samePolySets(drawn.sidewalk, unstated.sidewalk));
+        CHECK(samePolySets(drawn.shoulder, unstated.shoulder));
+        CHECK(samePolySets(drawn.median, unstated.median));
+        CHECK(drawn.footprints.size() == unstated.footprints.size());
+        for (std::size_t li = 0; li < drawn.footprints.size() && li < unstated.footprints.size(); ++li)
+            CHECK(samePolySets(drawn.footprints[li], unstated.footprints[li]));
+        // (and the build drew the same)
+        CHECK(samePolySets(drawn.sidewalk, r->pavement.sidewalk) && samePolySets(drawn.surface, r->pavement.surface));
+    }
+}
+
+// THE SHIPPED ROAD FILES' KINKS (ADR-0472): how many there are, how many the mitre limit cuts off, what the mitres add to
+// the drawn pavement (the same build drawn again with nothing stated about where ends meet), that no mitre piece crosses
+// itself, and that the corners left with the drawn sidewalk in two pieces are the three known ones -- none at a kink.
+TEST_CASE(road_model_41_the_shipped_kinks_are_mitred) {
+    // the corners left with no walk because the drawn sidewalks by their kerb ends are two pieces (junction id, arms)
+    const std::map<std::string, std::set<std::string>> knownTwoPieces = {
+        {"traffic_lab", {}},
+        // j0 6-0, j14 5-0: S2's box edges put their kerb ends 37-48 m out, and the walk round the block between them leaves
+        // the corner window (kCornerWindow); j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's
+        // carriageway (ADR-0471: j90 arm 0 too close to j120 for its angle)
+        {"river_town", {"j0 6-0", "j14 5-0", "j90 0-1"}}};
+    for (const char* level : {"traffic_lab", "river_town"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const std::unique_ptr<Result> r =
+            build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+        const RoadLabGraph& g = r->graph;
+        const std::vector<BandKink> kinks = bandKinks(g);
+        uint32_t capped = 0, crossed = 0;
+        Real sharpest = 0;
+        for (const BandKink& k : kinks) {
+            sharpest = std::max(sharpest, k.turn * RAD_TO_DEG);
+            capped += k.turn > 120 * DEG_TO_RAD ? 1u : 0u;
+            const EdgeSpec& A = g.edges[static_cast<std::size_t>(k.edgeA)];
+            const EdgeSpec& B = g.edges[static_cast<std::size_t>(k.edgeB)];
+            if (k.turn > 120 * DEG_TO_RAD)
+                std::printf("        past the mitre limit: %s and %s, turning %.1f degrees\n", A.id.c_str(), B.id.c_str(), k.turn * RAD_TO_DEG);
+            for (const Ring& piece : mitrePieces(g, k, g.sidewalkOuterHalfWidth(A), g.sidewalkOuterHalfWidth(B))) {
+                Vec2 at;
+                if (piece.size() == 4u && (segmentsCross(piece[0], piece[1], piece[2], piece[3], at) || segmentsCross(piece[1], piece[2], piece[3], piece[0], at)))
+                    ++crossed;
+            }
+        }
+        const Pavement unstated = redrawn(*r, false);
+        const Real sidewalkAdded = setArea(r->pavement.sidewalk) - setArea(unstated.sidewalk);
+        const Real asphaltAdded = setArea(r->pavement.surface) - setArea(unstated.surface);
+        const Real overlap = setArea(intersectSets(r->pavement.sidewalk, r->pavement.surface));
+        const Real overlapBefore = setArea(intersectSets(unstated.sidewalk, unstated.surface));
+        std::set<std::string> twoPieces;
+        for (const WalkCorner& wc : r->walkCorners)
+            if (wc.fault == WalkCornerFault::TwoPieces)
+                twoPieces.insert(g.junctions[wc.junction.index].id + " " + std::to_string(wc.armA) + "-" + std::to_string(wc.armB));
+        std::printf("      %s: %zu kinks (the sharpest %.1f degrees; %u past the mitre limit), %u mitre pieces crossing themselves; the "
+                    "mitres add %.1f m2 of sidewalk (%.2f%%) and %.1f m2 of asphalt; sidewalk over asphalt %.1f m2 (stated nothing: %.1f); "
+                    "%zu corners with the sidewalk in two pieces\n",
+                    level, kinks.size(), sharpest, capped, crossed, sidewalkAdded, 100 * sidewalkAdded / setArea(unstated.sidewalk),
+                    asphaltAdded, overlap, overlapBefore, twoPieces.size());
+        CHECK(!kinks.empty() && crossed == 0u);
+        CHECK(sidewalkAdded > 0 && asphaltAdded > 0);
+        CHECK(overlap <= overlapBefore + 1.0);
+        CHECK(twoPieces == knownTwoPieces.at(level));
     }
 }

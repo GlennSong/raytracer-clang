@@ -128,7 +128,9 @@ inline double kerbPerpSign() { return offsideness(1.0, 1) > 0 ? -1.0 : 1.0; }
 // the roads themselves is the lanes tag's, kLanesBuildTag, which keys the roads; to the road file's layout, lane rules
 // or the turns' table, the cache key's own; a change to the file format is LGRF's own version.)
 // History: git log -G kLaneGraphBuildVersion.
-constexpr uint32_t kLaneGraphBuildVersion = 19;  // 19: the box edge and stop line at the angle the arms meet, within the
+constexpr uint32_t kLaneGraphBuildVersion = 20;  // 20: the bands mitred at a kink, so corner walks are laid round the
+                                                 //     outside of a bend (ADR-0472)
+                                                 // 19: the box edge and stop line at the angle the arms meet, within the
                                                  //     room to the next junction (ADR-0471)
                                                  // 18: a street ending under the freeway is a dead end, joined across
                                                  //     (the crossing policy, ADR-0469)

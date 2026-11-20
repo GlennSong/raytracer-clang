@@ -23064,3 +23064,83 @@ agent_lab has river_town's roads and the same numbers.
 **For players** (after S7's re-bake): at sharp-angled junctions the crosswalks and stop lines move back to where the kerbs part. People on foot can get round 13 more corners on river_town and 9 on traffic_lab, and no traffic_lab sidewalk is cut off. Some cars at river_town's big spread junctions lose a turn that now cuts a corner, until corners get a stated radius.
 
 **Revisit when** the planner moves or merges the junctions listed as too close for their angle (S4 or later); when corners get a stated radius (step 9b), which should win back river_town's lost turns; or when someone looks at the four B1 corners the rule does not reach (river_town j19 3-0, j116 1-2, j119 2-3 and 4-5) and the four it newly cost (j8, j43, j91, j119).
+
+## ADR-0472 — Where a road kinks into the next, each road's asphalt, shoulder and sidewalk run on to the line that halves the bend, so the outside of the bend is paved in one piece (#306 re-bake bundle, S3; ADR-0469's B2)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: where two roads meet end to end at an angle, the build used to stop each road's paving square at its own end. On the outside of the bend that left a wedge of bare ground, 0.1 to 1 m wide at the sidewalk, through the asphalt, kerb and sidewalk, so the drawn sidewalk was in two pieces there and no corner walk could be laid round it (ADR-0469, fault B2). Sometimes the asphalt's automatic rounding (the "closing" that fills small gaps between lanes) partly filled the asphalt's wedge with a curve, and the bare ground showed as a round notch bitten out of the kerb. Now each road's paving runs on past its end to the bisector of the bend and meets the other's there: a **mitre**, as a picture frame's corners are cut. Only ends the road file says meet are joined, and only at one level.
+
+Words:
+- **Band:** a road's strip of one layer either side of its centre line (its **spine**): the asphalt out to half the travel width, the shoulder out to the carriageway's edge, the sidewalk out to its back edge (`spineRing`, pavement.cpp).
+- **Kink:** two road ends the road file states meet at one place, with nothing between them on one side, the outside of the bend, and at one level. The places it states are: a street carrying on as another (`ModelStreet::carriesOn`), a junction's arms at its one point (`ModelJunction::arms`), and a spread junction's points (`ModelJunction::nodes`; a spread junction is one the plan made of several points, ADR-0425).
+- **Bisector:** the line from where the ends meet that halves the outside of the bend.
+- **Mitre:** a band's end cut along the bisector instead of square; each road's band gets the piece from its own end to the bisector (`mitrePieces`).
+- **Mitre limit:** past a turn of 120 degrees a mitre's point would run out far (3.9 times the band's width at 150 degrees); it is cut off square across the bisector at `kMitreLimit` (2) times the wider band's half width.
+- **Same level:** the two ends' deck heights differ by less than the rules' `sameLevelDz` (1 m); otherwise one passes over the other and they are not joined.
+- **Corner walk:** the walk round a junction corner along the drawn sidewalk (ADR-0465). It is laid only where one piece of drawn sidewalk joins its two kerb ends.
+
+**The rule** (`lanes/pavement.h/.cpp`, run by `buildFootprints`):
+1. **Which ends meet** (`bandKinks(g)`): for each place the file states (each carry-on, each junction's point, each spread junction's point), the roads listed there whose station is the road's first or last point are road ends there; a road listed part way along it runs through and stands between the ends either side (only where it really passes that point: a spread junction's point lists a road where it leaves the junction's area, which may be metres away). Going round the place, two ends next to each other with more than half a turn between them, drawn within the file's `endpointTol` of one another and at one level, are a kink. Nothing is searched for by distance: the file says which ends meet.
+2. **The mitre pieces** (`mitrePieces`): each band's corner on the outside (computed exactly as `spineRing` computes it, so it is the band's own corner to the bit) runs on along the band's edge to where it meets the other band's edge; that point and the meeting point make the two pieces. Past the mitre limit the point is cut off square. Bands of different widths at a slight turn, whose edges' lines cross behind the ends, are joined straight from corner to corner. Where the two corners are already one point (a straight carry-on), the pieces are empty and nothing changes.
+3. **Asphalt** (half the travel width, and the 1 cm a lane's footprint reaches past its rails): each road's piece joins the footprint of that road's lane nearest it, before the closing looks for gaps, so the asphalt reaches the bisector and the closing finds no wedge to round off. That is what stops the notch.
+4. **Shoulder and sidewalk:** each road's band of the layer is its spine ring and its pieces (`mitredBand`), cut at its own level as before (ADR-0433's shoulder cut uses the mitred shoulder too). Only where both roads have the layer.
+
+walk_lanes.cpp did not change: it walks whatever sidewalk is drawn.
+
+**Before and after** (`lanes_tool build`, `lanes_tests` on the road files; tool before built from 273b6752; no level bake):
+
+| | traffic_lab before | after | river_town before | after |
+|---|---|---|---|---|
+| Kinks mitred | | 63 (sharpest 20.8°) | | 56 (sharpest 159.4°, one past the mitre limit: s337/s277, the planner's hairpin) |
+| Corners with no walk: the drawn sidewalk in two pieces (B2) | 9 | 0 | 18 | 3 (none at a kink; below) |
+| Corners with no walk: a kerb end out in the paved junction (B1) | 4 | 4 | 13 | 13 |
+| Corner walks laid | 532 | 541 | 540 | 555 |
+| Lone walk ends | 7 | 6 | 43 | 39 |
+| ...two pieces | 1 | 0 | 5 | 1 |
+| Sidewalks cut off (outside the largest part on foot) | 0 | 0 | 14 | 14 |
+| Sidewalks in the largest part | 100.0% | 100.0% | 97.7% | 97.7% |
+| Sidewalk area | 182 897 m² | +46 m² (+0.03%) | 221 969 m² | +627 m² (+0.28%) |
+| Asphalt area | 411 075 m² | +4 m² | 580 006 m² | +277 m² |
+| Shoulder / median area | | +2.5 m² / 0 | | +3.4 m² / 0 |
+| Islands / enclosed blocks | 26 / 135 | same | 31 / 153 | same |
+| Mitre pieces crossing themselves; sidewalk over asphalt | | 0; 4235 m², unchanged | | 0; 6791 m², unchanged |
+| Stated turns that fit no vehicle | 68 | 66 | | |
+
+agent_lab has river_town's roads (its road file differs elsewhere) and the same kinks.
+
+- **river_town j29 corner 2-3** (the known jam): the kerb kinks s48 → s77 → s78 through the junction's points; both kinks are mitred and the corner has its walk. Its 3-0 got one in ADR-0471, so all of j29's corners are walked.
+- **The notches** (river_town j39, j87, j116, j131): the asphalt now reaches the bisector, so the closing has no wedge to round, and the sidewalk runs round the outside of the bend. All four corners have walks.
+- **traffic_lab's freeway joints j153 and j154**: the straight on across the freeway's kink no longer leaves the paved road (fits no vehicle 68 to 66; the car's largest part 96.8% to 96.9%).
+- **The sidewalk added** is mostly river_town's hairpin s337/s277 (159°): the cut-off mitre closes its open end with a blunt nose of asphalt and sidewalk where it was bare ground. The hairpin itself is the planner's fault (listed in the orientation page).
+- **The checks the build runs** (`lanes_tool build`'s invariants): no new failure. river_town's deck cracks 328 to 316 and its step edges 103 to 102; the rest unchanged.
+- **Lot blocks** are the gaps in the drawn pavement, so river_town's and agent_lab's lots beside a mitred kink shift at the re-bake (the blocks' count does not change).
+
+**The three corners still in two pieces** (river_town), none at a kink:
+- j0 6-0 and j14 5-0 (across their points): new since ADR-0471, whose box edges put their kerb ends 37 to 48 m out. The walk between them goes round a block, and that way leaves the 30 m window the walk laying cuts round the two kerb ends (`kCornerWindow`). Widening the window to 90 m, tried and put back, lays both. Whether a walk round a whole block face is a corner at all is the question to answer first; not changed here.
+- j90 0-1: arm 0's (s228) kerb end lies 1.7 m from s227's centre line, on a scrap of s228's sidewalk left inside s227's carriageway (ADR-0471 lists j90 arm 0 as too close to j120 for its angle, 43 m short). It is B1 in kind; the scrap makes it read as two pieces.
+
+**Grouping unchanged, checked:** `lanes_tool junctions <file> --top 100000` prints byte-identical output before and after for traffic_lab, river_town and agent_lab (nothing in the grouping reads the pavement).
+
+**Tests:**
+- `road_model_40_the_bands_are_mitred_at_a_kink` (new), hand scenes:
+  - a carry-on kinked 40°: one kink; asphalt out to the carriageway's mitre and no sidewalk inside it; sidewalk unbroken across the bisector from kerb to back, and nothing past its mitre; the sidewalk in two pieces (one each side); the outside sidewalk's middle line walked across the kink stays on it. The same build drawn again with the file's statements of where ends meet taken away shows the old wedge (53 of 53 points across the bisector bare, three pieces).
+  - a T whose street kinks 25° at the junction, the stem inside the bend: one kink, all three corners walked, each on the drawn sidewalk.
+  - a 150° kink: the sidewalk's mitre reaches 22.0 m out (cut at 2 × 11 m; uncut, 42.5 m), drawn up to the cut and not past it.
+  - the 40° carry-on with one road 5 m up: no kink, the outside left as each road draws it.
+  - a straight carry-on: no kink, empty mitre pieces, and every layer and footprint the same to the bit as the same build drawn with nothing stated.
+- `road_model_41_the_shipped_kinks_are_mitred` (new): the table's kink counts and areas, no mitre piece crossing itself, sidewalk over asphalt not grown, and the three corners above by name.
+- Checked to bite by breaking the code on purpose: no mitres at all fails 7 checks in road_model_40 (the kinked T's outside corner "two pieces", as on the levels); no mitre limit fails 2; no height test fails 2; no asphalt piece fails 1 (the bay left in the carriageway); no "corners already one point" test fails 2 (the straight carry-on gets pieces). Put back, all pass.
+- Re-pinned, each with old/new/why in its comment: `road_model_33` (lone ends, two pieces: traffic_lab 1 to 0, river_town 5 to 1); `lanes_the_traffic_lab_lane_graph_can_be_driven_round` (fits no vehicle 68 to 66: j153, j154). `road_model_31` pins no counts; it passes and now prints each lone corner's kerb ends.
+
+**Suites:** full build; lanes_tests 149/149; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes: no new bare tolerance).
+
+**Format and caches:** `kLanesBuildTag` 2026-11-20.3 (the pavement moves at every kink on every lanes level). `kLaneGraphBuildVersion` 20 (the corner walks). No format or road file changed. No level was baked and the level tests were not run: S7 re-bakes.
+
+**One model:**
+- Concept touched: roads (where two road ends meet, and the drawn pavement there).
+- Which ends meet is read from the road file's own statements (carry-ons, junctions' arms and points), once, in `bandKinks`, inside `roads/lanes`. No ends are searched for by distance; the endpoint tolerance only refuses a stated meeting whose ends are drawn apart.
+- The mitre pieces join the existing bands and lane footprints; no new layer, list or structure of the roads was made. No road fact is computed outside `roads/`.
+
+**For players** (after S7's re-bake): where a street bends into the next, or through a spread junction, the kerb and sidewalk now run round the outside of the bend instead of stopping at a wedge of bare ground, and people on foot get round 9 more corners on traffic_lab and 15 on river_town. river_town's hairpin end is paved over.
+
+**Revisit when** the planner fixes the s337/s277 hairpin; when someone decides whether j0 6-0 and j14 5-0 (a walk round a block) are corners, and so the corner window; or when j90's arm 0 is moved (the planning fault ADR-0471 lists).

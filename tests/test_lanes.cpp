@@ -2247,7 +2247,10 @@ TEST_CASE(lanes_connectors_of_the_traffic_lab_meet_their_lanes_and_fit_their_veh
 // (ADR-0471: the box edge at the angle the arms meet -- at sharp-angled junctions the stop lines stand further back, clear
 // of the crossing road: fits none 75 -> 68, crossing lines 16 -> 11, kinks 63 -> 60, outlines crossing themselves 5 -> 0
 // (j0, j4, j19, j93, j96: their arms' stop lines no longer overlap); the car's largest part 96.6% -> 96.8%)
-constexpr uint32_t kTrafficLabFitsNone = 68,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
+// (ADR-0472: the bands mitred at a kink -- fits none 68 -> 66: the freeway joints j153 (fw0_a.f3 into fw1_a.f3) and j154
+// (fw1_b.f0 into fw0_b.f0), straight on across a kink where the two carriageways' asphalt now meets on the bisector, no
+// longer leave the paved road; the car's largest part 96.8% -> 96.9%)
+constexpr uint32_t kTrafficLabFitsNone = 66,   // 77 before ADR-0432: the carriageway half width is exact now, not read back off float lane bands
                     kTrafficLabCrossingLines = 11, kTrafficLabKinks = 60, kTrafficLabTidied = 11;
 TEST_CASE(lanes_the_traffic_lab_lane_graph_can_be_driven_round) {
     const LaneGraphBuild& lg = laneGraphOf("planned/traffic_lab_lanelab");
