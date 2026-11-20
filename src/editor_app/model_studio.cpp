@@ -19,6 +19,10 @@
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLineEdit>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMessageBox>
@@ -61,6 +65,7 @@ const char* kLevel = R"JSON({
   "editor_view": "models",
   "name": "model_studio",
   "_note": "Written by the editor's model studio. One prefab straight from a recipe; edit the recipe, not this.",
+  "_studio_args": %3,
   "player": { "position": [0, 1.2, -8], "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.6 }, "friction": 0.5 },
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "lighting": { "ambientMultiplier": 0.7, "exposure": 0.7,
@@ -69,7 +74,7 @@ const char* kLevel = R"JSON({
     { "id": 1, "name": "ground", "shape": "box", "position": [0, -0.2, 0], "size": [40, 0.4, 40],
       "material": { "albedo": [0.5, 0.5, 0.48], "metallic": 0.0, "roughness": 1.0, "opacity": 1.0, "emission": [0, 0, 0], "checkerboard": true },
       "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 } },
-    { "id": 2, "name": "model", "shape": "prefab", "prefab": { "recipe": "%1" }, "position": [0, 0, 0] }
+    { "id": 2, "name": "model", "shape": "prefab", "prefab": { "recipe": "%1"%2 }, "position": [0, 0, 0] }
   ]
 }
 )JSON";
@@ -224,6 +229,15 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     row->addWidget(listButton);
     column->addLayout(row);
     column->addWidget(file_);
+    auto* argsRow = new QHBoxLayout();
+    argsRow->addWidget(new QLabel("Arguments", this));
+    args_ = new QLineEdit(this);
+    args_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    args_->setPlaceholderText("none.  A Lua table the script reads as `args`:  { kind = \"tree\", seed = 3 }   (Enter rebuilds)");
+    args_->setToolTip("What the script is run with, as a recipe's `args`. Enter applies them and rebuilds the model.\nKept with this script for the next time it is opened here.");
+    argsRow->addWidget(args_, 1);
+    column->addLayout(argsRow);
+    QObject::connect(args_, &QLineEdit::returnPressed, [this]() { setArguments(args_->text()); });
     QObject::connect(copyButton, &QPushButton::clicked, [this]() { copyView(); });
     QObject::connect(listButton, &QPushButton::clicked, [this]() { addToLists(); });
 
@@ -352,11 +366,36 @@ void ModelStudioPanel::loadText() {
     file_->setText(QDir::current().relativeFilePath(path_));
 }
 
-void ModelStudioPanel::writeLevel() const {
+bool ModelStudioPanel::writeLevel() {
+    // the arguments as the level carries them
+    QString json, why;
+    const QString typed = args_->text().trimmed();
+    if (!typed.isEmpty()) {
+        if (!argsToJson || !argsToJson(typed, json, why)) {
+            setStatus("The arguments are not a Lua table: " + (why.isEmpty() ? QString("{ name = value, ... }") : why), true);
+            return false;
+        }
+    }
+    // (the typed text is kept beside them, as a JSON string, to put back in the box next time)
+    QString kept = QString::fromUtf8(QJsonDocument(QJsonArray{typed}).toJson(QJsonDocument::Compact));
+    kept = kept.mid(1, kept.size() - 2);
     QDir().mkpath(kLevels);
     QFile f(levelPath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return;
-    f.write(QString(kLevel).arg(recipeName()).toUtf8());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        setStatus("Cannot write " + levelPath(), true);
+        return false;
+    }
+    f.write(QString(kLevel).arg(recipeName(), json.isEmpty() ? QString() : ", \"args\": " + json, kept).toUtf8());
+    return true;
+}
+
+bool ModelStudioPanel::setArguments(const QString& luaTable) {
+    if (path_.isEmpty()) { setStatus("Open a script first.", true); return false; }
+    args_->setText(luaTable);
+    if (!writeLevel()) return false;
+    // (the level's own file is watched: writing it rebuilds the model with the new arguments, the camera left alone)
+    setStatus("Rebuilding " + recipeName() + " with those arguments ...", false);
+    return true;
 }
 
 void ModelStudioPanel::openScript(const QString& chosen) {
@@ -380,7 +419,13 @@ void ModelStudioPanel::openScript(const QString& chosen) {
     watcher_->addPath(path_);
     edit_->setTextCursor(QTextCursor(edit_->document()));
     loadText();
-    writeLevel();
+    // the arguments this script was last run with here, from its studio level
+    args_->clear();
+    {
+        QFile was(levelPath());
+        if (was.open(QIODevice::ReadOnly | QIODevice::Text)) args_->setText(QJsonDocument::fromJson(was.readAll()).object().value("_studio_args").toString());
+    }
+    if (!writeLevel()) { args_->clear(); writeLevel(); }
     setStatus("Building " + recipeName() + " ...", false);
     if (openLevel) openLevel(levelPath().toStdString());
 }
@@ -488,6 +533,7 @@ void ModelStudioPanel::copyView() {
     } else {
         text += "Nothing picked (click a piece of the model to name it).\n";
     }
+    if (!args_->text().trimmed().isEmpty()) text += "Arguments: " + args_->text().trimmed() + "\n";
     const QTextCursor c = edit_->textCursor();
     text += QString("Cursor: line %1\n").arg(c.blockNumber() + 1);
     if (status_->property("bad").toBool()) text += "Error shown: " + status_->text().section('\n', 0, 0) + "\n";
@@ -502,7 +548,9 @@ void ModelStudioPanel::addToLists() {
     if (status_->property("bad").toBool()) { setStatus("Mend the script first: a model that does not build should not be on the lists.", true); return; }
     const QString name = recipeName();
     const QString models = QString("%1/models.lua").arg(kScripts), prefabs = QString("%1/prefabs.lua").arg(kScripts);
-    QString why = addListLine(models, name, QString("  %1 = { recipe = \"%1\" },").arg(name));
+    const QString typed = args_->text().trimmed();
+    QString why = addListLine(models, name, typed.isEmpty() ? QString("  %1 = { recipe = \"%1\" },").arg(name)
+                                                             : QString("  %1 = { recipe = \"%1\", args = %2 },").arg(name, typed));
     if (why.isEmpty()) why = addListLine(prefabs, name, QString("  %1 = { model = \"%1\", physics = { body = \"static\" } },").arg(name));
     if (!why.isEmpty()) { setStatus("Not added: " + why, true); return; }
     setStatus(QString("'%1' is in models.lua and prefabs.lua. A level places it with { \"shape\": \"prefab\", \"prefab\": \"%1\", \"position\": [x, y, z] }.").arg(name), false);

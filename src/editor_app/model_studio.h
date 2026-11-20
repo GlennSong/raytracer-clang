@@ -22,6 +22,7 @@
 
 class QFileSystemWatcher;
 class QLabel;
+class QLineEdit;
 class QPlainTextEdit;
 class QTreeWidget;
 
@@ -49,6 +50,12 @@ public:
     std::function<void(const std::string&)> openLevel;
     // Where the viewport's camera is and a screenshot just asked for, as lines of text (editor_main knows both).
     std::function<QString()> viewNote;
+    // A Lua table as JSON (editor_main asks the engine): the Arguments box's text into what the level carries.
+    // Returns false with `error` when the text is not a table.
+    std::function<bool(const QString& lua, QString& json, QString& error)> argsToJson;
+    // ARGUMENTS: run the script with these (a Lua table as text, as a recipe's `args`), and rebuild. Kept with the
+    // script's studio level, so they are there the next time the script is opened.
+    bool setArguments(const QString& luaTable);
     // THE TREE OF THE MODEL: every node under its parent with where it was placed, and under each node what hangs on
     // it. editor_main gives the rows, selects a part's piece in the viewport, and moves a moving node.
     std::function<std::vector<StudioRow>()> modelTree;
@@ -82,7 +89,7 @@ public:
 
 private:
     void loadText();                 // the file's text into the pane
-    void writeLevel() const;         // the studio level for this script
+    bool writeLevel();               // the studio level for this script, with the Arguments box's arguments
     QString levelPath() const;
     QString recipeName() const;      // the script's name as `require` names it
     void setStatus(const QString& text, bool bad);
@@ -90,6 +97,7 @@ private:
 
     QPlainTextEdit* edit_ = nullptr;
     QLabel* file_ = nullptr;
+    QLineEdit* args_ = nullptr;      // the recipe's arguments, a Lua table
     QLabel* status_ = nullptr;
     QFileSystemWatcher* watcher_ = nullptr;
     QString path_;

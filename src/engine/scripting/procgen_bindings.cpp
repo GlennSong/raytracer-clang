@@ -3873,17 +3873,23 @@ int levelOpt(lua_State* L, int opts, const ProcModel& m) {
 }
 
 // A part from the arguments (mesh [, material] [, { level = n }]) starting at stack slot 2, hung on `node`.
-// WHAT MADE THIS: the line of the RECIPE that is running now. The outermost Lua frame is the recipe's own chunk
-// (a library it calls sits above it), so a part added inside truss.build is put down to the recipe's line that
-// called truss.build: the line its author wrote. 0 when no script is running.
+// WHAT MADE THIS: the line of the RECIPE that is running now. The outermost Lua frame is the recipe's own chunk;
+// a library it calls is another chunk. The line wanted is the deepest one that is still in the recipe's chunk: a
+// part added inside truss.build is put down to the recipe's line that called truss.build, and a part added inside
+// a function the recipe defines itself to the line in that function, which is the line its author wrote. 0 when no
+// script is running.
 int recipeLine(lua_State* L) {
     lua_Debug ar;
-    int line = 0;
+    std::vector<std::pair<std::string, int>> frames;    // innermost first: (the chunk it is in, its line)
     for (int level = 0; lua_getstack(L, level, &ar) != 0; ++level) {
-        if (lua_getinfo(L, "Sl", &ar) == 0) continue;
-        if (ar.currentline > 0) line = ar.currentline;
+        if (lua_getinfo(L, "Sl", &ar) == 0 || ar.currentline <= 0) continue;
+        frames.emplace_back(ar.source != nullptr ? ar.source : "", ar.currentline);
     }
-    return line;
+    if (frames.empty()) return 0;
+    const std::string& recipe = frames.back().first;
+    for (const std::pair<std::string, int>& f : frames)
+        if (f.first == recipe) return f.second;
+    return frames.back().second;
 }
 
 void addPart(lua_State* L, ProcModel& m, int node) {

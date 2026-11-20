@@ -52,6 +52,11 @@ std::string recipeModelName(const std::string& recipe, const std::string& argsJs
 std::vector<std::string> modelSourceFiles(const std::string& name, const std::string& levelDir = std::string(), ModelStore* store = nullptr,
                                           const std::string& list = "models.lua");
 
+// A LUA TABLE WRITTEN AS TEXT, as JSON: `{ kind = "tree", seed = 3 }` -> {"kind":"tree","seed":3}. For a host
+// that takes a recipe's arguments from a person (the model studio's Arguments box). False with `error` when the
+// text is not Lua, or is not a table of named values. Empty text is no arguments: true, with `json` empty.
+bool luaTableToJson(const std::string& luaText, std::string& json, std::string* error = nullptr);
+
 // The names in the list, sorted. Empty with `error` when the list cannot be read.
 std::vector<std::string> namedModels(const std::string& levelDir = std::string(), std::string* error = nullptr, const std::string& list = "models.lua");
 

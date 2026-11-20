@@ -669,13 +669,18 @@ TEST_CASE(a_stamped_piece_knows_the_recipe_line_that_made_it) {
             "local bolt = model.new()\n"                                                  // 9
             "bolt:add(mesh.box{ 0.1, 0.1, 0.1 })\n"                                       // 10
             "m:use(bolt, { { pos = { 1, 0, 0 } }, { pos = { -1, 0, 0 } } })\n"            // 11
+            "local function cap()\n"                                                      // 12
+            "  m:add(mesh.translate(mesh.box{ 0.3, 0.1, 0.3 }, { 0, 3, 0 }))\n"           // 13
+            "end\n"                                                                       // 14
+            "cap()\n"                                                                     // 15
             "return m\n");
     ModelStore store;
     std::string err;
     const std::shared_ptr<const ProcModel> model = obtainRecipeModel("test_prefab_lines_tmp", std::string(), f.dir, &err, &store);
     CHECK(model != nullptr);
     if (model == nullptr) { std::printf("    %s\n", err.c_str()); return; }
-    CHECK(model->parts.size() == 3);
+    CHECK(model->parts.size() == 4);
+    CHECK(model->parts[3].line == 13);       // made inside a function of the recipe's own: the line in that function
     CHECK(model->parts[0].line == 4);
     CHECK(model->parts[1].line == 6);        // made inside the library: the recipe's line that called it
     CHECK(model->parts[2].line == 8);
@@ -700,4 +705,22 @@ TEST_CASE(a_stamped_piece_knows_the_recipe_line_that_made_it) {
     }
     CHECK(at4 == 1 && at6 == 1 && at8 == 1);
     CHECK(at11 == 2);                        // both copies of the bolt
+}
+
+TEST_CASE(a_lua_table_typed_as_text_becomes_the_json_a_level_carries) {
+    std::string json, err;
+    CHECK(luaTableToJson("{ kind = \"tree\", seed = 3, tall = 2.5, on = true }", json, &err));
+    const nlohmann::json j = nlohmann::json::parse(json);
+    CHECK(j["kind"] == "tree" && j["seed"] == 3 && j["tall"] == 2.5 && j["on"] == true);
+    CHECK(luaTableToJson("{ size = { 1, 2, 3 }, look = { color = { 0.5, 0.5, 0.5 } } }", json, &err));
+    CHECK(nlohmann::json::parse(json)["size"][2] == 3);
+    // no text is no arguments
+    CHECK(luaTableToJson("", json, &err) && json.empty());
+    CHECK(luaTableToJson("   ", json, &err) && json.empty());
+    // what is not a table of named values is refused, and says why in a line
+    CHECK(!luaTableToJson("{ kind = ", json, &err));
+    CHECK(!err.empty() && err.find("[string") == std::string::npos);
+    CHECK(!luaTableToJson("42", json, &err));
+    CHECK(err.find("table of named values") != std::string::npos);
+    CHECK(!luaTableToJson("{ 1, 2, 3 }", json, &err));
 }

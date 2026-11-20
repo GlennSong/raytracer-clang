@@ -902,8 +902,16 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
    script line (nodes, markers and shapes record theirs now, as parts do); clicking a row goes to the line and,
    for a part, selects its piece in the viewport. `RT_STUDIO_PRESS=pose` moves two nodes unattended.
 
-Still open: finer tags than one line per library call; arguments
-for a recipe that takes them; a "walk" button (Play already does it); typing and clicking in the pane have been
+7. DONE the same day: **an Arguments box.** A Lua table typed there (`{ kind = "tree", seed = 3 }`) is what the
+   script reads as `args`; Enter rebuilds. The engine turns the text into the JSON the level carries
+   (`luaTableToJson`); the studio writes it into its level, whose own file is watched. Kept with the script's
+   studio level for next time, shown in Copy view, and written into the `models.lua` line by Add to lists.
+   Two things it showed, both mended: the camera now frames the model again when a rebuild gives something
+   nothing like what was framed (a model where there was none, or one over twice or under half the size); and a
+   part's line is the deepest one in the recipe's own chunk, so a part added in a function the recipe defines
+   points at the line in that function, not at the call.
+
+Still open: finer tags than one line per library call; a "walk" button (Play already does it); typing and clicking in the pane have been
 checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 
 ## The model half, done; what the prefab half starts from

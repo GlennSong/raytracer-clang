@@ -57,6 +57,29 @@ bool readScriptList(const std::string& file, const std::string& levelDir, nlohma
     return true;
 }
 
+bool luaTableToJson(const std::string& luaText, std::string& json, std::string* error) {
+    json.clear();
+    if (luaText.find_first_not_of(" \t\r\n") == std::string::npos) return true;
+    const std::string code = "return " + luaText;
+    ScriptVM vm;
+    lua_State* L = luaState(vm);
+    if (luaL_loadbuffer(L, code.data(), code.size(), "arguments") != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (error != nullptr) {
+            std::string why = lua_tostring(L, -1) ? lua_tostring(L, -1) : "not Lua";
+            const std::size_t at = why.find("]:1: ");          // (drop the chunk's name and line: there is one line)
+            *error = at == std::string::npos ? why : why.substr(at + 5);
+        }
+        return false;
+    }
+    const nlohmann::json value = luaToJson(L, -1);
+    if (!value.is_object()) {
+        if (error != nullptr) *error = "arguments are a table of named values: { name = value, ... }";
+        return false;
+    }
+    json = value.dump();
+    return true;
+}
+
 std::vector<std::string> namedModels(const std::string& levelDir, std::string* error, const std::string& listFile) {
     std::vector<std::string> names;
     nlohmann::json list;

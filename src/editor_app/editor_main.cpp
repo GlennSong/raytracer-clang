@@ -31,6 +31,7 @@
 #include "level_cache_panel.h"
 #include "model_studio.h"
 #include "../engine/model_motion.h"
+#include "../engine/scripting/model_recipes.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #ifdef RT_ROADS_LANES
@@ -972,6 +973,14 @@ int main(int argc, char** argv) {
         levelCacheDock->hide();
         mainWindow.resizeDocks({modelDock, assetsDock}, {700, 170}, Qt::Vertical);
     };
+    // The Arguments box: a Lua table as the JSON a level carries (the engine reads the Lua).
+    modelStudio->argsToJson = [](const QString& lua, QString& json, QString& error) {
+        std::string out, why;
+        const bool ok = engine::luaTableToJson(lua.toStdString(), out, &why);
+        json = QString::fromStdString(out);
+        error = QString::fromStdString(why);
+        return ok;
+    };
     // "Copy view": where the camera is, and a screenshot of the viewport taken now.
     modelStudio->viewNote = [&]() -> QString {
         const engine::CameraState& cam = app.renderView().camera;
@@ -1690,6 +1699,11 @@ int main(int argc, char** argv) {
         QString script = QString::fromStdString(studioScript);
         if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
         QTimer::singleShot(0, [modelStudio, script]() { modelStudio->openScript(script); });
+    }
+    // RT_STUDIO_ARGS=<a Lua table>: type that into the studio's Arguments box a few seconds in (unattended checking)
+    if (const char* typed = std::getenv("RT_STUDIO_ARGS"); typed && *typed) {
+        const QString text = QString::fromUtf8(typed);
+        QTimer::singleShot(3000, [modelStudio, text]() { modelStudio->setArguments(text); });
     }
     // RT_STUDIO_PRESS=copy|lists: press that button of the studio a few seconds in, for checking it unattended
     // (as RT_EDITOR_WINDOW_SHOT is for the window). "copy" also prints what went to the clipboard.

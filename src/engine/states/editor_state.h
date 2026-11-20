@@ -32,7 +32,12 @@ private:
 
     Renderer& editorRenderer;
     std::string levelFile;
-    void frameModelsIfAsked(FrameContext& ctx);   // "editor_view": "models" (the model studio's level)
+    // "editor_view": "models" (the model studio's level): put the camera where the level's models fill the view.
+    // Returns how big what it framed is (0: nothing there). `onlyIfChanged`: leave the camera be unless what is
+    // there is nothing like what it was last framed on.
+    Real frameModelsIfAsked(FrameContext& ctx, bool moveCameraNow, bool onlyIfChanged = false);
+    CameraSystem* camera_ = nullptr;
+    Real framedRadius_ = 0;
     ScriptWatch watch;
 };
 
