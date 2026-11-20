@@ -47,14 +47,9 @@ struct CarId {
 };
 
 // A PLACE ON THE ROAD: a path of the lane graph (a lane or a connector) and a distance along it, in metres from its
-// start. A trip's destination, a hold and a car's front are each one of these.
-struct PathPoint {
-    engine::PathId path;
-    Real along = 0;
-
-    bool operator==(const PathPoint& o) const { return path == o.path && along == o.along; }
-    bool operator!=(const PathPoint& o) const { return !(*this == o); }
-};
+// start. A trip's destination, a hold and a car's front are each one of these. The lane level's own type (lane_graph.h),
+// which the router routes between (ADR-0467).
+using engine::PathPoint;
 
 // HOW MANY EARLIER PATHS a car's body may still lie on behind the path its front is on. The worst case kept in mind: a
 // 20 m vehicle over paths as short as 1.5 m (a junction cut into short pieces) lies on 14 behind its front; 16 covers

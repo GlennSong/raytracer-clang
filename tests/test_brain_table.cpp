@@ -381,6 +381,7 @@ TEST_CASE(brain_includes_nothing_past_its_boundary) {
         "engine/procgen/city/roads/road_model.h", "engine/procgen/city/roads/road_model_parts.h",
         "engine/procgen/city/roads/lane_graph.h", "engine/procgen/city/roads/graph_index.h",
         "engine/procgen/city/roads/vehicle_size.h",
+        "engine/procgen/city/roads/route.h",        // the one route-finder the driving routes cars by (ADR-0467)
         "engine/bundle/bundle.h", "engine/bundle/binary_stream.h",   // the repo's hash
         "rt_math.h", "hash.h", "handle.h", "slot_map.h", "proc_rng.h",
     };

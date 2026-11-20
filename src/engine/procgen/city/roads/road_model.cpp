@@ -409,6 +409,12 @@ const PathMover* PathUsers::mover(const std::string& name) const {
     return nullptr;
 }
 
+Real PathMover::waitOn(const std::string& kind) const {
+    for (const std::pair<std::string, Real>& w : waits)
+        if (w.first == kind) return w.second;
+    return 0;
+}
+
 bool PathUsers::mayUse(const std::string& name, const std::string& kind) const {
     const std::vector<uint32_t>* users = usersOf(kind);
     if (!users) return false;
@@ -431,6 +437,16 @@ bool parsePathUsers(const nlohmann::json& doc, PathUsers& out, std::string* err)
         PathMover mv;
         mv.name = it.key();
         mv.vehicles = it.value().value("vehicles", false);
+        if (it.value().contains("waits")) {
+            const nlohmann::json& w = it.value()["waits"];
+            if (!w.is_object()) return fail("mover \"" + it.key() + "\": \"waits\" is not {kind: seconds}");
+            if (mv.vehicles) return fail("mover \"" + it.key() + "\" stands for the vehicles, whose search reads no \"waits\"");
+            for (nlohmann::json::const_iterator k = w.begin(); k != w.end(); ++k) {
+                if (!k.value().is_number() || k.value().get<double>() < 0)
+                    return fail("mover \"" + it.key() + "\": the wait on \"" + k.key() + "\" is not seconds (a number, 0 or more)");
+                mv.waits.emplace_back(k.key(), static_cast<Real>(k.value().get<double>()));
+            }
+        }
         out.movers.push_back(mv);
     }
     if (!doc.contains("kinds") || !doc["kinds"].is_object() || doc["kinds"].empty()) return fail("no \"kinds\": {kind: [movers]} object");
@@ -447,6 +463,10 @@ bool parsePathUsers(const nlohmann::json& doc, PathUsers& out, std::string* err)
         }
         out.kinds.emplace_back(it.key(), users);
     }
+    for (const PathMover& mv : out.movers)
+        for (const std::pair<std::string, Real>& w : mv.waits)
+            if (!out.mayUse(mv.name, w.first))
+                return fail("mover \"" + mv.name + "\" waits on kind \"" + w.first + "\", which \"kinds\" does not open to it");
     if (doc.contains("dead_end")) {
         const nlohmann::json& d = doc["dead_end"];
         if (!d.is_object()) return fail("\"dead_end\" is not an object");

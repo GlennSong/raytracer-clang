@@ -38,6 +38,7 @@
 #include "engine/procgen/city/roads/lanes/lane_level.h"     // the lane level from the model (ADR-0426)
 #include "lane_level_scene.h"                               // a scene with the lane level's facts, in memory
 #include "engine/procgen/city/roads/control_signs.h"   // the signs that follow from the facts (ADR-0424)
+#include "engine/procgen/city/roads/route.h"   // the one route-finder: cars and walkers (ADR-0467)
 #include "engine/procgen/city/roads/street_map.h"      // appendStreetMap: what routing reads
 #include "engine/ai/nav_graph.h"                        // rightOf: the kerb side
 #include "engine/script_assets.h"                       // loadScriptCode: the rule set's file
@@ -51,6 +52,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -60,6 +62,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <string>
 #include <tuple>
@@ -3716,5 +3719,328 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         for (const std::pair<const std::string, std::pair<uint32_t, uint32_t>>& o : outside)
             std::printf("          %u sidewalks in %u parts bounded by: %s\n", o.second.second, o.second.first, o.first.c_str());
         CHECK(sidewalks > 0u && inLargest * 2 > sidewalks);
+    }
+}
+
+// ---- 34. the one route-finder: a walker's route over the walks (ADR-0467) ----------------------------------------------
+
+namespace {
+namespace route = engine::roads;
+// THE SIDEWALK of a road's street on kerb `kerb` (+1 / -1), by the model's ids; kNoIndex: none.
+uint32_t sidewalkOf(const RoadModel& m, const std::string& road, int kerb) {
+    const LaneGraph& G = m.laneLevel;
+    for (uint32_t w = 0; w < G.walks.size(); ++w) {
+        const Walk& k = G.walks[w];
+        if (k.modelWalk >= m.walks.size() || !m.walks[k.modelWalk].onRoad() || k.street >= m.streets.size()) continue;
+        if (m.walks[k.modelWalk].dir == kerb && m.streets[k.street].road == road) return w;
+    }
+    return kNoIndex;
+}
+// A place `back` metres along a walk from its end nearer `near` (a junction's point).
+WalkPoint nearEnd(const LaneGraph& G, uint32_t walk, const Vec2& near, Real back) {
+    const Walk& k = G.walks[walk];
+    const bool startNearer = distance(G.pointAt(WalkId(walk), 0), near) < distance(G.pointAt(WalkId(walk), k.length), near);
+    WalkPoint p;
+    p.walk = WalkId(walk);
+    p.along = startNearer ? std::min(back, k.length) : std::max(Real(0), k.length - back);
+    return p;
+}
+uint32_t stepsOfKind(const RoadModel& m, const route::WalkRoute& r, const std::string& kind) {
+    uint32_t n = 0;
+    for (const route::WalkStep& s : r.steps) n += m.walkKind(s.walk) == kind ? 1u : 0u;
+    return n;
+}
+bool sameWalkRoute(const route::WalkRoute& a, const route::WalkRoute& b) {
+    return a.found == b.found && a.why == b.why && a.steps == b.steps && a.crossings == b.crossings && a.metres == b.metres &&
+           a.seconds == b.seconds && a.waitSeconds == b.waitSeconds;
+}
+void printWalkRoute(const RoadModel& m, const route::WalkRoute& r) {
+    std::printf("        %s: %.1f m, %.1f s (%.1f s waiting), %zu crossings:", r.found ? "found" : r.whyWords.c_str(), r.metres, r.seconds,
+                r.waitSeconds, r.crossings.size());
+    for (const route::WalkStep& s : r.steps)
+        std::printf(" %s %u %.1f->%.1f;", m.walkKind(s.walk).c_str(), s.walk.index, s.from, s.to);
+    std::printf("\n");
+}
+constexpr Real kTestPace = 1.4;   // m/s: a walker's pace in these tests (the router is given the person's)
+}  // namespace
+
+TEST_CASE(road_model_34_a_walkers_route_over_the_walks) {
+    // A T: from the east road's +1 sidewalk to its -1 sidewalk, 10 m from the junction on each: across the east arm's
+    // crosswalk (not round by the far dead end's turn-round, 170 m), the crossing's wait the path users' table states
+    BuiltScene s = builtScene(walkTee());
+    CHECK(s.report.error.empty());
+    const LaneGraph& G = s.m.laneLevel;
+    const Vec2 junction = s.m.junctions[0].at;
+    uint32_t eastArm = kNoIndex;
+    for (uint32_t a = 0; a < s.m.junctions[0].arms.size(); ++a)
+        if (s.m.junctions[0].arms[a].road == "east") eastArm = a;
+    const uint32_t eastNear = sidewalkOf(s.m, "east", +1), eastFar = sidewalkOf(s.m, "east", -1);
+    CHECK(eastArm != kNoIndex && eastNear != kNoIndex && eastFar != kNoIndex);
+    if (eastArm == kNoIndex || eastNear == kNoIndex || eastFar == kNoIndex) return;
+    const ModelCrosswalk* eastCrosswalk = s.m.crosswalkAcross(ModelJunctionId(0), eastArm);
+    CHECK(eastCrosswalk != nullptr);
+    if (!eastCrosswalk) return;
+    const uint32_t eastCw = static_cast<uint32_t>(eastCrosswalk - s.m.crosswalks.data());
+    const WalkPoint a = nearEnd(G, eastNear, junction, 10), b = nearEnd(G, eastFar, junction, 10);
+    const route::RouteWalker walker = route::bindWalker(s.m, "walker", kTestPace);
+    const Real crossingWait = pathUsers().mover("walker")->waitOn("crossing");
+    CHECK(crossingWait > 0 && pathUsers().mover("walker")->waitOn("sidewalk") == 0);
+    // THE WAITS ARE CHECKED AS READ: refused on the vehicles' mover, below zero, or on a kind not open to the mover
+    {
+        const nlohmann::json shipped = nlohmann::json::parse(slurp(std::string(RT_SOURCE_DIR) + "/assets/data/path_users.json"));
+        PathUsers bad;
+        std::string why;
+        nlohmann::json onCars = shipped;
+        onCars["movers"]["vehicles"]["waits"] = {{"connector", 5}};
+        CHECK(!parsePathUsers(onCars, bad, &why) && why.find("vehicles") != std::string::npos);
+        nlohmann::json negative = shipped;
+        negative["movers"]["walker"]["waits"] = {{"crossing", -1}};
+        CHECK(!parsePathUsers(negative, bad, &why) && why.find("seconds") != std::string::npos);
+        nlohmann::json notOpen = shipped;
+        notOpen["movers"]["walker"]["waits"] = {{"connector", 5}};
+        CHECK(!parsePathUsers(notOpen, bad, &why) && why.find("does not open") != std::string::npos);
+    }
+    {
+        const route::WalkRoute r = route::findWalkRoute(s.m, walker, a, b);
+        std::printf("      T, east +1 sidewalk to east -1 sidewalk:\n");
+        printWalkRoute(s.m, r);
+        CHECK(r.found);
+        CHECK(r.crossings.size() == 1u && stepsOfKind(s.m, r, "crossing") == 1u && stepsOfKind(s.m, r, "turn_round") == 0u);
+        if (!r.crossings.empty()) {
+            CHECK(r.crossings[0].crosswalk == eastCw);
+            // stepped off from the +1 kerb's end (kerb end 0: the crossing walk starts there)
+            CHECK(r.crossings[0].fromEnd == 0u && r.steps[r.crossings[0].step].forward);
+        }
+        CHECK(r.steps.size() >= 3u && r.steps.front().walk == a.walk && r.steps.back().walk == b.walk);
+        CHECK(std::fabs(r.steps.front().from - a.along) < 1e-9 && std::fabs(r.steps.back().to - b.along) < 1e-9);
+        CHECK(r.metres > 20 && r.metres < 45);
+        CHECK(std::fabs(r.waitSeconds - crossingWait) < 1e-9);
+        CHECK(std::fabs(r.seconds - (r.metres / kTestPace + r.waitSeconds)) < 1e-6);
+        // the way back crosses the same crosswalk from its other end
+        const route::WalkRoute back = route::findWalkRoute(s.m, walker, b, a);
+        CHECK(back.found && back.crossings.size() == 1u && std::fabs(back.metres - r.metres) < 1e-6);
+        if (back.crossings.size() == 1u) CHECK(back.crossings[0].crosswalk == eastCw && back.crossings[0].fromEnd == 1u);
+        // SAME ANSWER EVERY RUN
+        CHECK(sameWalkRoute(r, route::findWalkRoute(s.m, walker, a, b)));
+        // the walker's start and end on one walk: one step, no wait
+        WalkPoint c = a;
+        c.along = a.along > 20 ? a.along - 15 : a.along + 15;
+        const route::WalkRoute same = route::findWalkRoute(s.m, walker, a, c);
+        CHECK(same.found && same.steps.size() == 1u && std::fabs(same.metres - 15) < 1e-9 && same.waitSeconds == 0);
+    }
+    // CROSSINGS CLOSED TO THE MOVER: it goes round by the dead end's turn-round; with turn-rounds closed too, no route
+    {
+        const route::RouteWalker noCrossing =
+            route::bindWalker(s.m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "corner", "turn_round"}));
+        const route::WalkRoute r = route::findWalkRoute(s.m, noCrossing, a, b);
+        std::printf("      T, crossings closed:\n");
+        printWalkRoute(s.m, r);
+        CHECK(r.found && r.crossings.empty() && stepsOfKind(s.m, r, "crossing") == 0u && stepsOfKind(s.m, r, "turn_round") == 1u);
+        CHECK(r.metres > 150);
+        const route::RouteWalker stuck = route::bindWalker(s.m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "corner"}));
+        const route::WalkRoute none = route::findWalkRoute(s.m, stuck, a, b);
+        CHECK(!none.found && none.why == route::NoRouteWhy::NothingLeadsThere);
+        // a destination on a walk the mover may not use
+        WalkPoint onCrossing;
+        for (uint32_t w = 0; w < G.walks.size(); ++w)
+            if (G.walks[w].modelCrosswalk == eastCw) onCrossing.walk = WalkId(w);
+        CHECK(route::findWalkRoute(s.m, noCrossing, a, onCrossing).why == route::NoRouteWhy::DestinationClosed);
+        // a vehicle (the vehicles mover) may use no walk at all
+        CHECK(route::findWalkRoute(s.m, route::bindWalker(s.m, "vehicles", kTestPace), a, b).why == route::NoRouteWhy::DestinationClosed);
+    }
+    // A FOOTWAY: the T's south road a footway. A walker from the east road's sidewalk reaches a point on it along the
+    // footway's walk; a car may not drive it (the vehicles' filter shuts its lane path)
+    {
+        nlohmann::json f = walkTee();
+        f["edges"][2]["class"] = "footway";
+        BuiltScene fw = builtScene(f);
+        CHECK(fw.report.error.empty());
+        const LaneGraph& F = fw.m.laneLevel;
+        uint32_t footway = kNoIndex;
+        for (uint32_t w = 0; w < F.walks.size(); ++w)
+            if (fw.m.walkKind(WalkId(w)) == "footway") footway = w;
+        const uint32_t east = sidewalkOf(fw.m, "east", +1);
+        CHECK(footway != kNoIndex && east != kNoIndex);
+        if (footway == kNoIndex || east == kNoIndex) return;
+        const WalkPoint from = nearEnd(F, east, fw.m.junctions[0].at, 30), to = nearEnd(F, footway, fw.m.junctions[0].at, 40);
+        const route::WalkRoute r = route::findWalkRoute(fw.m, route::bindWalker(fw.m, "walker", kTestPace), from, to);
+        std::printf("      T with a footway, east sidewalk to 40 m down the footway:\n");
+        printWalkRoute(fw.m, r);
+        CHECK(r.found && stepsOfKind(fw.m, r, "footway") == 1u && !r.steps.empty() && r.steps.back().walk == WalkId(footway));
+        // A CAR NEVER: the lane level lays no lane path along the footway (no car path has its street), and the footway
+        // walk is shut to the vehicles' mover, so neither of a car's searches can take it
+        uint32_t carPathsOnIt = 0;
+        for (const Path& p : F.paths)
+            carPathsOnIt += p.street < fw.m.streets.size() && fw.m.streets[p.street].road == "south" ? 1u : 0u;
+        CHECK(carPathsOnIt == 0u);
+        CHECK(!fw.m.openTo("vehicles").walks[footway]);
+        const route::WalkRoute byCar = route::findWalkRoute(fw.m, route::bindWalker(fw.m, "vehicles", kTestPace), from, to);
+        CHECK(!byCar.found && byCar.why == route::NoRouteWhy::DestinationClosed);
+        // ... and a walker on a table that shuts footways to them is refused it too
+        const route::RouteWalker noFootway =
+            route::bindWalker(fw.m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "corner", "crossing", "turn_round"}));
+        CHECK(route::findWalkRoute(fw.m, noFootway, from, to).why == route::NoRouteWhy::DestinationClosed);
+    }
+    // ONE-WAY RULES ARE THE CARS': on the spread junction's one-way northbound road, a walker goes south along its
+    // sidewalk (against the traffic), the car on its lane cannot
+    {
+        BuiltScene sp = builtScene(walkSpread());
+        CHECK(sp.report.error.empty());
+        const LaneGraph& S = sp.m.laneLevel;
+        const route::RouteWalker w = route::bindWalker(sp.m, "walker", kTestPace);
+        const uint32_t nb = sidewalkOf(sp.m, "nb_n", +1);
+        CHECK(nb != kNoIndex);
+        if (nb == kNoIndex) return;
+        // from 80 m north of the junction to 20 m north, along nb_n's sidewalk, either way along it
+        const WalkPoint north = nearEnd(S, nb, Vec2(4, 0), 80), south = nearEnd(S, nb, Vec2(4, 0), 20);
+        const route::WalkRoute down = route::findWalkRoute(sp.m, w, north, south), up = route::findWalkRoute(sp.m, w, south, north);
+        std::printf("      spread junction, nb_n's sidewalk south (against its one-way traffic), then north:\n");
+        printWalkRoute(sp.m, down);
+        printWalkRoute(sp.m, up);
+        CHECK(down.found && up.found && down.steps.size() == 1u && up.steps.size() == 1u);
+        CHECK(std::fabs(down.metres - 60) < 1e-6 && std::fabs(up.metres - 60) < 1e-6);
+        if (!down.steps.empty() && !up.steps.empty()) CHECK(down.steps[0].forward != up.steps[0].forward);
+        // the car, on the road's one lane at the same two places: north to south finds nothing (it is one-way, and its
+        // far end leads nowhere), south to north is the 60 m drive
+        PathId lane;
+        for (uint32_t p = 0; p < S.paths.size(); ++p)
+            if (S.paths[p].kind == PathKind::Lane && S.paths[p].street < sp.m.streets.size() && sp.m.streets[S.paths[p].street].road == "nb_n")
+                lane = PathId(p);
+        CHECK(lane.valid());
+        if (!lane.valid()) return;
+        route::RouteClass car;
+        car.tags = ~TagMask(0);
+        car.topSpeed = 20;
+        const Vec2 jn(4, 0);
+        const bool laneStartNear = distance(S.pointAt(lane, 0), jn) < distance(S.pointAt(lane, S.paths[lane.index].length), jn);
+        const Real len = S.paths[lane.index].length;
+        PathPoint carNorth, carSouth;
+        carNorth.path = carSouth.path = lane;
+        carNorth.along = laneStartNear ? std::min(len, Real(80)) : std::max(Real(0), len - 80);
+        carSouth.along = laneStartNear ? std::min(len, Real(20)) : std::max(Real(0), len - 20);
+        const route::Route carDown = route::findRoute(sp.m, route::studyRoads(sp.m), car, carNorth, carSouth);
+        const route::Route carUp = route::findRoute(sp.m, route::studyRoads(sp.m), car, carSouth, carNorth);
+        std::printf("        the car: south %s; north %s (%.1f m)\n", carDown.found ? "found" : carDown.whyWords.c_str(),
+                    carUp.found ? "found" : carUp.whyWords.c_str(), carUp.metres);
+        CHECK(!carDown.found && carUp.found);
+    }
+}
+
+// ---- 35. the one route-finder on the shipped levels (ADR-0467) ---------------------------------------------------------
+
+TEST_CASE(road_model_35_the_one_router_on_the_shipped_levels) {
+    for (const char* level : {"traffic_lab", "river_town"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const std::unique_ptr<Result> r =
+            build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+        const RoadModel m = assembleRoadModel(*r, oneCar());
+        const LaneGraph& G = m.laneLevel;
+        // CARS: fixed-seed trips between points of the largest part, every route's hash folded (the move to roads/ kept
+        // them all: traffic_lab 0x909f03a16d4a0ad3, river_town 0xf727e34512df5c49 before it, from the driving's router)
+        {
+            const ReachableParts parts = reachableParts(G);
+            std::vector<uint32_t> inLargest;
+            for (uint32_t p = 0; p < G.paths.size(); ++p)
+                if (parts.partOf[p] == parts.largest && G.paths[p].length > 1) inLargest.push_back(p);
+            route::RouteClass car;
+            car.tags = ~TagMask(0);
+            car.topSpeed = 20;
+            // (the vehicles' filter by kind opens every lane path here: the car search need not ask it, ADR-0467)
+            CHECK(openCount(m.openTo("vehicles").paths) == G.paths.size());
+            const route::RouteBounds bounds = route::studyRoads(m);
+            std::mt19937 rng(1234u);
+            uint64_t fold = 1469598103934665603ull;
+            uint32_t found = 0;
+            const uint32_t trips = 500;
+            for (uint32_t t = 0; t < trips; ++t) {
+                PathPoint a, b;
+                a.path = PathId(inLargest[rng() % inLargest.size()]);
+                a.along = G.paths[a.path.index].length * (rng() % 1000) / 1000.0;
+                b.path = PathId(inLargest[rng() % inLargest.size()]);
+                b.along = G.paths[b.path.index].length * (rng() % 1000) / 1000.0;
+                const route::Route rt = route::findRoute(m, bounds, car, a, b);
+                found += rt.found ? 1u : 0u;
+                fold = (fold ^ route::routeHash(rt)) * 1099511628211ull;
+            }
+            std::printf("      %s: cars: %u of %u trips routed; the routes folded: 0x%016llx\n", level, found, trips,
+                        static_cast<unsigned long long>(fold));
+            CHECK(found == trips);
+        }
+        // WALKERS: fixed-seed trips between random points on the sidewalks of the largest part on foot. Every one is found;
+        // the time each search takes, and how far the route is against the straight line between its ends (the detour)
+        {
+            const route::RouteWalker walker = route::bindWalker(m, "walker", kTestPace);
+            const ReachableParts parts = reachableWalks(G, walker.open);
+            std::vector<uint32_t> sidewalks;
+            std::vector<uint32_t> inPart(parts.sizes.size(), 0);
+            for (uint32_t w = 0; w < G.walks.size(); ++w)
+                if (m.walkKind(WalkId(w)) == "sidewalk") ++inPart[parts.partOf[w]];
+            uint32_t largest = 0;
+            for (uint32_t p = 0; p < inPart.size(); ++p)
+                if (inPart[p] > inPart[largest]) largest = p;
+            for (uint32_t w = 0; w < G.walks.size(); ++w)
+                if (m.walkKind(WalkId(w)) == "sidewalk" && parts.partOf[w] == largest && G.walks[w].length > 0) sidewalks.push_back(w);
+            std::mt19937 rng(4321u);
+            const uint32_t trips = 1000;
+            uint32_t found = 0, absurd = 0;
+            std::vector<double> micros, detours, metres, crossings;
+            const auto pointOn = [&]() {
+                WalkPoint p;
+                p.walk = WalkId(sidewalks[rng() % sidewalks.size()]);
+                p.along = G.walks[p.walk.index].length * (rng() % 1000) / 1000.0;
+                return p;
+            };
+            uint64_t fold = 1469598103934665603ull;
+            for (uint32_t t = 0; t < trips; ++t) {
+                const WalkPoint a = pointOn(), b = pointOn();
+                const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+                const route::WalkRoute rt = route::findWalkRoute(m, walker, a, b);
+                micros.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count());
+                if (!rt.found) {
+                    std::printf("        NOT FOUND: %s\n", rt.whyWords.c_str());
+                    continue;
+                }
+                ++found;
+                fold = (fold ^ static_cast<uint64_t>(rt.metres * 1000)) * 1099511628211ull;
+                fold = (fold ^ rt.steps.size()) * 1099511628211ull;
+                const Real straight = distance(G.pointAt(a.walk, a.along), G.pointAt(b.walk, b.along));
+                metres.push_back(rt.metres);
+                crossings.push_back(static_cast<double>(rt.crossings.size()));
+                if (straight > 50) {
+                    detours.push_back(rt.metres / straight);
+                    if (rt.metres / straight > 4) {
+                        ++absurd;
+                        std::printf("        a long way round: %.0f m for %.0f m straight, (%.1f, %.1f) to (%.1f, %.1f), %zu crossings\n", rt.metres, straight,
+                                    G.pointAt(a.walk, a.along).x, G.pointAt(a.walk, a.along).y, G.pointAt(b.walk, b.along).x,
+                                    G.pointAt(b.walk, b.along).y, rt.crossings.size());
+                    }
+                }
+            }
+            // the same trips again: the same routes
+            std::mt19937 again(4321u);
+            rng = again;
+            uint64_t fold2 = 1469598103934665603ull;
+            for (uint32_t t = 0; t < trips; ++t) {
+                const WalkPoint a = pointOn(), b = pointOn();
+                const route::WalkRoute rt = route::findWalkRoute(m, walker, a, b);
+                if (!rt.found) continue;
+                fold2 = (fold2 ^ static_cast<uint64_t>(rt.metres * 1000)) * 1099511628211ull;
+                fold2 = (fold2 ^ rt.steps.size()) * 1099511628211ull;
+            }
+            const auto at = [](std::vector<double> v, double q) {
+                if (v.empty()) return 0.0;
+                std::sort(v.begin(), v.end());
+                return v[static_cast<std::size_t>(q * static_cast<double>(v.size() - 1))];
+            };
+            std::printf("      %s: walkers: %zu sidewalks in the largest part on foot; %u of %u trips routed (%.1f%%); folded 0x%016llx\n",
+                        level, sidewalks.size(), found, trips, 100.0 * found / trips, static_cast<unsigned long long>(fold));
+            std::printf("        search time: median %.0f us, 95th %.0f us, worst %.0f us\n", at(micros, 0.5), at(micros, 0.95), at(micros, 1.0));
+            std::printf("        route length: median %.0f m, 95th %.0f m; crossings: median %.0f, 95th %.0f\n", at(metres, 0.5),
+                        at(metres, 0.95), at(crossings, 0.5), at(crossings, 0.95));
+            std::printf("        detour (route / straight line, ends over 50 m apart, %zu trips): median %.2f, 95th %.2f, worst %.2f; over 4: %u\n",
+                        detours.size(), at(detours, 0.5), at(detours, 0.95), at(detours, 1.0), absurd);
+            CHECK(found == trips);
+            CHECK(fold == fold2);
+        }
     }
 }

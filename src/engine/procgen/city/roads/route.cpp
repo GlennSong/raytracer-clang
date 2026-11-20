@@ -1,0 +1,1016 @@
+#include "engine/procgen/city/roads/route.h"
+
+#include "engine/bundle/bundle.h"   // Fnv: the repo's 64-bit hash folded field by field
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace engine::roads {
+
+namespace {
+
+using engine::LaneGraph;
+using engine::Path;
+using engine::PathId;
+using engine::PathKind;
+using engine::Section;
+using engine::SectionId;
+
+constexpr Real kForever = std::numeric_limits<Real>::infinity();
+constexpr uint32_t kNoNode = 0xFFFFFFFFu;
+// How far a share of a lane's length may stray past a leg's ends and still count as inside it (rounding only).
+constexpr Real kShareTolerance = 1e-9;
+// How far a distance along may stray past the start or the destination and still count (rounding only).
+constexpr Real kAlongTolerance = 1e-6;
+
+bool knownPath(const LaneGraph& g, PathId p) { return p.valid() && p.index < g.paths.size(); }
+
+bool inRange(const engine::Range& r, std::size_t size) { return r.first <= size && r.count <= size - r.first; }
+
+// Whether a lane lies in a section that lists it where it says it is, so its neighbours can be read.
+bool inSoundSection(const LaneGraph& g, PathId lane) {
+    if (!knownPath(g, lane)) return false;
+    const Path& p = g.paths[lane.index];
+    if (p.kind != PathKind::Lane || !p.section.valid() || p.section.index >= g.sections.size()) return false;
+    const Section& s = g.sections[p.section.index];
+    return inRange(s.lanes, g.sectionLanes.size()) && p.indexInSection < s.lanes.count &&
+           g.sectionLanes[s.lanes.first + p.indexInSection] == lane;
+}
+
+// The lane beside `lane`, toward the kerb or toward the offside, when the line between may be crossed from this lane's
+// side; none otherwise (no such lane, a solid line, or no sound section). Line i lies between lane i (offside) and lane
+// i + 1 (kerb side).
+PathId sidestep(const LaneGraph& g, PathId lane, bool towardKerb) {
+    if (!inSoundSection(g, lane)) return PathId();
+    const Path& p = g.paths[lane.index];
+    const Section& s = g.sections[p.section.index];
+    if (!inRange(s.lines, g.laneLines.size()) || s.lines.count + 1 != s.lanes.count) return PathId();
+    const uint32_t k = p.indexInSection;
+    if (towardKerb) {
+        if (k + 1 >= s.lanes.count || !g.laneLines[s.lines.first + k].crossFromOffside) return PathId();
+        return g.sectionLanes[s.lanes.first + k + 1];
+    }
+    if (k == 0 || !g.laneLines[s.lines.first + k - 1].crossFromKerbside) return PathId();
+    return g.sectionLanes[s.lanes.first + k - 1];
+}
+
+// The paths leaving a path's end, in its next list's order (only known ones).
+template <typename Fn> void forEachNext(const LaneGraph& g, PathId p, Fn fn) {
+    const engine::Range next = g.paths[p.index].next;
+    if (!inRange(next, g.nextPaths.size())) return;
+    for (uint32_t i = next.first; i < next.end(); ++i)
+        if (knownPath(g, g.nextPaths[i])) fn(g.nextPaths[i]);
+}
+
+// The one lane a connector joins, or none.
+PathId laneAfter(const LaneGraph& g, PathId connector) {
+    PathId lane;
+    forEachNext(g, connector, [&](PathId q) {
+        if (!lane.valid() && g.paths[q.index].kind == PathKind::Lane) lane = q;
+    });
+    return lane;
+}
+
+// The seconds driving the whole of a path takes: a learned time for its section when the table has one, else its
+// length at the free-flow speed. Below zero: it cannot be driven (no speed at all).
+Real pathSeconds(const engine::RoadModel& g, const RouteClass& cls, PathId p, const SectionSeconds* learned) {
+    const Path& path = g.laneLevel.paths[p.index];
+    if (learned && path.kind == PathKind::Lane && path.section.valid() && path.section.index < learned->size() &&
+        (*learned)[path.section.index] > 0)
+        return (*learned)[path.section.index];
+    const Real speed = freeFlowSpeed(g, cls, p);
+    return speed > 0 ? path.length / speed : Real(-1);
+}
+
+std::string pointWords(const PathPoint& p) {
+    return "path " + std::to_string(p.path.index) + " at " + std::to_string(p.along) + " m";
+}
+
+bool onRoad(const LaneGraph& g, const PathPoint& p) {
+    return knownPath(g, p.path) && p.along >= 0 && p.along <= g.paths[p.path.index].length;
+}
+
+// Where in a leg's lanes `lane` is, or -1.
+int laneSlot(const Route& r, const RouteLeg& leg, PathId lane) {
+    for (uint32_t k = 0; k < leg.laneCount; ++k)
+        if (r.lanes[leg.firstLane + k].lane == lane) return static_cast<int>(k);
+    return -1;
+}
+
+// The changes still needed from `lane` as leg `leg` lists it; kCannotFinish when the leg does not have it.
+uint32_t changesIn(const Route& r, uint32_t leg, PathId lane) {
+    const int k = laneSlot(r, r.legs[leg], lane);
+    return k < 0 ? kCannotFinish : r.lanes[r.legs[leg].firstLane + static_cast<uint32_t>(k)].changes;
+}
+
+// The first leg at or after `fromLeg` that has `lane`, or -1.
+int legWithLane(const Route& r, PathId lane, uint32_t fromLeg) {
+    for (std::size_t i = fromLeg; i < r.legs.size(); ++i)
+        if (laneSlot(r, r.legs[i], lane) >= 0) return static_cast<int>(i);
+    return -1;
+}
+
+// How a car leaving `lane` (in leg `leg`, not the last) leads on into the next leg: the step it takes out of the
+// lane's end (a connector, or the next leg's lane itself) whose lane in the next leg needs the fewest changes still;
+// on a tie, the connector the search itself took for this turn (it chose that one with the ways on closed to the class
+// in view, issue #284), then the lower path id. None when the lane does not lead on.
+PathId bestStepOn(const Route& r, const LaneGraph& g, uint32_t leg, PathId lane, uint32_t* changes) {
+    PathId best;
+    uint32_t bestChanges = kCannotFinish;
+    const PathId searched = leg < r.turns.size() ? r.turns[leg].connector : PathId();
+    forEachNext(g, lane, [&](PathId q) {
+        PathId into = q;
+        if (g.paths[q.index].kind == PathKind::Connector) {
+            if (!mayUse(g, r.vehicle, q)) return;
+            into = laneAfter(g, q);
+            if (!into.valid()) return;
+        }
+        const uint32_t c = changesIn(r, leg + 1, into);
+        if (c == kCannotFinish) return;
+        const bool preferred = q == searched && best != searched;
+        if (c < bestChanges || (c == bestChanges && (preferred || (best != searched && q < best)))) {
+            bestChanges = c;
+            best = q;
+        }
+    });
+    if (changes) *changes = bestChanges;
+    return best;
+}
+
+// ---- the one search (ADR-0467) -----------------------------------------------------------------------------------
+
+// One entry of the search's heap: a node, the time to reach it, and that plus the lower bound from it.
+struct HeapItem {
+    Real estimate = 0;
+    Real cost = 0;
+    uint32_t node = 0;
+};
+// The heap keeps the LOWEST estimate on top; a tie goes to the lower node number (for a lane, its path id).
+bool heapAfter(const HeapItem& a, const HeapItem& b) {
+    if (a.estimate != b.estimate) return a.estimate > b.estimate;
+    return a.node > b.node;
+}
+
+// THE ONE SEARCH every mover is routed by: A* over numbered nodes, one binary heap ordered by (estimate, node number),
+// a node popped at a cost above its best is stale and skipped, and the search stops when the goal is popped. What a
+// node is and which steps leave it are the mover's (the caller's `expand`, which calls `reach` for each step); `bound`
+// is the mover's lower bound on the cost from a node to the goal (it must never over-estimate). Per node it keeps the
+// best cost, the node it was reached from and a byte saying how (the mover's own meaning). Nodes may be added while
+// it runs (addNode).
+template <typename Bound> class Search {
+public:
+    Search(uint32_t nodes, Bound bound) : best(nodes, kForever), pred(nodes, kNoNode), how(nodes, 0), bound_(bound) {}
+    uint32_t addNode() {
+        best.push_back(kForever);
+        pred.push_back(kNoNode);
+        how.push_back(0);
+        return static_cast<uint32_t>(best.size() - 1);
+    }
+    // A step reaching node `v` from node `from` at `cost` in all: kept when cheaper than any before.
+    void reach(uint32_t v, uint32_t from, Real cost, uint8_t by) {
+        if (!(cost < best[v])) return;
+        best[v] = cost;
+        pred[v] = from;
+        how[v] = by;
+        HeapItem item;
+        item.cost = cost;
+        item.estimate = cost + bound_(v);
+        item.node = v;
+        heap_.push_back(item);
+        std::push_heap(heap_.begin(), heap_.end(), heapAfter);
+    }
+    // Runs until `goal` is popped (true) or nothing is left (false); `expand(u, cost)` for each node popped.
+    template <typename Expand> bool run(uint32_t goal, Expand expand) {
+        while (!heap_.empty()) {
+            std::pop_heap(heap_.begin(), heap_.end(), heapAfter);
+            const HeapItem item = heap_.back();
+            heap_.pop_back();
+            if (item.cost > best[item.node]) continue;   // a stale entry: the node was reached cheaper since
+            if (item.node == goal) return true;
+            expand(item.node, item.cost);
+        }
+        return false;
+    }
+    // The nodes taken from the first one reached to the goal, not counting the goal.
+    std::vector<uint32_t> takenTo(uint32_t goal) const {
+        std::vector<uint32_t> taken;
+        for (uint32_t u = pred[goal]; u != kNoNode; u = pred[u]) taken.push_back(u);
+        std::reverse(taken.begin(), taken.end());
+        return taken;
+    }
+
+    std::vector<Real> best;
+    std::vector<uint32_t> pred;
+    std::vector<uint8_t> how;
+
+private:
+    std::vector<HeapItem> heap_;
+    Bound bound_;
+};
+
+Route noRoute(Route r, NoRouteWhy why, const std::string& words) {
+    r.found = false;
+    r.why = why;
+    r.whyWords = words;
+    return r;
+}
+
+}  // namespace
+
+// ---- ways on closed to a class (issue #284) -------------------------------------------------------------------------
+
+namespace {
+
+// Adds the children of `parent` for the chains [begin, end) (sorted, all sharing their first `depth` turns): one node per
+// distinct turn at `depth`, side by side, then each one's own children.
+void addChainChildren(ClosedChains& out, const std::vector<std::vector<PathId>>& chains,
+                      const std::vector<uint8_t>& never, std::size_t begin, std::size_t end, std::size_t depth,
+                      uint32_t parent) {
+    std::vector<std::pair<std::size_t, std::size_t>> groups;   // [from, to) of the chains with each turn at `depth`
+    for (std::size_t k = begin; k < end;) {
+        if (chains[k].size() <= depth) {
+            ++k;
+            continue;
+        }
+        std::size_t e = k + 1;
+        while (e < end && chains[e].size() > depth && chains[e][depth] == chains[k][depth]) ++e;
+        groups.push_back({k, e});
+        k = e;
+    }
+    out.nodes[parent].firstChild = static_cast<uint32_t>(out.nodes.size());
+    out.nodes[parent].childCount = static_cast<uint32_t>(groups.size());
+    for (const std::pair<std::size_t, std::size_t>& g : groups) {
+        ClosedChains::Node node;
+        node.turn = chains[g.first][depth];
+        for (std::size_t k = g.first; k < g.second; ++k)
+            if (chains[k].size() == depth + 1) {
+                node.closed = true;
+                node.never = node.never || never[k] != 0;
+            }
+        out.nodes.push_back(node);
+    }
+    for (std::size_t i = 0; i < groups.size(); ++i)
+        addChainChildren(out, chains, never, groups[i].first, groups[i].second, depth + 1,
+                         out.nodes[parent].firstChild + static_cast<uint32_t>(i));
+}
+
+uint32_t childFor(const ClosedChains& c, uint32_t state, PathId turn) {
+    const ClosedChains::Node& node = c.nodes[state];
+    const ClosedChains::Node* first = c.nodes.data() + node.firstChild;
+    const ClosedChains::Node* last = first + node.childCount;
+    const ClosedChains::Node* it =
+        std::lower_bound(first, last, turn, [](const ClosedChains::Node& x, PathId t) { return x.turn < t; });
+    return it != last && it->turn == turn ? static_cast<uint32_t>(it - c.nodes.data()) : 0;
+}
+
+}  // namespace
+
+ClosedChains buildClosedChains(std::vector<std::vector<PathId>> chains, const std::vector<uint8_t>& never) {
+    ClosedChains out;
+    std::vector<std::pair<std::vector<PathId>, uint8_t>> sorted;
+    for (std::size_t k = 0; k < chains.size(); ++k)
+        if (chains[k].size() >= 2) sorted.push_back({std::move(chains[k]), k < never.size() ? never[k] : uint8_t(0)});
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<std::vector<PathId>> list;
+    std::vector<uint8_t> nev;
+    for (const std::pair<std::vector<PathId>, uint8_t>& s : sorted) {
+        if (!list.empty() && list.back() == s.first) {
+            nev.back() = static_cast<uint8_t>(nev.back() | s.second);
+            continue;
+        }
+        list.push_back(s.first);
+        nev.push_back(s.second);
+    }
+    if (list.empty()) return out;
+    out.chains = static_cast<uint32_t>(list.size());
+    out.nodes.push_back(ClosedChains::Node());
+    addChainChildren(out, list, nev, 0, list.size(), 0, 0);
+    return out;
+}
+
+uint32_t ClosedChains::step(uint32_t state, PathId turn) const {
+    if (nodes.empty() || state >= nodes.size()) return 0;
+    const uint32_t child = childFor(*this, state, turn);
+    if (child == 0) return 0;
+    return nodes[child].closed ? kChainClosed : child;
+}
+
+bool ClosedChains::closedChain(const PathId* turns, std::size_t count, bool* never) const {
+    if (never) *never = false;
+    uint32_t state = 0;
+    for (std::size_t k = 0; k < count && !nodes.empty(); ++k) {
+        state = childFor(*this, state, turns[k]);
+        if (state == 0) return false;
+        if (nodes[state].closed) {
+            if (never) *never = nodes[state].never;
+            return k + 1 == count;
+        }
+    }
+    return false;
+}
+
+// ---- classes and paths -------------------------------------------------------------------------------------------
+
+bool mayUse(const LaneGraph& roads, const RouteClass& cls, PathId path) {
+    if (!knownPath(roads, path)) return false;
+    const Path& p = roads.paths[path.index];
+    return (p.vehicleTags & cls.tags) != 0 && p.tightestRadius >= cls.tightestTurnRadius &&
+           !std::binary_search(cls.closed.begin(), cls.closed.end(), path);
+}
+
+Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, PathId path) {
+    if (!knownPath(model.laneLevel, path)) return 0;
+    const Real limit = model.postedLimit(path);
+    if (limit <= 0) return cls.topSpeed;
+    return cls.topSpeed > 0 ? std::min(limit, cls.topSpeed) : limit;
+}
+
+RouteBounds studyRoads(const engine::RoadModel& model) {
+    const LaneGraph& roads = model.laneLevel;
+    RouteBounds b;
+    if (roads.paths.empty()) return b;
+    b.shortestPath = kForever;
+    const std::size_t points = std::min(roads.points.size(), roads.along.size());
+    for (uint32_t i = 0; i < roads.paths.size(); ++i) {
+        const Path& p = roads.paths[i];
+        const Real posted = model.postedLimit(PathId(i));
+        b.fastestLimit = std::max(b.fastestLimit, posted);
+        if (posted <= 0) b.anyUnlimited = true;
+        b.shortestPath = std::min(b.shortestPath, p.length);
+        if (p.curve.count == 0 || !inRange(p.curve, points)) continue;
+        const engine::Vec2 end = roads.points[p.curve.end() - 1];
+        forEachNext(roads, PathId(i), [&](PathId q) {
+            const engine::Range c = roads.paths[q.index].curve;
+            if (c.count == 0 || !inRange(c, points)) return;
+            b.widestGap = std::max(b.widestGap, engine::distance(end, roads.points[c.first]));
+        });
+    }
+    for (const Section& s : roads.sections) {
+        if (!inRange(s.lanes, roads.sectionLanes.size())) continue;
+        for (uint32_t k = 1; k < s.lanes.count; ++k) {
+            const PathId a = roads.sectionLanes[s.lanes.first + k - 1];
+            const PathId c = roads.sectionLanes[s.lanes.first + k];
+            if (!knownPath(roads, a) || !knownPath(roads, c)) continue;
+            b.widestSidestep = std::max(b.widestSidestep, engine::distance(roads.pointAt(a, 0), roads.pointAt(c, 0)));
+        }
+    }
+    b.usable = b.shortestPath > 0 && std::isfinite(b.shortestPath);
+    return b;
+}
+
+// ---- finding a route ---------------------------------------------------------------------------------------------
+
+Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const RouteClass& cls, const PathPoint& from,
+                const PathPoint& to, const SectionSeconds* sectionSeconds) {
+    const LaneGraph& roads = model.laneLevel;
+    Route r;
+    r.from = from;
+    r.to = to;
+    r.vehicle = cls;
+    if (!onRoad(roads, from))
+        return noRoute(r, NoRouteWhy::StartNotOnRoad, "the car's place (" + pointWords(from) + ") is not on the road");
+    if (!onRoad(roads, to))
+        return noRoute(r, NoRouteWhy::DestinationNotOnRoad, "the destination (" + pointWords(to) + ") is not on the road");
+    if (to.path != from.path && !mayUse(roads, cls, to.path))
+        return noRoute(r, NoRouteWhy::DestinationClosed,
+                       "the destination (" + pointWords(to) +
+                           ") is on a path this vehicle may not use: its tags do not match, or it bends tighter than "
+                           "the vehicle can turn");
+
+    // THE NODES. Node i < n is "path i, from its start". After them come the START nodes: the car's own path from
+    // where its front is, and (on a lane in a section) each lane beside it from the same share of its length, since a
+    // car may change lanes before it has driven anywhere. Last comes the destination.
+    const uint32_t n = static_cast<uint32_t>(roads.paths.size());
+    const Path& startPath = roads.paths[from.path.index];
+    const Real startShare = startPath.length > 0 ? from.along / startPath.length : Real(0);
+    std::vector<PathId> startNodes;
+    uint32_t startSlot = 0;
+    const bool startInSection = inSoundSection(roads, from.path);
+    if (startInSection) {
+        const Section& s = roads.sections[startPath.section.index];
+        for (uint32_t k = 0; k < s.lanes.count; ++k) startNodes.push_back(roads.sectionLanes[s.lanes.first + k]);
+        startSlot = startPath.indexInSection;
+    } else {
+        startNodes.push_back(from.path);
+    }
+    const uint32_t startCount = static_cast<uint32_t>(startNodes.size());
+    const uint32_t destNode = n + startCount;
+    const uint32_t nodeCount = destNode + 1;
+    // WAYS ON CLOSED TO THE CLASS (issue #284; RouteClass::closedChains): after the nodes above come nodes for "path p,
+    // from its start, partway through a closed chain's turns" (the chain's state, a node of its tree), made as the search
+    // reaches them; a car in such a state may not take the turn that completes a closed chain.
+    std::vector<PathId> chainNodePath;
+    std::vector<uint32_t> chainNodeState;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> chainNodeOf;   // (path, chain state) -> node
+    auto nodePath = [&](uint32_t u) {
+        return u < n ? PathId(u) : (u < destNode ? startNodes[u - n] : u == destNode ? to.path : chainNodePath[u - nodeCount]);
+    };
+    auto nodeState = [&](uint32_t u) -> uint32_t { return u < nodeCount ? 0u : chainNodeState[u - nodeCount]; };
+    auto nodeEntry = [&](uint32_t u) -> Real {
+        if (u < n || u > destNode) return 0;
+        if (u == destNode) return to.along;
+        const PathId p = startNodes[u - n];
+        return p == from.path ? from.along : startShare * roads.paths[p.index].length;
+    };
+
+    // THE LOWER BOUND (A*): the straight distance to the destination, less the widest gap between joined paths, over
+    // the fastest any step can go, slowed by the share a gap can add to each path's length. Every step a route takes
+    // either drives along a path (at most `fastest` metres a second, and a path is at least shortestPath long) or
+    // jumps a gap between paths (at most widestGap, once per path), or changes lanes (kLaneChangeCostSeconds for a
+    // shift no wider than `fastest` times that), so the bound never exceeds what remains. The first step, from part
+    // way along the start path, may be short; the subtracted gap covers it.
+    Real fastest = 0;
+    if (bounds.usable) {
+        fastest = cls.topSpeed > 0 ? std::min(bounds.fastestLimit, cls.topSpeed) : bounds.fastestLimit;
+        if (bounds.anyUnlimited) fastest = std::max(fastest, cls.topSpeed);
+        if (sectionSeconds) {
+            for (uint32_t s = 0; s < sectionSeconds->size() && s < roads.sections.size(); ++s) {
+                const Real secs = (*sectionSeconds)[s];
+                const Section& sec = roads.sections[s];
+                if (!(secs > 0) || !inRange(sec.lanes, roads.sectionLanes.size())) continue;
+                for (uint32_t k = 0; k < sec.lanes.count; ++k) {
+                    const PathId l = roads.sectionLanes[sec.lanes.first + k];
+                    if (knownPath(roads, l)) fastest = std::max(fastest, roads.paths[l.index].length / secs);
+                }
+            }
+        }
+        Real sidestepWidth = bounds.widestSidestep;
+        for (uint32_t k = 1; k < startCount; ++k)
+            sidestepWidth = std::max(sidestepWidth, engine::distance(roads.pointAt(startNodes[k - 1], nodeEntry(n + k - 1)),
+                                                                     roads.pointAt(startNodes[k], nodeEntry(n + k))));
+        fastest = std::max(fastest, sidestepWidth / kLaneChangeCostSeconds);
+    }
+    const bool useBound = bounds.usable && fastest > 0;
+    const Real boundScale = useBound ? 1 / (fastest * (1 + bounds.widestGap / bounds.shortestPath)) : 0;
+    const engine::Vec2 destPoint = roads.pointAt(to.path, to.along);
+    auto bound = [&](uint32_t u) -> Real {
+        if (!useBound || u == destNode) return 0;
+        const Real d = engine::distance(roads.pointAt(nodePath(u), nodeEntry(u)), destPoint) - bounds.widestGap;
+        return d > 0 ? d * boundScale : Real(0);
+    };
+
+    // THE ONE SEARCH over the car's steps: along a path it may use (on to the paths its end leads to), or sideways into
+    // the lane beside (a lane change). How a node was reached: 1 by a lane change, 0 otherwise.
+    Search<decltype(bound)> search(nodeCount, bound);
+    // The node for path `p` from its start in chain state `state` (0: the plain node).
+    auto nodeFor = [&](PathId p, uint32_t state) -> uint32_t {
+        if (state == 0) return p.index;
+        const std::pair<uint32_t, uint32_t> key(p.index, state);
+        const std::map<std::pair<uint32_t, uint32_t>, uint32_t>::const_iterator it = chainNodeOf.find(key);
+        if (it != chainNodeOf.end()) return it->second;
+        const uint32_t v = search.addNode();
+        chainNodePath.push_back(p);
+        chainNodeState.push_back(state);
+        chainNodeOf.emplace(key, v);
+        return v;
+    };
+    search.reach(n + startSlot, kNoNode, 0, 0);
+
+    const bool arrived = search.run(destNode, [&](uint32_t u, Real cost) {
+        const PathId p = nodePath(u);
+        const Path& path = roads.paths[p.index];
+        const Real entry = nodeEntry(u);
+        const Real whole = pathSeconds(model, cls, p, sectionSeconds);
+        if (whole >= 0 && path.length > 0) {
+            const Real perMetre = whole / path.length;
+            // The destination, when it lies ahead on this path.
+            if (p == to.path && to.along + kAlongTolerance >= entry)
+                search.reach(destNode, u, cost + perMetre * std::max(Real(0), to.along - entry), 0);
+            // On along the path's end (a turn that completes a closed chain is not taken).
+            const Real toEnd = cost + perMetre * (path.length - entry);
+            const uint32_t state = nodeState(u);
+            forEachNext(roads, p, [&](PathId q) {
+                if (!mayUse(roads, cls, q)) return;
+                uint32_t next = state;
+                if (roads.paths[q.index].kind == PathKind::Connector && !cls.closedChains.empty()) {
+                    next = cls.closedChains.step(state, q);
+                    if (next == kChainClosed) return;
+                }
+                search.reach(nodeFor(q, next), u, toEnd, 0);
+            });
+        }
+        // Sideways, into the lane beside (a start node goes to the start node beside it), when the class may.
+        if (cls.laneChanges && path.kind == PathKind::Lane) {
+            for (const bool towardKerb : {false, true}) {
+                const PathId beside = sidestep(roads, p, towardKerb);
+                if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
+                const bool startNode = u >= n && u < destNode;
+                if (startNode && !startInSection) continue;
+                const uint32_t v = startNode ? n + roads.paths[beside.index].indexInSection : nodeFor(beside, nodeState(u));
+                search.reach(v, u, cost + kLaneChangeCostSeconds, 1);
+            }
+        }
+    });
+    if (!arrived)
+        return noRoute(r, NoRouteWhy::NothingLeadsThere,
+                       "nothing this vehicle may use leads from " + pointWords(from) + " to " + pointWords(to));
+    r.cost = search.best[destNode];
+
+    // THE NODES TAKEN, start to destination (not counting the destination node itself).
+    const std::vector<uint32_t> taken = search.takenTo(destNode);
+    const std::vector<uint8_t>& bySidestep = search.how;
+
+    // INTO LEGS AND TURNS: lanes of one section joined by lane changes are one leg; a connector (or a lane leading
+    // straight into the next section's lane) is the turn between two legs; a connector first or last is the start or
+    // end connector.
+    PathId pendingConnector;
+    for (std::size_t i = 0; i < taken.size(); ++i) {
+        const uint32_t u = taken[i];
+        const PathId p = nodePath(u);
+        const Path& path = roads.paths[p.index];
+        if (path.kind == PathKind::Connector) {
+            if (i == 0) r.startConnector = p;
+            if (i + 1 == taken.size()) r.endConnector = p;
+            else if (i > 0) pendingConnector = p;
+            continue;
+        }
+        if (i > 0 && bySidestep[u]) {
+            r.legs.back().lane = p;
+            continue;
+        }
+        RouteLeg leg;
+        leg.section = inSoundSection(roads, p) ? path.section : SectionId();
+        leg.lane = p;
+        leg.enterFraction = path.length > 0 ? nodeEntry(u) / path.length : Real(0);
+        if (!r.legs.empty()) {
+            RouteTurn t;
+            t.fromSection = r.legs.back().section;
+            t.toSection = leg.section;
+            if (pendingConnector.valid()) {
+                const Path& c = roads.paths[pendingConnector.index];
+                t.turn = model.turnOf(pendingConnector);
+                t.junction = c.junction;
+                t.connector = pendingConnector;
+                t.metres = c.length;
+                const Real speed = freeFlowSpeed(model, cls, pendingConnector);
+                t.seconds = speed > 0 ? c.length / speed : Real(0);
+            }
+            r.turns.push_back(t);
+            pendingConnector = PathId();
+        }
+        r.legs.push_back(leg);
+    }
+
+    // Each leg's lanes, where the route comes out of it, and its length.
+    for (std::size_t i = 0; i < r.legs.size(); ++i) {
+        RouteLeg& leg = r.legs[i];
+        leg.firstLane = static_cast<uint32_t>(r.lanes.size());
+        if (leg.section.valid()) {
+            const Section& s = roads.sections[leg.section.index];
+            for (uint32_t k = 0; k < s.lanes.count; ++k) {
+                RouteLane rl;
+                rl.lane = roads.sectionLanes[s.lanes.first + k];
+                rl.length = knownPath(roads, rl.lane) ? roads.paths[rl.lane.index].length : Real(0);
+                r.lanes.push_back(rl);
+            }
+        } else {
+            RouteLane rl;
+            rl.lane = leg.lane;
+            rl.length = roads.paths[leg.lane.index].length;
+            r.lanes.push_back(rl);
+        }
+        leg.laneCount = static_cast<uint32_t>(r.lanes.size()) - leg.firstLane;
+        const Real length = roads.paths[leg.lane.index].length;
+        if (i + 1 == r.legs.size() && !r.endConnector.valid())
+            leg.leaveFraction = length > 0 ? to.along / length : Real(1);
+        leg.metres = std::max(Real(0), leg.leaveFraction - leg.enterFraction) * length;
+        const Real speed = freeFlowSpeed(model, cls, leg.lane);
+        leg.seconds = speed > 0 ? leg.metres / speed : Real(0);
+    }
+
+    // The start and end connectors' share, then each leg's "after it", from the destination back.
+    Real startMetres = 0, startSeconds = 0, endMetres = 0, endSeconds = 0;
+    if (r.startConnector.valid()) {
+        const bool alsoEnd = r.endConnector == r.startConnector && r.legs.empty();
+        startMetres = (alsoEnd ? to.along : roads.paths[r.startConnector.index].length) - from.along;
+        const Real speed = freeFlowSpeed(model, cls, r.startConnector);
+        startSeconds = speed > 0 ? startMetres / speed : Real(0);
+    }
+    if (r.endConnector.valid() && !r.legs.empty()) {
+        endMetres = to.along;
+        const Real speed = freeFlowSpeed(model, cls, r.endConnector);
+        endSeconds = speed > 0 ? endMetres / speed : Real(0);
+    }
+    Real afterMetres = endMetres, afterSeconds = endSeconds;
+    for (std::size_t i = r.legs.size(); i-- > 0;) {
+        r.legs[i].metresAfter = afterMetres;
+        r.legs[i].secondsAfter = afterSeconds;
+        afterMetres += r.legs[i].metres;
+        afterSeconds += r.legs[i].seconds;
+        if (i > 0) {
+            afterMetres += r.turns[i - 1].metres;
+            afterSeconds += r.turns[i - 1].seconds;
+        }
+    }
+    r.metres = startMetres + afterMetres;
+    r.seconds = startSeconds + afterSeconds;
+
+    // THE LANE-CHANGES TABLE, worked out backwards from the destination. In the last leg a lane finishes when the
+    // destination is on it (or it leads into the end connector); in any other leg, when it leads into the next leg at
+    // a lane that can finish, and then it needs what that lane needs. Then, within the leg, a lane needs one more
+    // change than a lane beside it that it may cross into.
+    for (std::size_t i = r.legs.size(); i-- > 0;) {
+        const RouteLeg& leg = r.legs[i];
+        const bool last = i + 1 == r.legs.size();
+        for (uint32_t k = 0; k < leg.laneCount; ++k) {
+            RouteLane& rl = r.lanes[leg.firstLane + k];
+            const bool usable = mayUse(roads, cls, rl.lane) || rl.lane == from.path;
+            uint32_t staying = kCannotFinish;
+            if (usable && knownPath(roads, rl.lane)) {
+                if (last) {
+                    const bool finishes = r.endConnector.valid() ? roads.paths[r.endConnector.index].from == rl.lane
+                                                                 : rl.lane == to.path;
+                    if (finishes) staying = 0;
+                } else {
+                    bestStepOn(r, roads, static_cast<uint32_t>(i), rl.lane, &staying);
+                }
+            }
+            rl.changesIfStaying = staying;
+            rl.changes = staying;
+        }
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (uint32_t k = 0; k < leg.laneCount; ++k) {
+                RouteLane& rl = r.lanes[leg.firstLane + k];
+                for (const bool towardKerb : {false, true}) {
+                    const PathId beside = sidestep(roads, rl.lane, towardKerb);
+                    if (!beside.valid()) continue;
+                    const int slot = laneSlot(r, leg, beside);
+                    if (slot < 0) continue;
+                    const uint32_t there = r.lanes[leg.firstLane + static_cast<uint32_t>(slot)].changes;
+                    if (there != kCannotFinish && there + 1 < rl.changes) {
+                        rl.changes = there + 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    r.found = true;
+    return r;
+}
+
+// ---- questions ---------------------------------------------------------------------------------------------------
+
+RoutePlace placeOnRoute(const Route& route, const LaneGraph& roads, const PathPoint& at, uint32_t fromLeg) {
+    RoutePlace place;
+    if (!route.found || !knownPath(roads, at.path)) return place;
+    const Path& p = roads.paths[at.path.index];
+    if (p.kind == PathKind::Lane) {
+        const Real share = p.length > 0 ? at.along / p.length : Real(0);
+        for (std::size_t i = fromLeg; i < route.legs.size(); ++i) {
+            const RouteLeg& leg = route.legs[i];
+            if (laneSlot(route, leg, at.path) < 0) continue;
+            if (share + kShareTolerance < leg.enterFraction || share > leg.leaveFraction + kShareTolerance) continue;
+            place.part = RoutePart::Leg;
+            place.index = static_cast<uint32_t>(i);
+            return place;
+        }
+        return place;
+    }
+    const bool onlyConnector = route.legs.empty();
+    if (fromLeg == 0 && at.path == route.startConnector && at.along + kAlongTolerance >= route.from.along &&
+        (!onlyConnector || at.along <= route.to.along + kAlongTolerance)) {
+        place.part = RoutePart::StartConnector;
+        return place;
+    }
+    if (!onlyConnector && at.path == route.endConnector && at.along <= route.to.along + kAlongTolerance) {
+        place.part = RoutePart::EndConnector;
+        return place;
+    }
+    const PathId into = laneAfter(roads, at.path);
+    for (std::size_t i = fromLeg; i < route.turns.size(); ++i) {
+        if (laneSlot(route, route.legs[i], p.from) < 0 || laneSlot(route, route.legs[i + 1], into) < 0) continue;
+        place.part = RoutePart::Turn;
+        place.index = static_cast<uint32_t>(i);
+        return place;
+    }
+    return place;
+}
+
+LanesToCross lanesToCross(const Route& route, PathId lane, uint32_t fromLeg) {
+    LanesToCross out;
+    if (!route.found) return out;
+    const int legIndex = legWithLane(route, lane, fromLeg);
+    if (legIndex < 0) return out;
+    out.onRoute = true;
+    const RouteLeg& leg = route.legs[static_cast<std::size_t>(legIndex)];
+    const uint32_t k = static_cast<uint32_t>(laneSlot(route, leg, lane));
+    const uint32_t mine = route.lanes[leg.firstLane + k].changes;
+    for (uint32_t d = 1; d < leg.laneCount; ++d) {
+        const uint32_t kerbward = k + d < leg.laneCount ? route.lanes[leg.firstLane + k + d].changes : kCannotFinish;
+        const uint32_t offward = k >= d ? route.lanes[leg.firstLane + k - d].changes : kCannotFinish;
+        const bool kerbBetter = kerbward < mine;
+        const bool offBetter = offward < mine;
+        if (!kerbBetter && !offBetter) continue;
+        out.lanes = d;
+        out.toward = kerbBetter && (!offBetter || kerbward <= offward) ? Across::TowardKerb : Across::TowardOffside;
+        return out;
+    }
+    return out;
+}
+
+LastChance lastChance(const Route& route, PathId lane, Real along, uint32_t fromLeg) {
+    LastChance out;
+    if (!route.found) return out;
+    const int legIndex = legWithLane(route, lane, fromLeg);
+    if (legIndex < 0) return out;
+    const RouteLeg& leg = route.legs[static_cast<std::size_t>(legIndex)];
+    const RouteLane& rl = route.lanes[leg.firstLane + static_cast<uint32_t>(laneSlot(route, leg, lane))];
+    if (rl.changesIfStaying != kCannotFinish) return out;
+    out.needed = true;
+    out.metres = std::max(Real(0), leg.leaveFraction * rl.length - along);
+    return out;
+}
+
+WayAhead wayAhead(const Route& route, const LaneGraph& roads, PathId path, Real along, Real lookAhead,
+                  uint32_t fromLeg) {
+    WayAhead way;
+    if (!knownPath(roads, path)) return way;
+    way.paths.push_back(path);
+    PathPoint here;
+    here.path = path;
+    here.along = along;
+    RoutePlace place = placeOnRoute(route, roads, here, fromLeg);
+    if (!place.onRoute()) return way;
+    Real reach = roads.paths[path.index].length - along;
+    PathId at = path;
+    while (reach < lookAhead && way.paths.size() < kMaxFollowedPaths) {
+        PathId next;
+        RoutePlace nextPlace;
+        if (place.part == RoutePart::StartConnector || place.part == RoutePart::Turn) {
+            const uint32_t leg = place.part == RoutePart::Turn ? place.index + 1 : 0;
+            if (leg >= route.legs.size()) break;   // the destination is on this connector
+            next = laneAfter(roads, at);
+            if (!next.valid() || laneSlot(route, route.legs[leg], next) < 0) break;
+            nextPlace.part = RoutePart::Leg;
+            nextPlace.index = leg;
+        } else if (place.part == RoutePart::Leg) {
+            const uint32_t leg = place.index;
+            if (leg + 1 == route.legs.size()) {
+                // The last leg: on to the end connector when the destination is on it, else the destination is here.
+                if (!route.endConnector.valid() || roads.paths[route.endConnector.index].from != at) break;
+                next = route.endConnector;
+                nextPlace.part = RoutePart::EndConnector;
+            } else {
+                next = bestStepOn(route, roads, leg, at, nullptr);
+                if (!next.valid()) break;   // this lane does not lead on: the way ends with it
+                nextPlace.part = roads.paths[next.index].kind == PathKind::Connector ? RoutePart::Turn : RoutePart::Leg;
+                nextPlace.index = nextPlace.part == RoutePart::Turn ? leg : leg + 1;
+            }
+        } else {
+            break;   // on the end connector: the destination is on it
+        }
+        way.paths.push_back(next);
+        reach += roads.paths[next.index].length;
+        at = next;
+        place = nextPlace;
+    }
+    return way;
+}
+
+Remaining remainingFrom(const Route& route, const engine::RoadModel& model, const PathPoint& at, uint32_t fromLeg) {
+    const LaneGraph& roads = model.laneLevel;
+    Remaining out;
+    const RoutePlace place = placeOnRoute(route, roads, at, fromLeg);
+    if (!place.onRoute()) return out;
+    out.onRoute = true;
+    const Path& p = roads.paths[at.path.index];
+    const Real speed = freeFlowSpeed(model, route.vehicle, at.path);
+    auto add = [&](Real metres, Real seconds) {
+        out.metres += metres;
+        out.seconds += seconds;
+    };
+    auto driveHere = [&](Real metres) { add(metres, speed > 0 ? metres / speed : Real(0)); };
+    switch (place.part) {
+    case RoutePart::Leg: {
+        const RouteLeg& leg = route.legs[place.index];
+        const Real share = p.length > 0 ? at.along / p.length : Real(0);
+        driveHere(std::max(Real(0), leg.leaveFraction - share) * p.length);
+        add(leg.metresAfter, leg.secondsAfter);
+        break;
+    }
+    case RoutePart::Turn: {
+        const RouteLeg& next = route.legs[place.index + 1];
+        driveHere(std::max(Real(0), p.length - at.along));
+        add(next.metres + next.metresAfter, next.seconds + next.secondsAfter);
+        break;
+    }
+    case RoutePart::StartConnector:
+        if (route.legs.empty()) {
+            driveHere(std::max(Real(0), route.to.along - at.along));
+        } else {
+            driveHere(std::max(Real(0), p.length - at.along));
+            add(route.legs[0].metres + route.legs[0].metresAfter, route.legs[0].seconds + route.legs[0].secondsAfter);
+        }
+        break;
+    case RoutePart::EndConnector:
+        driveHere(std::max(Real(0), route.to.along - at.along));
+        break;
+    case RoutePart::Off:
+        break;
+    }
+    return out;
+}
+
+uint64_t routeHash(const Route& route) {
+    engine::bundle::Fnv h;
+    h.pod(static_cast<uint8_t>(route.found));
+    h.pod(static_cast<uint8_t>(route.why));
+    h.str(route.whyWords);
+    h.pod(route.from.path.index);
+    h.pod(route.from.along);
+    h.pod(route.to.path.index);
+    h.pod(route.to.along);
+    h.pod(route.vehicle.tags);
+    h.pod(route.vehicle.tightestTurnRadius);
+    h.pod(route.vehicle.topSpeed);
+    h.pod(static_cast<uint8_t>(route.vehicle.laneChanges));
+    h.pod(static_cast<uint64_t>(route.vehicle.closed.size()));
+    for (const engine::PathId c : route.vehicle.closed) h.pod(c.index);
+    h.pod(route.vehicle.closedChains.chains);
+    h.pod(static_cast<uint64_t>(route.vehicle.closedChains.nodes.size()));
+    h.pod(route.startConnector.index);
+    h.pod(route.endConnector.index);
+    h.pod(static_cast<uint64_t>(route.legs.size()));
+    for (const RouteLeg& l : route.legs) {
+        h.pod(l.section.index);
+        h.pod(l.lane.index);
+        h.pod(l.enterFraction);
+        h.pod(l.leaveFraction);
+        h.pod(l.firstLane);
+        h.pod(l.laneCount);
+        h.pod(l.metres);
+        h.pod(l.seconds);
+        h.pod(l.metresAfter);
+        h.pod(l.secondsAfter);
+    }
+    h.pod(static_cast<uint64_t>(route.turns.size()));
+    for (const RouteTurn& t : route.turns) {
+        h.pod(static_cast<uint8_t>(t.turn));
+        h.pod(t.junction.index);
+        h.pod(t.fromSection.index);
+        h.pod(t.toSection.index);
+        h.pod(t.connector.index);
+        h.pod(t.metres);
+        h.pod(t.seconds);
+    }
+    h.pod(static_cast<uint64_t>(route.lanes.size()));
+    for (const RouteLane& l : route.lanes) {
+        h.pod(l.lane.index);
+        h.pod(l.length);
+        h.pod(l.changes);
+        h.pod(l.changesIfStaying);
+    }
+    h.pod(route.metres);
+    h.pod(route.seconds);
+    h.pod(route.cost);
+    return h.h;
+}
+
+// ---- people on foot (ADR-0467) -----------------------------------------------------------------------------------
+
+RouteWalker bindWalker(const engine::RoadModel& model, const std::string& mover, Real pace, const engine::PathUsers& users) {
+    RouteWalker w;
+    w.mover = mover;
+    w.pace = pace;
+    w.open = model.openTo(mover, users).walks;
+    const engine::PathMover* mv = users.mover(mover);
+    w.waits.assign(model.laneLevel.walks.size(), Real(0));
+    if (mv && !mv->waits.empty())
+        for (uint32_t k = 0; k < w.waits.size(); ++k) w.waits[k] = mv->waitOn(model.walkKind(engine::WalkId(k)));
+    return w;
+}
+
+namespace {
+
+std::string walkPointWords(const engine::WalkPoint& p) {
+    return "walk " + std::to_string(p.walk.index) + " at " + std::to_string(p.along) + " m";
+}
+
+bool onWalk(const LaneGraph& g, const engine::WalkPoint& p) {
+    return p.walk.valid() && p.walk.index < g.walks.size() && p.along >= 0 && p.along <= g.walks[p.walk.index].length;
+}
+
+// How a walker's node was reached (Search::how).
+enum WalkBy : uint8_t { kWalkStart = 0, kWalkAlong = 1, kWalkJoin = 2, kWalkPart = 3 };
+
+}  // namespace
+
+WalkRoute findWalkRoute(const engine::RoadModel& model, const RouteWalker& walker, const engine::WalkPoint& from,
+                        const engine::WalkPoint& to) {
+    const LaneGraph& g = model.laneLevel;
+    WalkRoute r;
+    r.from = from;
+    r.to = to;
+    const auto none = [&](NoRouteWhy why, const std::string& words) {
+        r.found = false;
+        r.why = why;
+        r.whyWords = words;
+        return r;
+    };
+    if (!onWalk(g, from))
+        return none(NoRouteWhy::StartNotOnRoad, "the walker's place (" + walkPointWords(from) + ") is not on a walk");
+    if (!onWalk(g, to))
+        return none(NoRouteWhy::DestinationNotOnRoad, "the destination (" + walkPointWords(to) + ") is not on a walk");
+    const auto isOpen = [&](uint32_t w) { return w < walker.open.size() && walker.open[w] != 0; };
+    if (to.walk != from.walk && !isOpen(to.walk.index))
+        return none(NoRouteWhy::DestinationClosed,
+                    "the destination (" + walkPointWords(to) + ") is on a walk of a kind '" + walker.mover + "' may not use");
+    if (!(walker.pace > 0))
+        return none(NoRouteWhy::NothingLeadsThere, "the walker has no pace to walk at");
+
+    // THE NODES. Node 2w + e is "at end e of walk w" (0 its start, 1 its end). Then the START (where the walker is, part
+    // way along their walk) and the DESTINATION.
+    const uint32_t W = static_cast<uint32_t>(g.walks.size());
+    const uint32_t startNode = 2 * W, destNode = 2 * W + 1;
+    const auto walkOf = [](uint32_t u) { return u >> 1; };
+    const auto endOf = [](uint32_t u) { return static_cast<uint8_t>(u & 1u); };
+    const auto alongAt = [&](uint32_t u) { return endOf(u) == 0 ? Real(0) : g.walks[walkOf(u)].length; };
+    const auto pointOf = [&](uint32_t u) {
+        return u == startNode ? g.pointAt(from.walk, from.along)
+             : u == destNode  ? g.pointAt(to.walk, to.along)
+                              : g.pointAt(engine::WalkId(walkOf(u)), alongAt(u));
+    };
+    const auto waitOn = [&](uint32_t w) { return w < walker.waits.size() ? walker.waits[w] : Real(0); };
+    const Real perMetre = 1 / walker.pace;
+    // THE LOWER BOUND: the straight distance to the destination at the walker's pace (every metre is walked at it).
+    const engine::Vec2 destPoint = g.pointAt(to.walk, to.along);
+    const auto bound = [&](uint32_t u) -> Real {
+        return u == destNode ? Real(0) : engine::distance(pointOf(u), destPoint) * perMetre;
+    };
+
+    // THE ONE SEARCH over the walker's steps: from the start either way along their walk; along a walk they may use to
+    // its other end (and the wait for stepping onto it); from a walk end to each walk end that meets it, across the gap.
+    Search<decltype(bound)> search(destNode + 1, bound);
+    search.reach(startNode, kNoNode, 0, kWalkStart);
+    const bool arrived = search.run(destNode, [&](uint32_t u, Real cost) {
+        if (u == startNode) {
+            const Real len = g.walks[from.walk.index].length;
+            if (to.walk == from.walk) search.reach(destNode, u, cost + std::fabs(to.along - from.along) * perMetre, kWalkPart);
+            search.reach(2 * from.walk.index, u, cost + from.along * perMetre, kWalkPart);
+            search.reach(2 * from.walk.index + 1, u, cost + (len - from.along) * perMetre, kWalkPart);
+            return;
+        }
+        const uint32_t w = walkOf(u);
+        if (isOpen(w) || w == from.walk.index) {
+            const Real wait = waitOn(w);
+            if (w == to.walk.index)
+                search.reach(destNode, u, cost + std::fabs(to.along - alongAt(u)) * perMetre + wait, kWalkPart);
+            search.reach(u ^ 1u, u, cost + g.walks[w].length * perMetre + wait, kWalkAlong);
+        }
+        const Range joins = g.walks[w].joins(endOf(u));
+        for (uint32_t j = joins.first; j < joins.end() && j < g.walkJoins.size(); ++j) {
+            const engine::WalkEnd e = g.walkJoins[j];
+            if (e.walk.index >= W || !isOpen(e.walk.index)) continue;
+            const uint32_t v = 2 * e.walk.index + e.end;
+            search.reach(v, u, cost + engine::distance(pointOf(u), pointOf(v)) * perMetre, kWalkJoin);
+        }
+    });
+    if (!arrived)
+        return none(NoRouteWhy::NothingLeadsThere,
+                    "no walk '" + walker.mover + "' may use leads from " + walkPointWords(from) + " to " + walkPointWords(to));
+
+    // THE STEPS, from the nodes taken: each move along a walk (whole, or the part from the start or to the destination)
+    // is a step; a move across a join adds its gap.
+    std::vector<uint32_t> taken = search.takenTo(destNode);
+    taken.push_back(destNode);
+    for (std::size_t i = 1; i < taken.size(); ++i) {
+        const uint32_t u = taken[i - 1], v = taken[i];
+        const uint8_t by = search.how[v];
+        if (by == kWalkJoin) {
+            r.metres += engine::distance(pointOf(u), pointOf(v));
+            continue;
+        }
+        WalkStep s;
+        if (u == startNode) {
+            s.walk = from.walk;
+            s.from = from.along;
+            s.to = v == destNode ? to.along : alongAt(v);
+        } else {
+            s.walk = engine::WalkId(walkOf(u));
+            s.from = alongAt(u);
+            s.to = v == destNode ? to.along : alongAt(v);
+            r.waitSeconds += waitOn(walkOf(u));
+        }
+        s.forward = s.to > s.from || (s.to == s.from && (u == startNode ? v != 2 * from.walk.index : endOf(u) == 0));
+        r.metres += std::fabs(s.to - s.from);
+        const engine::Walk& k = g.walks[s.walk.index];
+        if (k.modelCrosswalk != engine::kNoIndex)
+            r.crossings.push_back(WalkCrossing{k.modelCrosswalk, static_cast<uint8_t>(s.forward ? 0 : 1),
+                                               static_cast<uint32_t>(r.steps.size())});
+        r.steps.push_back(s);
+    }
+    r.seconds = search.best[destNode];
+    r.found = true;
+    return r;
+}
+
+}  // namespace engine::roads

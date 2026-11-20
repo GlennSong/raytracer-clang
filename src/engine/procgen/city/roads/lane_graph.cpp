@@ -308,10 +308,23 @@ Range curveOf(const LaneGraph& g, PathId path) {
     if (r.end() > g.points.size() || r.end() > g.along.size() || r.end() > g.heights.size()) return Range{};
     return r;
 }
+// ... of a walk, likewise.
+Range curveOf(const LaneGraph& g, WalkId walk) {
+    if (!walk.valid() || walk.index >= g.walks.size()) return Range{};
+    const Range r = g.walks[walk.index].curve;
+    if (r.end() > g.points.size() || r.end() > g.along.size() || r.end() > g.heights.size()) return Range{};
+    return r;
+}
 }  // namespace
 
 Vec2 LaneGraph::pointAt(PathId path, Real distanceAlong) const {
     const Range r = curveOf(*this, path);
+    if (r.count == 0) return Vec2();
+    return pointAtStation(points.data() + r.first, along.data() + r.first, r.count, distanceAlong);
+}
+
+Vec2 LaneGraph::pointAt(WalkId walk, Real distanceAlong) const {
+    const Range r = curveOf(*this, walk);
     if (r.count == 0) return Vec2();
     return pointAtStation(points.data() + r.first, along.data() + r.first, r.count, distanceAlong);
 }

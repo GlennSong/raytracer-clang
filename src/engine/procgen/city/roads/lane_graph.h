@@ -269,6 +269,25 @@ struct Walk {
     Range joins(int end) const { return end == 0 ? atStart : atEnd; }
 };
 
+// A PLACE ON THE LANE LEVEL: a path (a lane or a connector) and a distance along it, in metres from its start. A car's
+// front, a trip's destination and a hold are each one (the driving's records); the car router routes between two.
+struct PathPoint {
+    PathId path;
+    Real along = 0;
+
+    bool operator==(const PathPoint& o) const { return path == o.path && along == o.along; }
+    bool operator!=(const PathPoint& o) const { return !(*this == o); }
+};
+// A PLACE ON A WALK: the walk and a distance along it, in metres from its start: where a walker's route starts and ends
+// (route.h findWalkRoute, ADR-0467).
+struct WalkPoint {
+    WalkId walk;
+    Real along = 0;
+
+    bool operator==(const WalkPoint& o) const { return walk == o.walk && along == o.along; }
+    bool operator!=(const WalkPoint& o) const { return !(*this == o); }
+};
+
 // (PLACES TO LEAVE A CAR are not here. The kerb parking spaces are the road model's, stated on its streets
 // (road_model.h RoadModel::kerbRuns, ADR-0439); the kerb lane path beside a space is asked of the model:
 // RoadModel::kerbLaneBeside. The `CarSpace` list this table once declared was never filled and is deleted.)
@@ -326,6 +345,8 @@ struct LaneGraph {
     // reads as the origin, height 0, heading +x, grade 0.
     // Where it is, in plan.
     Vec2 pointAt(PathId path, Real distanceAlong) const;
+    // ... the same on a walk's centre line (an unknown walk: the origin).
+    Vec2 pointAt(WalkId walk, Real distanceAlong) const;
     // How high it is.
     Real heightAt(PathId path, Real distanceAlong) const;
     // Which way it runs, in plan, as a unit vector: the chord from polyline.h's kTangentHalfSpan before to as far

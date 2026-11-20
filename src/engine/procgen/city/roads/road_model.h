@@ -399,6 +399,11 @@ Vec2 towardKerb(const Vec2& spine, int dir);
 struct PathMover {
     std::string name;
     bool vehicles = false;           // stands for every vehicle tag of the level's fleet
+    // `waits` (ADR-0467): the seconds a walking route adds for each walk of a kind the mover steps onto (the wait
+    // expected at a crossing), in the file's order. Never on a vehicles mover (the car search does not read it).
+    std::vector<std::pair<std::string, Real>> waits;
+    // The wait for stepping onto a path of kind `kind`: 0 when none is stated.
+    Real waitOn(const std::string& kind) const;
 };
 struct PathUsers {
     bool usable = false;

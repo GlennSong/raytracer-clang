@@ -6,7 +6,11 @@
     "  movers     everyone who moves along the roads' paths, each with its properties:",
     "               vehicles   true: the mover stands for every vehicle tag of the level's fleet (vehicles.lua); which of",
     "                          them can take a path is still each body's own check against the path's bends",
-    "  kinds      each kind of path and the movers that may use it. The car kinds are the builder's lane kinds (through,",
+    "               waits      {kind: seconds}: what a walking route (route.h findWalkRoute, ADR-0467) adds for each",
+    "                          walk of that kind the mover steps onto, on top of its length at the mover's pace: the",
+    "                          wait expected before going on (at a crossing, for the lights or a gap). A kind not named",
+    "                          adds nothing. Not on a vehicles mover: the car search does not read it",
+    "  kinds     each kind of path and the movers that may use it. The car kinds are the builder's lane kinds (through,",
     "             turn (a pocket), slip, aux, ramp) and the path through a junction (connector). The walking kinds are",
     "             the walks the lane level lays for people on foot (ADR-0466): along a sidewalk, round a corner",
     "             (RoadModel::corners), over a crosswalk, across a dead end's road end, and along a footway road.",
@@ -14,12 +18,12 @@
     "  dead_end   joined_by: the kind of path that joins a dead end's two sidewalks across the road's end",
     "             (RoadModel::deadEnds, turnRound); null: a dead end's sidewalks are not joined, and each simply ends.",
     "",
-    "Read by RoadModel::openTo, the one mover filter (ADR-0466). Nothing routes by it yet: the driving still drives every",
-    "lane path, and people still walk the street map (#306 task 4, pieces 4 and 6)."
+    "Read by RoadModel::openTo, the one mover filter (ADR-0466), and by the one route-finder for a walker's route",
+    "(ADR-0467). The driving still drives every lane path, and people still walk the street map (#306 task 4, piece 6)."
   ],
   "movers": {
     "vehicles": {"vehicles": true},
-    "walker": {}
+    "walker": {"waits": {"crossing": 10}}
   },
   "kinds": {
     "through": ["vehicles"],

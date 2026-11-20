@@ -22685,3 +22685,82 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** piece 4 makes the one route-finder over paths and walks by mover; when ADR-0465's corners with no walk, the unstated junctions or the gapped carry-ons are fixed (their lone ends then join); or when a level states footways meeting roads.
+
+## ADR-0467 — One route-finder for cars and walkers: the router moves from the driving into roads/, and routes a person on foot over the walks with the same search (#306 task 4, piece 4)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: the router that finds a car's way through the lane level now lives with the road model (`src/engine/procgen/city/roads/route.h/.cpp`), as the engine's one route-finder, and it can also find a walker's way over the walks (ADR-0466) from a place on one walk to a place on another. Cars are routed exactly as before. Nobody walks by it yet: piece 6 puts people on it.
+
+Words:
+- **Route-finder (router):** given where a mover is and where it is going, the cheapest way there over the paths it may use.
+- **Mover:** anyone who moves along the roads' paths (ADR-0464): the vehicles, or a walker.
+- **A\* search:** a cheapest-path search that looks first at the places whose cost so far plus a guess of the cost still to go is least. The guess (the **lower bound**) must never be more than the real cost still to go; then the first way found to the goal is the cheapest.
+- **Heap:** the list the search takes its next place from, kept so that the least is always on top.
+- **Node:** one place the search can stand. For a car: a lane path entered at its start (plus the car's own place and the destination). For a walker: one END of one walk (each walk has two), plus where the walker is and the destination.
+- **Step:** a move from one node to another, with its cost.
+- **Wait:** seconds a walker's route adds for stepping onto a walk of some kind: the expected wait at a crossing.
+
+**Moved** (by `git mv`, then edited):
+- `apps/driving/route.h/.cpp` -> `engine/procgen/city/roads/route.h/.cpp`, namespace `engine::roads`. Everything a car route is moved with it unchanged: the classes as the router sees them (`RouteClass`), the closed turns and chains it obeys (`ClosedChains`, `buildClosedChains`), the bound's study of the roads (`studyRoads`), `findRoute`, the route (legs, turns, the lane-changes table), its questions (`placeOnRoute`, `lanesToCross`, `lastChance`, `wayAhead`, `remainingFrom`) and `routeHash`. They read the lane level only, and the questions read the route's own tables, so splitting them off would have meant exposing its helpers.
+- `PathPoint` (a path and a distance along it) moved from the driving's `traffic_state.h` to `lane_graph.h`, beside a new `WalkPoint`. `WayAhead` and `kMaxFollowedPaths` moved into `route.h`. The driving names them with `using` declarations, so no driving code or test changed but one: the driving's include check now allows `roads/route.h`.
+- What stays in the driving is what only it knows: `bindRouteClass` (a vehicle class's tag names turned into the road's tag bits), in a small `apps/driving/route.h/.cpp` that also brings the router's names into `driving`. Which turns and chains are closed to a class is still decided by the driving (room.h) and passed in on the `RouteClass`.
+
+**The one search** (`Search` in route.cpp). The car search's loop was taken out whole, as it was: A\* over numbered nodes, one binary heap ordered by (estimate, node number), so a tie goes to the lower node, a stale heap entry skipped, stop when the goal comes off the heap. It keeps per node the best cost, where it was reached from, and one byte saying how (a car: by a lane change or not; a walker: along a walk, across a join, or part of a walk). What a node is, which steps leave it and the lower bound are the mover's:
+- **A car** (`findRoute`): the steps are as before: along a path it may use onto the paths its end leads to, or sideways into the lane beside. The bound is as before.
+- **A walker** (`findWalkRoute`): from where the walker is, either way along their walk to its ends (or straight to the destination when it is on the same walk); from a walk end, along the walk to its other end (each walk either way: no one-way or turn rule of the cars applies to it); from a walk end, to every walk end the model says meets it (`LaneGraph::walkJoins`), never to one merely near. Cost is time: every metre walked at the walker's pace, along a walk or across the short gap between two ends that meet (ADR-0466 measured those: up to 5 m, a few carry-ons up to 18.7 m), plus the wait for each walk stepped onto. The bound is the straight distance to the destination at the walker's pace. It never over-estimates, because every metre of a route is walked at that pace and waits only add, so it needs no allowance for gaps, unlike the car's.
+- **Which walks a walker may use:** `bindWalker(model, mover, pace, users)` takes the mover's open walks from `RoadModel::openTo(mover, users)` (ADR-0466) and each walk's wait from the path users' table by the walk's kind. The walk the walker stands on may be walked whether or not it is open to them. No C++ names a mover or a kind.
+- **The walker's pace** is the caller's (the person's): `kWalkSpeed` times their speed factor in the city sim today. It is not stated again in data.
+
+**The waits** (`assets/data/path_users.json`): a mover may state `"waits": {kind: seconds}`. The walker states `{"crossing": 10}`: a route charges 10 s for each crossing it steps onto, so a walker does not cross the road twice to save a few metres. Read by `parsePathUsers` into `PathMover::waits` (`waitOn(kind)`). Refused: a wait on the vehicles' mover (the car search reads none), one below zero, one on a kind not open to the mover.
+
+**A walker's route** (`WalkRoute`): the walks taken in order (`WalkStep`: the walk, the stretch walked from `from` to `to` metres along it, and whether forward, start to end); the crosswalks crossed (`WalkCrossing`: the model's crosswalk id, so piece 6 can ask `walkAt` / `walkAtCrosswalk` at it; the kerb end stepped off from; which step); metres; seconds (what the search minimised); and how much of that is waiting. No route: the same reasons as a car's (`NoRouteWhy`), with words.
+
+**Cars and `openTo`:** the car search still asks the class's tags, bends and closed turns (`mayUse`), not `RoadModel::openTo`. On every shipped level the table opens every lane path the lane level lays to the vehicles (checked on traffic_lab and river_town), and the lane level lays no lane path for a footway at all (the footway test), so the answer is the same. Asking it would close every path of the driving's hand-made test roads, whose lanes state no kind; tried and seen. So it waits until those roads state their lanes' kinds.
+
+**The car routes are unchanged:**
+- 500 fixed-seed car trips on traffic_lab and 500 on river_town (`road_model_35`): every route's `routeHash` folded, the same before the move (run on the driving's router) and after: traffic_lab 0x909f03a16d4a0ad3, river_town 0xf727e34512df5c49.
+- `test_driving_route.cpp` not edited; driving_tests 200/200, and its output the same as before line for line except timings.
+- 1,000 car routes on the 40 by 40 grid, against the tool at 12ee2899 built apart from `git archive`, three runs each: A\* 983-1081 ms before, 956-1019 ms after; Dijkstra 2236-2318 ms before, 2273-2428 ms after (noise).
+- The sim hashes held (see Tests).
+
+**Walkers on the shipped levels** (`road_model_35`; 1,000 fixed-seed trips between random points on the sidewalks of the largest part on foot, pace 1.4 m/s):
+
+| | traffic_lab | river_town |
+|---|---|---|
+| Sidewalks in the largest part on foot | 558 | 590 |
+| Trips routed | 1000 of 1000 (100%) | 1000 of 1000 (100%) |
+| Search time, median / 95th / worst | 83 / 345 / 589 us | 97 / 309 / 507 us |
+| ...with the bound off (Dijkstra), median | 208 us | 211 us |
+| Route length, median / 95th | 686 / 1326 m | 860 / 1699 m |
+| Crossings per route, median / 95th | 6 / 13 | 9 / 16 |
+| Detour (route over straight line, ends over 50 m apart), median / 95th / worst | 1.42 / 2.27 / 6.97 | 1.47 / 2.92 / 13.22 |
+| Detours over 4 | 7 of 993 | 23 of 991 |
+
+- **The bound is right:** with the bound turned off (plain Dijkstra), all 2,000 routes came out the same (the folds of their lengths and step counts matched), at about twice the time.
+- **Same every run:** the same 1,000 trips again give the same routes.
+- **The long ways round, checked** (the straight line between the two ends tested against the level's river course and freeway and ramp centre lines):
+  - river_town: 21 of the 23 detours over 4 have ends on either side of the river (its course runs east across the city north of downtown), so they go round by a bridge. Of the other two, one was traced step by step: s226's sidewalk runs over a bridge and meets nothing at its south end (one of ADR-0466's lone ends), so a walker for its south end crosses by another bridge and comes back over this one (1583 m for 178 m straight). The other (223 m for 54 m, no crossing, at the river's western bank) was not traced.
+  - traffic_lab: 5 of the 7 are across a freeway or ramp. The other two (248 m for 53 m, 436 m for 90 m) were not traced.
+  - None found is the router's: the A\* answers equal Dijkstra's, and the traced ones follow from the walks and their listed lone ends.
+
+**Tests:**
+- `road_model_34_a_walkers_route_over_the_walks`:
+  - A T: from the east road's +1 sidewalk to its -1 sidewalk, 10 m from the junction: 37 m over the east crosswalk (sidewalk, crossing, sidewalk), 10 s waiting, the crossing stepped off from kerb end 0; the way back crosses it from kerb end 1; the same answer again; a route along one walk is one step with no wait.
+  - Crossings closed to the mover: round by the far dead end's turn-round (180 m, no crossing); with turn-rounds closed too, no route; a destination on a closed walk refused as closed; the vehicles' mover may use no walk.
+  - A footway: a walker reaches a point 40 m down it from the east sidewalk, by the corner and the footway; no car path lies along it, its walk is shut to the vehicles, and a table shutting footways to a pedestrian refuses it.
+  - One-way rules are the cars': on the spread junction's one-way northbound road, a walker goes 60 m south along its sidewalk and 60 m back; the car on its lane finds no way south and drives the 60 m north.
+  - The waits are checked as read (on the vehicles, below zero, on a kind not open to the mover: each refused).
+  - Checked to bite by breaking the code on purpose: every walk open to everyone (7 checks failed: the closed-crossing, closed-destination and footway checks); walks walked one way only (8 failed: the one-way checks and the T's); no crossings recorded and no waits charged (3 failed). Put back, all pass.
+- `road_model_35_the_one_router_on_the_shipped_levels`: the car folds and the walker table above.
+- Suites: lanes_tests 143/143; driving_tests 200/200; brain_tests 23/23 (its include check, like the driving's, now allows `roads/route.h`); run_tests 1513/1513; level_tests brain_lab 12/12, first_cars 1/1, river_town crowd 1/1. Hashes held: brain_crowd 0xf0003605a4cb6ba2, river_town crowd 0x83b99189cfc16fbd, traffic_lab v2 five minutes 0x55109fe9a8e247b1, near crowd 0x59168988decd4c99. Failing as before only: brain_crowd's kerb-wait share (line 275), the near crowd's off-lane worst (line 1108), v2_drives's two limits, and the stale 3364-paths pin.
+
+**Format and caches:** no format moved (LGRF, `kRoadModelFormat`, `kLaneGraphBuildVersion` as they were). The path users' table's bytes changed (the waits), which is part of the saved road model's key only, so each level's saved road model is made again once. No bake key moved, no lots tag bumped, and no builder code was touched (road meshes unchanged).
+
+**One model:**
+- Concepts touched: routing (one route-finder for cars and walkers), roads (a place on the lane level, a walk's point), paths' users (the waits).
+- The router is one search in `roads/`, used by both movers; there is no second router. The street map's router (`pathfind.h`, the `NavGraph`) is still what people walk by until piece 6, and is deleted in piece 10.
+- No road fact is computed outside `roads/`; the walker's joins are the model's stated joins, its walk kinds the model's answer, its open walks `openTo`'s.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** piece 6 puts walkers on routes (their pace, and waiting at a crosswalk by `WalkRoute::crossings`); when the driving's test roads state their lanes' kinds (then the car search can ask `openTo` too); when the lone walk ends behind the long detours are joined; or when a mover other than a walker states waits.

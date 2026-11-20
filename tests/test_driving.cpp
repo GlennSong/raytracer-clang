@@ -239,6 +239,7 @@ const std::vector<std::string> kLibraryAllowed = {
     "engine/bundle/bundle.h",                   // the repo's hash (FNV) folded field by field
     "engine/bundle/binary_stream.h",            // ... which bundle.h brings
     "engine/procgen/city/roads/vehicle_size.h", // the body a road is checked against per tag, and how it is derived (ADR-0435)
+    "engine/procgen/city/roads/route.h",        // the one route-finder over the lane level, which it routes cars by (ADR-0467)
     "rt_math.h", "hash.h", "handle.h", "slot_map.h", "proc_rng.h",
 };
 // ... and the scripting folder's, besides: the Lua VM it reads rule sets with, and the placement policy's plain form.
