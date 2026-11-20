@@ -69,13 +69,7 @@ nlohmann::json planCrossings(const RoadLabGraph& spec) {
     for (EdgeSpec& e : g.edges)
         if (e.xy.size() >= 2 && e.z.size() < 2) { e.s = stations(e.xy); e.z.assign(e.xy.size(), 0.0); }
     auto kindOf = [&](const EdgeSpec& a, const EdgeSpec& b, bool aEndsOnB, bool bEndsOnA) {
-        if (g.cls(a).track || g.cls(b).track) return "bridge";
-        if ((g.cls(a).limitedAccess && !b.isRamp()) || (g.cls(b).limitedAccess && !a.isRamp())) return "bridge";
-        if (g.cls(a).footway || g.cls(b).footway) {
-            const bool footEnds = (g.cls(a).footway && aEndsOnB) || (g.cls(b).footway && bEndsOnA);
-            return footEnds ? "at_grade" : "bridge";
-        }
-        return "at_grade";
+        return meetAtGrade(g, a, b, aEndsOnB, bEndsOnA) ? "at_grade" : "bridge";
     };
     auto endsOn = [&](const EdgeSpec& e, const EdgeSpec& o, const Vec2& p) {
         const double tol = g.hw(o) + g.hw(e) + 1.0;
@@ -104,13 +98,23 @@ nlohmann::json planCrossings(const RoadLabGraph& spec) {
     return out;
 }
 
-bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end) {
+bool meetAtGrade(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b, bool aEndsOnB, bool bEndsOnA) {
+    if (g.cls(a).track || g.cls(b).track) return false;
+    if ((g.cls(a).limitedAccess && !b.isRamp()) || (g.cls(b).limitedAccess && !a.isRamp())) return false;
+    if (g.cls(a).footway || g.cls(b).footway) return (g.cls(a).footway && aEndsOnB) || (g.cls(b).footway && bEndsOnA);
+    return true;
+}
+
+bool roadEndMeetsAnother(const RoadLabGraph& g, const EdgeSpec& e, int end, bool atGradeOnly) {
     if (e.xy.size() < 2) return false;
     const Vec2 q = end ? e.xy.back() : e.xy.front();
     for (const EdgeSpec& o : g.edges) {
         if (&o == &e || o.xy.size() < 2) continue;
-        if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) return true;
-        if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) return true;
+        const bool endToEnd = std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol;
+        if (!endToEnd && !(project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e))) continue;
+        // (`e` ends where they meet; `o` too where the two ends meet)
+        if (atGradeOnly && !meetAtGrade(g, e, o, true, endToEnd)) continue;
+        return true;
     }
     return false;
 }

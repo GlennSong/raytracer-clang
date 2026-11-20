@@ -3280,6 +3280,13 @@ TEST_CASE(road_model_31_the_shipped_levels_walks) {
                     "its sidewalk is wide (the worst %.2f m past it)\n",
                     level, pairs.size(), walkable, laid, laidSpread, m.corners.size(), sidewalkLanes, offWalks, off, checked, endsAway, worst);
         for (const std::pair<const std::string, uint32_t>& w : whys) std::printf("        %u with no walk: %s\n", w.second, w.first.c_str());
+        // each corner with no walk says what kind of fault it is, and one with a walk none (ADR-0469: the lane level's lone
+        // ends are counted by it)
+        for (const WalkCorner& wc : r->walkCorners) {
+            CHECK((wc.lane >= 0) == (wc.fault == WalkCornerFault::None));
+            if (wc.fault == WalkCornerFault::KerbEndOut) CHECK(wc.why.find("kerb end lies") != std::string::npos);
+            if (wc.fault == WalkCornerFault::TwoPieces) CHECK(wc.why.find("two pieces") != std::string::npos);
+        }
         CHECK(laid + static_cast<uint32_t>(r->walkCorners.size() - laid) == walkable);
         CHECK(laid > 0u && laidSpread > 0u);
         CHECK(offWalks == 0u);
@@ -3719,6 +3726,31 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         for (const std::pair<const std::string, std::pair<uint32_t, uint32_t>>& o : outside)
             std::printf("          %u sidewalks in %u parts bounded by: %s\n", o.second.second, o.second.first, o.first.c_str());
         CHECK(sidewalks > 0u && inLargest * 2 > sidewalks);
+        // THE LONE ENDS BY CAUSE, pinned (ADR-0469; was, at ADR-0466: traffic_lab 61, river_town 126). The fixes left for the
+        // one planned re-bake are named in the ADR:
+        //   - a corner with no walk because a kerb end lies out in the paved junction: the box edge's one rule
+        //     (road_model_parts.h boxEdgeBack) sets an arm's crosswalk back by the crossing road's half width as if the two
+        //     met square, so where they meet at a sharp angle the crosswalk's kerb end stands in the other road;
+        //   - a corner with no walk because the drawn sidewalk is in two pieces: each road's sidewalk band is cut square at
+        //     the road's end, leaving a wedge of bare ground where the kerb kinks from one road into the next;
+        //   - traffic_lab's s208, the fourth arm of j95, not stated in its ring (its two kerbs' ends);
+        //   - river_town's freeway carry-ons: a boulevard's sidewalks end where it runs on as the freeway (tn0, tn1, bv0, bv1).
+        // No end may say "no corner is stated" where the build tried a walk (a spread junction's pair: it was counted as a
+        // freeway arm's), and none is a street end under the freeway (now a dead end, joined across: 16 and 24 turn-rounds).
+        std::map<std::string, uint32_t> cause;
+        for (const LaneGraphBuild::WalkEndAlone& a : report.walkEndsAlone)
+            ++cause[a.why.find(walkCornerFaultWord(WalkCornerFault::KerbEndOut)) != std::string::npos ? "kerb end out"
+                    : a.why.find(walkCornerFaultWord(WalkCornerFault::TwoPieces)) != std::string::npos ? "two pieces"
+                    : a.why.find("meets another road") != std::string::npos                         ? "meets another road"
+                    : a.why.find("carries on into") != std::string::npos                            ? "carry-on"
+                                                                                                    : a.why];
+        const bool lab = std::string(level) == "traffic_lab";
+        const std::map<std::string, uint32_t> pinned =
+            lab ? std::map<std::string, uint32_t>{{"kerb end out", 24}, {"two pieces", 3}, {"meets another road", 2}}
+                : std::map<std::string, uint32_t>{{"kerb end out", 49}, {"two pieces", 13}, {"carry-on", 16}};
+        CHECK(cause == pinned);
+        CHECK(kinds.count("turn_round") && kinds.at("turn_round") == (lab ? 16u : 31u));
+        CHECK(sidewalks - inLargest == (lab ? 4u : 25u));
     }
 }
 
@@ -4208,5 +4240,56 @@ TEST_CASE(road_model_36_where_a_place_joins_the_walks_is_one_query) {
             printJoin("stated on ramp_one's street", m, onRamp);
             CHECK(!onRamp.valid() && onRamp.why == WalkJoinWhy::NoWalk);
         }
+    }
+}
+
+// ---- 37. a street ending under the freeway is a dead end: the crossing policy says what meets at grade (ADR-0469) -------
+
+TEST_CASE(road_model_37_a_street_ending_under_the_freeway_is_a_dead_end) {
+    // THE CROSSING POLICY, one statement (road_design.h meetAtGrade), by what the two roads are
+    {
+        RoadLabGraph g = RoadLabGraph::fromJson(walkTee());
+        const auto edgeOf = [&](const char* cls) {
+            EdgeSpec e = g.edges.front();
+            e.cls = cls;
+            return e;
+        };
+        const EdgeSpec local = edgeOf("local"), freeway = edgeOf("freeway"), rail = edgeOf("rail"), footway = edgeOf("footway");
+        CHECK(meetAtGrade(g, local, local, true, false));          // two streets: a junction
+        CHECK(!meetAtGrade(g, local, freeway, true, false));       // a street at the freeway: a bridge
+        CHECK(!meetAtGrade(g, freeway, local, false, true));
+        CHECK(!meetAtGrade(g, local, rail, true, false));          // at a track: a bridge
+        CHECK(meetAtGrade(g, footway, local, true, false));        // a footway ending on a road: its way in
+        CHECK(!meetAtGrade(g, footway, local, false, false));      // a footway crossing it: a footbridge
+    }
+    // A SPUR ENDING INSIDE A ROAD'S BAND, with no junction stated (walkTee's spur, 6 m short of the east road's centre
+    // line): a street the planner left unstated where the road is one it meets at grade; a dead end, joined across by a
+    // turn-round, where that road is a freeway (above it, by the class's own `limited_access`). The design stage's own
+    // test, in plan, still says the spur's end is met (its profile is not brought down to the ground: no mesh moves).
+    for (const char* cls : {"local", "freeway"}) {
+        nlohmann::json file = walkTee(std::string(), true);
+        for (nlohmann::json& e : file["edges"])
+            if (e["id"] == "east" || e["id"] == "west") e["class"] = cls;
+        RoadLabGraph g;
+        const RoadModel m = walkModel(file, g);
+        const ModelStreetId spur = streetNamed(m, "spur/1");
+        CHECK(spur.valid());
+        if (!spur.valid()) return;
+        const bool underFreeway = std::string(cls) == "freeway";
+        const StreetEndKind kind = streetEndKind(g, m.streets[spur.index], 1);
+        std::printf("      the spur's end inside the %s road's band: %s\n", cls, streetEndKindWord(kind));
+        CHECK(kind == (underFreeway ? StreetEndKind::DeadEnd : StreetEndKind::MeetsAnother));
+        const EdgeSpec& spurEdge = g.edges[static_cast<size_t>(g.index.at("spur"))];
+        CHECK(roadEndMeetsAnother(g, spurEdge, 1));                         // the design's test: met, in plan, both ways
+        CHECK(roadEndMeetsAnother(g, spurEdge, 1, true) == !underFreeway);   // at grade: only the street
+        uint32_t spurEnds = 0;
+        bool joinedAtTheFreeway = false;
+        for (const ModelDeadEnd& d : m.deadEnds)
+            if (d.street == spur) {
+                ++spurEnds;
+                joinedAtTheFreeway = joinedAtTheFreeway || (d.end == 1 && d.turnRound);
+            }
+        CHECK(spurEnds == (underFreeway ? 2u : 1u));
+        CHECK(joinedAtTheFreeway == underFreeway);
     }
 }

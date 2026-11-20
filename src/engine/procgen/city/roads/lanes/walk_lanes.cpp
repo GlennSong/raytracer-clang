@@ -111,6 +111,16 @@ std::vector<Vec2> shorterWay(const Ring& r, const OnRing& a, const OnRing& b) {
 
 }  // namespace
 
+const char* walkCornerFaultWord(WalkCornerFault f) {
+    switch (f) {
+    case WalkCornerFault::None: return "a walk was laid";
+    case WalkCornerFault::ArmUnknown: return "an arm's road is not one the build knows";
+    case WalkCornerFault::KerbEndOut: return "a kerb end lies out in the paved junction";
+    case WalkCornerFault::TwoPieces: return "the drawn sidewalk there is in two pieces";
+    }
+    return "?";
+}
+
 void layWalks(Result& r) {
     const RoadLabGraph& g = r.graph;
     LaneSet& L = r.lanes;
@@ -158,7 +168,8 @@ void layWalks(Result& r) {
         const ModelJunction& J = m.junctions[p.junction.index];
         ArmWalk a, b;
         if (!armWalk(m, g, p.junction, p.armA, p.kerbA, a) || !armWalk(m, g, p.junction, p.armB, p.kerbB, b)) {
-            wc.why = "an arm's road is not one the build knows";
+            wc.fault = WalkCornerFault::ArmUnknown;
+            wc.why = walkCornerFaultWord(wc.fault);
             r.walkCorners.push_back(wc);
             continue;
         }
@@ -204,10 +215,12 @@ void layWalks(Result& r) {
             // carriageway), or two kerb ends each by a drawn sidewalk, but not the same piece of it
             char buf[200];
             if (nearestA > reachA || nearestB > reachB) {
+                wc.fault = WalkCornerFault::KerbEndOut;
                 const bool armAFar = nearestA / reachA >= nearestB / reachB;
                 std::snprintf(buf, sizeof buf, "arm %u's kerb end lies %.1f m from the nearest drawn sidewalk (out in the paved junction)",
                               armAFar ? p.armA : p.armB, armAFar ? nearestA : nearestB);
             } else {
+                wc.fault = WalkCornerFault::TwoPieces;
                 std::snprintf(buf, sizeof buf, "the drawn sidewalks by the two kerb ends are not joined (two pieces)");
             }
             wc.why = buf;

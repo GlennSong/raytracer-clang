@@ -814,6 +814,8 @@ LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end);
 // the street names there; the street it carries on into; a ramp's end anchored to its host; the road just ends (a dead
 // end); or the street stops where the road file states nothing though another road meets its road's end there, or part
 // way along its road (both the planner's to state: the lane level reports them). `g`: the road file the street is of.
+// "Meets" is at grade, by the planner's crossing policy (road_design.h meetAtGrade, ADR-0469): a street ending under
+// the freeway's band (the freeway meets no road at grade) is a dead end, not a junction the planner left unstated.
 enum class StreetEndKind : uint8_t { Junction, CarriesOn, RampAnchored, DeadEnd, MeetsAnother, PartWay };
 StreetEndKind streetEndKind(const roads::lanes::RoadLabGraph& g, const ModelStreet& s, int end);
 const char* streetEndKindWord(StreetEndKind k);
