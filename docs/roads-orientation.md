@@ -90,6 +90,7 @@ move the loop into it; never a private loop in the reader.
 | How far along a lane path a station of its spine falls | `RoadModel::alongPathAt(path, station)` |
 | Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, interim); `frontageOn(street, station, dir)` (stated facts) |
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
+| Where a place (a marker, a door) joins the walks: a point on a walk along its street, its kerb, and whether held to a sidewalk's end, across the road, cut off (ADR-0468, THE ONE ANSWER for placing a place, starting and ending a walk; built layer) | `RoadModel::walkJoinOn(frontage, openWalks, parts)` (stated: `frontageOn`); the one fallback by position `walkJoinNear(point, ...)` (`frontageAt`, then the same); `WalkJoin`, `WalkJoinWhy`; a station's place on a walk: `walkAlongAt(walk, station)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
 | The crosswalks (ADR-0452): across an arm; by id; of a lane-level record; the paths over one; which a walk round a junction crosses; where a person waits at a kerb end | `RoadModel::crosswalkAcross`, `crosswalk`, `crosswalkOfLane`, `crossersOf`, `crosswalksOnWalk`, `ModelCrosswalk::kerbWait` (stated once by `stateCrosswalks` in road_model.cpp; laid in the lane level by `layLaneCrosswalks`) |
 | Where people on foot can walk (ADR-0464): the corners round each junction's ring (which kerb of each arm); the ring pairs with no corner and why; the dead ends and whether they are joined across; what is at a street's end; is there a sidewalk (or any walk) along a kerb | `RoadModel::corners` (`ModelCorner`), `ringPairs(m, g)` (`CornerGap`), `RoadModel::deadEnds` (`ModelDeadEnd`, `deadEndsOf`), `streetEndKind(g, street, end)`, `ModelSection::sidewalkOnKerb`, `pavementOnKerb` (stated once by `plannedRoadModel`; the walks are laid from them: ADR-0465, ADR-0466) |
@@ -134,6 +135,16 @@ The old city sim still lays and parks in its own bays (`CitySim::ParkingBay`, a 
 nothing about the street its door fronts. It is the same search the lot pass faces its doors by: both call
 `nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with `buildingMayFront` as the rule.
 `lotRoadInputs` makes the lot pass's roads from that list; never add a road to one and not the other.
+
+**From a place to the walks** (ADR-0468). `walkJoinOn` answers from a stated frontage (the brain's markers state
+street, station and kerb); `walkJoinNear` is the only fallback by position (a lot's door states nothing: `LotBuilding`
+and `DoorSpec` record no street; recording it is a lot format bump and a re-bake, left for Glenn). Only walks along a
+street (`Walk::street` set: sidewalk and footway stretches) are joined, never a corner, crossing or turn-round, never a
+walk closed to the mover; `cutOff` says when the walk is outside the largest part on foot. The street map's three
+look-ups it replaces in piece 6 are named for the comparison (`CitySim::walkStartNode`, `kerbLinkNear`, `kerbSideLink`;
+`CityRenderSystem::nearestWalkableLink`) and set beside it by `level_walk_join_...` (level_tests). Measured: river_town
+has 98 of 799 crowd places on sidewalks cut off from the largest part, and 136 doors snap to park/quad footpaths the lane
+level does not hold; both need an answer before piece 6 switches over.
 
 **The street map's links** (ADR-0437). A link's `width`, `klass`, `lanes`, `oneWay`, `walkable`, `access`,
 `parkOffset` and `parkWidth` are a compiled look-up, written only in `layLinks` (`street_map.cpp`) from the street's

@@ -1789,16 +1789,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         const CrowdUsable onFoot = [&](Vec2 p, bool cars) {
             // the nearest link people walk (NavLink::walkable), within a walker's last straight steps, and in the
             // largest part of the walking network
-            int best = -1;
-            Real bestD = kBoardReach;
-            for (std::size_t l = 0; l < nav_.links.size(); ++l) {
-                const engine::NavLink& L = nav_.links[l];
-                if (!L.walkable) continue;
-                const Real away = engine::distToSegment(p, nav_.nodes[static_cast<std::size_t>(L.from)], nav_.nodes[static_cast<std::size_t>(L.to)]);
-                if (away > bestD) continue;
-                bestD = away;
-                best = static_cast<int>(l);
-            }
+            const int best = nearestWalkableLink(p, kBoardReach);
             if (best < 0) return false;
             const engine::NavLink& L = nav_.links[static_cast<std::size_t>(best)];
             if (part[static_cast<std::size_t>(L.from)] != mainPart || part[static_cast<std::size_t>(L.to)] != mainPart) return false;
@@ -1886,6 +1877,20 @@ driving::HeadShows CityRenderSystem::signalHeadShows(std::size_t head) const {
         return driving::HeadShows{};
     return driving::headAt(*d->roads(), d->rightOfWay(), headJunctions_[head],
                            static_cast<uint32_t>(signalHeads_[head].arm), d->clockSeconds());
+}
+
+int CityRenderSystem::nearestWalkableLink(Vec2 p, Real reach) const {
+    int best = -1;
+    Real bestD = reach;
+    for (std::size_t l = 0; l < nav_.links.size(); ++l) {
+        const engine::NavLink& L = nav_.links[l];
+        if (!L.walkable) continue;
+        const Real away = engine::distToSegment(p, nav_.nodes[static_cast<std::size_t>(L.from)], nav_.nodes[static_cast<std::size_t>(L.to)]);
+        if (away > bestD) continue;
+        bestD = away;
+        best = static_cast<int>(l);
+    }
+    return best;
 }
 
 void CityRenderSystem::tieSignalHeads(World& world) {
