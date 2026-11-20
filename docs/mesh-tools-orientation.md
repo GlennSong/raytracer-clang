@@ -71,7 +71,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 510f2a7a | the studio keeps the last good model up while the script has a mistake |
 | c14642cd | "what made this?": `ProcPart::line`, `ProcUse::line`, `ModelPiece::line` / `what`; picking a piece in the editor puts the script pane on its line |
 | 7eddd267 | the studio's Copy view and Add to lists buttons, line numbers, Lua colouring, the model's numbers; `RT_STUDIO_PRESS=copy|lists` presses a button unattended |
-| (this) | the studio's model tree: nodes under their parents with their placement, what hangs on each, a box to move each moving node; nodes, markers and shapes record their script lines |
+| 56a47c33 | the studio's model tree: nodes under their parents with their placement, what hangs on each, a box to move each moving node; nodes, markers and shapes record their script lines |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
