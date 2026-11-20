@@ -128,6 +128,13 @@ struct MeshBuilder {
     static MeshPath pathHelix(const Vec3& centre, double radius, double pitch, double turns, int segsPerTurn = 32);
     // a smooth curve THROUGH `points` (centripetal Catmull-Rom: no cusps or overshoot), `count` points at even spacing
     static MeshPath pathSpline(const std::vector<Vec3>& points, bool closed = false, int count = 64);
+    // a smooth curve PULLED TOWARD `control` points without passing through them (a B-spline: each point of the curve
+    // is a blend of the few control points nearest it, so moving one reshapes only its own stretch, and the curve
+    // has no kink anywhere). An open curve starts at the first control point and ends at the last; a closed one is
+    // a loop round them all. `degree` 3 is the usual smooth curve, 2 a tighter one, 1 the straight lines between the
+    // control points. `count` points at even spacing. Where pathSpline is for "go through here", this is for "about
+    // this shape, and smooth": bodywork, a fairing, a road's centreline from a rough sketch.
+    static MeshPath pathBSpline(const std::vector<Vec3>& control, bool closed = false, int count = 64, int degree = 3);
     // a cubic Bezier from p0 to p3 pulled toward p1 and p2, `count` points at even spacing
     static MeshPath pathBezier(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, int count = 32);
     // the path again, its points `spacing` metres apart along it (ends kept)
@@ -161,6 +168,13 @@ struct MeshBuilder {
     // a fender skin, a curved panel. (A solid wants a loft, or a sheet given thickness.)
     static RenderMesh sheet(const std::vector<std::vector<Vec3>>& rows, const Vec3& toward = Vec3(0, 0, 0),
                             const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A SMOOTH SURFACE PULLED TOWARD A GRID OF CONTROL POINTS (a B-spline surface): `control` is rows of points, the
+    // same count in each; the surface starts and ends on the outer rows and columns' own curves, passes through the
+    // four corner points, and is pulled toward the rest. Moving one control point swells or dents only the surface
+    // near it, smoothly. `across` points along each row and `up` rows are made, as a sheet (above: `toward`, `color`,
+    // `creaseDeg`, and its uv). A hood, a fender, a hull plate, a tent.
+    static RenderMesh bsplineSurface(const std::vector<std::vector<Vec3>>& control, int across = 16, int up = 16, int degree = 3,
+                                     const Vec3& toward = Vec3(0, 0, 0), const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
     // RULED: the sheet of straight lines joining two curves, point for point by their share of each curve's length,
     // in `steps` bands between them and `count` points along (0: the longer curve's own count). A ramp between two
     // edges, a blade, a hood between two rails, a twisted ribbon.

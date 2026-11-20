@@ -9,7 +9,8 @@
 --   scatter.ring{ at = {x,y,z}, normal = {0,1,0}, radius = 0.2, count = 8 [, phase = degrees] }
 --       evenly round a circle that lies flat on the surface
 --   scatter.along{ path = { {x,y,z}, ... }, spacing = 0.1, normal = {0,1,0} [, ends = false] [, closed = false] }
---       evenly along a line of points (a seam, a rim); `ends = false` leaves the two ends empty
+--       evenly along a line of points or a path from mesh.path.* (a seam, a rim); `ends = false` leaves the two
+--       ends empty; a closed path is gone round once
 --   scatter.grid{ origin = {x,y,z}, u = {x,y,z}, v = {x,y,z}, count = { nu, nv } [, margin = 0.05] }
 --       rows and columns over the flat patch origin + [0,1] u + [0,1] v, `margin` metres in from its edges
 --   scatter.faces(P, sel)
@@ -50,7 +51,9 @@ function M.along(o)
   local n = unit(o.normal or { 0, 1, 0 }, "normal")
   local pts = {}
   for i, p in ipairs(o.path) do pts[i] = p end
-  if o.closed then pts[#pts + 1] = pts[1] end
+  local closed = o.closed
+  if closed == nil then closed = o.path.closed end      -- a path from mesh.path.* says whether it is a loop
+  if closed then pts[#pts + 1] = pts[1] end
   local total, segs = 0, {}
   for i = 1, #pts - 1 do
     local l = len(sub(pts[i + 1], pts[i]))
@@ -59,7 +62,7 @@ function M.along(o)
   if #segs == 0 then error("scatter.along: the path has no length", 2) end
   local gaps = math.max(1, math.floor(total / o.spacing + 0.5))
   local first, last = 0, gaps
-  if o.closed then last = gaps - 1 elseif o.ends == false then first, last = 1, gaps - 1 end
+  if closed then last = gaps - 1 elseif o.ends == false then first, last = 1, gaps - 1 end
   local out, s = {}, 1
   for i = first, last do
     local d = total * i / gaps

@@ -424,6 +424,72 @@ MeshPath MeshBuilder::pathSpline(const std::vector<Vec3>& points, bool closed, i
     return p;
 }
 
+namespace {
+
+// One point of a B-spline at `t` in 0..1 (de Boor). `clamped`: the curve starts on the first control point and ends
+// on the last. Not clamped: the control points are taken as a loop (the caller has repeated the first `degree`).
+Vec3 bsplineAt(const std::vector<Vec3>& ctrl, int degree, bool clamped, double t) {
+    const int n = static_cast<int>(ctrl.size());
+    const int p = std::max(1, std::min(degree, n - 1));
+    std::vector<double> knots(static_cast<std::size_t>(n + p + 1));
+    for (int i = 0; i < n + p + 1; ++i) {
+        if (!clamped) knots[static_cast<std::size_t>(i)] = i;
+        else knots[static_cast<std::size_t>(i)] = i <= p ? 0.0 : (i >= n ? double(n - p) : double(i - p));
+    }
+    const double lo = knots[static_cast<std::size_t>(p)], hi = knots[static_cast<std::size_t>(n)];
+    const double u = lo + (hi - lo) * std::clamp(t, 0.0, 1.0);
+    int k = p;
+    while (k < n - 1 && u >= knots[static_cast<std::size_t>(k + 1)]) ++k;
+    std::vector<Vec3> d(static_cast<std::size_t>(p + 1));
+    for (int j = 0; j <= p; ++j) d[static_cast<std::size_t>(j)] = ctrl[static_cast<std::size_t>(j + k - p)];
+    for (int r = 1; r <= p; ++r)
+        for (int j = p; j >= r; --j) {
+            const double a0 = knots[static_cast<std::size_t>(j + k - p)], a1 = knots[static_cast<std::size_t>(j + 1 + k - r)];
+            const double alpha = a1 - a0 > 1e-12 ? (u - a0) / (a1 - a0) : 0.0;
+            d[static_cast<std::size_t>(j)] = d[static_cast<std::size_t>(j - 1)] * (1.0 - alpha) + d[static_cast<std::size_t>(j)] * alpha;
+        }
+    return d[static_cast<std::size_t>(p)];
+}
+
+}  // namespace
+
+MeshPath MeshBuilder::pathBSpline(const std::vector<Vec3>& control, bool closed, int count, int degree) {
+    MeshPath p;
+    p.closed = closed && control.size() >= 3;
+    if (control.size() < 2) { p.pts = control; return p; }
+    count = std::max(2, count);
+    std::vector<Vec3> ctrl = control;
+    const int deg = std::max(1, std::min(degree, static_cast<int>(control.size()) - 1));
+    if (p.closed)
+        for (int i = 0; i < deg; ++i) ctrl.push_back(control[static_cast<std::size_t>(i)]);   // round again: a loop
+    std::vector<Vec3> dense;
+    const int fine = std::max(64, count * 8);
+    for (int i = 0; i <= fine; ++i) dense.push_back(bsplineAt(ctrl, deg, !p.closed, static_cast<double>(i) / fine));
+    p.pts = evenlyAlong(dense, count + (p.closed ? 1 : 0));
+    if (p.closed) p.pts.pop_back();
+    return p;
+}
+
+RenderMesh MeshBuilder::bsplineSurface(const std::vector<std::vector<Vec3>>& control, int across, int up, int degree, const Vec3& toward,
+                                       const Vec3& color, double creaseDeg) {
+    if (control.size() < 2 || control[0].size() < 2) return RenderMesh();
+    for (const std::vector<Vec3>& row : control)
+        if (row.size() != control[0].size()) return RenderMesh();
+    across = std::max(2, across);
+    up = std::max(2, up);
+    // along each control row first, then up through the columns of what that gives
+    std::vector<std::vector<Vec3>> swept(control.size());
+    for (std::size_t r = 0; r < control.size(); ++r)
+        for (int i = 0; i < across; ++i) swept[r].push_back(bsplineAt(control[r], degree, true, static_cast<double>(i) / (across - 1)));
+    std::vector<std::vector<Vec3>> rows(static_cast<std::size_t>(up), std::vector<Vec3>(static_cast<std::size_t>(across)));
+    std::vector<Vec3> column(control.size());
+    for (int i = 0; i < across; ++i) {
+        for (std::size_t r = 0; r < control.size(); ++r) column[r] = swept[r][static_cast<std::size_t>(i)];
+        for (int j = 0; j < up; ++j) rows[static_cast<std::size_t>(j)][static_cast<std::size_t>(i)] = bsplineAt(column, degree, true, static_cast<double>(j) / (up - 1));
+    }
+    return sheet(rows, toward, color, creaseDeg);
+}
+
 MeshPath MeshBuilder::pathBezier(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, int count) {
     std::vector<Vec3> dense;
     for (int k = 0; k <= 256; ++k) dense.push_back(bezier(p0, p1, p2, p3, k / 256.0));

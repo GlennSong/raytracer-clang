@@ -355,3 +355,91 @@ TEST_CASE(cage_reshapes_what_is_inside_it_by_its_control_points) {
     CHECK(ok);
     CHECK(!m.parts.empty());
 }
+
+TEST_CASE(bspline_paths_and_surfaces_and_the_libraries_along_a_path) {
+    ProcModel m;
+    std::string err;
+    const bool ok = runModel(R"LUA(
+        local truss = require "truss"
+        local cable = require "cable"
+        local scatter = require "scatter"
+        local function near(a, b, eps) return math.abs(a - b) < (eps or 1e-6) end
+        local function dist(a, b) return math.sqrt((a[1] - b[1]) ^ 2 + (a[2] - b[2]) ^ 2 + (a[3] - b[3]) ^ 2) end
+        local ctrl = { { 0, 0, 0 }, { 1, 2, 0 }, { 3, 2, 0 }, { 4, 0, 0 } }
+
+        -- an open B-spline starts on the first control point and ends on the last, is pulled toward the others
+        -- without reaching them, and stays inside the control points' box
+        local b = mesh.path.bspline(ctrl, { count = 33 })
+        assert(#b == 33 and not b.closed)
+        assert(dist(b[1], ctrl[1]) < 1e-9 and dist(b[33], ctrl[4]) < 1e-9)
+        local top = 0
+        for _, p in ipairs(b) do
+          top = math.max(top, p[2])
+          assert(p[1] >= -1e-9 and p[1] <= 4 + 1e-9 and p[2] >= -1e-9 and p[2] <= 2 + 1e-9 and near(p[3], 0))
+        end
+        assert(top > 1.2 and top < 1.9, "pulled toward y = 2, not to it: " .. top)
+        -- where the spline THROUGH the same points reaches them
+        local through = mesh.path.spline(ctrl, { count = 33 })
+        local reach = 0
+        for _, p in ipairs(through) do reach = math.max(reach, p[2]) end
+        assert(reach > 1.99)
+        -- its points are evenly spaced
+        local step = dist(b[1], b[2])
+        for i = 2, 32 do assert(near(dist(b[i], b[i + 1]), step, step * 0.05)) end
+        -- degree 1 is the straight lines between the control points
+        local straight = mesh.path.bspline(ctrl, { count = 64, degree = 1 })
+        assert(near(mesh.path.length(straight), 2 * math.sqrt(5) + 2, 0.08), "degree 1: " .. mesh.path.length(straight))
+        -- a closed one is a loop round the control points: no point of it is a control point, and it is smooth
+        -- across where it joins
+        local square = { { 1, 0, 1 }, { -1, 0, 1 }, { -1, 0, -1 }, { 1, 0, -1 } }
+        local loop = mesh.path.bspline(square, { closed = true, count = 40 })
+        assert(#loop == 40 and loop.closed)
+        for _, p in ipairs(loop) do
+          local r = math.sqrt(p[1] ^ 2 + p[3] ^ 2)
+          assert(r > 0.6 and r < 1.0, "a rounded loop inside the square: " .. r)
+        end
+        assert(near(dist(loop[40], loop[1]), dist(loop[1], loop[2]), 0.01))
+        local okd, whyd = pcall(mesh.path.bspline, ctrl, { degree = 9 })
+        assert(not okd and whyd:find("degree is 1 to 5"))
+
+        -- a surface: through its four corners, pulled toward the middle control points
+        local grid = {
+          { { 0, 0, 0 }, { 1, 0, 0 }, { 2, 0, 0 }, { 3, 0, 0 } },
+          { { 0, 0, 1 }, { 1, 2, 1 }, { 2, 2, 1 }, { 3, 0, 1 } },
+          { { 0, 0, 2 }, { 1, 2, 2 }, { 2, 2, 2 }, { 3, 0, 2 } },
+          { { 0, 0, 3 }, { 1, 0, 3 }, { 2, 0, 3 }, { 3, 0, 3 } },
+        }
+        local hood = mesh.bspline_surface(grid, { across = 13, up = 9 })
+        assert(mesh.audit(hood).tris == 12 * 8 * 2)
+        local okg, whyg = pcall(mesh.bspline_surface, { { { 0, 0, 0 }, { 1, 0, 0 } }, { { 0, 0, 1 } } })
+        assert(not okg and whyg:find("same number of points"))
+
+        -- the libraries take a path as it is: a truss, a rope and a row of bolts along a curve
+        local curve = mesh.path.bspline({ { 0, 0, 0 }, { 0, 3, 2 }, { 0, 3, 6 }, { 0, 0, 8 } }, { count = 48 })
+        local _, info = truss.build{ path = curve, bay = 1.0, size = { 0.6, 0.6 } }
+        assert(near(info.length, mesh.path.length(curve), 1e-6) and info.bays == math.floor(info.length + 0.5))
+        assert(mesh.audit(cable.rope(curve, { radius = 0.03 })).tris > 0)
+        local bolts = scatter.along{ path = curve, spacing = 0.5 }
+        assert(#bolts == math.floor(info.length / 0.5 + 0.5) + 1)
+        -- a closed path is gone round once, without being told it is closed
+        local round = scatter.along{ path = loop, spacing = 0.25 }
+        assert(#round == math.floor(mesh.path.length(loop) / 0.25 + 0.5), #round .. " round the loop")
+
+        local out = model.new()
+        out:add(hood)
+        return out
+    )LUA", m, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    if (m.parts.empty()) { CHECK(false); return; }
+    // the surface passes through its four corner control points and rises toward, not to, the middle ones
+    double top = 0;
+    bool corner00 = false, corner33 = false;
+    for (const Vertex& v : m.parts[0].mesh.vertices) {
+        top = std::max(top, static_cast<double>(v.position.y));
+        if ((v.position - Vec3(0, 0, 0)).length() < 1e-6) corner00 = true;
+        if ((v.position - Vec3(3, 0, 3)).length() < 1e-6) corner33 = true;
+    }
+    CHECK(corner00 && corner33);
+    CHECK(top > 0.8 && top < 1.5);
+}

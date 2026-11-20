@@ -835,6 +835,15 @@ proposed to him:
 
 All eight tools on this list are built. What each does not do is said in its line.
 
+**Curves and surfaces from control points (Glenn asked about splines and NURBS, 2026-11-20).** The toolkit already
+had a spline THROUGH points (`mesh.path.spline`), Beziers, arcs and helices, and everything that follows a path. Added:
+`mesh.path.bspline(control, { closed, count, degree })`, a smooth path pulled TOWARD its control points (moving one
+reshapes only its own stretch), and `mesh.bspline_surface(rows, { across, up, degree, ...look })`, a smooth sheet
+pulled toward a grid of control points, through its four corners. A path is a plain list of points, so the truss,
+cable and scatter libraries take any `mesh.path.*` result as it is (`scatter.along` now goes once round a closed
+one). Not built: weights and trimming curves (full NURBS: wanted only to read CAD data, since circles and conics are
+made directly), a surface that closes on itself, and moving one control point of a path already made.
+
 ## The model half, done; what the prefab half starts from
 
 Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of

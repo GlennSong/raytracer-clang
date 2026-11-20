@@ -740,6 +740,15 @@ int l_path_spline(lua_State* L) {   // (points, {closed, count})
                                         optIntField(L, 2, "count", 64)));
     return 1;
 }
+// mesh.path.bspline(control, {closed = false, count = 64, degree = 3}) -> a smooth path pulled toward the control
+// points without passing through them (MeshBuilder::pathBSpline)
+int l_path_bspline(lua_State* L) {
+    const int degree = optIntField(L, 2, "degree", 3);
+    if (degree < 1 || degree > 5) return luaL_error(L, "path.bspline: degree is 1 to 5");
+    pushPath(L, MeshBuilder::pathBSpline(checkPoints(L, 1), lua_istable(L, 2) && optBoolField(L, 2, "closed", false),
+                                         optIntField(L, 2, "count", 64), degree));
+    return 1;
+}
 int l_path_bezier(lua_State* L) {
     pushPath(L, MeshBuilder::pathBezier(checkVec3(L, 1), checkVec3(L, 2), checkVec3(L, 3), checkVec3(L, 4),
                                         static_cast<int>(luaL_optinteger(L, 5, 32))));
@@ -2832,6 +2841,26 @@ int l_mesh_sheet(lua_State* L) {
     }
     const SheetLook look = checkSheetLook(L, 2);
     pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::sheet(rows, look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.bspline_surface({row1, row2, ...}, {across = 16, up = 16, degree = 3, ...look}) -> a smooth sheet pulled
+// toward a grid of control points, each row a list of {x,y,z}, the same count each (MeshBuilder::bsplineSurface)
+int l_mesh_bspline_surface(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec3>> rows;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        rows.push_back(checkVec3List(L, lua_gettop(L)));
+        lua_pop(L, 1);
+    }
+    if (rows.size() < 2 || rows[0].size() < 2) return luaL_error(L, "bspline_surface: give two rows or more of two points or more");
+    for (const std::vector<Vec3>& row : rows)
+        if (row.size() != rows[0].size()) return luaL_error(L, "bspline_surface: every row has the same number of points");
+    const int degree = optIntField(L, 2, "degree", 3);
+    if (degree < 1 || degree > 5) return luaL_error(L, "bspline_surface: degree is 1 to 5");
+    const SheetLook look = checkSheetLook(L, 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::bsplineSurface(rows, optIntField(L, 2, "across", 16), optIntField(L, 2, "up", 16), degree,
+                                                                         look.toward, look.color, look.crease)));
     return 1;
 }
 // mesh.ruled(path_a, path_b, {steps = 1, count = 0, ...look}) -> the sheet of straight lines joining two curves
@@ -5599,7 +5628,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"union", l_mesh_union},
         {"subtract", l_mesh_subtract},
         {"intersect", l_mesh_intersect},
-        {"sheet", l_mesh_sheet},
+        {"sheet", l_mesh_sheet}, {"bspline_surface", l_mesh_bspline_surface},
         {"ruled", l_mesh_ruled},
         {"patch", l_mesh_patch},
         {nullptr, nullptr},
@@ -5616,7 +5645,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setfield(L, -2, "profile");
     static const luaL_Reg kPathFns[] = {
         {"line", l_path_line}, {"arc", l_path_arc}, {"circle", l_path_circle}, {"helix", l_path_helix},
-        {"spline", l_path_spline}, {"bezier", l_path_bezier}, {"resample", l_path_resample}, {"length", l_path_length},
+        {"spline", l_path_spline}, {"bspline", l_path_bspline}, {"bezier", l_path_bezier}, {"resample", l_path_resample}, {"length", l_path_length},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kPathFns);

@@ -102,6 +102,8 @@ const std::map<std::string, std::string> kReach = {
     {"pathLine", "mesh.path.line"},
     {"pathResample", "mesh.path.resample"},
     {"pathSpline", "mesh.path.spline"},
+    {"pathBSpline", "mesh.path.bspline"},
+    {"bsplineSurface", "mesh.bspline_surface"},
     {"plane", "mesh.plane"},
     {"profileCircle", "mesh.profile.circle"},
     {"profileEllipse", "mesh.profile.ellipse"},
