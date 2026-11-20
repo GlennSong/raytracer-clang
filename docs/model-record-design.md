@@ -877,7 +877,8 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
 
 **Not built yet, in the order planned:**
 
-1. While a recipe has a mistake the viewport is empty: the last good model should stay up.
+1. DONE the same day: while a recipe has a mistake the viewport shows the model as it last built (the stamp
+   falls back to the store's last model for a prefab straight from a recipe, and still reports the error).
 2. "What made this?": each part, node, marker and shape recording the script line that added it; a click in the
    viewport showing it and putting the pane on that line. One way, scene to script.
 3. A "copy what I am looking at" button (part, script line, camera, a screenshot's path) for pointing at things

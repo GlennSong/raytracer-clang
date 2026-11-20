@@ -1547,6 +1547,8 @@ static void loadEntities(const json& entities, const json& root, World& world,
                 LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why;
                 continue;
             }
+            // (stamped all the same: a recipe with a mistake in it, shown as it last built)
+            if (!why.empty()) LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why << " (showing the last one that built)";
             SourceSpec spec = buildSourceSpec(ent, "prefab");
             spec.recipe = what.dump();   // the writer gives it back as "prefab": <the same>
             world.add<SourceSpec>(stamped, spec);

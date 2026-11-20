@@ -267,6 +267,8 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
         // (said once: "prefab 'x': the model 'recipe:x': x.lua: line 3: ..." is "line 3: ...")
         const int own = why.indexOf(recipeName() + ".lua: ");
         if (own >= 0) why = why.mid(own + recipeName().size() + 6);
+        const bool old = why.endsWith("(showing the last one that built)");
+        if (old) why = why.left(why.size() - 33).trimmed() + "\nThe viewport shows the model as it last built.";
         setStatus(why, true);
         if (errorLine > 0 && !dirty()) gotoLine(errorLine);
         return;

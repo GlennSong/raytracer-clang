@@ -613,15 +613,30 @@ TEST_CASE(a_level_shows_a_model_straight_from_a_recipe_and_watches_what_it_is_bu
         });
         CHECK(wide);
     }
-    // The recipe is broken: nothing is stamped, the load still succeeds, and the recipe is still watched so it
-    // can be mended.
+    // The recipe is broken: the load still succeeds, the model is shown as it last built (the 4 m one), and the
+    // recipe is still watched so it can be mended.
     f.write("test_prefab_studio_tmp.lua", "local m = model.new() m:add(mesh.box{ 1, 1 ) return m");
     {
         World world;
         CHECK(load(world));
         int seen = 0;
-        world.each<ModelInstance>([&](Entity, ModelInstance&) { ++seen; });
-        CHECK(seen == 0);
+        world.each<ModelInstance, SourceSpec>([&](Entity, ModelInstance& mi, SourceSpec& spec) {
+            ++seen;
+            if (spec.name == "it") CHECK_APPROX(world.get<Collider>(mi.bodies[0])->halfExtent.x, 2.0, 1e-9);
+        });
+        CHECK(seen == 2);
+        // stamped by hand, the error is still said, with a valid entity: "this is the old one"
+        Prefab direct;
+        direct.name = direct.recipe = "test_prefab_studio_tmp";
+        std::string why;
+        const Entity old = stampPrefab(world, nullptr, direct, Transform(), f.dir, &why);
+        CHECK(old.valid());
+        CHECK(why.find("test_prefab_studio_tmp.lua") != std::string::npos);
+        // a recipe that has never built has nothing to show
+        ModelStore empty;
+        why.clear();
+        CHECK(!stampPrefab(world, nullptr, direct, Transform(), f.dir, &why, &empty).valid());
+        CHECK(!why.empty());
         bool still = false;
         for (const std::string& w : LevelLoader::lastLoadedScriptFiles())
             if (w.find("test_prefab_studio_tmp.lua") != std::string::npos) still = true;

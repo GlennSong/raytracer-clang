@@ -33,7 +33,9 @@ class ModelDresser;
 
 // One entity of `prefab` at `at` (its position and orientation; a scale is not carried). `dresser` gives the pieces
 // their meshes and materials; null makes the pieces without anything to draw (a headless test, a server). Returns
-// an invalid entity with `error` when the prefab's model cannot be had. `store`, `models`: for a test with its own.
+// an invalid entity with `error` when the prefab's model cannot be had. A prefab straight from a recipe
+// (Prefab::recipe) whose recipe now fails is stamped with the last model that recipe built, if there is one, and
+// `error` is still filled: a valid entity with an error means "this is the old one". `store`, `models`: for a test with its own.
 Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, const Transform& at, const std::string& levelDir = std::string(),
                    std::string* error = nullptr, ModelStore* store = nullptr, const std::string& models = "models.lua");
 

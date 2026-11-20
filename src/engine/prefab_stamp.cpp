@@ -35,9 +35,15 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
     const std::string modelName = direct ? recipeModelName(prefab.recipe, prefab.recipeArgs) : prefab.model;
     const std::shared_ptr<const ProcModel> model = direct ? obtainRecipeModel(prefab.recipe, prefab.recipeArgs, levelDir, &why, &store, models)
                                                           : obtainModel(prefab.model, levelDir, &why, &store, models);
-    if (model == nullptr) {
+    std::shared_ptr<const ProcModel> shown = model;
+    if (shown == nullptr) {
         if (error != nullptr) *error = "prefab '" + prefab.name + "': " + why;
-        return Entity();
+        // A RECIPE BEING WRITTEN (the model studio) that has a mistake in it: the last model it built is still in
+        // the store, and is shown until the mistake is mended, so the thing being worked on does not vanish at every
+        // slip. `error` still says what is wrong. (A prefab from the list has no such grace: a broken shipped
+        // model should be seen to be missing.)
+        if (direct) shown = store.find(modelName);
+        if (shown == nullptr) return Entity();
     }
     // What the model was built from, as one number: a mesh's name to the asset manager carries it, so every copy of
     // one build of the model shares its uploaded meshes, and a rebuilt model does not get the old ones.
@@ -55,11 +61,11 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
     world.add<PrevTransform>(entity, PrevTransform{place});
     ModelInstance instance;
     instance.prefab = prefab.name;
-    instance.model = model;
+    instance.model = shown;
 
     const DrawClass drawClass = drawClassNamed(prefab.drawClass);
     std::map<const ProcPart*, std::size_t> partNumber;   // in the order parts are first met: the same for every stamp of one build
-    for (const ProcModelDraw& d : modelDraws(*model)) {
+    for (const ProcModelDraw& d : modelDraws(*shown)) {
         const std::size_t number = partNumber.emplace(d.part, partNumber.size()).first->second;
         const Entity e = world.create();
         world.add<Transform>(e, Transform());
@@ -81,7 +87,7 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
         // A box, sphere or capsule on a node that can move is a kinematic body: ModelMotionSystem carries it with
         // its node. Each such body says which of the model's shapes it is (ModelShape).
         std::vector<int> colliderOf;
-        instance.bodies = spawnModelColliders(world, *model, &frame, prefab.friction, /*movingAreKinematic=*/true, &colliderOf);
+        instance.bodies = spawnModelColliders(world, *shown, &frame, prefab.friction, /*movingAreKinematic=*/true, &colliderOf);
         for (std::size_t i = 0; i < instance.bodies.size(); ++i)
             if (colliderOf[i] >= 0) world.add<ModelShape>(instance.bodies[i], ModelShape{entity, colliderOf[i]});
     }
