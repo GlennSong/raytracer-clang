@@ -306,6 +306,24 @@
   "usage": "mem?"
  },
  {
+  "name": "model?",
+  "owner": "engine",
+  "summary": "One stamped model's tree as JSON (n from models?, default 0): each node under its parent with its placement and motion, and its parts, used pieces, markers and collision shapes, each with the script line that made it.",
+  "usage": "model? [n]"
+ },
+ {
+  "name": "model_set",
+  "owner": "engine",
+  "summary": "Move a moving node of a stamped model: degrees for a turn, metres for a slide; with a speed (per second) it travels there, without it is there at once. n from models?, default 0.",
+  "usage": "model_set <node> <value> [speed] [n]"
+ },
+ {
+  "name": "models?",
+  "owner": "engine",
+  "summary": "The stamped prefabs in the world, numbered: prefab, place, pieces and bodies.",
+  "usage": "models?"
+ },
+ {
   "name": "move?",
   "owner": "engine",
   "summary": "The player's movement: mode, ground, position, velocity, stamina and the last change.",

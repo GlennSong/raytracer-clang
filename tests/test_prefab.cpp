@@ -5,6 +5,7 @@
 #include "../src/engine/level_loader.h"
 #include "../src/engine/level_writer.h"
 #include "../src/engine/mesh_uploader.h"
+#include "../src/engine/model_inspect.h"
 #include "../src/engine/model_motion.h"
 #include "../src/engine/model_spawn.h"
 #include "../src/engine/prefab_stamp.h"
@@ -790,4 +791,58 @@ TEST_CASE(a_recipe_says_what_arguments_it_takes_and_wrong_ones_are_refused) {
     // the shipped prop models declare theirs
     CHECK(obtainRecipeModel("prop_models", R"({"kind":"rock"})", std::string(), &err, &store) != nullptr);
     CHECK(recipeParams("prop_models").find("\"kind\"") != std::string::npos);
+}
+
+TEST_CASE(a_stamped_models_tree_is_described_as_data) {
+    // model_inspect.h: what the editor's model studio draws and the control channel's `model?` hands to a tool.
+    World world;
+    ModelStore store;
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    CHECK(modelsListing(world) == "none");
+    const Entity e = stampPrefab(world, nullptr, crane, turnedAt(Vec3(3, 0, 4), 0), std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    CHECK(modelInstances(world).size() == 1);
+    CHECK(modelsListing(world).find("0 crane at 3 0 4, 9 pieces, 4 bodies") == 0);
+    const nlohmann::json rows = nlohmann::json::parse(modelTreeJson(world, e));
+    CHECK(rows.is_array() && rows.size() > 15);
+    // the nodes, each one deeper than its parent: root, cabin under it, boom under the cabin, hook under the boom
+    std::vector<std::pair<std::string, int>> nodes;
+    for (const nlohmann::json& r : rows)
+        if (r["kind"] == "node") nodes.emplace_back(r["name"].get<std::string>(), r["depth"].get<int>());
+    CHECK(nodes.size() == 4);
+    if (nodes.size() == 4) {
+        CHECK(nodes[0].first == "root" && nodes[0].second == 0);
+        CHECK(nodes[1].first == "cabin" && nodes[1].second == 1);
+        CHECK(nodes[2].first == "boom" && nodes[2].second == 2);
+        CHECK(nodes[3].first == "hook" && nodes[3].second == 3);
+    }
+    int parts = 0, markers = 0, shapes = 0, joints = 0;
+    for (const nlohmann::json& r : rows) {
+        if (r["kind"] == "part") {
+            ++parts;
+            CHECK(r["line"].get<int>() > 0);                                  // every part knows its line
+            CHECK(r["piece"].get<int>() >= 0 && r["piece"].get<int>() < 9);   // ...and which drawn piece it is
+        }
+        if (r["kind"] == "marker") { ++markers; CHECK(r["line"].get<int>() > 0); }
+        if (r["kind"] == "shape") { ++shapes; CHECK(r["line"].get<int>() > 0); }
+        if (r.contains("joint")) {
+            ++joints;
+            if (r["joint"] == "boom") {
+                CHECK(r["turn"] == true);
+                CHECK_APPROX(r["lo"].get<double>(), 0.0, 1e-9);
+                CHECK_APPROX(r["hi"].get<double>(), 75.0, 1e-6);              // degrees, as a person reads them
+                CHECK_APPROX(r["value"].get<double>(), 0.0, 1e-9);
+                CHECK(r["detail"].get<std::string>().find("under cabin") != std::string::npos);
+            }
+            if (r["joint"] == "hook") CHECK(r["turn"] == false);              // a slide, in metres
+        }
+    }
+    CHECK(parts == 9 && markers == 4 && shapes == 4 && joints == 3);
+    // a moved node says where it is now
+    CHECK(setModelTarget(world, e, "boom", 30 * 3.14159265358979 / 180.0, 0));
+    for (const nlohmann::json& r : nlohmann::json::parse(modelTreeJson(world, e)))
+        if (r.contains("joint") && r["joint"] == "boom") CHECK_APPROX(r["value"].get<double>(), 30.0, 1e-6);
+    CHECK(modelTreeJson(world, world.create()) == "[]");
 }

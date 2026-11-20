@@ -435,6 +435,9 @@ void ModelStudioPanel::openScript(const QString& chosen) {
     }
     if (!path_.isEmpty()) watcher_->removePath(path_);
     path_ = abs;
+    pickedLine_ = 0;            // what was picked belonged to the script before
+    pickedWhat_.clear();
+    numbers_->clear();
     watcher_->addPath(path_);
     edit_->setTextCursor(QTextCursor(edit_->document()));
     loadText();
@@ -629,6 +632,21 @@ void ModelStudioPanel::refreshTree() {
         }
     }
     tree_->expandAll();
+}
+
+QString ModelStudioPanel::describe() const {
+    QJsonObject o;
+    o["script"] = path_.isEmpty() ? QString() : QDir::current().relativeFilePath(path_);
+    o["arguments"] = args_->text().trimmed();
+    o["unsaved"] = dirty();
+    o["status"] = status_->text();
+    o["error"] = status_->property("bad").toBool();
+    o["model"] = numbers_->text();
+    o["cursor_line"] = edit_->textCursor().blockNumber() + 1;
+    o["picked_line"] = pickedLine_;
+    o["picked"] = pickedWhat_;
+    if (pickedLine_ > 0) o["picked_text"] = edit_->document()->findBlockByNumber(pickedLine_ - 1).text().trimmed();
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
 void ModelStudioPanel::copyView() {

@@ -88,6 +88,10 @@ public:
     // SAVE AS A MODEL AND A PREFAB: give the script its line in models.lua and in prefabs.lua, so the engine can
     // build it by name and a level can place it. Says what it did (or why not) under the pane.
     void addToLists();
+    // WHAT THE STUDIO IS SHOWING, as one line of JSON, for a tool on the control channel (`studio?`): the script,
+    // its arguments, whether the pane has unsaved edits, the status line and whether it is an error, the model's
+    // numbers, and what was last picked (its line and what it is).
+    QString describe() const;
     // Is a script open with changes not yet written?
     bool dirty() const;
     QString scriptPath() const { return path_; }

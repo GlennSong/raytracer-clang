@@ -201,6 +201,24 @@ them. In Lua: `events.publish(name, fields)` (delivered at the frame's queued
 dispatch), `local id = events.on(name, function(fields) ... end)`,
 `events.off(id)`; a script's subscriptions go with its entity.
 
+## Stamped models and the editor's model studio (#191)
+
+A stamped prefab's model can be read and moved from the channel, in the viewer or the editor:
+
+- `models?` lists the stamped models in the world, numbered.
+- `model? [n]` gives one's tree as JSON: each node under its parent with its placement and motion, and its parts,
+  used pieces, markers and collision shapes, each with the script line that made it.
+- `model_set <node> <value> [speed] [n]` moves a moving node (degrees for a turn, metres for a slide).
+
+The Qt editor adds the model studio's own verbs (it registers them, so a plain viewer does not list them):
+
+- `studio?` says what the studio shows: the script, its arguments, unsaved edits, the status line and whether it
+  is an error, the model's numbers, what was last picked and its script line.
+- `studio_open <script>`, `studio_args <a Lua table | none>`, `studio_pick <piece>`.
+
+The editor contains the engine, so it is one program with one socket: a tool attached to it has the engine's verbs
+and the studio's together.
+
 ## The MCP server
 
 `tools/viewer-mcp.py` — standard library only, registered in the repo-root

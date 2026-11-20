@@ -30,6 +30,8 @@
 #include "bake_dialog.h"
 #include "level_cache_panel.h"
 #include "model_studio.h"
+#include <nlohmann/json.hpp>
+#include "../engine/model_inspect.h"
 #include "../engine/model_motion.h"
 #include "../engine/scripting/model_recipes.h"
 #include "../engine/bundle/bake.h"
@@ -1031,100 +1033,29 @@ int main(int argc, char** argv) {
         return found;
     };
     modelStudio->modelTree = [&]() -> std::vector<StudioRow> {
+        // (the engine's one description of a stamped model, model_inspect.h, which the control channel's `model?`
+        // gives to a tool too: the studio only draws it)
         std::vector<StudioRow> rows;
         engine::World* world = bridge.world();
         const engine::Entity instance = studioInstance();
-        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
-        if (mi == nullptr || mi->model == nullptr) return rows;
-        const engine::ProcModel& model = *mi->model;
-        const std::vector<engine::ProcModelDraw> draws = engine::modelDraws(model);
-        auto xyz = [](const Vec3& v) { return QString("%1, %2, %3").arg(v.x, 0, 'g', 4).arg(v.y, 0, 'g', 4).arg(v.z, 0, 'g', 4); };
-        auto placed = [&](const engine::ProcFrame& f) {
-            QString text = "at " + xyz(f.position);
-            Vec3 axis;
-            Real angle = 0;
-            f.rotation.toAxisAngle(axis, angle);
-            if (std::abs(angle) > 1e-6) text += QString(", turned %1 deg about %2").arg(angle * 180.0 / 3.14159265358979, 0, 'f', 1).arg(xyz(axis));
-            return text;
-        };
-        const double deg = 180.0 / 3.14159265358979323846;
-        std::function<void(int, int)> walk = [&](int node, int depth) {
-            const engine::ProcNode& n = model.nodes[static_cast<std::size_t>(node)];
+        if (world == nullptr || !instance.valid()) return rows;
+        const nlohmann::json tree = nlohmann::json::parse(engine::modelTreeJson(*world, instance), nullptr, false);
+        if (!tree.is_array()) return rows;
+        for (const nlohmann::json& r : tree) {
             StudioRow row;
-            row.depth = depth;
-            row.kind = "node";
-            row.name = QString::fromStdString(n.name);
-            row.line = n.line;
-            row.detail = node == 0 ? QString("the model's own space") : placed(n.frame) + " under " + QString::fromStdString(model.nodes[static_cast<std::size_t>(n.parent)].name);
-            if (n.motion.kind != engine::ProcMotion::Kind::None) {
-                row.turn = n.motion.kind == engine::ProcMotion::Kind::Turn;
-                const double unit = row.turn ? deg : 1.0;
-                row.joint = QString::fromStdString(n.name);
-                row.lo = n.motion.limited ? n.motion.min * unit : 0.0;
-                row.hi = n.motion.limited ? n.motion.max * unit : 0.0;
-                row.value = mi->pose.of(n.name) * unit;
-                row.detail += QString(row.turn ? "; turns about %1" : "; slides along %1").arg(xyz(n.motion.axis));
-                row.detail += n.motion.limited ? QString(", %1 to %2 %3").arg(row.lo, 0, 'g', 4).arg(row.hi, 0, 'g', 4).arg(row.turn ? "deg" : "m") : QString(", without end");
-            }
+            row.depth = r.value("depth", 0);
+            row.kind = QString::fromStdString(r.value("kind", std::string()));
+            row.name = QString::fromStdString(r.value("name", std::string()));
+            row.detail = QString::fromStdString(r.value("detail", std::string()));
+            row.line = r.value("line", 0);
+            row.piece = r.value("piece", -1);
+            row.joint = QString::fromStdString(r.value("joint", std::string()));
+            row.turn = r.value("turn", true);
+            row.lo = r.value("lo", 0.0);
+            row.hi = r.value("hi", 0.0);
+            row.value = r.value("value", 0.0);
             rows.push_back(row);
-            for (std::size_t i = 0; i < model.parts.size(); ++i) {
-                const engine::ProcPart& part = model.parts[i];
-                if (part.node != node || part.mesh.indices.empty()) continue;
-                StudioRow r;
-                r.depth = depth + 1;
-                r.kind = "part";
-                const std::string& material = model.materials[static_cast<std::size_t>(part.material)].name;
-                r.name = QString::fromStdString(material.empty() ? "plain" : material);
-                r.detail = QString("%L1 triangles").arg(static_cast<qulonglong>(part.mesh.indices.size() / 3));
-                if (part.level > 0) r.detail += QString(", the level from %1 m").arg(model.levelFrom[static_cast<std::size_t>(part.level)], 0, 'f', 0);
-                r.line = part.line;
-                for (std::size_t d = 0; d < draws.size(); ++d)
-                    if (draws[d].part == &part) { r.piece = static_cast<int>(d); break; }
-                rows.push_back(r);
-            }
-            for (const engine::ProcUse& use : model.uses) {
-                if (use.node != node || use.piece == nullptr) continue;
-                StudioRow r;
-                r.depth = depth + 1;
-                r.kind = "use";
-                r.name = QString::fromStdString(use.piece->name.empty() ? "a piece" : use.piece->name);
-                r.detail = QString("%1 %2, %L3 triangles each").arg(use.placements.size()).arg(use.placements.size() == 1 ? "copy" : "copies")
-                               .arg(static_cast<qulonglong>(engine::flattenModel(*use.piece).indices.size() / 3));
-                if (use.placements.size() == 1) r.detail += ", " + placed(engine::ProcFrame{use.placements[0].position, use.placements[0].rotation});
-                if (use.level > 0) r.detail += QString(", the level from %1 m").arg(model.levelFrom[static_cast<std::size_t>(use.level)], 0, 'f', 0);
-                r.line = use.line;
-                rows.push_back(r);
-            }
-            for (const engine::ProcMarker& mk : n.markers) {
-                StudioRow r;
-                r.depth = depth + 1;
-                r.kind = "marker";
-                r.name = QString::fromStdString(mk.name);
-                r.detail = QString::fromStdString(mk.role) + ", " + placed(mk.frame);
-                r.line = mk.line;
-                rows.push_back(r);
-            }
-            for (const engine::ProcCollider& c : model.colliders) {
-                if (c.node != node) continue;
-                StudioRow r;
-                r.depth = depth + 1;
-                r.kind = "shape";
-                r.name = QString::fromStdString(c.name.empty() ? "(unnamed)" : c.name);
-                switch (c.kind) {
-                    case engine::ProcCollider::Kind::Box: r.detail = "box " + xyz(c.halfExtent * 2.0) + " m"; break;
-                    case engine::ProcCollider::Kind::Sphere: r.detail = QString("sphere, radius %1 m").arg(c.radius, 0, 'g', 4); break;
-                    case engine::ProcCollider::Kind::Capsule: r.detail = QString("capsule, radius %1 m, %2 m between its ends").arg(c.radius, 0, 'g', 4).arg(c.halfHeight * 2.0, 0, 'g', 4); break;
-                    case engine::ProcCollider::Kind::Hull: r.detail = "hull"; break;
-                    case engine::ProcCollider::Kind::Mesh: r.detail = QString("mesh, %L1 triangles").arg(static_cast<qulonglong>(c.mesh.indices.size() / 3)); break;
-                }
-                r.detail += ", " + placed(c.frame());
-                r.line = c.line;
-                rows.push_back(r);
-            }
-            for (std::size_t child = 1; child < model.nodes.size(); ++child)
-                if (model.nodes[child].parent == node) walk(static_cast<int>(child), depth + 1);
-        };
-        walk(0, 0);
+        }
         return rows;
     };
     modelStudio->selectPiece = [&](int piece) {
@@ -1144,6 +1075,45 @@ int main(int argc, char** argv) {
         std::string why;
         if (!engine::setModelTarget(*world, instance, joint.toStdString(), value * unit, 0, &why)) LOG_WARN << "[studio] " << why;
     };
+    // THE STUDIO ON THE CONTROL CHANNEL (docs/control-channel.md): what a tool beside the person can ask and do.
+    // Registered by the editor, so a plain viewer does not offer them. (The model itself is the engine's: models?,
+    // model?, model_set work in both.)
+    app.commands().add("studio?", "studio?",
+                       "The model studio as JSON: the script open, its arguments, unsaved edits, the status line (and whether it is an error), the model's numbers, what was last picked and its script line.",
+                       [modelStudio](const engine::ControlCommand&) -> std::string { return "ok " + modelStudio->describe().toStdString(); }, "editor");
+    app.commands().add("studio_open", "studio_open <script>",
+                       "Open a model script in the studio: a name under assets/scripts (crane) or a path to a .lua there.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_open <script>";
+        QString script = QString::fromStdString(cmd.args[0]);
+        if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
+        if (!QFileInfo::exists(script)) return "err no such script: " + script.toStdString();
+        modelStudio->openScript(script);
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_args", "studio_args <a Lua table | none>",
+                       "Run the studio's script with these arguments ({ kind = \"tree\", seed = 3 }) and rebuild; `none` clears them.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        const QString text = QString::fromStdString(cmd.rest).trimmed();
+        if (!modelStudio->setArguments(text == "none" ? QString() : text)) return "err " + modelStudio->describe().toStdString();
+        return "ok rebuilding";
+    }, "editor");
+    app.commands().add("studio_pick", "studio_pick <piece>",
+                       "Select one of the model's drawn pieces in the viewport (the `piece` of a part row of model?), as a click on it would.",
+                       [&, modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_pick <piece>";
+        const int piece = std::atoi(cmd.args[0].c_str());
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi == nullptr || piece < 0 || piece >= static_cast<int>(mi->pieces.size())) return "err no such piece";
+        const engine::Entity e = mi->pieces[static_cast<std::size_t>(piece)];
+        bridge.select(e);
+        const engine::ModelPiece* p = world->get<engine::ModelPiece>(e);
+        if (p != nullptr) modelStudio->showPiece(p->line, QString::fromStdString(p->what));
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+
     // Assets: double-clicking a .lua under assets/scripts opens it in the studio (a level still opens as a level).
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&, modelStudio, assetsModel](const QModelIndex& index) {
         const QString path = assetsModel->filePath(index);

@@ -20,6 +20,8 @@
 #include "control/city_requests.h"     // PossessRequest, CityLayerRequest, JitterRequest, ...
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
+#include "model_inspect.h"   // models?, model?
+#include "model_motion.h"    // model_set
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/bake.h"
 #include <algorithm>
@@ -514,6 +516,38 @@ void Application::registerSkyVerbs() {
 
 // The player
 void Application::registerPlayerVerbs() {
+    // STAMPED MODELS (#191): the prefabs' model instances in the world, one's make-up, and moving one of its nodes.
+    // They work wherever a prefab stands: a level in the viewer, or the editor's model studio.
+    commandTable.add("models?", "models?",
+                     "The stamped prefabs in the world, numbered: prefab, place, pieces and bodies.",
+                     [this](const ControlCommand&) -> std::string { return "ok " + modelsListing(worldState); });
+    commandTable.add("model?", "model? [n]",
+                     "One stamped model's tree as JSON (n from models?, default 0): each node under its parent with its placement and motion, and its parts, used pieces, markers and collision shapes, each with the script line that made it.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        const std::vector<Entity> all = modelInstances(worldState);
+        const std::size_t n = cmd.args.empty() ? 0 : static_cast<std::size_t>(std::max(0, std::atoi(cmd.args[0].c_str())));
+        if (n >= all.size()) return all.empty() ? "err no stamped model in the world" : "err there are " + std::to_string(all.size()) + " models (0 to " + std::to_string(all.size() - 1) + ")";
+        return "ok " + modelTreeJson(worldState, all[n]);
+    });
+    commandTable.add("model_set", "model_set <node> <value> [speed] [n]",
+                     "Move a moving node of a stamped model: degrees for a turn, metres for a slide; with a speed (per second) it travels there, without it is there at once. n from models?, default 0.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.size() < 2) return "err model_set <node> <value> [speed] [n]";
+        const std::vector<Entity> all = modelInstances(worldState);
+        const std::size_t n = cmd.args.size() > 3 ? static_cast<std::size_t>(std::max(0, std::atoi(cmd.args[3].c_str()))) : 0;
+        if (n >= all.size()) return "err no such stamped model (see models?)";
+        const ModelInstance* mi = worldState.get<ModelInstance>(all[n]);
+        const ProcNode* node = mi != nullptr && mi->model != nullptr ? mi->model->jointAt(cmd.args[0]) : nullptr;
+        if (node == nullptr) return "err the model has no moving node named '" + cmd.args[0] + "' (model? lists them: the rows with a joint)";
+        const double unit = node->motion.kind == ProcMotion::Kind::Turn ? 3.14159265358979323846 / 180.0 : 1.0;
+        const double value = std::atof(cmd.args[1].c_str()), speed = cmd.args.size() > 2 ? std::atof(cmd.args[2].c_str()) : 0.0;
+        std::string why;
+        if (!setModelTarget(worldState, all[n], cmd.args[0], value * unit, speed * unit, &why)) return "err " + why;
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "ok %s %s %.4g", cmd.args[0].c_str(), speed > 0 ? "heading for" : "at", node->motion.clamped(value * unit) / unit);
+        return buf;
+    });
+
     commandTable.add("teleport", "teleport <x y z [pitch yaw] | x z> | open",
                      "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel.",
                      [this](const ControlCommand& cmd) -> std::string {

@@ -74,6 +74,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 56a47c33 | the studio's model tree: nodes under their parents with their placement, what hangs on each, a box to move each moving node; nodes, markers and shapes record their script lines |
 | 3b80f181 | the studio's Arguments box (`luaTableToJson`; `RT_STUDIO_ARGS` types into it unattended); the camera reframes when a rebuilt model is nothing like the last; a part's line is the deepest in the recipe's own chunk |
 | 8d2c6694 | a recipe says what it takes: Lua `params{ ... }` (`declaredParams`, `recipeParams`), and the studio's form of controls for it; `prop_models.lua` and `car_rig_lab.lua` declare theirs |
+| (this) | the model and the studio on the control channel: `models?`, `model?`, `model_set` (engine), `studio?`, `studio_open`, `studio_args`, `studio_pick` (editor); `engine/model_inspect.{h,cpp}`, the one description of a stamped model's tree; `web/engine/commands.json` refreshed |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -139,7 +140,9 @@ level suite has not been run.
 numbered list of what is not). Build the editor with `cmake --build build-viewer --target editor_app`; run
 `./build-viewer/editor_app --model crane`. To check it without a person: `RT_EDITOR_WINDOW_SHOT=<png>
 RT_EDITOR_WINDOW_SHOT_DELAY=6 timeout 25 ./build-viewer/editor_app --model <name>` writes a picture of the whole
-window; write to the script's file while it runs to see a rebuild.
+window; write to the script's file while it runs to see a rebuild. To drive a running editor, send it lines
+over its control socket (`tools/rtctl.py`; `build-viewer/sheets/studio/ctl_check.py` is a worked example, not
+tracked): `studio?`, `model?`, `model_set boom 40`.
 
 
 Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen

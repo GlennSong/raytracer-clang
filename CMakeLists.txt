@@ -234,6 +234,7 @@ add_library(engine_core STATIC
     src/engine/model_spawn.cpp      # a model into the world: materials and collision shapes (#191)
     src/engine/prefab_stamp.cpp     # a prefab stamped as one entity (#191)
     src/engine/model_motion.cpp     # a model instance's moving nodes (#191)
+    src/engine/model_inspect.cpp    # a stamped model described: its tree as data (#191)
     src/engine/drawn_road.cpp
     src/engine/level_params.cpp
     src/engine/level_writer.cpp

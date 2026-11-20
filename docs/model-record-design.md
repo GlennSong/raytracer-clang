@@ -922,6 +922,22 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
    shows what the form set. `prop_models.lua` and `car_rig_lab.lua` declare theirs (the car's choice is whatever
    `vehicle_kit.lua`'s `SPECS` holds).
 
+9. DONE the same day (Glenn: "do you have MCP access into that editor?"): **the studio and the model on the
+   control channel** (docs/control-channel.md), which the repo's MCP server (`tools/viewer-mcp.py`, `.mcp.json`)
+   turns into tools by reading the running program's own command list. The editor contains the engine, so it is one
+   program with one socket: there is no second server.
+   - In the ENGINE (the viewer has them too, for any stamped prefab in any level): `models?` (the stamped models,
+     numbered), `model? [n]` (one's tree as JSON), `model_set <node> <value> [speed] [n]` (degrees or metres).
+   - In the EDITOR only (registered by it, so a plain viewer does not offer what it cannot do): `studio?` (the
+     script, its arguments, unsaved edits, the status and whether it is an error, the model's numbers, what was
+     picked and its line), `studio_open <script>`, `studio_args <a Lua table | none>`, `studio_pick <piece>`.
+   - The model's tree has ONE description now, `engine/model_inspect.{h,cpp}` (`modelTreeJson`): the studio's tree
+     draws it and `model?` hands it out.
+   Checked by launching the editor and sending every command over the socket, and by asking the MCP server for its
+   tool list beside a running editor (`model_q`, `model_set`, `models_q`, `studio_q`, `studio_args`,
+   `studio_open`, `studio_pick`) and calling one. An assistant's session has the tools once the server is
+   registered with it; this session's was not.
+
 Still open: finer tags than one line per library call; a "walk" button (Play already does it); typing and clicking in the pane have been
 checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 
