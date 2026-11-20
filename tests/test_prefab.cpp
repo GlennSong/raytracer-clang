@@ -217,7 +217,7 @@ TEST_CASE(stamping_a_prefab_makes_an_instance_its_pieces_and_its_bodies) {
     CHECK(mi->model != nullptr && mi->model == store.find("crane"));    // the store's one crane, not a copy
     CHECK(mi->model->frozen);
     CHECK(mi->pieces.size() == modelDraws(*mi->model).size());
-    CHECK(mi->pieces.size() == 7);          // five parts of the full crane, two of the far one
+    CHECK(mi->pieces.size() == 9);          // seven parts of the full crane, two of the far one
     CHECK(mi->bodies.size() == 4);          // base, mast, cabin, boom: each a box
 
     // A piece stands where the entity's place and its own place in the model put it. The boom's mesh is in the
@@ -325,12 +325,12 @@ TEST_CASE(a_stamped_prefabs_pieces_draw_by_band_and_measure_from_the_models_own_
         // steel is steel on the renderer's material
         if (piece->local.m[1][3] > 5.0 && piece->from == 0) CHECK_APPROX(r->material.metallic, 0.6, 1e-6);
     }
-    CHECK(full == 5);
+    CHECK(full == 7);
     CHECK(far == 2);
 
     // A second crane uploads no mesh again: the copies share them by the model's build.
     const int uploads = up.uploads;
-    CHECK(uploads == 7);
+    CHECK(uploads == 9);
     CHECK(stampPrefab(world, &dresser, crane, Transform(), std::string(), nullptr, &store).valid());
     CHECK(up.uploads == uploads);
 

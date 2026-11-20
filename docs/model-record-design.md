@@ -775,6 +775,13 @@ priority." So the crane is the test at the end, and each wish is a system first:
 | turning it from the cab | motion on the entity and the script | step 8 |
 | entering the cab, its own interactions | offers at markers | step 9 |
 
+**The crane, rebuilt with the first tools (2026-11-20).** `assets/scripts/crane.lua` is no longer boxes: the mast
+and the boom are lattices (`truss.lua`), the cab is a floor, a roof and four walls with a framed, glazed window in
+three of them (`openings.lua`), and the base, the cab and the hook block have bevelled edges. Its nodes, markers and
+collision shapes are as they were, so it is the same prefab. What the sheet's numbers say honestly: a lattice
+member is an open-ended tube that passes through its neighbours at a joint (1,920 open edges on the crane), which
+reads right at any distance a crane is seen from and would not survive a close look at a joint.
+
 ### Modelling tools still to build (2026-11-20)
 
 Glenn: modelling tools are "of higher interest" than the crane itself. What the toolkit lacks, in the order
