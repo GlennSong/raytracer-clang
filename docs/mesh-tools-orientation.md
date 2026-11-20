@@ -51,6 +51,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 8712173e | the sheet measures triangle shape and left against right: `measureShape`, `checkMirror` in `engine/mesh_audit.h`; `tests/test_mesh_shape.cpp` |
 | 949357c5 | the kit creases the same band on both flanks (the second cause of left differing from right). Changes every subdivided kit car |
 | d534a3c5 | a door opening's wall stands at the opening only: `solidify` takes `against`; the sedan's 532 edges with three or more faces are gone. Changes kit cars with panels |
+| 55cf9eba | the sheet's shape lines name their part; the survey's findings below |
+| 7a63568e | third merge of `claude/island8-batch`, up to bec6d732 (ADR-0469 to 0473, sidewalks at junctions and road file fixes). Roads only; the car's fingerprint is unchanged |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
