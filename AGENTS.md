@@ -158,6 +158,26 @@ recompiling, and lets one generative vocabulary serve every procgen project.
   (`spawnDocumentEntity`) carrying its recipe; the render/instance entities are
   runtime companions regenerated from it.
 
+### Model file names (convention; the loader that reads them is #191 step 6, not built yet)
+
+A model made outside the engine (a glTF file from Blender) says what its pieces are by their NAMES. These are this
+engine's own conventions (Glenn, 2026-11-19: "let's come up with our own conventions and use those"), not another
+engine's. Names are lower case with underscores.
+
+- **A collision shape: `col_<kind>_<name>`.** The object is not drawn; it becomes one of the model's collision
+  shapes, named `<name>`. `<kind>` says which simple solid it is, so a box stays a box and is not treated as a mesh:
+  - `col_box_cabin`: the object's own box (its size and turn);
+  - `col_sphere_`, `col_capsule_`: the sphere or capsule that fits it;
+  - `col_hull_`: the convex hull of its points;
+  - `col_mesh_`: its triangles as they are (static things only).
+- **A level of detail: `<name>_lod<N>`.** `body_lod0` is the full mesh, `body_lod1` the next simpler, and so on. A
+  mesh with no suffix is level 0.
+- **A marker: any empty** (an object with no mesh). Its name is the marker's name, and its position, turn and size
+  are the marker's. Its role (seat, lamp, hook) is a custom property `role`; without one the role is `point`.
+- **A node:** every other object. Its name is the node's name, and the file's parenting is the model's tree.
+
+The same names mean the same things in a model built by a Lua recipe.
+
 ## Playable Scenes (Engine Rule)
 
 This is a game engine: a level is a world you move through, not a diorama you fly

@@ -163,10 +163,16 @@ thing both records have to be able to say.
 10. **Many copies:** drawn as a group, one made full when approached.
 11. **First ports:** kerb props (ADR-0354), then furniture's spots and anchors as markers, then the car.
 
-## Questions for Glenn
+## Glenn's calls (2026-11-19)
 
-1. **Angles in Lua:** degrees in scripts, radians inside?
-2. **The first port after the crane:** kerb props (small, already data) before furniture (92 pieces, every
-   interior)?
-3. **Colliders on distant copies:** keep one on every copy as today, or only near the player?
-4. **Collision meshes in a glTF file:** which name marks them? `UCX_` (Unreal's) is the common one.
+1. **Angles:** degrees in Lua, radians inside the engine.
+2. **The first port after the crane:** kerb props (the things standing at the edge of a street: hydrants, bins,
+   mailboxes, posts), before furniture.
+3. **Colliders on distant copies:** open. "It might make sense if it's only objects close to the player, but that
+   depends if we allow physics collisions on things far away from the player." To settle at step 10 by finding out
+   what far from the player still collides today (far traffic, thrown or falling things); until then every copy keeps
+   its collider, as now.
+4. **Names in a model file are our own conventions**, written in AGENTS.md ("Model file names"): `col_<kind>_<name>`
+   for a collision shape, `_lod<N>` for a level, an empty for a marker. Glenn asked for a convention of ours and
+   offered `CM` / `RCM`; `col_` is the proposal, because it reads without a key and the shape's kind can follow it.
+   His to change.
