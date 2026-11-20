@@ -31,6 +31,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 7c5771ea | Lua words over the toolkit (`mesh.weld`, `simplify`, `remesh`, `fill_holes`, `hull`, `tri`, ...), the word list test, and booleans (`MeshBuilder::boolean` in `engine/mesh_boolean.cpp`, over `third_party/manifold`) |
 | bdff2422 | `mesh.sheet`, `mesh.ruled`, `mesh.patch` |
 | 4301e016, 7fb30148 | the design note and the model file name conventions |
+| (this commit) | model step 1, nodes: `ProcNode` and `ProcFrame` in `procgen/proc_model.h`, Lua `m:node` and the node words, read by the bake, the loader, `m:flatten` and the model sheet; `tests/test_model_nodes.cpp` |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -38,6 +39,10 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 - **Look at it:** `./build-viewer/rt_model_sheet RECIPE.lua --out build-viewer/sheets/x.png`, then open the PNG. The
   `.txt` beside it has the audit. Scratch recipes live in `build-viewer/sheets/` (not tracked).
+- **Has the shape changed?** The `.txt` has a `fingerprint` line: one number for all the drawn triangles, whatever
+  their order. The same number before and after a change means the same triangles. Take it for every recipe before
+  you start (a loop over `assets/scripts/*.lua` with `--size 64 --spp 1` takes about 20 seconds; the scripts that are
+  data tables and return no model just report that).
 - **The picture draws both sides of a face,** so facing is judged by the audit's numbers and by tests, not by eye.
 - **A new function in `mesh_builder.h` must go on the list** in `tests/test_mesh_lua_words.cpp` with its Lua word or
   the reason it is C++ only. The test fails otherwise.
@@ -48,15 +53,16 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
   vertices within 1e-5 m as one point; without that the library refuses them as not closed.
 - The boolean library does not turn the normals of a cut cavity's walls. `mesh_boolean.cpp` does.
 - `mesh.cut` clamps to a plane; it does not open a hole.
+- A recipe that walks a Lua table with `pairs` (the car kit does) adds its parts in a different order every run.
+  Compare shapes by the sheet's fingerprint, never by the order of parts or by a hash that depends on it.
 - Edit source with the edit tools, not shell appends (AGENTS.md).
 
 ## What is next
 
-Model step 1 in the design note: **nodes** in `ProcModel` (`procgen/proc_model.h`) and in Lua's `model` table
-(`scripting/procgen_bindings.cpp`, the `l_model_*` functions), read by `bakeProcModel` (`level_scene.cpp`), the level
-loader's script path (`level_loader.cpp`, near "The realtime twin of level_scene's bakeProcModel") and the model
-sheet. A model with one node must stay exactly today's flat model: prove it by the same triangles from every
-existing recipe.
+Model step 2 in the design note: **markers and named materials.** A marker is a named point on a node (a position, a
+direction, a size, a role); it goes beside `ProcNode::frame` in `procgen/proc_model.h` and gets a Lua word on the node
+handle (`n:marker`), next to `l_node_add` in `scripting/procgen_bindings.cpp`. The design note's last section, "What is
+built", lists what step 1 left alone and which later step owns each.
 
 Not started: edge bevel (deferred until the crane shows whether it is missed), baked maps on instanced objects
 (step 4), the ports, the crane. ADRs are written at merge, when numbers are free.

@@ -1,6 +1,6 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Nothing here is built. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model step 1 (nodes) is built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -176,3 +176,42 @@ thing both records have to be able to say.
    for a collision shape, `_lod<N>` for a level, an empty for a marker. Glenn asked for a convention of ours and
    offered `CM` / `RCM`; `col_` is the proposal, because it reads without a key and the shape's kind can follow it.
    His to change.
+
+## What is built
+
+### Model step 1: nodes (2026-11-19)
+
+```lua
+local m = model.new()
+m:add(base_mesh)                                              -- on the root, as every recipe did before
+local cabin = m:node("cabin", { pos = { 0, 4.4, 0 }, turn = { 0, 40, 0 } })
+cabin:add(cabin_mesh, paint)                                  -- the mesh is in the cabin's own space
+local boom = cabin:node("boom", { pos = { 0, 1, 0.6 }, turn = { -30, 0, 0 } })
+boom:add(boom_mesh, paint)
+```
+
+- **The record** (`procgen/proc_model.h`): `ProcModel::nodes`, each a name, a parent and a frame (a position and a
+  rotation, no scale). Node 0 is the root and is always there; its frame is no move and no turn. A part has a `node`,
+  0 unless said. `nodeFrame(i)` is a node's place in the model.
+- **Lua:** `m:node(name, opts)` adds a node under the root, `n:node(name, opts)` under `n`; `opts.parent = "name"`
+  names another parent. `pos` is metres in the parent's space; `turn` is degrees about x, then y, then z. `n:add`
+  hangs a mesh. `m:find(name)`, `m:node_count()`, `n:name()`, `n:parent()`, `n:point{x,y,z}` ask the tree.
+- **A wrong name stops the recipe:** a name used twice, or a parent the model lacks, is an error where it is written.
+- **Merging** (`m:merge(other)`) puts the other model's nodes under this model's root and keeps their tree. Both
+  models having a node of one name is an error.
+- **The readers:** the offline bake, the level loader (each part's entity stands at its node's frame) and
+  `m:flatten` all place a part by its node. The model sheet lists the tree and where each node ends up.
+- **The proof:** the model sheet now prints a fingerprint of the drawn triangles. All 30 recipes in `assets/scripts`
+  and the scratch folder that return a model gave the same fingerprint on the code before nodes and after.
+  `tests/test_model_nodes.cpp` holds the rest.
+
+Left as they were, on purpose, for the steps that own them:
+
+- **Instance groups, colliders and flatten footprints** are in the root's space. Collision shapes on nodes come with
+  the model's `shapes` (used first in step 7); placed copies on nodes come with `uses` (step 3).
+- **A node cannot be moved after it is made.** Motion is step 4.
+- **A textured part's tiling** is laid in its node's space in the game (so the pattern stays with the piece) and in
+  the world's space in the path tracer. The two differ only for a textured part on a node that is not the root; named
+  materials (step 2) are where this gets one answer.
+- **In the game each part is still its own entity** with no link back to its node. The model instance (step 7) is
+  what will hold the tree at run time.

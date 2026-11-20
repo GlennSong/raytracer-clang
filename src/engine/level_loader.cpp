@@ -1451,8 +1451,13 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         const ProcPart& part = model.parts[i];
         if (part.mesh.vertices.empty()) continue;
         Entity e = world.create();
-        Transform t;                          // recipe geometry is world-space
-        t.position = spawnOffset;
+        // The part's entity sits at the node the part hangs on. The root's frame is no move and no turn, so a flat
+        // model's geometry stays world-space. (A textured part's tiling is laid in its node's space, so the pattern
+        // stays with the piece.)
+        const ProcFrame at = model.nodeFrame(part.node);
+        Transform t;
+        t.position = spawnOffset + at.position;
+        t.orientation = at.rotation;
         world.add<Transform>(e, t);
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;

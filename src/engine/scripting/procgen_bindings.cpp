@@ -3685,16 +3685,128 @@ int l_model_new(lua_State* L) {
     return 1;
 }
 
-// m:add(mesh [, material]) -> m : append a part. With a material it is textured
-// (world-planar), else baked vertex-coloured. Chainable.
-int l_model_add(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+// A part from the arguments (mesh [, material]) starting at stack slot 2, hung on `node`.
+void addPart(lua_State* L, ProcModel& m, int node) {
     ProcPart part;
     part.mesh = checkMesh(L, 2);
     if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
         part.material = **mat;
+    part.node = node;
     m.parts.push_back(std::move(part));
+}
+
+// m:add(mesh [, material]) -> m : append a part. With a material it is textured
+// (world-planar), else baked vertex-coloured. Chainable.
+int l_model_add(lua_State* L) {
+    addPart(L, checkModel(L, 1), 0);
     lua_pushvalue(L, 1);
+    return 1;
+}
+
+// --- nodes: the named pieces of a model (#191, model step 1) --------------------
+// A node is a named place in the model with its own position and turn under its parent: the door under the car, the
+// handle under the door. Lua holds a node as a small handle (the model and the node's number), so a recipe hangs
+// meshes and further nodes on it:
+//     local door = m:node("door_fl", { pos = { 0.8, 0.5, 1.1 }, turn = { 0, 20, 0 } })
+//     door:add(door_mesh, paint)                       -- the mesh is in the door's own space
+//     local handle = door:node("handle_fl", { pos = { 0, 0.4, -0.7 } })
+// The model itself is the root: m:add puts a mesh there, exactly as before nodes existed.
+constexpr const char* kNodeMt = "engine.procgen.ModelNode";
+struct NodeRef {
+    ModelPtr model;
+    int index = 0;
+};
+
+void pushNode(lua_State* L, ModelPtr m, int index) {
+    void* mem = lua_newuserdatauv(L, sizeof(NodeRef), 0);
+    new (mem) NodeRef{std::move(m), index};
+    luaL_setmetatable(L, kNodeMt);
+}
+NodeRef& checkNode(lua_State* L, int idx) { return *static_cast<NodeRef*>(luaL_checkudata(L, idx, kNodeMt)); }
+int nodeGc(lua_State* L) {
+    static_cast<NodeRef*>(lua_touserdata(L, 1))->~NodeRef();
+    return 0;
+}
+
+// The shared body of m:node and n:node: (name [, { parent = "name", pos = {x,y,z}, turn = {x,y,z} }]) from stack
+// slot 2, under `parent` unless the table names another. `turn` is in DEGREES (Glenn's call: degrees in Lua, radians
+// in the engine), about x, then y, then z. A name already used, or a parent the model lacks, is an error in the
+// recipe, raised here and not found later in the game.
+// (No C++ object that owns memory is alive where an error is raised: a Lua error leaves the function by a long jump.)
+int addNodeFromLua(lua_State* L, const ModelPtr& model, int parent) {
+    const char* name = luaL_checkstring(L, 2);
+    ProcFrame frame;
+    if (!lua_isnoneornil(L, 3)) {
+        luaL_checktype(L, 3, LUA_TTABLE);
+        lua_getfield(L, 3, "parent");
+        if (!lua_isnil(L, -1)) {
+            const char* parentName = luaL_checkstring(L, -1);
+            parent = model->findNode(parentName);
+            if (parent < 0) return luaL_error(L, "node '%s': the model has no node named '%s' to be its parent", name, parentName);
+        }
+        lua_pop(L, 1);
+        frame.position = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+        frame.rotation = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+    }
+    if (name[0] == '\0') return luaL_error(L, "a node needs a name");
+    if (model->findNode(name) >= 0) return luaL_error(L, "the model already has a node named '%s'", name);
+    pushNode(L, model, model->addNode(name, parent, frame));
+    return 1;
+}
+
+// m:node(name [, opts]) -> node : a new node under the root (or under opts.parent).
+int l_model_node(lua_State* L) {
+    return addNodeFromLua(L, *static_cast<ModelPtr*>(luaL_checkudata(L, 1, kModelMt)), 0);
+}
+
+// m:find(name) -> node | nil : the node with this name; "root" is the model itself as a node.
+int l_model_find(lua_State* L) {
+    const ModelPtr& model = *static_cast<ModelPtr*>(luaL_checkudata(L, 1, kModelMt));
+    const int index = model->findNode(luaL_checkstring(L, 2));
+    if (index < 0) lua_pushnil(L);
+    else pushNode(L, model, index);
+    return 1;
+}
+
+int l_model_node_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).nodes.size()));
+    return 1;
+}
+
+// n:node(name [, opts]) -> node : a new node under this one.
+int l_node_node(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    return addNodeFromLua(L, n.model, n.index);
+}
+
+// n:add(mesh [, material]) -> n : a part hung on this node, its mesh in the node's own space. Chainable.
+int l_node_add(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    addPart(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_node_name(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    lua_pushstring(L, n.model->nodes[static_cast<std::size_t>(n.index)].name.c_str());
+    return 1;
+}
+
+// n:parent() -> node | nil : the node this one hangs under; nil for the root.
+int l_node_parent(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    const int parent = n.model->nodes[static_cast<std::size_t>(n.index)].parent;
+    if (parent < 0) lua_pushnil(L);
+    else pushNode(L, n.model, parent);
+    return 1;
+}
+
+// n:point({x,y,z}) -> {x,y,z} : a point given in this node's space, in the model's space. Where a child's corner
+// really is, for a recipe that has to line something up with it.
+int l_node_point(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    pushVec3(L, n.model->nodeFrame(n.index).point(checkVec3(L, 2)));
     return 1;
 }
 
@@ -3821,10 +3933,19 @@ int l_model_collider_count(lua_State* L) {
     return 1;
 }
 
-// m:merge(other) -> m : fold another Model's parts + instances into this one.
+// m:merge(other) -> m : fold another Model's parts + instances into this one. The other model's nodes come across
+// under this model's root; two nodes of one name is an error.
 int l_model_merge(lua_State* L) {
     ProcModel& m = checkModel(L, 1);
-    m.merge(checkModel(L, 2));
+    const ProcModel& other = checkModel(L, 2);
+    if (&m == &other) return luaL_error(L, "a model cannot be merged into itself");
+    bool merged = false;
+    {
+        std::string clash;
+        merged = m.merge(other, &clash);
+        if (!merged) lua_pushstring(L, clash.c_str());   // the name goes to Lua's stack; the string ends here
+    }
+    if (!merged) return luaL_error(L, "merge: both models have a node named '%s'", lua_tostring(L, -1));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -3842,7 +3963,10 @@ int l_model_instance_count(lua_State* L) {
 // stamped at each transform. Bridges a Model to single-mesh consumers/preview.
 RenderMesh flattenModel(const ProcModel& m) {
     RenderMesh out;
-    for (const ProcPart& p : m.parts) MeshBuilder::append(out, p.mesh);
+    for (const ProcPart& p : m.parts) {
+        if (p.node == 0) MeshBuilder::append(out, p.mesh);   // the root is the model's own space: no move to apply
+        else MeshBuilder::appendTransformed(out, p.mesh, m.nodeFrame(p.node).matrix());
+    }
     for (const ProcInstanceGroup& g : m.instances)
         for (const Mat4& xf : g.transforms)
             MeshBuilder::appendTransformed(out, g.proto, xf);
@@ -4696,6 +4820,23 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_collider_count); lua_setfield(L, -2, "collider_count");
         lua_pushcfunction(L, l_model_flatten);        lua_setfield(L, -2, "flatten");
         lua_pushcfunction(L, l_model_conform);        lua_setfield(L, -2, "conform");
+        lua_pushcfunction(L, l_model_node);           lua_setfield(L, -2, "node");
+        lua_pushcfunction(L, l_model_find);           lua_setfield(L, -2, "find");
+        lua_pushcfunction(L, l_model_node_count);     lua_setfield(L, -2, "node_count");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+
+    // A node of a model (#191, model step 1): what m:node returns.
+    if (luaL_newmetatable(L, kNodeMt)) {
+        lua_pushcfunction(L, nodeGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_node_add);    lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_node_node);   lua_setfield(L, -2, "node");
+        lua_pushcfunction(L, l_node_name);   lua_setfield(L, -2, "name");
+        lua_pushcfunction(L, l_node_parent); lua_setfield(L, -2, "parent");
+        lua_pushcfunction(L, l_node_point);  lua_setfield(L, -2, "point");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

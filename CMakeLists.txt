@@ -1085,6 +1085,7 @@ if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
         tests/test_mesh_lua_words.cpp
+        tests/test_model_nodes.cpp      # a model's tree of nodes: the record, Lua, the bake and the loader (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp

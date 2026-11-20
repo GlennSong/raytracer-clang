@@ -2,7 +2,8 @@
 //
 //   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--size 512] [--spp 48]
 //
-// Runs the recipe (a chunk that returns a Mesh or a `model`), and writes
+// Runs the recipe (a chunk that returns a Mesh or a `model`; a model's nodes are drawn where the tree puts them and
+// listed in the text), and writes
 //   sheet.png   four pictures in one: front and side on the top row, top and three-quarter on the bottom row,
 //               the model standing on a floor of 1 m squares so its size reads in every picture;
 //   sheet.txt   the numbers: size in metres, triangles and vertices per part, and the mesh audit's findings.
@@ -15,6 +16,7 @@
 // right here; the audit's numbers are what catch it), and `bakeProcModel` carries no opacity or emission, so glass
 // and lamps draw as plain surfaces.
 #include "camera.h"
+#include "engine/bundle/bundle.h"   // fnv1a
 #include "engine/mesh_audit.h"
 #include "engine/procgen/proc_model.h"
 #include "engine/script_assets.h"
@@ -85,12 +87,41 @@ struct Bounds {
 
 Bounds boundsOf(const ProcModel& m) {
     Bounds b;
-    for (const ProcPart& part : m.parts)
-        for (const Vertex& v : part.mesh.vertices) b.add(v.position);
+    for (const ProcPart& part : m.parts) {
+        const ProcFrame at = m.nodeFrame(part.node);   // a part stands at the node it hangs on
+        for (const Vertex& v : part.mesh.vertices) b.add(at.point(v.position));
+    }
     for (const ProcInstanceGroup& g : m.instances)
         for (const Mat4& t : g.transforms)
             for (const Vertex& v : g.proto.vertices) b.add(t.transformPoint(v.position));
     return b;
+}
+
+// One number for "the same triangles": every drawn triangle as it stands in the scene (corners, normals, colours),
+// then every placed copy. Two runs that print the same number built the same shape, so a change to the toolkit or to
+// the model record can be checked against every recipe without looking at pictures. Each triangle is hashed alone and
+// the hashes are added, so the ORDER of triangles and parts does not count: a recipe that walks a Lua table with
+// `pairs` adds its parts in a different order every run, and it is still the same shape.
+uint64_t fingerprint(const Scene& scene, const ProcModel& m) {
+    uint64_t sum = 0;
+    uint64_t h = 0;
+    auto vec = [&](const Vec3& v) { const double d[3] = {v.x, v.y, v.z}; h = bundle::fnv1a(d, sizeof d, h); };
+    for (const Triangle& t : scene.triangles) {
+        h = bundle::fnv1aStr("triangle");
+        vec(t.v0); vec(t.v1); vec(t.v2);
+        vec(t.n0); vec(t.n1); vec(t.n2);
+        vec(t.c0); vec(t.c1); vec(t.c2);
+        sum += h;
+    }
+    for (const ProcInstanceGroup& g : m.instances) {
+        h = bundle::fnv1aStr("placed");
+        for (const Vertex& v : g.proto.vertices) { vec(v.position); vec(v.normal); vec(v.color); }
+        h = bundle::fnv1a(g.proto.indices.data(), g.proto.indices.size() * sizeof(g.proto.indices[0]), h);
+        for (const Mat4& t : g.transforms)
+            for (int r = 0; r < 4; ++r) { const double row[4] = {t.m[r][0], t.m[r][1], t.m[r][2], t.m[r][3]}; h = bundle::fnv1a(row, sizeof row, h); }
+        sum += h;
+    }
+    return sum;
 }
 
 // The floor and the light every sheet is taken under: a floor of 1 m squares at the model's foot, a pale sky and
@@ -130,7 +161,7 @@ Image renderView(const Scene& scene, const Bounds& b, const View& v, const Optio
     return renderImage(scene, camera, cfg, jobs);
 }
 
-std::string report(const Options& o, const ProcModel& m, const Bounds& b) {
+std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64_t print) {
     std::ostringstream s;
     char line[512];
     s << "model sheet: " << o.recipe << "\n";
@@ -140,6 +171,24 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b) {
     s << line;
     std::snprintf(line, sizeof line, "lowest point y = %.3f, centre = (%.3f, %.3f, %.3f)\n", b.lo.y, b.centre().x, b.centre().y, b.centre().z);
     s << line;
+    // The tree of nodes, when the model has more than its root: each node, what it hangs under, and where it ends
+    // up in the model's space. A flat model prints nothing here.
+    const bool tree = m.nodes.size() > 1;
+    if (tree) {
+        std::snprintf(line, sizeof line, "nodes: %zu\n", m.nodes.size());
+        s << line;
+        for (std::size_t i = 0; i < m.nodes.size(); ++i) {
+            const ProcNode& n = m.nodes[i];
+            int depth = 0;
+            for (int p = n.parent; p >= 0; p = m.nodes[static_cast<std::size_t>(p)].parent) ++depth;
+            const Vec3 at = m.nodeFrame(static_cast<int>(i)).position;
+            long parts = 0;
+            for (const ProcPart& part : m.parts) parts += part.node == static_cast<int>(i) ? 1 : 0;
+            std::snprintf(line, sizeof line, "  %*s%s: at (%.3f, %.3f, %.3f) in the model, %ld part%s\n", depth * 2, "", n.name.c_str(),
+                          at.x, at.y, at.z, parts, parts == 1 ? "" : "s");
+            s << line;
+        }
+    }
     MeshAudit all;
     long vertices = 0;
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
@@ -147,8 +196,9 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b) {
         const MeshAudit a = auditMesh(mesh);
         all.add(a);
         vertices += static_cast<long>(mesh.vertices.size());
-        std::snprintf(line, sizeof line, "part %zu: %ld triangles, %zu vertices%s\n", i + 1, a.tris, mesh.vertices.size(),
-                      a.clean() ? "" : "  <- audit findings");
+        const std::string on = tree ? " on " + m.nodes[static_cast<std::size_t>(m.parts[i].node)].name : std::string();
+        std::snprintf(line, sizeof line, "part %zu%s: %ld triangles, %zu vertices%s\n", i + 1, on.c_str(), a.tris,
+                      mesh.vertices.size(), a.clean() ? "" : "  <- audit findings");
         s << line;
     }
     for (std::size_t i = 0; i < m.instances.size(); ++i) {
@@ -161,6 +211,9 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b) {
     }
     std::snprintf(line, sizeof line, "total: %ld triangles, %ld vertices in parts, %d placed copies, %d colliders\n", all.tris,
                   vertices, m.instanceCount(), m.colliderCount());
+    s << line;
+    std::snprintf(line, sizeof line, "fingerprint: %016llx (the same number means the same triangles)\n",
+                  static_cast<unsigned long long>(print));
     s << line;
     if (all.clean()) {
         s << "mesh audit: clean\n";
@@ -211,6 +264,7 @@ int main(int argc, char** argv) {
 
     Scene scene;
     bakeProcModel(model, scene);
+    const uint64_t print = fingerprint(scene, model);
     addStage(scene, bounds);
     scene.buildAccelerator();
 
@@ -236,7 +290,7 @@ int main(int argc, char** argv) {
     }
     sheet.writePng(o.out);
 
-    const std::string text = report(o, model, bounds) + "pictures: front | side  over  top | three-quarter; floor squares are 1 m\n";
+    const std::string text = report(o, model, bounds, print) + "pictures: front | side  over  top | three-quarter; floor squares are 1 m\n";
     std::string textPath = o.out;
     const std::size_t dot = textPath.rfind('.');
     textPath = (dot == std::string::npos ? textPath : textPath.substr(0, dot)) + ".txt";

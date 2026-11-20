@@ -5,6 +5,7 @@
 #include "../../rt_math.h"             // Mat4
 #include "terrain.h"                   // TerrainFlatten
 #include "tree.h"                      // TextureData
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -36,10 +37,34 @@ struct ProcMaterial {
     bool twoSided = false;     // -> RenderMaterial::FLAG_TWO_SIDED
 };
 
-// A model part: geometry + its material (default = untextured, vertex-coloured).
+// Where a thing sits and how it is turned, relative to whatever holds it: a position and a rotation, no scale. A
+// node's frame is relative to its parent node; the frame `ProcModel::nodeFrame` returns is relative to the model.
+struct ProcFrame {
+    Vec3 position{0, 0, 0};
+    Quat rotation;
+
+    // A point given in this frame, in the space the frame sits in.
+    Vec3 point(const Vec3& local) const { return position + rotation.rotate(local); }
+    // `inner` is a frame given in this one; the result is `inner` in the space this frame sits in.
+    ProcFrame operator*(const ProcFrame& inner) const { return ProcFrame{point(inner.position), rotation * inner.rotation}; }
+    Mat4 matrix() const { return Mat4::trs(position, rotation, Vec3(1, 1, 1)); }
+};
+
+// One named piece of a model (#191, model step 1): a car's door is a node under the car, the handle a node under the
+// door. A node holds no geometry itself; a part says which node it hangs on, and is drawn at that node's frame.
+struct ProcNode {
+    std::string name;      // unique in the model
+    int parent = -1;       // an index into ProcModel::nodes, always lower than this node's own; -1 for the root only
+    ProcFrame frame;       // relative to the parent
+};
+
+// A model part: geometry + its material (default = untextured, vertex-coloured). The mesh is in the space of the
+// node it hangs on; node 0 is the root, which is the model's own space, so a part that names no node is where its
+// vertices say it is.
 struct ProcPart {
     RenderMesh mesh;
     ProcMaterial material;
+    int node = 0;
 };
 
 // A composable procedural model (ADR-0042): the value a recipe returns at any
@@ -94,6 +119,10 @@ struct ProcInstanceGroup {
 };
 
 struct ProcModel {
+    // The model's pieces as a tree. There is always a root, node 0, whose frame is the model's own space and never
+    // changes; a model that adds no node is the flat model every recipe built before nodes existed. Instance groups,
+    // colliders and flatten footprints are in the root's space.
+    std::vector<ProcNode> nodes = {ProcNode{"root", -1, ProcFrame{}}};
     std::vector<ProcPart> parts;
     std::vector<ProcInstanceGroup> instances;
     std::vector<ProcCollider> colliders;
@@ -105,12 +134,54 @@ struct ProcModel {
     // ground meets the roads. Empty for a recipe that owns its own ground.
     std::vector<TerrainFlatten> flatten;
 
-    // Fold another model into this one (composition).
-    void merge(const ProcModel& o) {
+    // The node with this name, or -1.
+    int findNode(const std::string& name) const {
+        for (std::size_t i = 0; i < nodes.size(); ++i)
+            if (nodes[i].name == name) return static_cast<int>(i);
+        return -1;
+    }
+
+    // Add a node under `parent`. Returns its index, or -1 (and adds nothing) when the name is empty or taken, or the
+    // parent is not a node of this model.
+    int addNode(const std::string& name, int parent, const ProcFrame& frame) {
+        if (name.empty() || findNode(name) >= 0) return -1;
+        if (parent < 0 || parent >= static_cast<int>(nodes.size())) return -1;
+        nodes.push_back(ProcNode{name, parent, frame});
+        return static_cast<int>(nodes.size()) - 1;
+    }
+
+    // A node's frame relative to the model: its own frame under its parent's, up to the root.
+    ProcFrame nodeFrame(int node) const {
+        ProcFrame f = nodes[static_cast<std::size_t>(node)].frame;
+        for (int p = nodes[static_cast<std::size_t>(node)].parent; p >= 0; p = nodes[static_cast<std::size_t>(p)].parent)
+            f = nodes[static_cast<std::size_t>(p)].frame * f;
+        return f;
+    }
+
+    // Fold another model into this one (composition). The other model's root becomes this model's root, so its flat
+    // parts land where they did; its other nodes come across with their parts, keeping their tree. Returns false and
+    // changes nothing when the two models both have a node of one name; `clash`, when given, is that name.
+    bool merge(const ProcModel& o, std::string* clash = nullptr) {
+        for (std::size_t i = 1; i < o.nodes.size(); ++i)
+            if (findNode(o.nodes[i].name) >= 0) {
+                if (clash != nullptr) *clash = o.nodes[i].name;
+                return false;
+            }
+        // The other model's node i is this model's node `base + i`, except its root, which is this root.
+        const int base = static_cast<int>(nodes.size()) - 1;
+        for (std::size_t i = 1; i < o.nodes.size(); ++i) {
+            ProcNode n = o.nodes[i];
+            if (n.parent > 0) n.parent += base;
+            nodes.push_back(std::move(n));
+        }
+        const std::size_t firstPart = parts.size();
         parts.insert(parts.end(), o.parts.begin(), o.parts.end());
+        for (std::size_t i = firstPart; i < parts.size(); ++i)
+            if (parts[i].node > 0) parts[i].node += base;
         instances.insert(instances.end(), o.instances.begin(), o.instances.end());
         colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
         flatten.insert(flatten.end(), o.flatten.begin(), o.flatten.end());
+        return true;
     }
 
     int instanceCount() const {

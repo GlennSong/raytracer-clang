@@ -391,7 +391,10 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
             mat.surface = pm.surface;
         }
         int mi = scene.addMaterial(mat);
-        addMeshAsTriangles(part.mesh, offset, Quat::identity(), Vec3(1, 1, 1), mi, scene);
+        // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
+        // land exactly where their vertices say.
+        const ProcFrame at = m.nodeFrame(part.node);
+        addMeshAsTriangles(part.mesh, offset + at.position, at.rotation, Vec3(1, 1, 1), mi, scene);
     }
     // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
     for (const ProcInstanceGroup& g : m.instances) {
