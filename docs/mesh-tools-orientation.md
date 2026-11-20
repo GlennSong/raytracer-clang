@@ -64,7 +64,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | ff719461 | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
 | c5d9a860 | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
 | bb747fea | cage deform (`assets/scripts/cage.lua`) and un-subdivide (`unsubdivide`, Lua `P:unsubdivide`): the last two of the eight tools |
-| (this) | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
+| ccaa2c5f | the tools' gaps closed: a rounded bevel (`rounds`) that cannot fold a face, un-subdivide with open borders, joint balls on a truss (`nodes`), seeded `scatter.jitter`; the crane uses the first and third |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
