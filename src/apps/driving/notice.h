@@ -20,6 +20,7 @@
 // Units: metres, seconds, m/s, m/s2.
 
 #include "engine/procgen/city/roads/lane_graph.h"
+#include "engine/procgen/city/roads/route.h"   // WayAhead, kMaxFollowedPaths: the paths ahead along a route
 #include "apps/driving/rule_set.h"
 #include "apps/driving/traffic_state.h"
 #include "apps/driving/vehicle_class.h"
@@ -78,14 +79,12 @@ bool operator==(const NoticedFact& a, const NoticedFact& b);   // every field th
 inline bool operator!=(const NoticedFact& a, const NoticedFact& b) { return !(a == b); }
 
 // THE PATHS AHEAD OF A DRIVER, in order: the first is the path its front bumper is on, each next one leads on from the
-// one before. The caller supplies it (routes are a later task). When it is empty or does not start on the driver's own
-// path, the facts read it as the driver's own path alone.
-struct WayAhead {
-    std::vector<engine::PathId> paths;
-};
+// one before (the router's type, roads/route.h, which its wayAhead fills from a route). When it is empty or does not
+// start on the driver's own path, the facts read it as the driver's own path alone.
+using engine::roads::WayAhead;
 // For tests and for a car with no route: from `path`, follow `next` while a path has exactly one, until the paths
 // reach `lookAhead` metres past `along` (or kMaxFollowedPaths paths are taken, which only a loop of empty paths reaches).
-constexpr std::size_t kMaxFollowedPaths = 256;
+using engine::roads::kMaxFollowedPaths;
 WayAhead followOnlyWay(const engine::LaneGraph& roads, engine::PathId path, Real along, Real lookAhead);
 
 // WHAT ONE DRIVER CAN SEE THIS TICK, all read-only.

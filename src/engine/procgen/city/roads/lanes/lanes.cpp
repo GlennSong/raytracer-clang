@@ -5,6 +5,7 @@
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // deriveLayout: the junctions of a file that states none
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
+#include "engine/procgen/city/roads/lanes/walk_lanes.h"   // layWalks: the walks for people on foot (ADR-0465)
 #include "engine/procgen/city/rail_track.h"   // kPlatformGap: piers keep off the platforms
 
 #include <algorithm>
@@ -309,6 +310,13 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         const auto tj = std::chrono::steady_clock::now();
         r.lookup = std::make_shared<const LaneLookup>(r.pavement);
         r.timings["lane lookup"] = secondsSince(tj);
+    }
+    // 8. the walks for people on foot (ADR-0465): laid into the same centre lines, from the drawn pavement; nothing is drawn
+    // from them (walk_lanes.h)
+    {
+        const auto tw = std::chrono::steady_clock::now();
+        layWalks(r);
+        r.timings["walks"] = secondsSince(tw);
     }
     r.seconds = secondsSince(t0); stage(4, "done", 1.0);
     return rp;

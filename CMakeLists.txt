@@ -530,7 +530,7 @@ add_library(driving STATIC
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/room.cpp            # room beyond a junction, asked for and granted one car at a time (#264)
     src/apps/driving/things.cpp          # what is in a driver's way, whatever it is, and going round it (ADR-0451)
-    src/apps/driving/route.cpp           # routes over sections and connectors, and which lanes lead on (#254)
+    src/apps/driving/route.cpp           # a vehicle class bound to the road for the one router (roads/route.h, ADR-0467)
     src/apps/driving/signal_programme.cpp   # the traffic lights' clock: programmes, yellow, a pure function of time (#261)
     src/apps/driving/rule_set.cpp
     src/apps/driving/trace.cpp           # each car's recent decisions, and the driver card (#256)
@@ -715,6 +715,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/terrain_recipe.cpp
             src/engine/procgen/city/roads/lanes/polyline_ops.cpp
             src/engine/procgen/city/roads/lanes/lane_expand.cpp
+            src/engine/procgen/city/roads/lanes/walk_lanes.cpp   # the walks for people on foot, from the drawn pavement (ADR-0465)
             src/engine/procgen/city/roads/lanes/vertical_profile.cpp
             src/engine/procgen/city/roads/lanes/road_design.cpp
             src/engine/procgen/city/roads/lanes/deck_height.cpp
@@ -736,6 +737,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/control_plan.cpp   # every junction's control and every road's limit, planned (#240)
             src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
             src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)
+            src/engine/procgen/city/roads/route.cpp   # the one route-finder over the lane level, cars and walkers (ADR-0467)
             src/engine/procgen/city/roads/road_problem.cpp   # a problem the road build found, as a record (ADR-0438)
             src/engine/procgen/city/roads/vehicle_size.cpp   # the body a road is checked against per vehicle tag (ADR-0435)
             src/engine/procgen/city/roads/lane_turns.cpp   # which turns a junction offers, which lane takes each (ADR-0426)

@@ -8,6 +8,7 @@
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"       // kArmOrderCommand: an unmarked file's ring (ADR-0427)
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"   // classOf: the engine's class of a road
+#include "engine/procgen/city/roads/lanes/road_design.h"       // roadEndMeetsAnother: a road that just ends, or meets others
 #include "engine/procgen/city/roads/lane_turns.h"              // the stated turns through each junction (ADR-0426)
 #include "engine/procgen/city/polyline.h"                      // simplifyRun, distToSegment
 #include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines
@@ -91,6 +92,8 @@ ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
     s.sidewalk = c.sidewalk;
     s.track = c.track;
     s.footway = c.footway;
+    s.sidewalkAlong = e.sidewalks[0];   // (the edge's statement; both where it states none: ADR-0464)
+    s.sidewalkAgainst = e.sidewalks[1];
     // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418), and where its band lies
     *fits = true;
     s.parking = c.carriesCars() ? roads::lanes::kerbParking(g, e, fits) : 0.0;
@@ -209,13 +212,12 @@ Vec2 spineDirection(const StreetLine& l, Real from, Real to) {
     const Vec2 seg = l.xy[spot.seg + 1] - l.xy[spot.seg];
     return strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
 }
-// ACROSS THE ROAD TOWARD A KERB (unit): the kerb of the traffic running `dir` (+1 along the spine, -1 against it),
-// where the spine runs `spine`. Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign.
+
+}  // namespace
+
 Vec2 towardKerb(const Vec2& spine, int dir) {
     return perp(spine * static_cast<Real>(dir)) * static_cast<Real>(roads::lanes::kerbPerpSign());
 }
-
-}  // namespace
 
 bool junctionLit(const ModelJunction& J) {
     const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
@@ -244,7 +246,8 @@ void stateCrosswalks(RoadModel& m, const RoadLabGraph& g, const std::vector<road
             const ModelStreet* street = m.streetOf(J.arms[a]);
             bool fits = true;
             const ModelSection section = street ? street->section : sectionOf(g, e, &fits);
-            const bool pavements = section.sidewalk > 0 && section.carriesCars();
+            // (people reach it along a sidewalk on either kerb: ADR-0464's sides, both where the file states none)
+            const bool pavements = section.carriesCars() && (section.sidewalkOnKerb(+1) || section.sidewalkOnKerb(-1));
             if (!arm.painted && !pavements) continue;
             const int sign = arm.spineIn ? -1 : +1;   // the approach lies at stations below the box (-1) or above (+1)
             const Real nearStation = arm.boxEdge + sign * roads::lanes::kCrosswalkNear;
@@ -301,6 +304,230 @@ void stateCrosswalks(RoadModel& m, const RoadLabGraph& g, const std::vector<road
 }
 
 }  // namespace
+
+// ---- where people on foot can walk (ADR-0464) ---------------------------------------------------------------------------
+
+const char* streetEndKindWord(StreetEndKind k) {
+    switch (k) {
+    case StreetEndKind::Junction: return "a junction";
+    case StreetEndKind::CarriesOn: return "carries on into another street";
+    case StreetEndKind::RampAnchored: return "a ramp's end anchored to its host";
+    case StreetEndKind::DeadEnd: return "a dead end";
+    case StreetEndKind::MeetsAnother: return "meets another road where no junction is stated";
+    case StreetEndKind::PartWay: return "stops part way along its road where no junction is stated";
+    }
+    return "?";
+}
+
+StreetEndKind streetEndKind(const RoadLabGraph& g, const ModelStreet& s, int end) {
+    const std::size_t k = end == 0 ? 0 : 1;
+    if (s.junctions[k].valid()) return StreetEndKind::Junction;
+    if (s.carriesOn[k].valid()) return StreetEndKind::CarriesOn;
+    const EdgeSpec& e = g.edges[s.edge != kNoIndex ? static_cast<std::size_t>(s.edge) : static_cast<std::size_t>(g.index.at(s.road))];
+    const Real at = k == 0 ? s.from : s.to;
+    const int roadEnd = e.s.empty() ? -1 : sameWrittenStation(at, 0.0) ? 0 : sameWrittenStation(at, e.s.back()) ? 1 : -1;
+    if (roadEnd < 0) return StreetEndKind::PartWay;
+    if (!(roadEnd == 0 ? e.from.edge : e.to.edge).empty()) return StreetEndKind::RampAnchored;
+    return roads::lanes::roadEndMeetsAnother(g, e, roadEnd) ? StreetEndKind::MeetsAnother : StreetEndKind::DeadEnd;
+}
+
+const char* cornerGapWord(CornerGap g) {
+    switch (g) {
+    case CornerGap::None: return "a corner";
+    case CornerGap::NoPavement: return "no walk along an arm's kerb facing it";
+    case CornerGap::NoStreet: return "an arm names no street";
+    case CornerGap::OneArm: return "a junction of one arm";
+    case CornerGap::RingNotStated: return "the file does not state its arms in their ring";
+    case CornerGap::ArmAtNoPoint: return "an arm stands at none of its spread junction's stated points";
+    case CornerGap::ApartAtSpread: return "the two arms meet a spread junction at different points, and no walk between them is stated";
+    }
+    return "?";
+}
+
+std::vector<RingPair> ringPairs(const RoadModel& m, const RoadLabGraph& g) {
+    std::vector<RingPair> out;
+    // Which kerb of an arm's street faces a corner (+1: the kerb of the traffic running along its spine). The arriving
+    // traffic's kerb lies toward the next arm round the ring the way the kerb side turns (lane_turns.h
+    // kerbSideCounterClockwise): the corner after an arm (counter-clockwise) is on its arriving traffic's kerb exactly
+    // when the kerb side turns counter-clockwise, and the corner before an arm is on the other kerb. Traffic arrives by an
+    // arm along its spine where the spine runs in.
+    const bool kerbCcw = kerbSideCounterClockwise();
+    const auto kerbFacing = [](bool spineIn, bool arriving) { return arriving == spineIn ? +1 : -1; };
+    for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+        const ModelJunction& J = m.junctions[j];
+        const uint32_t n = static_cast<uint32_t>(J.arms.size());
+        if (n == 0) continue;
+        // each arm's point of a spread junction: the stated point holding its road and station (-1: none); a junction
+        // with no points stated is one point
+        std::vector<int> pointOf(n, 0);
+        if (!J.nodes.empty())
+            for (uint32_t a = 0; a < n; ++a) {
+                pointOf[a] = -1;
+                const std::map<std::string, int>::const_iterator road = g.index.find(J.arms[a].road);
+                if (road == g.index.end()) continue;
+                for (std::size_t p = 0; p < J.nodes.size() && pointOf[a] < 0; ++p)
+                    for (const ModelNodePoint& q : J.nodes[p].points)
+                        if (q.edge == static_cast<uint32_t>(road->second) && sameWrittenStation(q.station, J.arms[a].station)) {
+                            pointOf[a] = static_cast<int>(p);
+                            break;
+                        }
+            }
+        for (uint32_t a = 0; a < n; ++a) {
+            RingPair p;
+            p.junction = ModelJunctionId(j);
+            p.armA = a;
+            p.armB = (a + 1) % n;
+            const ModelArm& A = J.arms[p.armA];
+            const ModelArm& B = J.arms[p.armB];
+            p.kerbA = kerbFacing(A.spineIn, kerbCcw);
+            p.kerbB = kerbFacing(B.spineIn, !kerbCcw);
+            const ModelStreet* sa = m.streetOf(A);
+            const ModelStreet* sb = m.streetOf(B);
+            if (n == 1) p.gap = CornerGap::OneArm;
+            else if (!m.armsInRing) p.gap = CornerGap::RingNotStated;
+            else if (!sa || !sb) p.gap = CornerGap::NoStreet;
+            else if (!sa->section.pavementOnKerb(p.kerbA) || !sb->section.pavementOnKerb(p.kerbB)) p.gap = CornerGap::NoPavement;
+            else if (pointOf[p.armA] < 0 || pointOf[p.armB] < 0) p.gap = CornerGap::ArmAtNoPoint;
+            else if (pointOf[p.armA] != pointOf[p.armB]) p.gap = CornerGap::ApartAtSpread;
+            out.push_back(p);
+        }
+    }
+    return out;
+}
+
+// ---- who may use which kind of path (ADR-0464) -----------------------------------------------------------------------
+
+const std::vector<uint32_t>* PathUsers::usersOf(const std::string& kind) const {
+    for (const std::pair<std::string, std::vector<uint32_t>>& k : kinds)
+        if (k.first == kind) return &k.second;
+    return nullptr;
+}
+
+const PathMover* PathUsers::mover(const std::string& name) const {
+    for (const PathMover& mv : movers)
+        if (mv.name == name) return &mv;
+    return nullptr;
+}
+
+Real PathMover::waitOn(const std::string& kind) const {
+    for (const std::pair<std::string, Real>& w : waits)
+        if (w.first == kind) return w.second;
+    return 0;
+}
+
+bool PathUsers::mayUse(const std::string& name, const std::string& kind) const {
+    const std::vector<uint32_t>* users = usersOf(kind);
+    if (!users) return false;
+    for (const uint32_t u : *users)
+        if (u < movers.size() && movers[u].name == name) return true;
+    return false;
+}
+
+bool parsePathUsers(const nlohmann::json& doc, PathUsers& out, std::string* err) {
+    out = PathUsers();
+    const auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        out = PathUsers();
+        return false;
+    };
+    if (!doc.is_object() || !doc.contains("movers") || !doc["movers"].is_object() || doc["movers"].empty())
+        return fail("no \"movers\": {name: {...}} object");
+    for (nlohmann::json::const_iterator it = doc["movers"].begin(); it != doc["movers"].end(); ++it) {
+        if (!it.value().is_object()) return fail("mover \"" + it.key() + "\" is not an object");
+        PathMover mv;
+        mv.name = it.key();
+        mv.vehicles = it.value().value("vehicles", false);
+        if (it.value().contains("waits")) {
+            const nlohmann::json& w = it.value()["waits"];
+            if (!w.is_object()) return fail("mover \"" + it.key() + "\": \"waits\" is not {kind: seconds}");
+            if (mv.vehicles) return fail("mover \"" + it.key() + "\" stands for the vehicles, whose search reads no \"waits\"");
+            for (nlohmann::json::const_iterator k = w.begin(); k != w.end(); ++k) {
+                if (!k.value().is_number() || k.value().get<double>() < 0)
+                    return fail("mover \"" + it.key() + "\": the wait on \"" + k.key() + "\" is not seconds (a number, 0 or more)");
+                mv.waits.emplace_back(k.key(), static_cast<Real>(k.value().get<double>()));
+            }
+        }
+        out.movers.push_back(mv);
+    }
+    if (!doc.contains("kinds") || !doc["kinds"].is_object() || doc["kinds"].empty()) return fail("no \"kinds\": {kind: [movers]} object");
+    for (nlohmann::json::const_iterator it = doc["kinds"].begin(); it != doc["kinds"].end(); ++it) {
+        if (!it.value().is_array()) return fail("kind \"" + it.key() + "\" does not list its movers");
+        std::vector<uint32_t> users;
+        for (const nlohmann::json& u : it.value()) {
+            const std::string name = u.is_string() ? u.get<std::string>() : std::string();
+            uint32_t found = kNoIndex;
+            for (uint32_t k = 0; k < out.movers.size(); ++k)
+                if (out.movers[k].name == name) found = k;
+            if (found == kNoIndex) return fail("kind \"" + it.key() + "\" names mover \"" + name + "\", which \"movers\" does not have");
+            users.push_back(found);
+        }
+        out.kinds.emplace_back(it.key(), users);
+    }
+    for (const PathMover& mv : out.movers)
+        for (const std::pair<std::string, Real>& w : mv.waits)
+            if (!out.mayUse(mv.name, w.first))
+                return fail("mover \"" + mv.name + "\" waits on kind \"" + w.first + "\", which \"kinds\" does not open to it");
+    if (doc.contains("dead_end")) {
+        const nlohmann::json& d = doc["dead_end"];
+        if (!d.is_object()) return fail("\"dead_end\" is not an object");
+        if (d.contains("joined_by") && !d["joined_by"].is_null()) {
+            if (!d["joined_by"].is_string()) return fail("\"dead_end\".\"joined_by\" is not a kind's name");
+            out.deadEndJoin = d["joined_by"].get<std::string>();
+            if (!out.usersOf(out.deadEndJoin))
+                return fail("\"dead_end\" is joined by kind \"" + out.deadEndJoin + "\", which \"kinds\" does not list");
+        }
+    }
+    out.usable = true;
+    return true;
+}
+
+const PathUsers& pathUsers() {
+    static const PathUsers users = [] {
+        const std::string path = assetPath("assets/data/path_users.json");
+        PathUsers u;
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            LOG_WARN << "[roads] " << path << " is missing: no path is open to anyone, and no dead end is joined";
+            return u;
+        }
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string why;
+        const nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
+        if (doc.is_discarded() || !parsePathUsers(doc, u, &why))
+            LOG_WARN << "[roads] " << path << ": " << (doc.is_discarded() ? std::string("it is not JSON") : why)
+                     << ": no path is open to anyone, and no dead end is joined";
+        u.hash = bundle::fnv1aStr(text);   // (of the file as it is, usable or not)
+        return u;
+    }();
+    return users;
+}
+
+namespace {
+
+// THE CORNERS (ADR-0464): the ring pairs that have one (ringPairs, the one derivation).
+void stateCorners(RoadModel& m, const RoadLabGraph& g) {
+    for (const RingPair& p : ringPairs(m, g))
+        if (p.gap == CornerGap::None) m.corners.push_back(ModelCorner{p.junction, p.armA, p.armB, p.kerbA, p.kerbB});
+}
+
+}  // namespace
+
+std::vector<ModelDeadEnd> deadEndsOf(const RoadModel& m, const RoadLabGraph& g, const PathUsers& users) {
+    std::vector<ModelDeadEnd> out;
+    for (uint32_t s = 0; s < m.streets.size(); ++s) {
+        const ModelStreet& S = m.streets[s];
+        for (int end = 0; end < 2; ++end) {
+            if (streetEndKind(g, S, end) != StreetEndKind::DeadEnd) continue;
+            ModelDeadEnd d;
+            d.street = ModelStreetId(s);
+            d.end = end;
+            d.turnRound = !users.deadEndJoin.empty() && S.section.carriesCars() && S.section.sidewalkOnKerb(+1) &&
+                          S.section.sidewalkOnKerb(-1);
+            out.push_back(d);
+        }
+    }
+    return out;
+}
 
 // ---- the planned layer and the model of a build -------------------------------------------------------------------------
 
@@ -442,6 +669,15 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     stateCrosswalks(m, g, areas);
     // ---- the kerb parking spaces (ADR-0439): stated here, from the streets, the arms' stop lines and the rules file ------
     stateKerbRuns(m, kerbParkingRules());
+    // ---- where people on foot can walk (ADR-0464): the corners round each junction's ring and the dead ends -------------
+    stateCorners(m, g);
+    m.deadEnds = deadEndsOf(m, g, pathUsers());
+    for (const EdgeSpec& e : g.edges)
+        if (e.sidewalksStated && !(e.sidewalks[0] && e.sidewalks[1]) && g.cls(e).sidewalk > 0)
+            m.problems.push_back("road " + e.id + ": it states a sidewalk on fewer than both kerbs; the road model holds that, but the "
+                                 "road build still paves both (ADR-0464)");
+    m.notStated.push_back("the walking paths: the corners, dead ends and sidewalk kerbs are stated (ADR-0464), but no path for "
+                          "people on foot is laid from them yet, and no walk between a spread junction's points is stated");
     m.notStated.push_back("what else a kerb space must keep clear of: driveways and lot entrances, bus stops, hydrants and bridges are not "
                           "stated on a street, so no space is kept off them; parking off the street (a store's lot, a garage) is the "
                           "lot pass's, not held here");
@@ -519,20 +755,9 @@ RoadModel builtRoadModel(const Result& r) {
     m.curves = r.lanes.curves;
     m.heights.assign(m.lanePoints().size(), 0.0);
     m.spineStations.assign(m.lanePoints().size(), kNotStated);
-    for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-        const Lane& l = r.lanes.lanes[li];
-        CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
-        ModelLane L;
-        static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
-        // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
-        std::size_t i0 = 0;
-        const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
-        if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
-        const Span<Vec2> xy = l.xy();
-        for (std::size_t k = 0; k < xy.size(); ++k) {
-            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
-            m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
-        }
+    // where a lane laid along road `e` lies on the stated streets: its stretches, and the junction at each end where it
+    // reaches that end of its street (a car lane's, and a sidewalk lane's: ADR-0465)
+    const auto placeOnStreets = [&](ModelLane& L, const EdgeSpec* e) {
         const std::map<std::string, std::vector<uint32_t>>::const_iterator own = e ? streetsOf.find(e->id) : streetsOf.end();
         if (own != streetsOf.end()) {
             for (uint32_t si : own->second) {
@@ -550,8 +775,89 @@ RoadModel builtRoadModel(const Result& r) {
             L.atStart = L.dir > 0 ? atFrom : atTo;
             L.atEnd = L.dir > 0 ? atTo : atFrom;
         }
+    };
+    for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const Lane& l = r.lanes.lanes[li];
+        CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
+        ModelLane L;
+        static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
+        // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
+        std::size_t i0 = 0;
+        const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
+        if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
+        const Span<Vec2> xy = l.xy();
+        for (std::size_t k = 0; k < xy.size(); ++k) {
+            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
+            m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
+        }
+        placeOnStreets(L, e);
         for (const ModelLaneSpan& sp : L.streets) m.streets[sp.street.index].lanes.push_back(ModelLaneId(static_cast<uint32_t>(li)));
         m.lanes.push_back(std::move(L));
+    }
+    // ---- THE WALKS (ADR-0465), as the build laid them (lanes/walk_lanes.h): each sidewalk lane where it lies on the
+    // streets, at its road's deck; each corner walk at the deck of the nearer of its two arms' roads. And the corners the
+    // build found a walk for: a stated one keeps its place with its walk (none where no drawn pavement joins its arms:
+    // its why is the build's, r.walkCorners); a spread junction's pair becomes a corner only where the build laid one.
+    {
+        std::vector<int> cornerOfWalk(r.lanes.walks.size(), -1);
+        for (std::size_t c = 0; c < r.walkCorners.size(); ++c)
+            if (r.walkCorners[c].lane >= 0 && static_cast<std::size_t>(r.walkCorners[c].lane) < cornerOfWalk.size())
+                cornerOfWalk[static_cast<std::size_t>(r.walkCorners[c].lane)] = static_cast<int>(c);
+        for (std::size_t wi = 0; wi < r.lanes.walks.size(); ++wi) {
+            const Lane& l = r.lanes.walks[wi];
+            CHECK(l.curves == r.lanes.curves);
+            ModelLane W;
+            static_cast<LaneFacts&>(W) = l;
+            const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
+            // a corner's roads: its two arms'
+            std::array<int, 2> armRoads{{-1, -1}};
+            if (!e && cornerOfWalk[wi] >= 0) {
+                const roads::lanes::WalkCorner& wc = r.walkCorners[static_cast<std::size_t>(cornerOfWalk[wi])];
+                const ModelJunction& J = m.junctions[wc.junction.index];
+                for (int k = 0; k < 2; ++k) {
+                    const std::map<std::string, int>::const_iterator it = g.index.find(J.arms[k == 0 ? wc.armA : wc.armB].road);
+                    if (it != g.index.end()) armRoads[static_cast<std::size_t>(k)] = it->second;
+                }
+            }
+            std::size_t i0 = 0;
+            if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
+            const Span<Vec2> xy = l.xy();
+            for (std::size_t k = 0; k < xy.size(); ++k) {
+                int road = e ? static_cast<int>(l.edge) : -1;
+                if (!e) {
+                    double nearest = std::numeric_limits<double>::infinity();
+                    for (const int a : armRoads) {
+                        if (a < 0) continue;
+                        const EdgeSpec& ae = g.edges[static_cast<std::size_t>(a)];
+                        const double d = roads::lanes::project(ae.xy, ae.s, xy[k]).distance;
+                        if (d < nearest) {
+                            nearest = d;
+                            road = a;
+                        }
+                    }
+                }
+                m.heights[l.curve.first + k] = r.heights && road >= 0 ? r.heights->deckRoad(road, xy[k]) : 0.0;
+                m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
+            }
+            if (e) placeOnStreets(W, e);
+            m.walks.push_back(std::move(W));
+        }
+        std::vector<ModelCorner> corners;
+        for (const roads::lanes::WalkCorner& wc : r.walkCorners) {
+            if (wc.spread && wc.lane < 0) continue;
+            ModelCorner c{wc.junction, wc.armA, wc.armB, wc.kerbA, wc.kerbB, wc.lane >= 0 ? static_cast<uint32_t>(wc.lane) : kNoIndex, wc.spread};
+            corners.push_back(c);
+        }
+        // (a stated corner the build did not reach, its road unknown to it, stays as stated)
+        for (const ModelCorner& c : m.corners) {
+            bool found = false;
+            for (const roads::lanes::WalkCorner& wc : r.walkCorners) found = found || (wc.junction == c.junction && wc.armA == c.armA);
+            if (!found) corners.push_back(c);
+        }
+        std::stable_sort(corners.begin(), corners.end(), [](const ModelCorner& a, const ModelCorner& b) {
+            return std::make_pair(a.junction.index, a.armA) < std::make_pair(b.junction.index, b.armA);
+        });
+        m.corners = std::move(corners);
     }
     for (ModelStreet& S : m.streets) {
         std::sort(S.lanes.begin(), S.lanes.end());
@@ -1402,6 +1708,21 @@ std::string dumpRoadModel(const RoadModel& m) {
         out += fmt("kerb parking: street %s, the kerb of the traffic running %s the spine, %u spaces of %.2f m from station %.2f to %.2f\n",
                    run.street.index < m.streets.size() ? m.streets[run.street.index].id.c_str() : "?", run.dir > 0 ? "along" : "against",
                    run.count, run.spaceLength, run.from, run.to());
+    // where people on foot can walk (ADR-0464)
+    const auto streetId = [&](ModelStreetId s) { return s.index < m.streets.size() ? m.streets[s.index].id : std::string("?"); };
+    for (const ModelCorner& c : m.corners) {
+        const ModelJunction& J = m.junctions[c.junction.index];
+        out += fmt("corner: junction %s, arm %u (%s, the %s kerb) to arm %u (%s, the %s kerb)%s%s\n", J.id.c_str(), c.armA,
+                   streetId(J.arms[c.armA].street).c_str(), c.kerbA > 0 ? "along" : "against", c.armB,
+                   streetId(J.arms[c.armB].street).c_str(), c.kerbB > 0 ? "along" : "against", c.spread ? ", across its points" : "",
+                   c.walk < m.walks.size() ? fmt(", walk %s (%u points)", m.walks[c.walk].id.c_str(), m.walks[c.walk].curve.count).c_str() : "");
+    }
+    for (const ModelLane& w : m.walks)
+        if (w.onRoad()) out += fmt("walk: %s, a %s along road %u, the %s kerb, %.1f m wide\n", w.id.c_str(), w.kind.c_str(), w.edge,
+                                   w.dir > 0 ? "along" : "against", w.width);
+    for (const ModelDeadEnd& d : m.deadEnds)
+        out += fmt("dead end: street %s, its %s end%s\n", streetId(d.street).c_str(), d.end == 0 ? "`from`" : "`to`",
+                   d.turnRound ? ", its sidewalks joined across" : "");
     return out;
 }
 
@@ -1503,6 +1824,20 @@ std::string reportRoadModel(const RoadModel& m) {
                    "%.1f to %.1f m kerb to kerb; %u in the lane level, crossed by %u path stretches\n",
                    m.crosswalks.size(), marked, pavements, byControl[0], byControl[1], byControl[2], shortest, longest, laid, crossers);
     }
+    {   // where people on foot can walk (ADR-0464)
+        uint32_t turnRound = 0;
+        for (const ModelDeadEnd& d : m.deadEnds) turnRound += d.turnRound ? 1u : 0u;
+        uint32_t walked = 0, spread = 0, sidewalks = 0;
+        for (const ModelCorner& c : m.corners) {
+            walked += c.walk != kNoIndex ? 1u : 0u;
+            spread += c.spread ? 1u : 0u;
+        }
+        for (const ModelLane& w : m.walks) sidewalks += w.onRoad() ? 1u : 0u;
+        out += fmt("  %zu corners round the junctions' rings (%u with a walk the build laid, %u of those across a spread junction's "
+                   "points); %zu dead ends, %u of them with their sidewalks joined across (ADR-0464); %zu walks: %u sidewalk lanes "
+                   "(ADR-0465)\n",
+                   m.corners.size(), walked, spread, m.deadEnds.size(), turnRound, m.walks.size(), sidewalks);
+    }
     {
         std::map<std::string, uint32_t> byKind;
         for (const ModelAttachment& a : m.attachments) ++byKind[a.kind];
@@ -1587,7 +1922,8 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelLane>::value || std::is_same<T, ModelConnection>::value || std::is_same<T, ModelRampEnd>::value ||
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
            std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
-           std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value || std::is_same<T, ModelCrosswalk>::value;
+           std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value || std::is_same<T, ModelCrosswalk>::value ||
+           std::is_same<T, ModelCorner>::value || std::is_same<T, ModelDeadEnd>::value;
 }
 
 struct Writer {
@@ -1655,7 +1991,7 @@ template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     io(klass);
     s.klass = static_cast<RoadClass>(klass);
     io(s.lanesForward); io(s.lanesBackward); io(s.laneWidth); io(s.medianGap); io(s.median); io(s.shoulder); io(s.sidewalk);
-    io(s.parking); io(s.parkingOffset); io(s.track); io(s.footway);
+    io(s.parking); io(s.parkingOffset); io(s.track); io(s.footway); io(s.sidewalkAlong); io(s.sidewalkAgainst);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
     io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.speedLimit);
@@ -1678,6 +2014,10 @@ template <class IO, class C> void fields(IO& io, C& c, ModelCrosswalk*) {
     c.control = static_cast<CrosswalkControl>(control);
     io(c.laneCrosswalk);
 }
+template <class IO, class C> void fields(IO& io, C& c, ModelCorner*) {
+    io(c.junction); io(c.armA); io(c.armB); io(c.kerbA); io(c.kerbB); io(c.walk); io(c.spread);
+}
+template <class IO, class D> void fields(IO& io, D& d, ModelDeadEnd*) { io(d.street); io(d.end); io(d.turnRound); }
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -1716,6 +2056,7 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     m.curves = std::move(curves);
     io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
     io(m.crosswalks);
+    io(m.corners); io(m.deadEnds); io(m.walks);
     io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
@@ -1869,6 +2210,54 @@ void layLaneCrosswalks(RoadModel& m) {
             ++jn.crosswalks.count;
         }
     }
+}
+
+// ---- who may use which path of the lane level (ADR-0466) ----------------------------------------------------------------
+
+const std::string kConnectorKind = "connector";
+const std::string kCrossingKind = "crossing";
+
+Real kerbEndStation(const RoadModel& m, ModelJunctionId junction, uint32_t arm) {
+    if (junction.index >= m.junctions.size() || arm >= m.junctions[junction.index].arms.size()) return kNotStated;
+    const ModelArm& A = m.junctions[junction.index].arms[arm];
+    const ModelStreet* street = m.streetOf(A);
+    const ModelCrosswalk* c = m.crosswalkAcross(junction, arm);
+    if (c && !(street && street->section.footway)) return (c->nearStation + c->farStation) * Real(0.5);
+    return stated(A.boxEdge) ? A.boxEdge : A.station;
+}
+
+const std::string& RoadModel::pathKind(PathId path) const {
+    if (path.index >= laneLevel.paths.size()) return kNoneStated;
+    const Path& p = laneLevel.paths[path.index];
+    if (p.kind == PathKind::Connector) return kConnectorKind;
+    return p.modelLane < lanes.size() ? lanes[p.modelLane].kind : kNoneStated;
+}
+
+const std::string& RoadModel::walkKind(WalkId walk) const {
+    if (walk.index >= laneLevel.walks.size()) return kNoneStated;
+    const Walk& k = laneLevel.walks[walk.index];
+    if (k.modelWalk < walks.size()) return walks[k.modelWalk].kind;
+    if (k.modelLane < lanes.size()) return lanes[k.modelLane].kind;
+    if (k.modelCrosswalk < crosswalks.size()) return kCrossingKind;
+    if (k.modelDeadEnd < deadEnds.size()) return pathUsers().deadEndJoin;
+    return kNoneStated;
+}
+
+RoadModel::OpenPaths RoadModel::openTo(const std::string& mover, const PathUsers& users) const {
+    OpenPaths out;
+    out.paths.assign(laneLevel.paths.size(), 0);
+    out.walks.assign(laneLevel.walks.size(), 0);
+    std::map<std::string, uint8_t> asked;   // (each kind asked of the table once)
+    const auto open = [&](const std::string& kind) {
+        const std::map<std::string, uint8_t>::const_iterator it = asked.find(kind);
+        if (it != asked.end()) return it->second;
+        const uint8_t may = users.mayUse(mover, kind) ? 1 : 0;
+        asked.emplace(kind, may);
+        return may;
+    };
+    for (uint32_t p = 0; p < out.paths.size(); ++p) out.paths[p] = open(pathKind(PathId(p)));
+    for (uint32_t w = 0; w < out.walks.size(); ++w) out.walks[w] = open(walkKind(WalkId(w)));
+    return out;
 }
 
 bool operator==(const RoadModel& a, const RoadModel& b) {

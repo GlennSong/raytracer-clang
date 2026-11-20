@@ -122,7 +122,7 @@ wishes with.
 | `junction_plan.h/.cpp` | A driver's plan for each junction ahead: its connector, where its body can wait. |
 | `room.h/.cpp` | Room beyond a junction: nobody enters a box it cannot leave. |
 | `things.h/.cpp` | What is in my way (ADR-0451): `RoadThing` (anything on the road the driving does not drive, with the crosswalk a person stands at, ADR-0452), `findThingAhead`, `findCrosswalkAhead`, their facts (`thing_*`, `person_at_crosswalk`, `crosswalk_stop`), the horn, swerve and another-way answers. |
-| `route.h/.cpp` | The router over paths. |
+| `route.h/.cpp` | The driving's side of routing (ADR-0467): `bindRouteClass` (a vehicle class bound to the road's tags), and the router's names brought into `driving`. The router itself is the engine's one route-finder, `engine/procgen/city/roads/route.h` (`findRoute` for cars, `findWalkRoute` for walkers; legs, turns, the lane-changes table, `wayAhead`, `routeHash`). |
 | `trip_places.h/.cpp` | Where a host's aimless trips can begin and end. |
 | `vehicle_class.h/.cpp`, `scripting/vehicle_class_lua.*` | The vehicle classes, derived from the vehicle data. |
 | `measure.h/.cpp` | The measurements table (tests and lab tools only). |
