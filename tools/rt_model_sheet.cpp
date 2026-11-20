@@ -3,7 +3,7 @@
 //   rt_model_sheet RECIPE.lua [--out sheet.png] [--args JSON] [--size 512] [--spp 48]
 //
 // Runs the recipe (a chunk that returns a Mesh or a `model`; a model's nodes are drawn where the tree puts them and
-// listed in the text), and writes
+// listed in the text, with its named materials and its markers, which are also drawn), and writes
 //   sheet.png   four pictures in one: front and side on the top row, top and three-quarter on the bottom row,
 //               the model standing on a floor of 1 m squares so its size reads in every picture;
 //   sheet.txt   the numbers: size in metres, triangles and vertices per part, and the mesh audit's findings.
@@ -18,6 +18,7 @@
 #include "camera.h"
 #include "engine/bundle/bundle.h"   // fnv1a
 #include "engine/mesh_audit.h"
+#include "engine/mesh_builder.h"
 #include "engine/procgen/proc_model.h"
 #include "engine/script_assets.h"
 #include "engine/scripting/procgen_bindings.h"
@@ -97,8 +98,48 @@ Bounds boundsOf(const ProcModel& m) {
     return b;
 }
 
-// One number for "the same triangles": every drawn triangle as it stands in the scene (corners, normals, colours),
-// then every placed copy. Two runs that print the same number built the same shape, so a change to the toolkit or to
+// Every marker of the model with where it is in the model.
+struct PlacedMarker { const ProcMarker* marker; const ProcNode* node; ProcFrame at; };
+std::vector<PlacedMarker> markersOf(const ProcModel& m) {
+    std::vector<PlacedMarker> out;
+    for (std::size_t n = 0; n < m.nodes.size(); ++n) {
+        const ProcFrame node = m.nodeFrame(static_cast<int>(n));
+        for (const ProcMarker& mk : m.nodes[n].markers) out.push_back(PlacedMarker{&mk, &m.nodes[n], node * mk.frame});
+    }
+    return out;
+}
+
+// Draw each marker as three short bars from its point: red along its x, green along its y, and a longer blue one
+// along its z, the way it faces. The bars are a small model of their own (a node at each marker, a bar on each
+// node), baked like any other; markers are not part of the shape, so this is added after the fingerprint is taken.
+// A marker with no size is drawn at a size that reads on this model.
+void addMarkers(Scene& scene, const std::vector<PlacedMarker>& markers, const Bounds& b) {
+    if (markers.empty()) return;
+    const Real reach = std::max({b.size().x, b.size().y, b.size().z, Real(0.2)});
+    const Vec3 colours[3] = {Vec3(0.9, 0.05, 0.05), Vec3(0.05, 0.7, 0.05), Vec3(0.05, 0.2, 0.95)};
+    ProcModel bars;
+    for (const PlacedMarker& pm : markers) {
+        const int node = bars.addNode(pm.marker->name, 0, pm.at);
+        const Real len = pm.marker->size > 0 ? pm.marker->size : reach * 0.06;
+        const Real thick = std::max(len * 0.08, reach * 0.004);
+        for (int a = 0; a < 3; ++a) {
+            const Real along = a == 2 ? len * 1.6 : len;
+            Vec3 size(thick, thick, thick), centre(0, 0, 0);
+            (a == 0 ? size.x : a == 1 ? size.y : size.z) = along;
+            (a == 0 ? centre.x : a == 1 ? centre.y : centre.z) = along * 0.5;
+            ProcPart bar;
+            bar.mesh = MeshBuilder::box(size);
+            MeshBuilder::transform(bar.mesh, Mat4::translate(centre.x, centre.y, centre.z));
+            for (Vertex& v : bar.mesh.vertices) v.color = colours[a];
+            bar.node = node;
+            bars.parts.push_back(std::move(bar));
+        }
+    }
+    bakeProcModel(bars, scene);
+}
+
+// One number for "the same triangles": every drawn triangle as it stands in the scene (corners, normals, colours,
+// and what it is made of), then every placed copy. Two runs that print the same number built the same shape, so a change to the toolkit or to
 // the model record can be checked against every recipe without looking at pictures. Each triangle is hashed alone and
 // the hashes are added, so the ORDER of triangles and parts does not count: a recipe that walks a Lua table with
 // `pairs` adds its parts in a different order every run, and it is still the same shape.
@@ -106,11 +147,27 @@ uint64_t fingerprint(const Scene& scene, const ProcModel& m) {
     uint64_t sum = 0;
     uint64_t h = 0;
     auto vec = [&](const Vec3& v) { const double d[3] = {v.x, v.y, v.z}; h = bundle::fnv1a(d, sizeof d, h); };
+    // What each triangle is made of counts too: its material's numbers and the pixels of its maps, not which slot
+    // of the scene the material happens to sit in.
+    auto pixels = [&](int tex) -> uint64_t {
+        if (tex < 0) return 0;
+        const Texture& t = scene.textures[static_cast<std::size_t>(tex)];
+        const int dims[3] = {t.width, t.height, t.channels};
+        return bundle::fnv1a(t.pixels.data(), t.pixels.size(), bundle::fnv1a(dims, sizeof dims));
+    };
+    std::vector<uint64_t> made(scene.materials.size());
+    for (std::size_t i = 0; i < scene.materials.size(); ++i) {
+        const Material& mat = scene.materials[i];
+        const double nums[4] = {mat.metallic, mat.roughness, mat.texScale, mat.meshUV ? 1.0 : 0.0};
+        const uint64_t maps[3] = {pixels(mat.albedoTex), pixels(mat.normalTex), static_cast<uint64_t>(mat.surface)};
+        made[i] = bundle::fnv1a(maps, sizeof maps, bundle::fnv1a(nums, sizeof nums));
+    }
     for (const Triangle& t : scene.triangles) {
         h = bundle::fnv1aStr("triangle");
         vec(t.v0); vec(t.v1); vec(t.v2);
         vec(t.n0); vec(t.n1); vec(t.n2);
         vec(t.c0); vec(t.c1); vec(t.c2);
+        h = bundle::fnv1a(&made[static_cast<std::size_t>(t.materialIndex)], sizeof(uint64_t), h);
         sum += h;
     }
     for (const ProcInstanceGroup& g : m.instances) {
@@ -189,6 +246,35 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
             s << line;
         }
     }
+    // The materials, when the recipe named any, and the markers.
+    bool named = false;
+    for (const ProcModelMaterial& mm : m.materials) named = named || !mm.name.empty();
+    if (named) {
+        for (std::size_t i = 0; i < m.materials.size(); ++i) {
+            const ProcModelMaterial& mm = m.materials[i];
+            long parts = 0;
+            for (const ProcPart& part : m.parts) parts += part.material == static_cast<int>(i) ? 1 : 0;
+            if (parts == 0 && mm.name.empty()) continue;
+            std::snprintf(line, sizeof line, "material %s: roughness %.2f, metallic %.2f%s%s, %ld part%s\n",
+                          mm.name.empty() ? (i == 0 ? "(plain)" : "(no name)") : mm.name.c_str(), mm.material->roughness,
+                          mm.material->metallic, mm.material->textured ? ", with maps" : "",
+                          mm.material->opacity < 1.0f ? ", see-through" : "", parts, parts == 1 ? "" : "s");
+            s << line;
+        }
+    }
+    const std::vector<PlacedMarker> markers = markersOf(m);
+    if (!markers.empty()) {
+        std::snprintf(line, sizeof line, "markers: %zu (drawn as red x, green y, blue z; blue is the way it faces)\n", markers.size());
+        s << line;
+        for (const PlacedMarker& pm : markers) {
+            const Vec3 face = pm.at.rotation.rotate(Vec3(0, 0, 1));
+            std::snprintf(line, sizeof line, "  %s (%s) on %s: at (%.3f, %.3f, %.3f) in the model, facing (%.2f, %.2f, %.2f)", pm.marker->name.c_str(),
+                          pm.marker->role.c_str(), pm.node->name.c_str(), pm.at.position.x, pm.at.position.y, pm.at.position.z, face.x, face.y, face.z);
+            s << line;
+            if (pm.marker->size > 0) { std::snprintf(line, sizeof line, ", size %.3f m", pm.marker->size); s << line; }
+            s << "\n";
+        }
+    }
     MeshAudit all;
     long vertices = 0;
     for (std::size_t i = 0; i < m.parts.size(); ++i) {
@@ -196,7 +282,9 @@ std::string report(const Options& o, const ProcModel& m, const Bounds& b, uint64
         const MeshAudit a = auditMesh(mesh);
         all.add(a);
         vertices += static_cast<long>(mesh.vertices.size());
-        const std::string on = tree ? " on " + m.nodes[static_cast<std::size_t>(m.parts[i].node)].name : std::string();
+        std::string on = tree ? " on " + m.nodes[static_cast<std::size_t>(m.parts[i].node)].name : std::string();
+        const std::string& made = m.materials[static_cast<std::size_t>(m.parts[i].material)].name;
+        if (!made.empty()) on += " in " + made;
         std::snprintf(line, sizeof line, "part %zu%s: %ld triangles, %zu vertices%s\n", i + 1, on.c_str(), a.tris,
                       mesh.vertices.size(), a.clean() ? "" : "  <- audit findings");
         s << line;
@@ -265,6 +353,7 @@ int main(int argc, char** argv) {
     Scene scene;
     bakeProcModel(model, scene);
     const uint64_t print = fingerprint(scene, model);
+    addMarkers(scene, markersOf(model), bounds);
     addStage(scene, bounds);
     scene.buildAccelerator();
 

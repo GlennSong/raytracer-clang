@@ -144,7 +144,7 @@ TEST_CASE(merging_two_models_keeps_both_trees) {
     c.parts.push_back(ProcPart{});
     std::string clash;
     CHECK(!a.merge(c, &clash));
-    CHECK(clash == "door");
+    CHECK(clash == "node 'door'");
     CHECK(a.nodes.size() == 4);
     CHECK(a.parts.size() == 4);
 }
@@ -201,7 +201,7 @@ TEST_CASE(a_wrong_node_name_stops_the_recipe) {
         local a, b = model.new(), model.new()
         a:node("door") b:node("door")
         return a:merge(b))LUA", m, &err));
-    CHECK(err.find("both models have a node named 'door'") != std::string::npos);
+    CHECK(err.find("disagree on node 'door'") != std::string::npos);
     err.clear();
     CHECK(!runModel(R"LUA(local a = model.new() return a:merge(a))LUA", m, &err));
     CHECK(err.find("into itself") != std::string::npos);

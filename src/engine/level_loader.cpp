@@ -1447,8 +1447,11 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     Vec3 spawnOffset = ent.contains("position") ? parseVec3(ent["position"]) : Vec3(0, 0, 0);
     SurfaceTexCache scriptSurfTex;   // the baked sets this model's parts bind (one bake per surface)
 
+    struct MaterialMaps { TextureHandle albedo{}; TextureHandle normal{}; bool done = false; };
+    std::vector<MaterialMaps> uploaded(model.materials.size());
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
         const ProcPart& part = model.parts[i];
+        const ProcMaterial& made = model.materialOf(part);
         if (part.mesh.vertices.empty()) continue;
         Entity e = world.create();
         // The part's entity sits at the node the part hangs on. The root's frame is no move and no turn, so a flat
@@ -1462,29 +1465,34 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         world.add<PrevTransform>(e, PrevTransform{t});
         Renderable r;
         r.material.albedo = Vec3(1, 1, 1);    // hue carried in vertex colour
-        r.material.metallic = part.material.metallic;
-        r.material.roughness = part.material.roughness;
-        r.material.opacity = part.material.opacity;
-        r.material.emission = part.material.emission;
-        if (part.material.twoSided)
+        r.material.metallic = made.metallic;
+        r.material.roughness = made.roughness;
+        r.material.opacity = made.opacity;
+        r.material.emission = made.emission;
+        if (made.twoSided)
             r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
         // Analytic surface library (renderer.h Surface): an id evaluated in-shader
         // from the mesh's own UVs — e.g. RoadMarkings paints lane lines from the
         // road-local u/v baked onto the carriageway. Independent of texture maps,
         // so it rides whether or not the part is `textured`.
-        if (part.material.surface != 0)
-            r.material.setSurface(static_cast<RenderMaterial::Surface>(part.material.surface));
-        if (!part.material.textured && surfaceIsBakedOnMeshUVs(r.material.surface()))
+        if (made.surface != 0)
+            r.material.setSurface(static_cast<RenderMaterial::Surface>(made.surface));
+        if (!made.textured && surfaceIsBakedOnMeshUVs(r.material.surface()))
             bindSurfaceMaps(r.material, bakeSurfaceTextures(renderer, r.material.surface(), scriptSurfTex));
-        if (part.material.textured) {
+        if (made.textured) {
             RenderMesh tiled = part.mesh;
-            double tile = part.material.tile > 1e-6 ? part.material.tile : 1.0;
+            double tile = made.tile > 1e-6 ? made.tile : 1.0;
             applyWorldPlanarUVs(tiled, 1.0 / tile);
             r.mesh = assets.acquireMesh(tiled, key + ":part" + std::to_string(i));
-            if (!part.material.albedo.pixels.empty())
-                r.material.albedoMap = upload(part.material.albedo);
-            if (!part.material.normal.pixels.empty())
-                r.material.normalMap = upload(part.material.normal);
+            // A material's maps go to the GPU once, however many parts are made of it.
+            MaterialMaps& maps = uploaded[static_cast<std::size_t>(part.material)];
+            if (!maps.done) {
+                if (!made.albedo.pixels.empty()) maps.albedo = upload(made.albedo);
+                if (!made.normal.pixels.empty()) maps.normal = upload(made.normal);
+                maps.done = true;
+            }
+            if (!made.albedo.pixels.empty()) r.material.albedoMap = maps.albedo;
+            if (!made.normal.pixels.empty()) r.material.normalMap = maps.normal;
         } else {
             r.mesh = assets.acquireMesh(part.mesh, key + ":part" + std::to_string(i));
         }

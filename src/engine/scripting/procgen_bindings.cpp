@@ -3685,18 +3685,56 @@ int l_model_new(lua_State* L) {
     return 1;
 }
 
+// What a part is made of, from the argument at `idx`: a Material, the NAME of one the model holds (m:material), or
+// nothing for the plain material. Returns the index in the model's table. A name the model lacks stops the recipe.
+int materialArg(lua_State* L, int idx, ProcModel& m) {
+    if (MaterialPtr* mat = static_cast<MaterialPtr*>(luaL_testudata(L, idx, kMaterialMt))) return m.addMaterial("", *mat);
+    if (lua_type(L, idx) == LUA_TSTRING) {
+        const char* name = lua_tostring(L, idx);
+        const int found = m.findMaterial(name);
+        if (found < 0) return luaL_error(L, "the model has no material named '%s' (name one with m:material)", name);
+        return found;
+    }
+    return 0;
+}
+
 // A part from the arguments (mesh [, material]) starting at stack slot 2, hung on `node`.
 void addPart(lua_State* L, ProcModel& m, int node) {
+    const int material = materialArg(L, 3, m);   // first: an error here must leave no mesh half made
     ProcPart part;
     part.mesh = checkMesh(L, 2);
-    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
-        part.material = **mat;
+    part.material = material;
     part.node = node;
     m.parts.push_back(std::move(part));
 }
 
-// m:add(mesh [, material]) -> m : append a part. With a material it is textured
-// (world-planar), else baked vertex-coloured. Chainable.
+// The shared body of m:marker and n:marker: (name [, { pos = {x,y,z}, turn = {x,y,z}, size = metres, role = "seat" }])
+// from stack slot 2, on `node`. `turn` is in degrees, as a node's is; the marker faces along its own +z.
+void addMarkerFromLua(lua_State* L, ProcModel& m, int node) {
+    const char* name = luaL_checkstring(L, 2);
+    if (name[0] == '\0') { luaL_error(L, "a marker needs a name"); return; }
+    if (m.findMarker(name) != nullptr) { luaL_error(L, "the model already has a marker named '%s'", name); return; }
+    ProcFrame frame;
+    Real size = 0;
+    const char* role = "point";
+    if (!lua_isnoneornil(L, 3)) {
+        luaL_checktype(L, 3, LUA_TTABLE);
+        frame.position = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+        frame.rotation = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+        size = static_cast<Real>(optField(L, 3, "size", 0.0));
+        lua_getfield(L, 3, "role");                        // stays on the stack while `role` points into it
+        if (!lua_isnil(L, -1)) role = luaL_checkstring(L, -1);
+    }
+    ProcMarker marker;
+    marker.name = name;
+    marker.role = role;
+    marker.frame = frame;
+    marker.size = size;
+    m.addMarker(node, marker);
+}
+
+// m:add(mesh [, material]) -> m : append a part. `material` is a Material or the name of one the model holds
+// (m:material); a textured one is laid world-planar, and with none the part is baked vertex-coloured. Chainable.
 int l_model_add(lua_State* L) {
     addPart(L, checkModel(L, 1), 0);
     lua_pushvalue(L, 1);
@@ -3765,6 +3803,60 @@ int l_model_find(lua_State* L) {
     const int index = model->findNode(luaL_checkstring(L, 2));
     if (index < 0) lua_pushnil(L);
     else pushNode(L, model, index);
+    return 1;
+}
+
+// m:material(name, material) -> m : give one of the model's materials a name, so a part can say m:add(mesh, "paint")
+// and anything later can find "paint" on the model. One name, one material: naming a different one is an error.
+int l_model_material(lua_State* L) {
+    ProcModel& m = checkModel(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    const MaterialPtr& mat = *static_cast<MaterialPtr*>(luaL_checkudata(L, 3, kMaterialMt));
+    if (name[0] == '\0') return luaL_error(L, "a material needs a name");
+    if (m.addMaterial(name, mat) < 0) return luaL_error(L, "the model already has a different material named '%s'", name);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:has_material(name) -> boolean.
+int l_model_has_material(lua_State* L) {
+    lua_pushboolean(L, checkModel(L, 1).findMaterial(luaL_checkstring(L, 2)) >= 0);
+    return 1;
+}
+
+// m:material_count() -> how many materials the model holds, the plain one included.
+int l_model_material_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).materials.size()));
+    return 1;
+}
+
+// m:marker(name [, opts]) -> m : a marker on the root. Chainable.
+int l_model_marker(lua_State* L) {
+    addMarkerFromLua(L, checkModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:marker_at(name) -> {x,y,z}, {x,y,z} | nil : where a marker is in the model and the way it faces (its +z), through
+// every node above it.
+int l_model_marker_at(lua_State* L) {
+    ProcFrame at;
+    if (!checkModel(L, 1).markerFrame(luaL_checkstring(L, 2), at)) { lua_pushnil(L); return 1; }
+    pushVec3(L, at.position);
+    pushVec3(L, at.rotation.rotate(Vec3(0, 0, 1)));
+    return 2;
+}
+
+int l_model_marker_count(lua_State* L) {
+    lua_pushinteger(L, checkModel(L, 1).markerCount());
+    return 1;
+}
+
+// n:marker(name [, opts]) -> n : a marker on this node, placed in the node's own space. Chainable.
+int l_node_marker(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    addMarkerFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
     return 1;
 }
 
@@ -3885,11 +3977,11 @@ int l_model_collide(lua_State* L) {
 // foundation): what you see is exactly what you hit. Chainable.
 int l_model_add_solid(lua_State* L) {
     ProcModel& m = checkModel(L, 1);
+    const int material = materialArg(L, 3, m);
     RenderMesh mesh = checkMesh(L, 2);
     ProcPart part;
     part.mesh = mesh;
-    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
-        part.material = **mat;
+    part.material = material;
     m.parts.push_back(std::move(part));
     ProcCollider c;
     c.kind = ProcCollider::Kind::Mesh;
@@ -3945,7 +4037,7 @@ int l_model_merge(lua_State* L) {
         merged = m.merge(other, &clash);
         if (!merged) lua_pushstring(L, clash.c_str());   // the name goes to Lua's stack; the string ends here
     }
-    if (!merged) return luaL_error(L, "merge: both models have a node named '%s'", lua_tostring(L, -1));
+    if (!merged) return luaL_error(L, "merge: the two models disagree on %s (both have one, and they are not the same)", lua_tostring(L, -1));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -4823,6 +4915,12 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_node);           lua_setfield(L, -2, "node");
         lua_pushcfunction(L, l_model_find);           lua_setfield(L, -2, "find");
         lua_pushcfunction(L, l_model_node_count);     lua_setfield(L, -2, "node_count");
+        lua_pushcfunction(L, l_model_material);       lua_setfield(L, -2, "material");
+        lua_pushcfunction(L, l_model_has_material);   lua_setfield(L, -2, "has_material");
+        lua_pushcfunction(L, l_model_material_count); lua_setfield(L, -2, "material_count");
+        lua_pushcfunction(L, l_model_marker);         lua_setfield(L, -2, "marker");
+        lua_pushcfunction(L, l_model_marker_at);      lua_setfield(L, -2, "marker_at");
+        lua_pushcfunction(L, l_model_marker_count);   lua_setfield(L, -2, "marker_count");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
@@ -4837,6 +4935,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_node_name);   lua_setfield(L, -2, "name");
         lua_pushcfunction(L, l_node_parent); lua_setfield(L, -2, "parent");
         lua_pushcfunction(L, l_node_point);  lua_setfield(L, -2, "point");
+        lua_pushcfunction(L, l_node_marker); lua_setfield(L, -2, "marker");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);

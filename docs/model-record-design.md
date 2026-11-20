@@ -1,6 +1,6 @@
 # Models and prefabs: design note (#191 step 5)
 
-Draft 2 for Glenn, 2026-11-19. Model step 1 (nodes) is built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
+Draft 2 for Glenn, 2026-11-19. Model steps 1 and 2 (nodes; markers and named materials) are built; see "What is built" at the end. Draft 1 put scripts, lights, sounds and offers inside the
 model; Glenn's review split that in two: "an entity will contain the model and it would also then contain other
 components to handle physics, audio, collision, gameplay logic". This draft follows that split.
 
@@ -211,7 +211,57 @@ Left as they were, on purpose, for the steps that own them:
   the model's `shapes` (used first in step 7); placed copies on nodes come with `uses` (step 3).
 - **A node cannot be moved after it is made.** Motion is step 4.
 - **A textured part's tiling** is laid in its node's space in the game (so the pattern stays with the piece) and in
-  the world's space in the path tracer. The two differ only for a textured part on a node that is not the root; named
-  materials (step 2) are where this gets one answer.
+  the world's space in the path tracer. The two differ only for a textured part on a node that is not the root. The
+  game and the path tracer lay a tiled map by two separate pieces of code today, so making them one is materials
+  work (#309), not a step here.
 - **In the game each part is still its own entity** with no link back to its node. The model instance (step 7) is
   what will hold the tree at run time.
+
+### Model step 2: markers and named materials (2026-11-19)
+
+```lua
+local m = model.new()
+m:material("steel", material.new{ roughness = 0.55, metallic = 0.6 })
+local cabin = m:node("cabin", { pos = { 0, 4.4, 0 }, turn = { 0, 40, 0 } })
+cabin:add(cabin_mesh, "steel")                                -- made of the model's "steel"
+cabin:marker("driver", { pos = { 0, 0.4, 0.2 }, role = "seat", size = 0.5 })
+cabin:marker("lamp_top", { pos = { 0, 1.05, 0 }, turn = { -90, 0, 0 }, role = "lamp" })
+local at, facing = m:marker_at("driver")                      -- where it is in the model, and the way it faces
+```
+
+- **Markers** (`ProcMarker`, on `ProcNode::markers`): a name, a role, a frame under its node, a size.
+  - The name is unique in the whole model, not only on its node, so a prefab can say `at = "exhaust"` and nothing
+    more.
+  - A marker faces along its own +z. `turn` is degrees, as a node's is.
+  - `role` is `"point"` when none is said (the same default as a model file's empty). `size` is 0 when none is said.
+  - `ProcModel::markerFrame(name)` and Lua's `m:marker_at(name)` give where it is in the model, through every node
+    above it.
+- **Materials** are one table on the model (`ProcModel::materials`). A part holds an index into it, not a material
+  of its own.
+  - Entry 0 is always the plain material (no maps, the colour on the vertices). A part that says nothing is made of
+    it.
+  - `m:material("paint", mat)` names an entry. `m:add(mesh, "paint")` makes a part of it; a name the model lacks
+    stops the recipe.
+  - `m:add(mesh, mat)` still works as before. The same material given forty times is one entry.
+  - One name, one material: naming a different material "paint" is an error.
+- **Merging** carries markers and materials across. The same material under the same name in both models is held
+  once. Two markers of one name, or one name for two different materials, is an error.
+- **The readers:**
+  - The offline bake makes one scene material, and one copy of its maps, per material of the model. Before, every
+    part brought its own copy.
+  - The game's loader sends a material's maps to the GPU once, however many parts are made of it.
+  - The model sheet lists the materials and the markers, and draws each marker as three bars: red x, green y, and a
+    longer blue z for the way it faces.
+- **The proof:** the fingerprint now also covers what each triangle is made of (its material's numbers and the
+  pixels of its maps). 30 of the 31 recipes gave the same fingerprint before and after. The other, `bake_lab`, does
+  not give the same number twice even on unchanged code: it bakes normal maps from a car's parts, and the car kit
+  hands those over in a different order each run. Forty runs of the new code gave twenty or so different numbers,
+  the old code's among them. `tests/test_model_markers.cpp` holds the rest.
+
+Left as they were, on purpose:
+
+- **Nothing reads a marker yet.** Sounds, lights and offers at markers are prefab steps 8 and 9.
+- **A material is still what `material.new` makes** (roughness, metallic, maps, opacity, emission), with the colour
+  on the vertices. A colour per material, and changing "paint" on one copy of a prefab, belong to #309 and step 7.
+- **An instance group keeps its own roughness and metallic**, outside the table, until `uses` (step 3) replaces it.
+- **The path tracer still ignores a material's opacity and emission**, as before this step.

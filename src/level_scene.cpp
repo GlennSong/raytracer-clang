@@ -374,9 +374,12 @@ static int addProcTexture(const TextureData& td, Scene& scene) {
 }
 
 void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
-    for (const ProcPart& part : m.parts) {
-        if (part.mesh.indices.empty()) continue;
-        const ProcMaterial& pm = part.material;
+    // One scene material (and one copy of its maps) per material of the model, made the first time a part uses it.
+    std::vector<int> sceneMaterial(m.materials.size(), -1);
+    auto materialFor = [&](int index) -> int {
+        int& mi = sceneMaterial[static_cast<std::size_t>(index)];
+        if (mi >= 0) return mi;
+        const ProcMaterial& pm = *m.materials[static_cast<std::size_t>(index)].material;
         Material mat = Material::pbr(Vec3(1, 1, 1), pm.metallic, pm.roughness);
         if (pm.textured) {
             // World-planar tiling frame (meshUV=false): no authored UVs needed;
@@ -390,7 +393,12 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
             // at shade time — no baked texture, paint composites over the vertex colour.
             mat.surface = pm.surface;
         }
-        int mi = scene.addMaterial(mat);
+        mi = scene.addMaterial(mat);
+        return mi;
+    };
+    for (const ProcPart& part : m.parts) {
+        if (part.mesh.indices.empty()) continue;
+        const int mi = materialFor(part.material);
         // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
         // land exactly where their vertices say.
         const ProcFrame at = m.nodeFrame(part.node);
