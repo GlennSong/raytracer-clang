@@ -120,11 +120,12 @@ std::string describeLaneGraphSummary(const LaneGraphSummary& s) {
     return b;
 }
 
-uint64_t roadModelTablesHash(uint64_t turnTable, uint64_t kerbParking) {
+uint64_t roadModelTablesHash(uint64_t turnTable, uint64_t kerbParking, uint64_t pathUsers) {
     bundle::Fnv k;
     k.str("roadmodel tables");
     k.pod(turnTable);
     k.pod(kerbParking);
+    k.pod(pathUsers);
     return k.h;
 }
 
@@ -323,9 +324,10 @@ void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts
             try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
         }
         // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the tables the
-        // turns are stated by (ADR-0426) and the kerb parking spaces are laid by (ADR-0439)
+        // turns are stated by (ADR-0426), the kerb parking spaces are laid by (ADR-0439) and the dead ends are joined by
+        // (ADR-0464)
         out.key = roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec),
-                                    roadModelTablesHash(laneTurnRules().hash, kerbParkingRules().hash), opts);
+                                    roadModelTablesHash(laneTurnRules().hash, kerbParkingRules().hash, pathUsers().hash), opts);
     }
 
     if (!cacheDir.empty()) {

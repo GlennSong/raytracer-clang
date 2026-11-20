@@ -80,8 +80,9 @@ uint64_t roadModelCacheKey(uint64_t roadsKey, uint64_t laneFacts, uint64_t table
                            uint32_t builderVersion = kLaneGraphBuildVersion);
 // THE DATA TABLES A SAVED MODEL IS MADE BY, as one number for its key: the turn table's hash (laneTurnRules().hash:
 // which lane takes which turn, ADR-0426) and the kerb parking rules' (kerbParkingRules().hash: how a parking band is cut
-// into spaces, ADR-0439), each the hash of its file's bytes. Editing either file makes every saved model again.
-uint64_t roadModelTablesHash(uint64_t turnTable, uint64_t kerbParking);
+// into spaces, ADR-0439) and the path users' (pathUsers().hash: who may use which kind of path, and how a dead end is
+// joined, ADR-0464), each the hash of its file's bytes. Editing any of them makes every saved model again.
+uint64_t roadModelTablesHash(uint64_t turnTable, uint64_t kerbParking, uint64_t pathUsers);
 // The file for a key in `dir`: <dir>/<key as 16 hex digits>.roadmodel
 std::string roadModelCachePath(const std::string& dir, uint64_t key);
 

@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "WHO MAY USE WHICH KIND OF PATH (ADR-0464, #306 task 4): the road model reads this once (road_model.h pathUsers).",
+    "No C++ names a mover or a kind: a new mover (a bicycle, a wheelchair) or a new kind of path is a row here.",
+    "",
+    "  movers     everyone who moves along the roads' paths, each with its properties:",
+    "               vehicles   true: the mover stands for every vehicle tag of the level's fleet (vehicles.lua); which of",
+    "                          them can take a path is still each body's own check against the path's bends",
+    "  kinds      each kind of path and the movers that may use it. The car kinds are the builder's lane kinds (through,",
+    "             turn (a pocket), slip, aux, ramp) and the path through a junction (connector). The walking kinds are",
+    "             the paths the lane level will lay for people on foot (task 4, pieces 2 and 3): along a sidewalk, round a",
+    "             corner (RoadModel::corners), over a crosswalk, across a dead end's road end, and along a footway road.",
+    "             A kind not listed here is open to nobody.",
+    "  dead_end   joined_by: the kind of path that joins a dead end's two sidewalks across the road's end",
+    "             (RoadModel::deadEnds, turnRound); null: a dead end's sidewalks are not joined, and each simply ends.",
+    "",
+    "Nothing reads the kinds yet but the tests: today every lane path is open to every vehicle (lane_level.cpp)."
+  ],
+  "movers": {
+    "vehicles": {"vehicles": true},
+    "walker": {}
+  },
+  "kinds": {
+    "through": ["vehicles"],
+    "turn": ["vehicles"],
+    "slip": ["vehicles"],
+    "aux": ["vehicles"],
+    "ramp": ["vehicles"],
+    "connector": ["vehicles"],
+    "sidewalk": ["walker"],
+    "corner": ["walker"],
+    "crossing": ["walker"],
+    "turn_round": ["walker"],
+    "footway": ["walker"]
+  },
+  "dead_end": {"joined_by": "turn_round"}
+}

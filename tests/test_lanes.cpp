@@ -2742,7 +2742,8 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
     {
         const uint64_t facts = laneLevelKey(withFacts);
         const uint64_t kerb = kerbParkingRules().hash;
-        CHECK(first.key == roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, kerb), opts));
+        const uint64_t users = pathUsers().hash;
+        CHECK(first.key == roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, kerb, users), opts));
         // the table's hash is of its file's bytes: the shipped file's, and another text one byte longer (a comment
         // edited) hashes otherwise, and keys another file
         std::ifstream tf(std::string(RT_SOURCE_DIR) + "/assets/data/lane_turns.json", std::ios::binary);
@@ -2750,14 +2751,21 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
         CHECK(!table.empty() && laneTurnRules().hash == laneTurnTableHash(table));
         const uint64_t edited = laneTurnTableHash(table + " ");
         CHECK(edited != laneTurnRules().hash);
-        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(edited, kerb), opts) != first.key);
+        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(edited, kerb, users), opts) != first.key);
         // ...and with the kerb parking rules' bytes (ADR-0439): the saved model holds the spaces laid by them
         std::ifstream kf(std::string(RT_SOURCE_DIR) + "/assets/data/kerb_parking.json", std::ios::binary);
         const std::string kerbText((std::istreambuf_iterator<char>(kf)), std::istreambuf_iterator<char>());
         CHECK(!kerbText.empty() && kerb == bundle::fnv1aStr(kerbText));
-        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, bundle::fnv1aStr(kerbText + " ")), opts) !=
+        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, bundle::fnv1aStr(kerbText + " "), users), opts) !=
               first.key);
-        CHECK(roadModelTablesHash(1, 2) != roadModelTablesHash(2, 1));   // (which table changed is told apart)
+        // ...and with the path users' bytes (ADR-0464): the saved model holds the dead ends joined by them
+        std::ifstream uf(std::string(RT_SOURCE_DIR) + "/assets/data/path_users.json", std::ios::binary);
+        const std::string usersText((std::istreambuf_iterator<char>(uf)), std::istreambuf_iterator<char>());
+        CHECK(!usersText.empty() && users == bundle::fnv1aStr(usersText));
+        CHECK(roadModelCacheKey(levelRoadsKey(in), facts, roadModelTablesHash(laneTurnRules().hash, kerb, bundle::fnv1aStr(usersText + " ")), opts) !=
+              first.key);
+        CHECK(roadModelTablesHash(1, 2, 3) != roadModelTablesHash(2, 1, 3));   // (which table changed is told apart)
+        CHECK(roadModelTablesHash(1, 2, 3) != roadModelTablesHash(1, 3, 2));
         nlohmann::json otherRules = withFacts;
         otherRules["lane_rules"]["solid_before_stop_line"] = 25.0;
         CHECK(laneLevelKey(otherRules) != facts);

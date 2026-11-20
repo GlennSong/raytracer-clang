@@ -92,6 +92,8 @@ move the loop into it; never a private loop in the reader.
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
 | The crosswalks (ADR-0452): across an arm; by id; of a lane-level record; the paths over one; which a walk round a junction crosses; where a person waits at a kerb end | `RoadModel::crosswalkAcross`, `crosswalk`, `crosswalkOfLane`, `crossersOf`, `crosswalksOnWalk`, `ModelCrosswalk::kerbWait` (stated once by `stateCrosswalks` in road_model.cpp; laid in the lane level by `layLaneCrosswalks`) |
+| Where people on foot can walk (ADR-0464): the corners round each junction's ring (which kerb of each arm); the ring pairs with no corner and why; the dead ends and whether they are joined across; what is at a street's end; is there a sidewalk (or any walk) along a kerb | `RoadModel::corners` (`ModelCorner`), `ringPairs(m, g)` (`CornerGap`), `RoadModel::deadEnds` (`ModelDeadEnd`, `deadEndsOf`), `streetEndKind(g, street, end)`, `ModelSection::sidewalkOnKerb`, `pavementOnKerb` (stated once by `plannedRoadModel`; nothing reads them yet but tests: the walking paths are laid from them in #306 task 4, pieces 2-3) |
+| Who may use which kind of path; how a dead end is joined | `pathUsers()` (`PathUsers::usersOf`, `mayUse`, `mover`, `deadEndJoin`), from `assets/data/path_users.json` |
 | The nearest of several centre lines to a point (the one search) | `nearestLine` (`city/polyline.h`) |
 | May a building front a road of this class | `buildingMayFront` (`city/road_network.h`) |
 
@@ -247,7 +249,7 @@ Still working roads out for itself:
 
 | Section | What it states | Bake key sees it? |
 |---|---|---|
-| `edges`, `classes`, `terrain`, ramps, pockets, connectors | Roads, their class rows stated on top of the table (`assets/data/road_classes.json`, whose own bytes the key hashes too), ground | yes |
+| `edges`, `classes`, `terrain`, ramps, pockets, connectors | Roads, their class rows stated on top of the table (`assets/data/road_classes.json`, whose own bytes the key hashes too), ground. An edge may state `"sidewalks": "both" \| "along" \| "against" \| "none"` (ADR-0464; not stated: both): which kerbs have its class's sidewalk, named by the traffic beside each. Only the road model reads it; the build still paves both kerbs, and the model says so in a problem line. No shipped file states it. | yes |
 | `rules` (incl. `storage`, default 6.5 m) | Builder tolerances. `storage` is the waiting room between two junction points below which they are one junction (`findJunctions`). | yes (only `streets`, `divided`, `junctions`, `arms_in_ring`, `lane_rules` are cut) |
 | `carry_on_control` | The control the plan gives carry-ons (control_plan.cpp) | yes *(unsure what reads it at load)* |
 | `junctions` | Id, `at`, arms in their ring (street, heading, regulations; see below), `through` (by place in that list), `inside`, `control`, `why`, `nodes` (step 7's points) | no |
@@ -320,6 +322,12 @@ it (before `streets`), so one write is final (ADR-0437; the same test).
   `space_length` (7 m) and `clear_of_stop_line` (10 m). Read once by `kerbParkingRules()` (road_model.cpp); no copy
   in C++, and a missing file means no street has a space. Its bytes are part of the saved road model's key
   (`roadModelTablesHash`, with the turn table's), not of any bake key: nothing baked reads the spaces.
+- **`assets/data/path_users.json`** (ADR-0464): who may use which kind of path. `movers` (each with its properties:
+  `vehicles: true` stands for every vehicle tag of the level's fleet), `kinds` (each kind of path, a builder lane kind or
+  a walking kind the lane level will lay, with the movers that may use it; a kind not listed is open to nobody) and
+  `dead_end.joined_by` (the kind of path joining a dead end's two sidewalks; null: not joined). Read once by
+  `pathUsers()` (road_model.cpp); no copy in C++, and no C++ names a mover or a kind. Its bytes are part of the saved
+  road model's key (`roadModelTablesHash`), not of any bake key. Nothing reads its kinds yet but tests.
 - `assets/data/streets.json`: name words and sign look (names only).
 
 ## 6. Checking a change quickly

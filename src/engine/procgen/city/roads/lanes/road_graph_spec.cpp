@@ -400,6 +400,14 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         e.speedLimit = num(ej, "speed_limit", 0.0);
         e.speedLimitHand = ej.value("speed_limit_hand", false);
         e.frontageOf = ej.value("frontage_of", std::string());
+        if (ej.contains("sidewalks")) {
+            // WHICH KERBS HAVE THE SIDEWALK (ADR-0464): named by the traffic beside each, as the road model names kerbs
+            const std::string sides = ej["sidewalks"].is_string() ? ej["sidewalks"].get<std::string>() : std::string();
+            if (sides != "both" && sides != "along" && sides != "against" && sides != "none")
+                throw std::runtime_error("edge " + e.id + ": sidewalks is \"" + sides + "\", expected \"both\", \"along\", \"against\" or \"none\"");
+            e.sidewalks = {{sides == "both" || sides == "along", sides == "both" || sides == "against"}};
+            e.sidewalksStated = true;
+        }
         if (!(e.speedLimit >= 0.0)) throw std::runtime_error("edge " + e.id + ": speed_limit must be a speed in m/s, 0 or more");
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
         if (ej.contains("landing")) {

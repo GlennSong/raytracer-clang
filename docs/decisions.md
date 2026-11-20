@@ -22454,3 +22454,76 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** task 4 replaces walker routing with the road model (then the street map, `junctionRadius` and the kerb-end step go).
+
+## ADR-0464 — Where people on foot can walk is stated in the road model: corners, dead ends, sidewalks per kerb, and who may use which kind of path (#306 task 4, piece 1)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: it adds to the road model the facts the walking paths will be laid from, each stated once from facts the road file already states. Nothing reads them yet except the tests and the tools. Pieces 2 and 3 of task 4 will lay sidewalk, corner, crosswalk and turn-round paths in the lane level from them, and the one route-finder (Glenn, 2026-11-19: one route-finder for walkers and drivers, on the one road model) will route people over those paths.
+
+Words:
+- **Ring:** a junction's arms listed counter-clockwise round it, as the road file states them (ADR-0427).
+- **Kerb +1 / -1:** a street's two kerbs, named by the traffic beside each. +1 is the kerb of the traffic running along the road's spine, -1 the other (as for kerb parking, ADR-0439, and crosswalk ends, ADR-0452).
+- **Corner:** the walk round a junction's kerb from one arm to the next arm round its ring.
+- **Spread junction:** one the plan made of several points (`junctions[].nodes`, ADR-0425).
+- **Mover:** anyone who moves along the roads' paths: the fleet's vehicles, a person on foot.
+
+**Added:**
+- **A street's sidewalk per kerb** (`ModelSection::sidewalkAlong`, `sidewalkAgainst`; `sidewalkOnKerb(k)`; `pavementOnKerb(k)`: a sidewalk on a road cars drive, or a footway, which is all walk; a track never).
+  - A road-file edge may state `"sidewalks": "both" | "along" | "against" | "none"`. Not stated means both, as before. No shipped file states it.
+  - Only the model reads it: the road build still paves both kerbs, and a model whose file states fewer than both says so in a problem line.
+  - A crosswalk is used by people (`pavements`) when either kerb has a sidewalk. With both kerbs, as every file has, that is the same answer as before.
+- **The corners** (`RoadModel::corners`, `ModelCorner {junction, armA, armB, kerbA, kerbB}`). There is one for each pair of arms next to each other round a junction's stated ring, where people can walk along both arms on the kerbs that face the corner.
+  - Which kerb faces it follows from the arm's `spineIn` and the world's kerb side (`kerbSideCounterClockwise`). The arriving traffic's kerb lies toward the next arm round the ring the way the kerb side turns.
+  - The one derivation is `ringPairs(m, g)`. It returns every ring pair with a corner or the reason there is none (`CornerGap`): no walk on a facing kerb; an arm with no street; a junction of one arm; a file that does not state its ring; an arm at none of its spread junction's stated points; or two arms meeting a spread junction at different points.
+  - The last is not stated as a corner: nothing in the road file says where the kerb runs between two points of a spread junction, and guessing it from geometry is not allowed.
+- **The dead ends** (`RoadModel::deadEnds`, `ModelDeadEnd {street, end, turnRound}`; one derivation, `deadEndsOf`).
+  - A dead end is a street end with no junction, nothing it carries on into, no ramp anchor, and no other road meeting it there.
+  - `turnRound`: its two sidewalks are joined across the road's end, where the path users' table names a join and the street is a road cars drive with a sidewalk on both kerbs.
+- **What is at a street's end, one answer** (`streetEndKind(g, street, end)`): a junction, carries on, a ramp's anchored end, a dead end, meets another road where no junction is stated, or stops part way along its road where none is stated.
+  - The lane level's report of unstated street ends (`StreetEndUnstated`) now asks it instead of its own copy of the same tests. The problem counts are unchanged (the lane-level tests pin them: traffic_lab 17, river_town 24).
+- **Who may use which kind of path** (`assets/data/path_users.json`, read once by `pathUsers()`; `PathUsers::usersOf`, `mayUse`, `mover`, `deadEndJoin`).
+  - `movers`: `vehicles` (`"vehicles": true`: every vehicle tag of the level's fleet, still checked against each body's turns) and `walker`.
+  - `kinds`: the builder's lane kinds (through, turn, slip, aux, ramp) and `connector` for the vehicles; `sidewalk`, `corner`, `crossing`, `turn_round` and `footway` for the walker.
+  - `dead_end.joined_by: "turn_round"`.
+  - A kind not listed is open to nobody. No C++ names a mover or a kind: a new mover (a cyclist) or a new kind of path is a row, and the tests show one read.
+  - The table's bytes are part of the saved road model's key (`roadModelTablesHash` takes a third hash), not of any bake key.
+  - Nothing reads the kinds yet: every lane path is still open to every vehicle.
+
+**The shipped levels, measured** (`road_model_29`, planned layer):
+
+| | traffic_lab | river_town (agent_lab's file is the same) |
+|---|---|---|
+| Junctions (spread over points) | 156 (15) | 144 (30) |
+| Ring pairs | 553 | 571 |
+| Corners stated | 504 | 497 |
+| No corner: no walk on a facing kerb (freeway and ramp arms) | 8 | 0 |
+| No corner: arms at different points of a spread junction | 41, at all 15 spread junctions | 74, at all 30 spread junctions |
+| Other reasons (no street, arm at no point, one arm, ring unstated) | 0 | 0 |
+| Dead ends (joined across) | 0 | 7 (7) |
+| Street ends meeting another road where no junction is stated | 17 | 24 |
+| Ramp anchors / carry-ons | 16 / 0 | 16 / 32 |
+
+- Every spread junction has corners missing between its points. That includes river_town's j29 (`s79-s48`, `s48-s78`, `s78-s81`), the junction of the crosswalk jam. This is task 4's spread-junction risk, now measured.
+- **Recommended fix:** the walk between two points of a spread junction must be stated before people can walk round one. The road file's `inside` stretches already join its points, so the likely statement is which kerb of each inside stretch is the outside of the junction. That is for Glenn to decide (pieces 2-3).
+- **Checked against where the kerbs lie:** every stated corner's two kerb ends (its arms' crosswalk ends on the named kerbs, laid from the kerbs' positions, not from the ring) lie inside the corner, seen from the junction's stated point, at every compact junction: traffic_lab 439 checked, 0 outside; river_town 422 checked, 4 outside, all at spread junctions (j11, j18, j39 twice), where the junction's stated point is not where the two arms meet, so the angle seen from it says nothing.
+
+**Tests:**
+- `road_model_28_corners_dead_ends_and_sidewalk_kerbs_are_stated_once`:
+  - A T laid out by the tool: 3 corners, each naming the kerbs that face it, and a flipped kerb is caught. Its 3 dead ends are joined, and none is joined under a table naming no join. The model saves and reads back whole.
+  - One-sided ("along") and no ("none") sidewalks on the T's south road: the corner on the bare kerb goes, its crosswalk is still used (or is not), its dead end is not joined, the problem line is there, and `"left"` is refused.
+  - A spur stopping inside another road's band: its `from` is a dead end, its `to` "meets another road". Every junction end is a junction.
+  - A divided crossing spread over two points: 4 corners, the 2 pairs across the points refused as `ApartAtSpread`. With one point misstated: `ArmAtNoPoint` twice. Unmarked: no corner.
+  - The footway and the track, each kerb.
+- `road_model_28b_who_may_use_which_kind_of_path_is_its_data_file`: the shipped file read and hashed; every lane kind traffic_lab's build lays (through, ramp) is open to the vehicles and to nobody on foot; three bad files refused, each saying why; a cyclist row read.
+- `road_model_29_the_shipped_levels_corners_and_dead_ends`: the table above.
+
+**Format and caches:** `kRoadModelFormat` 15 (the corners, the dead ends, the section's two kerb flags). Each level's saved road model (`cache/roadmodel`) is made again once on its next load. No bake key moved and no lots tag was bumped. `lanes_tool build` gives byte-identical `.glb` and `.svg` for traffic_lab and river_town before and after (the tool at 31c6e538, built apart from git archive, against this change).
+
+**One model:** concepts touched: roads (sidewalks, corners, dead ends, street ends) and paths' users.
+- Every new fact is stated once in `roads/`, from stated facts: the ring, the arms' `spineIn`, the cross-sections, the spread junctions' stated points and the design stage's one test for a road end another road meets.
+- One second derivation was removed: the lane level's own street-end tests now ask `streetEndKind`.
+- No second model was made, and no road fact is computed outside `roads/`.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** pieces 2-3 lay the walking paths from these facts, when the walk between a spread junction's points is stated, or when the build paves one kerb only (then the problem line goes).

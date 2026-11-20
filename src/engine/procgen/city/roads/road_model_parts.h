@@ -128,6 +128,15 @@ struct ModelSection {
     Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
     Real parkingOffset = 0;                    // its middle, from the carriageway's middle toward the kerb (m)
     bool track = false, footway = false;
+    // WHICH KERBS HAVE THE SIDEWALK (ADR-0464): `sidewalkAlong` the kerb of the traffic running along the spine (+1),
+    // `sidewalkAgainst` the other (-1). The road file's edge may state it ("sidewalks": "both" | "along" | "against" |
+    // "none"); stated nowhere, both, as before. `sidewalk` is the width of each one there is.
+    bool sidewalkAlong = true, sidewalkAgainst = true;
+    // Is there a sidewalk along kerb `kerb` (+1 / -1, as above)?
+    bool sidewalkOnKerb(int kerb) const { return sidewalk > 0 && (kerb > 0 ? sidewalkAlong : sidewalkAgainst); }
+    // CAN PEOPLE ON FOOT WALK ALONG KERB `kerb` OF IT: a sidewalk there on a road cars drive, or the road is a footway
+    // (all of it is the walk). A track: never.
+    bool pavementOnKerb(int kerb) const { return footway || (carriesCars() && sidewalkOnKerb(kerb)); }
     // Does its traffic run one way only (either way along the spine)?
     bool oneWay() const { return lanesRunOneWay(lanesForward, lanesBackward); }
     // The lanes whose traffic ARRIVES at an end of the road: the forward lanes where the spine runs INTO that end

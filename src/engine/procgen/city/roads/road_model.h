@@ -381,6 +381,60 @@ struct WalkCrossing {
 };
 const char* crosswalkControlWord(CrosswalkControl c);
 
+// ---- WHERE PEOPLE ON FOOT CAN WALK (ADR-0464, #306 task 4 piece 1) -----------------------------------------------------
+// The facts the walking paths will be laid from (pieces 2 and 3): stated once, by the planned layer, from stated facts
+// only. Nothing reads them yet but the tests and the tools.
+//
+// WHO MAY USE WHICH KIND OF PATH: assets/data/path_users.json, read once. Its MOVERS are named there with their
+// properties (`vehicles`: the mover stands for every vehicle tag of the level's fleet, still checked against each body's
+// turns); its KINDS are the kinds of path (a lane's kind as the builder names it, and the kinds the walking paths will
+// be laid as), each listing the movers that may use it. A kind the file does not list is open to nobody, and asking
+// says so. No C++ names a mover or a kind. `deadEndJoin`: the kind of path that joins a dead end's two sidewalks across
+// the road's end (the file's `dead_end.joined_by`); empty: a dead end's sidewalks are not joined. `hash`: of the file's
+// bytes, part of the saved road model's key (lanes/road_model_cache.h).
+struct PathMover {
+    std::string name;
+    bool vehicles = false;           // stands for every vehicle tag of the level's fleet
+};
+struct PathUsers {
+    bool usable = false;
+    std::vector<PathMover> movers;
+    std::vector<std::pair<std::string, std::vector<uint32_t>>> kinds;   // kind -> movers (indices into `movers`), in the file's order
+    std::string deadEndJoin;
+    uint64_t hash = 0;
+    // The movers that may use a path of kind `kind` (null: the file lists no such kind).
+    const std::vector<uint32_t>* usersOf(const std::string& kind) const;
+    // The mover named `name` (null: none).
+    const PathMover* mover(const std::string& name) const;
+    // May mover `name` use a path of kind `kind`?
+    bool mayUse(const std::string& name, const std::string& kind) const;
+};
+// The table a parsed file states; false (and why in `err`) when it is not one: no movers or kinds, a kind naming a
+// mover the file does not have, or a dead-end join naming a kind it does not list.
+bool parsePathUsers(const nlohmann::json& doc, PathUsers& out, std::string* err = nullptr);
+const PathUsers& pathUsers();
+
+// A CORNER: the walk round a junction's kerb from one arm to the next one round its stated ring (ADR-0427:
+// counter-clockwise), `armB` the arm after `armA` (wrapping), where people can walk along both arms on the kerbs that
+// face that corner (ModelSection::pavementOnKerb). `kerbA` / `kerbB`: which kerb of each arm's street that is (+1 the
+// kerb of the traffic running along its spine, -1 the other), from the arm's `spineIn` and the world's kerb side
+// (lane_turns.h kerbSideCounterClockwise): the arriving traffic's kerb lies toward the next arm round the ring the way
+// the kerb side turns. Stated by the planned layer (ringPairs below says which pairs got none, and why).
+struct ModelCorner {
+    ModelJunctionId junction;
+    uint32_t armA = 0, armB = 0;
+    int kerbA = 1, kerbB = 1;
+};
+// A DEAD END: a street's end with no junction, nothing it carries on into, and no other road meeting it there (the
+// road just ends: StreetEndKind::DeadEnd). `turnRound`: its two sidewalks are joined across the road's end by a path of
+// the dead-end join's kind (pathUsers().deadEndJoin) -- where the file names one and the street has a sidewalk on both
+// kerbs of a road cars drive.
+struct ModelDeadEnd {
+    ModelStreetId street;
+    int end = 0;                     // 0: the street's `from`, 1: its `to`
+    bool turnRound = false;
+};
+
 struct RoadModel {
     std::string name;
     bool built = false;                   // the built layer is here (assembleRoadModel); false: the planned layer alone
@@ -413,6 +467,10 @@ struct RoadModel {
     // THE CROSSWALKS (ADR-0452): junction by junction, each junction's in its arms' order. Stated by the planned layer
     // (see ModelCrosswalk); read through the questions below.
     std::vector<ModelCrosswalk> crosswalks;
+    // WHERE PEOPLE WALK (ADR-0464): the corners, junction by junction in each one's ring order, and the dead ends, street
+    // by street (its `from` end first). Stated by the planned layer (see ModelCorner, ModelDeadEnd).
+    std::vector<ModelCorner> corners;
+    std::vector<ModelDeadEnd> deadEnds;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -645,6 +703,41 @@ struct LaneSpanEnd {
     Real stopLine = kNotStated;      // that arm's stop line, along the road's spine (not stated: its road is not in the file)
 };
 LaneSpanEnd laneSpanEnd(const RoadModel& m, const ModelLaneSpan& sp, int end);
+// WHAT IS AT AN END OF A STREET (`end` 0: its `from`, 1: its `to`) -- THE ONE ANSWER (ADR-0464), from stated facts and
+// the design stage's one test for a road end another road meets (lanes/road_design.h roadEndMeetsAnother): a junction
+// the street names there; the street it carries on into; a ramp's end anchored to its host; the road just ends (a dead
+// end); or the street stops where the road file states nothing though another road meets its road's end there, or part
+// way along its road (both the planner's to state: the lane level reports them). `g`: the road file the street is of.
+enum class StreetEndKind : uint8_t { Junction, CarriesOn, RampAnchored, DeadEnd, MeetsAnother, PartWay };
+StreetEndKind streetEndKind(const roads::lanes::RoadLabGraph& g, const ModelStreet& s, int end);
+const char* streetEndKindWord(StreetEndKind k);
+// EVERY PAIR OF ARMS NEXT TO EACH OTHER ROUND A JUNCTION'S STATED RING, and whether a corner is stated between them, or
+// why not -- THE ONE DERIVATION of corners (ADR-0464): the planned layer keeps the stated ones (RoadModel::corners); a
+// tool or a test asks for the rest. `g`: the road file `m` was read from (an arm's point of a spread junction is found
+// by its road and station among the junction's stated points).
+enum class CornerGap : uint8_t {
+    None,              // stated: a corner
+    NoPavement,        // an arm's street has no walk along the kerb facing the corner (a freeway, a ramp, a track)
+    NoStreet,          // an arm names no street, so nothing says what it is made of
+    OneArm,            // a junction of one arm has no corner
+    RingNotStated,     // the road file does not state that its arms are listed in their ring (ADR-0427)
+    ArmAtNoPoint,      // a spread junction states its points, and none holds the arm's road and station
+    ApartAtSpread,     // the two arms meet the junction at different points of a spread junction: no walk between the
+                       // points is stated, so nothing says where the kerb runs between them
+};
+constexpr uint8_t kCornerGapCount = 7;
+const char* cornerGapWord(CornerGap g);
+struct RingPair {
+    ModelJunctionId junction;
+    uint32_t armA = 0, armB = 0;
+    int kerbA = 1, kerbB = 1;
+    CornerGap gap = CornerGap::None;
+};
+std::vector<RingPair> ringPairs(const RoadModel& m, const roads::lanes::RoadLabGraph& g);
+// THE DEAD ENDS OF `m`'s streets (streetEndKind DeadEnd), street by street, `from` first, each joined across where
+// `users` names a dead-end join and the street is a road cars drive with a sidewalk on both kerbs -- THE ONE DERIVATION
+// (ADR-0464): the planned layer states it with the shipped table (RoadModel::deadEnds); a test hands in another table.
+std::vector<ModelDeadEnd> deadEndsOf(const RoadModel& m, const roads::lanes::RoadLabGraph& g, const PathUsers& users);
 // EACH JUNCTION'S ARMS AS THE TURN TABLE READS THEM (lane_turns.h TurnArm), in the stated ring order (the list's own): each
 // arm's heading and the built lanes arriving and leaving by it. What assembleRoadModel states the turns from.
 std::vector<std::vector<TurnArm>> turnArmsOf(const RoadModel& m);
@@ -713,7 +806,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 14;   // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)
+constexpr uint32_t kRoadModelFormat = 15;   // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)
+                                            // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)
                                             // 13:the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)
                                             // 12: the lane level holds no through partner (LGRF 13, ADR-0438)
                                             // 11: the regulations stated on streets; the lane level holds none (LGRF 12, ADR-0437)

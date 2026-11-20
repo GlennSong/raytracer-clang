@@ -257,6 +257,11 @@ struct EdgeSpec {
     // road, every lane running the way that carriageway's traffic runs, so a ramp joins or leaves it at grade on its lane
     // nearest the freeway. The builder checks it (checkFrontageRoads); empty: not one.
     std::string frontageOf;
+    // WHICH KERBS HAVE ITS CLASS'S SIDEWALK (ADR-0464; "sidewalks": "both" | "along" | "against" | "none"): [0] the kerb of
+    // the traffic running along the spine, [1] the other. Not stated: both. Only the road model reads it so far (its
+    // cross-section, ModelSection::sidewalkOnKerb); the pavement is still built on both kerbs.
+    std::array<bool, 2> sidewalks{{true, true}};
+    bool sidewalksStated = false;   // the file states "sidewalks" on this edge
     // resolved geometry and profile
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine

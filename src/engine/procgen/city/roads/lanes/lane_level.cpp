@@ -7,7 +7,6 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"     // fitConnector, reachReport
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // where the paths' bodies could touch
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
-#include "engine/procgen/city/roads/lanes/road_design.h"         // roadEndMeetsAnother: a road that just ends, or meets others
 #include "engine/procgen/city/roads/lanes/road_layout.h"         // kArmOrderCommand: a file whose arms are not in ring order
 
 #include <algorithm>
@@ -499,16 +498,14 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
     std::set<std::pair<uint32_t, int>> unstatedMeetings;
     auto unstatedEnd = [&](const Piece& pc, int streetEnd) {
         const ModelStreet& S = m.streets[pc.street];
-        if (S.carriesOn[static_cast<std::size_t>(streetEnd)].valid()) return;
-        const EdgeSpec& e = edgeAt(S.edge);
-        const double at = streetEnd == 0 ? S.from : S.to;
-        const int roadEnd = sameWrittenStation(at, 0.0) ? 0 : sameWrittenStation(at, e.s.back()) ? 1 : -1;
-        if (roadEnd >= 0 && !(roadEnd == 0 ? e.from.edge : e.to.edge).empty()) return;   // a ramp's anchored end
-        if (roadEnd >= 0 && !roadEndMeetsAnother(g, e, roadEnd)) return;                 // a road that just ends
+        // (what is at the street's end: the model's one answer, road_model.h streetEndKind, ADR-0464)
+        const StreetEndKind kind = streetEndKind(g, S, streetEnd);
+        if (kind != StreetEndKind::MeetsAnother && kind != StreetEndKind::PartWay) return;
         if (!unstatedMeetings.insert(std::make_pair(pc.street, streetEnd)).second) return;
-        const Vec2 p = pointAt(e.xy, e.s, at);
+        const EdgeSpec& e = edgeAt(S.edge);
+        const Vec2 p = pointAt(e.xy, e.s, streetEnd == 0 ? S.from : S.to);
         out.problems.push_back(RoadProblem(RoadProblemKind::StreetEndUnstated).onStreet(S.id).word(streetEnd == 0 ? "`from`" : "`to`").where(p)
-                                   .word(roadEnd < 0 ? "lies part way along its road" : "meets another road"));
+                                   .word(kind == StreetEndKind::PartWay ? "lies part way along its road" : "meets another road"));
     };
     for (const Piece& pc : pieces)
         if (pc.startStreetEnd >= 0 && !pc.paths.empty()) unstatedEnd(pc, pc.startStreetEnd);
