@@ -660,6 +660,155 @@ void creaseCorners(PolyMesh& m, const std::vector<int>& sel, double angleDeg, fl
     }
 }
 
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel) {
+    std::vector<int> made;
+    if (width <= 0 || m.faces.empty()) return made;
+    const int nf = static_cast<int>(m.faces.size());
+    const std::size_t np = m.pts.size();
+    std::vector<char> chosen(static_cast<std::size_t>(nf), sel.empty() ? 1 : 0);
+    for (int f : sel)
+        if (f >= 0 && f < nf) chosen[static_cast<std::size_t>(f)] = 1;
+
+    // which face has each directed edge, and at which corner
+    std::unordered_map<long long, std::pair<int, int>> owner;
+    // (the points, normals and middles as they are BEFORE anything is moved: every move is measured from these)
+    const std::vector<Vec3> was = m.pts;
+    std::vector<Vec3> normal(static_cast<std::size_t>(nf)), middle(static_cast<std::size_t>(nf));
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+        normal[static_cast<std::size_t>(f)] = m.faceNormal(f);
+        middle[static_cast<std::size_t>(f)] = m.faceCentroid(f);
+        for (std::size_t i = 0; i < v.size(); ++i) owner[dkey(v[i], v[(i + 1) % v.size()])] = {f, static_cast<int>(i)};
+    }
+    const double cosLim = std::cos(angleDeg * M_PI / 180.0);
+    // a -> b is sharp: it has a twin, the two faces turn more than the angle, and the selection takes it
+    auto sharp = [&](int a, int b) {
+        const std::unordered_map<long long, std::pair<int, int>>::const_iterator f = owner.find(dkey(a, b)), g = owner.find(dkey(b, a));
+        if (f == owner.end() || g == owner.end()) return false;
+        if (!chosen[static_cast<std::size_t>(f->second.first)] && !chosen[static_cast<std::size_t>(g->second.first)]) return false;
+        return dot(normal[static_cast<std::size_t>(f->second.first)], normal[static_cast<std::size_t>(g->second.first)]) < cosLim;
+    };
+
+    // Round each point: the faces there in order, cut into FANS at the sharp edges. Every fan gets a point of its own.
+    // fanPoint[(face, corner)] = the point that corner of that face now uses.
+    std::vector<std::vector<int>> cornerPoint(static_cast<std::size_t>(nf));
+    for (int f = 0; f < nf; ++f) cornerPoint[static_cast<std::size_t>(f)] = m.faces[static_cast<std::size_t>(f)].v;
+    std::vector<std::pair<int, int>> firstCorner(np, {-1, -1});
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+        for (std::size_t i = 0; i < v.size(); ++i)
+            if (firstCorner[static_cast<std::size_t>(v[i])].first < 0) firstCorner[static_cast<std::size_t>(v[i])] = {f, static_cast<int>(i)};
+    }
+    struct Cap { std::vector<int> pts; int like; };
+    std::vector<Cap> caps;
+    for (std::size_t p = 0; p < np; ++p) {
+        if (firstCorner[p].first < 0) continue;
+        const int v = static_cast<int>(p);
+        // Walk the faces round v: from a face, across its edge v -> next, to the face on the other side. A point on
+        // the mesh's open border, or one faces meet at more than once round, is left as it is.
+        struct Corner { int face, corner, next, prev; };
+        std::vector<Corner> ring;
+        bool whole = true;
+        std::pair<int, int> at = firstCorner[p];
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::vector<int>& fv = m.faces[static_cast<std::size_t>(at.first)].v;
+            const int n = static_cast<int>(fv.size());
+            ring.push_back(Corner{at.first, at.second, fv[static_cast<std::size_t>((at.second + 1) % n)], fv[static_cast<std::size_t>((at.second + n - 1) % n)]});
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator twin = owner.find(dkey(ring.back().next, v));
+            if (twin == owner.end()) { whole = false; break; }
+            // the twin face has next -> v; its corner AT v is the one after
+            const int tn = static_cast<int>(m.faces[static_cast<std::size_t>(twin->second.first)].v.size());
+            at = {twin->second.first, (twin->second.second + 1) % tn};
+            if (at == firstCorner[p]) break;
+            if (guard == 4095) whole = false;
+        }
+        if (!whole) continue;
+        const int count = static_cast<int>(ring.size());
+        // ring[i]'s edge v -> next is shared with ring[i + 1], whose edge prev -> v it is
+        std::vector<char> cut(static_cast<std::size_t>(count));
+        int cuts = 0;
+        for (int i = 0; i < count; ++i) {
+            cut[static_cast<std::size_t>(i)] = sharp(v, ring[static_cast<std::size_t>(i)].next) ? 1 : 0;
+            cuts += cut[static_cast<std::size_t>(i)];
+        }
+        if (cuts < 2) continue;   // none: nothing to do. One: the bevel runs out to a point here.
+        // start just after a cut, so fans are runs of the ring
+        int start = 0;
+        while (!cut[static_cast<std::size_t>((start + count - 1) % count)]) ++start;
+        std::vector<int> fanPts;
+        bool reusedOwn = false;
+        for (int i = 0; i < count;) {
+            int j = i;
+            while (!cut[static_cast<std::size_t>((start + j) % count)]) ++j;
+            // the fan is ring[start + i .. start + j]: bounded by the sharp edge before its first face (that face's
+            // prev -> v) and the sharp edge after its last (that face's v -> next)
+            const Corner& first = ring[static_cast<std::size_t>((start + i) % count)];
+            const Corner& last = ring[static_cast<std::size_t>((start + j) % count)];
+            const Vec3 here = was[p];
+            auto into = [&](const Corner& c, int other) {
+                // in the face's plane, square to the sharp edge, pointing into the face
+                const Vec3 along = normalize(was[static_cast<std::size_t>(other)] - here);
+                Vec3 in = cross(normal[static_cast<std::size_t>(c.face)], along);
+                if (dot(in, middle[static_cast<std::size_t>(c.face)] - here) < 0) in = in * -1.0;
+                return normalize(in);
+            };
+            const Vec3 a = into(first, first.prev), b = into(last, last.next);
+            // the move that is `width` from both edges: x a + y b with (x a + y b).a = (x a + y b).b = width
+            const double ab = dot(a, b);
+            Vec3 move;
+            if (1.0 - ab * ab < 1e-6) move = normalize(a + b) * width;       // the two edges run on in a line
+            else move = (a + b) * (width / (1.0 + ab));
+            int point;
+            if (!reusedOwn) { point = v; reusedOwn = true; }
+            else { point = static_cast<int>(m.pts.size()); m.pts.push_back(here); }
+            m.pts[static_cast<std::size_t>(point)] = here + move;
+            for (int k = i; k <= j; ++k) {
+                const Corner& c = ring[static_cast<std::size_t>((start + k) % count)];
+                cornerPoint[static_cast<std::size_t>(c.face)][static_cast<std::size_t>(c.corner)] = point;
+            }
+            fanPts.push_back(point);
+            i = j + 1;
+        }
+        // three or more fans leave a hole at the corner: closed by a face through the fans' points, the other way
+        // round from the walk (the strips' ends run with it)
+        if (fanPts.size() >= 3) caps.push_back(Cap{std::vector<int>(fanPts.rbegin(), fanPts.rend()), ring[0].face});
+    }
+
+    // the strips: one per sharp edge, between the two faces' own copies of its ends
+    const int bevelGroup = m.groupId("bevel");
+    auto addFace = [&](std::vector<int> pts, int like) {
+        std::vector<int> tidy;
+        for (int q : pts)
+            if (tidy.empty() || tidy.back() != q) tidy.push_back(q);
+        if (tidy.size() > 1 && tidy.front() == tidy.back()) tidy.pop_back();
+        if (tidy.size() < 3) return;
+        PolyMesh::Face nfce = m.faces[static_cast<std::size_t>(like)];
+        nfce.v = tidy;
+        nfce.group = bevelGroup;
+        made.push_back(static_cast<int>(m.faces.size()));
+        m.faces.push_back(std::move(nfce));
+    };
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int> v = m.faces[static_cast<std::size_t>(f)].v;   // (a copy: the faces grow)
+        const int n = static_cast<int>(v.size());
+        for (int i = 0; i < n; ++i) {
+            const int a = v[static_cast<std::size_t>(i)], b = v[static_cast<std::size_t>((i + 1) % n)];
+            if (a > b || !sharp(a, b)) continue;     // each edge once, from its lower end
+            const std::pair<int, int> g = owner[dkey(b, a)];
+            const int gn = static_cast<int>(m.faces[static_cast<std::size_t>(g.first)].v.size());
+            const int aF = cornerPoint[static_cast<std::size_t>(f)][static_cast<std::size_t>(i)];
+            const int bF = cornerPoint[static_cast<std::size_t>(f)][static_cast<std::size_t>((i + 1) % n)];
+            const int bG = cornerPoint[static_cast<std::size_t>(g.first)][static_cast<std::size_t>(g.second)];
+            const int aG = cornerPoint[static_cast<std::size_t>(g.first)][static_cast<std::size_t>((g.second + 1) % gn)];
+            m.creases.erase({std::min(a, b), std::max(a, b)});
+            addFace({bF, aF, aG, bG}, f);
+        }
+    }
+    for (const Cap& c : caps) addFace(c.pts, c.like);
+    for (int f = 0; f < nf; ++f) m.faces[static_cast<std::size_t>(f)].v = cornerPoint[static_cast<std::size_t>(f)];
+    return made;
+}
+
 void mirrorX(PolyMesh& m, double eps) {
     const int n = static_cast<int>(m.pts.size());
     std::vector<int> map(static_cast<std::size_t>(n));

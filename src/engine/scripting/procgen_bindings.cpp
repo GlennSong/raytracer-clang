@@ -5041,6 +5041,21 @@ int l_poly_crease_corners(lua_State* L) {
     creaseCorners(m, sel, luaL_optnumber(L, 3, 40.0), static_cast<float>(luaL_optnumber(L, 4, PolyMesh::kInfCrease)));
     return 0;
 }
+// P:bevel(width [, angle = 30 [, sel]]) -> sel: cut every edge whose faces turn more than `angle` degrees back to a
+// flat strip `width` metres from the edge on each face (procgen/polymesh.h bevel). `sel` limits it to the edges of
+// those faces. Returns the strips and corner faces, which are also the group "bevel".
+int l_poly_bevel(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const double width = luaL_checknumber(L, 2);
+    if (!(width > 0)) return luaL_error(L, "bevel: width is more than 0");
+    std::vector<int> sel;
+    if (!lua_isnoneornil(L, 4)) {
+        sel = checkSel(L, 4);
+        checkSelRange(L, m, sel);
+    }
+    pushSel(L, bevel(m, width, luaL_optnumber(L, 3, 30.0), sel));
+    return 1;
+}
 int l_poly_crease_faces(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
@@ -5237,7 +5252,7 @@ void registerPolyMetatable(lua_State* L) {
             {"extract", l_poly_extract},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
-            {"crease_corners", l_poly_crease_corners},
+            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel},
             {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},

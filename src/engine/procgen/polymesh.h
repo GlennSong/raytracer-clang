@@ -131,6 +131,21 @@ void mirrorX(PolyMesh& m, double eps = 1e-4);
 PolyMesh subdivide(const PolyMesh& m, int levels);
 
 // Face selection helpers.
+// EDGE BEVEL (#191; the first of the modelling tools Glenn asked for, 2026-11-20): cut every sharp edge back to a
+// flat strip (a chamfer), so a hard-surface part has an edge that catches the light. An edge is sharp when its two
+// faces meet at more than `angleDeg` (the angle between their normals). Each face keeps its plane and is drawn back
+// `width` metres from each of its sharp edges; a strip joins the two faces along the edge, and where three or more
+// sharp edges meet, a small face closes the corner. A closed mesh stays closed and outward-facing.
+//
+// Returns the new faces (strips and corners), which are also put in the group "bevel" with the material, panel and
+// colour of a face beside them. `sel`, when not empty, limits the bevel to edges between two faces of the selection
+// or on its outline (so one panel's rim can be bevelled alone).
+//
+// What it does not do: round the strip (subdivide after it, or bevel twice, for a softer edge); stop a width wider
+// than a face from folding the face over (keep `width` under half the narrowest face); keep creases on the edges it
+// cuts (they are gone with the edge). An edge on the open border of a mesh is left alone.
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg = 30.0, const std::vector<int>& sel = {});
+
 std::vector<int> selectAll(const PolyMesh& m);
 std::vector<int> selectGroup(const PolyMesh& m, const std::string& group);
 std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const Vec3& centroid, const Vec3& normal)>& pred);

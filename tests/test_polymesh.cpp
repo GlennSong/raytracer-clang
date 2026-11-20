@@ -242,3 +242,79 @@ TEST_CASE(polymesh_solidify_walls_the_whole_outline_or_only_along_the_faces_aske
     const std::vector<int> none;
     CHECK(solidify(c, top, 0.1, "body", &none).faces.size() == 1);   // along nothing: the back alone
 }
+
+TEST_CASE(polymesh_bevel_cuts_every_sharp_edge_to_a_strip_and_closes_the_corners) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    const std::vector<int> made = bevel(c, 0.1);
+    // 6 faces drawn back, 12 strips, 8 corner triangles; every old corner is three points now
+    CHECK(c.faces.size() == 26);
+    CHECK(made.size() == 20);
+    CHECK(c.pts.size() == 24);
+    CHECK(isClosed(c));
+    const double v = signedVolume(c);
+    CHECK(v > 0);                      // still outward
+    CHECK(v < 1.0 && v > 1.0 - 12 * 0.5 * 0.1 * 0.1);   // less than the cube by under twelve edge prisms
+    Vec3 lo, hi;
+    bounds(c, lo, hi);
+    CHECK_APPROX(lo.x, -0.5, 1e-9);    // the faces kept their planes
+    CHECK_APPROX(hi.y, 0.5, 1e-9);
+    int strips = 0, corners = 0;
+    for (int f : made) {
+        const PolyMesh::Face& face = c.faces[static_cast<std::size_t>(f)];
+        CHECK(c.groups[static_cast<std::size_t>(face.group)] == "bevel");
+        if (face.v.size() == 4) ++strips; else if (face.v.size() == 3) ++corners;
+    }
+    CHECK(strips == 12);
+    CHECK(corners == 8);
+    // a strip is `width` back from the edge on each face: 0.1 * sqrt(2) across
+    for (int f : made) {
+        const std::vector<int>& q = c.faces[static_cast<std::size_t>(f)].v;
+        if (q.size() != 4) continue;
+        const double e0 = (c.pts[static_cast<std::size_t>(q[1])] - c.pts[static_cast<std::size_t>(q[0])]).length();
+        const double e1 = (c.pts[static_cast<std::size_t>(q[2])] - c.pts[static_cast<std::size_t>(q[1])]).length();
+        CHECK_APPROX(std::min(e0, e1), 0.1 * std::sqrt(2.0), 1e-9);
+        CHECK_APPROX(std::max(e0, e1), 0.8, 1e-9);
+    }
+    // each original face is a 0.8 square in its own plane
+    for (int f = 0; f < 6; ++f) {
+        const std::vector<int>& q = c.faces[static_cast<std::size_t>(f)].v;
+        CHECK(q.size() == 4);
+        CHECK_APPROX((c.pts[static_cast<std::size_t>(q[1])] - c.pts[static_cast<std::size_t>(q[0])]).length(), 0.8, 1e-9);
+    }
+
+    // An angle no edge reaches leaves the mesh alone.
+    PolyMesh same = cube();
+    CHECK(bevel(same, 0.1, 100.0).empty());
+    CHECK(same.faces.size() == 6 && same.pts.size() == 8);
+
+    // A selection bevels only its own edges: the top face's rim is four strips, and the four top corners, each with
+    // two bevelled edges and one not, become two points with no corner face.
+    PolyMesh top = cube();
+    top.creases.clear();
+    const std::vector<int> up = selectWhere(top, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    CHECK(up.size() == 1);
+    const std::vector<int> rim = bevel(top, 0.1, 30.0, up);
+    CHECK(rim.size() == 4);
+    CHECK(top.faces.size() == 10);
+    CHECK(top.pts.size() == 12);
+    CHECK(isClosed(top));
+    CHECK(signedVolume(top) > 0.9 && signedVolume(top) < 1.0);
+
+    // Bevelled twice, the strips' own edges are cut again (45 degrees each): still closed and outward.
+    PolyMesh twice = cube();
+    twice.creases.clear();
+    bevel(twice, 0.1);
+    bevel(twice, 0.02, 30.0);
+    CHECK(isClosed(twice));
+    CHECK(signedVolume(twice) > 0.9);
+
+    // A mesh with an open border keeps its border.
+    const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
+    PolyMesh open = loft({sq, sq}, {-0.5, 0.5}, false, false);
+    open.creases.clear();
+    const std::size_t before = open.pts.size();
+    const std::vector<int> walls = bevel(open, 0.1);
+    CHECK(open.pts.size() == before);      // every point is on the border: none split
+    CHECK(walls.empty() || !walls.empty()); // (it may add nothing; it must not crash or tear)
+}

@@ -780,7 +780,11 @@ priority." So the crane is the test at the end, and each wish is a system first:
 Glenn: modelling tools are "of higher interest" than the crane itself. What the toolkit lacks, in the order
 proposed to him:
 
-1. **Edge bevel:** round or chamfer chosen edges of a hard-surface part.
+1. **Edge bevel:** round or chamfer chosen edges of a hard-surface part. BUILT 2026-11-20 as a chamfer: `bevel` in
+   `procgen/polymesh.{h,cpp}`, Lua `P:bevel(width [, angle [, sel]])`. Every edge whose faces turn more than the
+   angle is cut back to a flat strip, each face keeping its plane; a corner where three or more meet gets a small
+   face. Bevel twice (a second, smaller width) for a rounder edge. It does not round in one go, does not stop a
+   width wider than a face from folding it, and leaves the open border of a mesh alone.
 2. **Loop cut and bridge** on the quad mesh: add a ring of edges; join two open rings. Also what would let the car
    cage's hood be more than one quad across.
 3. **Opening with a frame:** cut a hole in a wall or panel and get the frame and the pane back as parts.
