@@ -21,7 +21,9 @@
 //                      --arm-order lists each junction whose arms are not listed in their ring (exit 3 when one is not, or
 //                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427);
 //                      --state-arm J ROAD states the end of ROAD at junction J's point as one of J's arms, in its ring, with
-//                      the through pairs the rule gives it, then writes the layout (ADR-0473)
+//                      the through pairs the rule gives it, then writes the layout (ADR-0473); --split-junction J R1,R2,...
+//                      states junction J as two: its points holding those roads become a new junction at the list's end,
+//                      then writes the layout (ADR-0477)
 //   lanes_tool reclass <graph.json> <class> <road> ... [--write]   each road's class set, in place (ADR-0473)
 //   lanes_tool reframe <graph.json> <carriageway a> <carriageway b> <ramp> ... [--write]   each system-interchange ramp's
 //                      stated centre line set out again in the freeway's frame turning smoothly, without the sideways steps
@@ -315,11 +317,20 @@ int main(int argc, char** argv) {
         // street and heading, the street's end junction). For a file that keeps its own grouping (traffic_lab, ADR-0419).
         bool write = false, fresh = false, names = false, nodes = false, armOrder = false;
         double laneRules = -1;
-        std::string armJunction, armRoad;
+        // --split-junction J R1,R2,... (ADR-0477): ONCE, junction J stated as two, its points holding those roads a new
+        // junction at the list's end (road_layout.h insertSplitJunctionText); then the layout as usual.
+        std::string armJunction, armRoad, splitJunction;
+        std::vector<std::string> splitRoads;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--state-arm") == 0 && i + 2 < argc) {
                 armJunction = argv[i + 1];
                 armRoad = argv[i + 2];
+            }
+            if (std::strcmp(argv[i], "--split-junction") == 0 && i + 2 < argc) {
+                splitJunction = argv[i + 1];
+                std::stringstream list(argv[i + 2]);
+                for (std::string r; std::getline(list, r, ',');)
+                    if (!r.empty()) splitRoads.push_back(r);
             }
             if (std::strcmp(argv[i], "--arm-order") == 0) armOrder = true;
             if (std::strcmp(argv[i], "--write") == 0) write = true;
@@ -337,13 +348,15 @@ int main(int argc, char** argv) {
             text = ss.str();
         }
         const std::string original = text;
-        if (!armJunction.empty()) {
-            // ONE ARM STATED, then the layout below writes its street and heading and the street's end (with --write)
+        if (!armJunction.empty() || !splitJunction.empty()) {
+            // ONE ARM STATED, or ONE JUNCTION SPLIT, then the layout below writes the streets and headings (with --write)
             const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
             std::string err, added;
             std::string out;
             try {
-                out = insertArmText(text, RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir), armJunction, armRoad, &added, &err);
+                const RoadLabGraph asRead = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir);
+                out = !armJunction.empty() ? insertArmText(text, asRead, armJunction, armRoad, &added, &err)
+                                           : insertSplitJunctionText(text, asRead, splitJunction, splitRoads, &added, &err);
                 if (!out.empty()) (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir);
             } catch (const std::exception& ex) {
                 std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what());

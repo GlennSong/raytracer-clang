@@ -189,6 +189,30 @@ std::vector<ArmFacts> armsOver(const RoadLabGraph& g, const std::map<int, std::v
     return arms;
 }
 
+// THE JUNCTION OVER THESE NODES (`g`: the graph with its ramps composed): its place (the nodes' middle), its nodes and
+// their points, its arms and the stretches inside it (armsOver), its through pairs by the one rule (statedThrough), its
+// roles. The one making of a junction from a group of nodes: findJunctions' groups and a stated split (junctionOverNodes).
+JunctionFacts factsOverNodes(const RoadLabGraph& g, const std::vector<const Node*>& members, const ControlPolicy& policy) {
+    JunctionFacts j;
+    std::map<int, std::vector<double>> stations;   // road -> its stations at this junction's nodes
+    std::set<int> ramps;
+    for (const Node* node : members) {
+        j.at += node->at;
+        j.nodes.push_back(node->at);
+        j.nodePoints.emplace_back();
+        for (const NodePoint& p : node->points)
+            j.nodePoints.back().push_back(ModelNodePoint{g.edges[static_cast<std::size_t>(p.edge)].id, written(p.s)});
+        j.rampEnd = j.rampEnd || node->rampEnd;
+        if (node->ramp >= 0) ramps.insert(node->ramp);
+        for (const NodePoint& p : node->points) stations[p.edge].push_back(p.s);
+    }
+    if (!members.empty()) j.at = j.at / static_cast<double>(members.size());
+    j.arms = armsOver(g, stations, ramps, policy, &j.inside);
+    j.through = statedThrough(g, j.arms);
+    settleRoles(j, policy);
+    return j;
+}
+
 }  // namespace
 
 bool FactRange::holds(bool hasValue, double value) const {
@@ -533,28 +557,37 @@ std::vector<JunctionFacts> findJunctions(const RoadLabGraph& graph, const Contro
         members[static_cast<std::size_t>(idOfRoot[static_cast<std::size_t>(r)])].push_back(static_cast<int>(n));
     }
     for (std::size_t m = 0; m < members.size(); ++m) {
-        JunctionFacts j;
+        std::vector<const Node*> group;
+        for (int n : members[m]) group.push_back(&nodes[static_cast<std::size_t>(n)]);
+        JunctionFacts j = factsOverNodes(g, group, policy);
         j.id = "j" + std::to_string(m);
-        std::map<int, std::vector<double>> stations;   // road -> its stations at this junction's nodes
-        std::set<int> ramps;
-        for (int n : members[m]) {
-            const Node& node = nodes[static_cast<std::size_t>(n)];
-            j.at += node.at;
-            j.nodes.push_back(node.at);
-            j.nodePoints.emplace_back();
-            for (const NodePoint& p : node.points)
-                j.nodePoints.back().push_back(ModelNodePoint{g.edges[static_cast<std::size_t>(p.edge)].id, written(p.s)});
-            j.rampEnd = j.rampEnd || node.rampEnd;
-            if (node.ramp >= 0) ramps.insert(node.ramp);
-            for (const NodePoint& p : node.points) stations[p.edge].push_back(p.s);
-        }
-        j.at = j.at / static_cast<double>(members[m].size());
-        j.arms = armsOver(g, stations, ramps, policy, &j.inside);
-        j.through = statedThrough(g, j.arms);
-        settleRoles(j, policy);
         out.push_back(j);
     }
     return out;
+}
+
+JunctionFacts junctionOverNodes(const RoadLabGraph& graph, const std::vector<ModelNode>& stated, const ControlPolicy& policy,
+                                std::string* err) {
+    RoadLabGraph g = graph;
+    expand(g);
+    std::vector<Node> nodes;
+    for (const ModelNode& sn : stated) {
+        Node n;
+        n.at = sn.at;
+        for (const ModelNodePoint& p : sn.points) {
+            const std::map<std::string, int>::const_iterator it = g.index.find(p.road);
+            const EdgeSpec* e = it == g.index.end() ? nullptr : &g.edges[static_cast<std::size_t>(it->second)];
+            if (!e || !carsDrive(g, *e) || e->isRamp()) {
+                if (err) *err = "a node names road " + p.road + ", which is not a street cars drive (or is a ramp: not handled here)";
+                return JunctionFacts();
+            }
+            n.points.push_back(NodePoint{it->second, p.station});
+        }
+        nodes.push_back(n);
+    }
+    std::vector<const Node*> group;
+    for (const Node& n : nodes) group.push_back(&n);
+    return factsOverNodes(g, group, policy);
 }
 
 ModelJunction junctionOf(const JunctionFacts& f) {

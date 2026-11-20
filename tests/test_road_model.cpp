@@ -1929,9 +1929,11 @@ TEST_CASE(road_model_18_the_shipped_road_files_state_their_arms_in_their_ring) {
 // A street's end is at a junction or carries on, never both: counted here, with each file's own numbers.
 TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_nothing) {
     struct Shipped { const char* file; std::size_t streetsCarryingOn, carryOnEnds, junctionsWithNodes; };
+    // (river_town / agent_lab junctions listing their nodes 30 -> 31, ADR-0477: j14 stated as two, each over two of its
+    // points (j14, j144); j0's split-off T, j145, is over one point and lists none)
     const Shipped files[] = {{"planned/traffic_lab_lanelab.json", 0, 0, 15},
-                             {"planned/river_town_lanelab.json", 22, 32, 30},
-                             {"planned/agent_lab_lanelab.json", 22, 32, 30}};
+                             {"planned/river_town_lanelab.json", 22, 32, 31},
+                             {"planned/agent_lab_lanelab.json", 22, 32, 31}};
     for (const Shipped& f : files) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.file;
         const std::string text = slurp(path);
@@ -4505,7 +4507,9 @@ TEST_CASE(road_model_38_the_box_edge_at_the_angle_the_arms_meet) {
 TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction) {
     const std::map<std::string, std::set<std::string>> knownSqueezed = {
         {"traffic_lab", {"j0:5", "j0:6", "j22:0", "j24:0", "j37:3", "j70:0", "j70:1", "j84:3", "j84:4"}},
-        {"river_town", {"j135:4", "j135:5", "j14:0", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
+        // (ADR-0477: j14:0 (s21, too close to j13) -> gone, j14 stated as two and s21 now its arm 3 with the room the
+        // square rule gives; j0:5 (s274_0, too close to j145) new, j0's T stated apart 28.6 m along s274_0)
+        {"river_town", {"j135:4", "j135:5", "j0:5", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
                         "j72:0", "j72:1", "j73:0", "j75:0", "j75:2", "j7:0", "j7:1", "j8:2", "j8:3", "j90:0", "j90:4", "j91:2", "j91:3"}}};
     for (const char* level : {"traffic_lab", "river_town", "agent_lab"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
@@ -4520,9 +4524,11 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
             for (const ModelStretch& in : J.inside)
                 for (const Real s : {in.from, in.to}) onRoad[in.road].push_back(Point{j, s, -1, false});
         }
-        uint32_t pairs = 0, short_ = 0, past = 0;
+        uint32_t pairs = 0, past = 0;
+        std::set<std::string> short_;
         for (uint32_t j = 0; j < m.junctions.size(); ++j)
-            for (const ModelArm& a : m.junctions[j].arms) {
+            for (std::size_t ai = 0; ai < m.junctions[j].arms.size(); ++ai) {
+                const ModelArm& a = m.junctions[j].arms[ai];
                 if (!stated(a.stopLine)) continue;
                 const Real away = a.spineIn ? -1 : 1, back = (a.stopLine - a.station) * away;
                 const Point* facing = nullptr;
@@ -4537,7 +4543,7 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
                 const ModelArm& b = m.junctions[facing->junction].arms[static_cast<std::size_t>(facing->arm)];
                 const Real backB = (b.stopLine - b.station) * (b.spineIn ? -1 : 1);
                 const Real between = (facing->station - a.station) * away - back - backB;
-                if (between < g.rules.storage - kSamePoint) ++short_;
+                if (between < g.rules.storage - kSamePoint) short_.insert(m.junctions[j].id + ":" + std::to_string(ai));
             }
         std::set<std::string> squeezed;
         for (const std::string& p : m.problems) {
@@ -4549,9 +4555,13 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         }
         std::printf("      %s: %u arms facing the next junction along their road, %u with less than the storage between the stop "
                     "lines, %u stop lines past another junction's point; %zu arms too close to the next junction for their angle\n",
-                    level, pairs, short_, past, squeezed.size());
-        CHECK(pairs > 500u && short_ == 0u && past == 0u);
+                    level, pairs, static_cast<unsigned>(short_.size()), past, squeezed.size());
         const std::string known = std::string(level) == "agent_lab" ? "river_town" : level;   // (agent_lab has river_town's roads)
+        // (ADR-0477, the one stated exception: Glenn split river_town's j14 into j14 and j144, whose facing stop lines on
+        // Redwood Parkway's s313 leave 3.9 m between them, less than the 6.5 m storage -- the reason the grouping had made
+        // them one junction. Was none.)
+        const std::set<std::string> knownShort = known == "river_town" ? std::set<std::string>({"j14:2", "j144:0"}) : std::set<std::string>();
+        CHECK(pairs > 500u && short_ == knownShort && past == 0u);
         CHECK(squeezed == knownSqueezed.at(known));
     }
 }
@@ -4761,10 +4771,11 @@ TEST_CASE(road_model_41_the_shipped_kinks_are_mitred) {
     // the corners left with no walk because the drawn sidewalks by their kerb ends are two pieces (junction id, arms)
     const std::map<std::string, std::set<std::string>> knownTwoPieces = {
         {"traffic_lab", {}},
-        // j0 6-0, j14 5-0: S2's box edges put their kerb ends 37-48 m out, and the walk round the block between them leaves
-        // the corner window (kCornerWindow); j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's
-        // carriageway (ADR-0471: j90 arm 0 too close to j120 for its angle)
-        {"river_town", {"j0 6-0", "j14 5-0", "j90 0-1"}}};
+        // j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's carriageway (ADR-0471: j90 arm 0 too
+        // close to j120 for its angle). (Was also j0 6-0 and j14 5-0, whose kerb ends S2 put 37-48 m out, the walk between
+        // them round a block face; since ADR-0477 states j14 and j0 each as two junctions, those kerbs are each street's
+        // own sidewalk between two junctions, and no corner joins them: 3 -> 1.)
+        {"river_town", {"j90 0-1"}}};
     for (const char* level : {"traffic_lab", "river_town"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
         const std::unique_ptr<Result> r =
@@ -5249,4 +5260,66 @@ TEST_CASE(road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_
     // and the door is answered on the path by the one query
     const WalkJoin j = m.walkJoinOn(onPath);
     CHECK(j.valid() && j.walkway == 1u && !j.street.valid() && j.held == 0);
+}
+
+// ---- 46. staggered junctions stated apart (ADR-0477) -------------------------------------------------------------------
+
+TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
+    // river_town's and agent_lab's j14 (two staggered pairs on Redwood Parkway) and j0 (a T 28.6 m along the arterial from
+    // the boulevard pair) are each stated as two: the new parts j144 and j145 at the list's end, no other id moved
+    auto armsOf = [](const ModelJunction& j) {
+        std::vector<std::string> out;
+        for (const ModelArm& a : j.arms) out.push_back(a.road + (a.spineIn ? " in " : " out ") + std::to_string(static_cast<int>(std::lround(a.station * 100))));
+        return out;
+    };
+    auto through = [](const ModelJunction& j) {
+        std::set<std::string> out;
+        for (const std::array<uint32_t, 2>& t : j.through) {
+            const std::string a = j.arms[t[0]].road, b = j.arms[t[1]].road;
+            out.insert(a < b ? a + "-" + b : b + "-" + a);
+        }
+        return out;
+    };
+    for (const char* level : {"river_town", "agent_lab"}) {
+        const std::string dir = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned";
+        const std::string text = slurp(dir + "/" + level + "_lanelab.json");
+        const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir);
+        CHECK(g.junctions.size() == 146u);
+        for (std::size_t i = 0; i < g.junctions.size(); ++i) CHECK(g.junctions[i].id == "j" + std::to_string(i));
+        std::map<std::string, const ModelJunction*> J;
+        for (const ModelJunction& j : g.junctions) J[j.id] = &j;
+        CHECK(armsOf(*J["j14"]) == std::vector<std::string>({"s294 in 4722", "s314 out 0", "s313 out 2304", "s21 in 8268"}));
+        CHECK(armsOf(*J["j144"]) == std::vector<std::string>({"s313 in 5938", "s315 out 0", "s290 in 6393", "s18 in 11485"}));
+        CHECK(armsOf(*J["j145"]) == std::vector<std::string>({"s38 in 9447", "s274_0 out 0", "s272 in 11995"}));
+        // through pairs by the one rule: Fifth Avenue (s21 -> s315) is no longer one straight across the parkway
+        CHECK(through(*J["j14"]) == std::set<std::string>({"s21-s314", "s294-s313"}));
+        CHECK(through(*J["j144"]) == std::set<std::string>({"s18-s315", "s290-s313"}));
+        CHECK(through(*J["j145"]) == std::set<std::string>({"s272-s274_0"}));
+        // the parkway between them is a street now, from j14 to j144, and keeps its name; the streets keep theirs
+        bool seen = false;
+        for (const ModelStreet& s : g.streets) {
+            if (s.id == "s313") {
+                seen = true;
+                CHECK(s.junctions[0].valid() && g.junctions[s.junctions[0].index].id == "j14");
+                CHECK(s.junctions[1].valid() && g.junctions[s.junctions[1].index].id == "j144");
+                CHECK(sameWrittenStation(s.from, 23.04) && sameWrittenStation(s.to, 59.38));
+                CHECK(s.name == "Redwood Parkway");
+            }
+            if (s.id == "s18" || s.id == "s314") CHECK(s.name == "Fourteenth Street");
+            if (s.id == "s21" || s.id == "s315") CHECK(s.name == "Fifth Avenue");
+        }
+        CHECK(seen);
+        // the one making of a junction from its points (junctionOverNodes, findJunctions' own) puts the two back as the
+        // one junction the grouping made: six arms, Redwood Parkway's s292 and s313 inside it
+        std::vector<ModelNode> all = J["j14"]->nodes;
+        all.insert(all.end(), J["j144"]->nodes.begin(), J["j144"]->nodes.end());
+        const JunctionFacts whole = junctionOverNodes(g, all, ControlPolicy());
+        std::set<std::string> inside;
+        for (const ModelStretch& st : whole.inside) inside.insert(st.road);
+        CHECK(whole.arms.size() == 6u && inside == std::set<std::string>({"s21", "s292", "s313"}));
+        // a split whose roads leave every point on one side is refused, and says so
+        std::string err;
+        CHECK(insertSplitJunctionText(text, g, "j90", {"s999"}, nullptr, &err).empty());
+        CHECK(err.find("do not split in two") != std::string::npos);
+    }
 }

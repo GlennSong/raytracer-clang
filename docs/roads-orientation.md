@@ -209,7 +209,10 @@ Under `src/engine/procgen/city/roads/`:
 Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, with every `layout` flag since ADR-0438)
 and `city_plan` (the planner; `city_plan controls`). One-off edits to a frozen road file (ADR-0473), each writing only what it names, in place, through
 road_layout.h's text writers: `layout <file> --state-arm J ROAD --write` (a road's end at a junction's point stated as
-one of its arms, in its ring, with the through pairs the rule gives it; then the layout), `reclass <file> <class> <road>
+one of its arms, in its ring, with the through pairs the rule gives it; then the layout), `layout <file> --split-junction J
+R1,R2,... --write` (ADR-0477: J's points holding those roads become a new junction at the list's end, each part made by
+the grouping's own `factsOverNodes` via `junctionOverNodes`; then the layout; a street the file names keeps its name),
+`reclass <file> <class> <road>
 ... --write`, and `reframe <file> <carriageway a> <carriageway b> <ramp> ... --write` (a system interchange's ramps set
 out again in the freeway's frame turning smoothly). `lanes_tool lanegraph` prints the lane level's problems counted
 by kind, each kind with what it means.
@@ -474,9 +477,9 @@ data rows.
   this is down to traffic_lab 4 corners and river_town 13 (was 13 and 27): the junctions too close for their angle,
   above, and river_town j19, j116, j119, which the rule's straight strips do not reach. The wedges and notches of
   bare ground at a kink between two roads' bands (B2, traffic_lab 9, river_town 18) are gone since ADR-0472 mitres
-  the bands. Three river_town corners still read "two pieces", none at a kink: j0 6-0 and j14 5-0 (their kerb ends
-  stand 37-48 m out since ADR-0471 and the walk round the block leaves the 30 m `kCornerWindow`), and j90 0-1 (arm 0's
-  kerb end on a scrap of s228's sidewalk inside s227's carriageway). Sidewalks cut off from the largest part on foot:
+  the bands. One river_town corner still reads "two pieces", not at a kink: j90 0-1 (arm 0's kerb end on a scrap of
+  s228's sidewalk inside s227's carriageway). (j0 6-0 and j14 5-0, walks round a block face, went when ADR-0477 stated
+  j0 and j14 each as two junctions.) Sidewalks cut off from the largest part on foot:
   traffic_lab 0, river_town 10 (14 until ADR-0473 made the freeway's turn-round loops tn0/tn1 ramps, with no
   sidewalks). The s337/s277 hairpin's open end is now paved over by the capped mitre.
 - **Two traffic_lab ramps carry no car** (d0_0_a_on, d1_0_a_off). Their hosts' kerb lanes end at freeway joints
@@ -486,6 +489,11 @@ data rows.
   and x1_outR_link state a merge past the host lane's end. s320 carries on into s287 where no lane leaves. Dead-end
   spokes under the freeway ring (dead ends, ADR-0469). The planner no longer reproduces river_town's road file (ADR-0423). Car reach 41%
   without lane changes, 81% with: lane changes come first.
+- **Staggered junctions stated apart** (ADR-0477): river_town/agent_lab j14 is now j14 (north) and j144 (south), and
+  j0's south-east T is j145. The new ids are at the list's end; no other id moved. The street between j14 and j144 (s313)
+  has only 3.9 m between its facing stop lines, the one stated exception in `road_model_39`. j90, j119 and j135 are left
+  as single junctions (reasons in the ADR). A junction file list is no longer exactly what the grouping (`lanes_tool
+  junctions`) gives for river_town: the grouping still chains these points.
 - **river_town j103 stands 21 m in the air** (ADR-0473, not fixed): the design stage's height agreement lifts the
   junction from 6.5 m to 27.3 m over 30 rounds while the ground is 5-7 m, so every street leaving it is far too steep
   (s192 42 %, s334 41 %, s193 30 %, s335 23.7 %). The pump is at j90, 82 m away along s334: s334's end lies inside

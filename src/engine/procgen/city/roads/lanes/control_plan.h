@@ -202,6 +202,13 @@ struct JunctionFinding {
 // are one junction however far apart. Nothing else groups them.
 std::vector<JunctionFacts> findJunctions(const RoadLabGraph& g, const ControlPolicy& policy,
                                          const JunctionFinding& how = JunctionFinding());
+// THE JUNCTION OVER NODES A ROAD FILE STATES (ADR-0477; `lanes_tool layout --split-junction`): the facts findJunctions
+// gives a group of nodes -- the same function makes both -- for nodes named by their points (road and station), so a
+// junction the grouping made of nodes that are really two junctions can be stated as two. `graph` as read (its ramps are
+// composed here). No id. Empty (with `err`) when a point names a road cars do not drive, or a ramp (whose free end the
+// grouping finds by its anchor, not by a stated point).
+JunctionFacts junctionOverNodes(const RoadLabGraph& graph, const std::vector<ModelNode>& nodes, const ControlPolicy& policy,
+                                std::string* err = nullptr);
 
 // THE WHOLE PLAN for a road graph.
 struct ControlPlan {

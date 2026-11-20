@@ -23372,3 +23372,86 @@ Words:
 **For players:** after S7's re-bake, people cross parks, the quad and the paseos as before; one path of lot 557 on river_town (p8) ends at nothing where it reaches the street by a junction.
 
 **Revisit when** piece 6 starts places and walks from `walkJoinOn` (the doors on walkways then count); when a path ending far past a kerb end should be drawn to the kerb end instead (lot557.p8); when a level has several lane-built cities with lots of their own (a lot pass per city); or when a path must cross a street (a crossing of its own kind).
+
+## ADR-0477 — Two river_town "junctions" that were really two junctions each are stated as two: j14 becomes j14 and j144, j0 gives up its south-east T as j145 (#306 re-bake bundle, before S7)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: river_town's and agent_lab's road files (the same roads) state each junction as a list of the points where roads meet. The grouping that wrote those lists (ADR-0419) joins two points into one junction when a car could not wait between their stop lines. At j14 that chained two staggered crossings on Redwood Parkway into one six-arm junction. Fifth Avenue's two halves, 55 m apart, then counted as one "straight" that ran diagonally over a kerb corner (pictures in `out/corner_pictures/`). Glenn decided (2026-11-20) that such junctions are split before the one re-bake. j14 and j0 are now each stated as two junctions with a plain street between; j90, j119 and j135 are left as they are.
+
+Words:
+- **Point (node):** where road ends meet; a junction spread over several lists them (`nodes`, ADR-0425).
+- **Grouping:** `findJunctions`, which made the files' junction lists: two points become one junction when the street between their stop lines is shorter than the storage, 6.5 m (one car and its gap).
+- **Box edge / stop line:** where a junction's area begins along an arm, and where traffic stops, 5.2 m further back (ADR-0428, ADR-0471).
+- **Through pair:** two arms that are one street running on, stated by the one rule (`throughPairs`: arms leaving within 30 degrees of opposite ways).
+- **Staggered pair:** two side streets meeting a through road from opposite sides at different places along it.
+
+**The tool** (`lanes_tool layout <file> --split-junction J R1,R2,... --write`; road_layout.h `insertSplitJunctionText`):
+- J's stated points holding any of the named roads become a new junction. It takes the next id at the end of the list (`j<length>`) and is written after the list's last element. The rest stay as J, written again in place. No other junction moves.
+- Each part is made by the same function the grouping uses for a group of points. `factsOverNodes` (control_plan.cpp) is factored out of `findJunctions`; `junctionOverNodes` calls it for points named by road and station. That function gives the arms, the stretches inside, and the through pairs by the one rule. Each part's arms are then put in their ring, and it keeps J's control and each arm's stated signs.
+- The road between the parts is inside neither. The layout, run straight after, makes it a street from one part to the other.
+- **Names:** a street the file already names keeps its name. The run naming (`nameStreetRuns`) used to give a whole run its longest street's name, so a through pair joining two differently named streets renamed a whole chain (Fourteenth Street became Fifth Avenue on 10 streets). Now the run's name goes only to streets the file does not name. The three shipped files' layouts still write back byte for byte (`road_model_19`).
+
+**Which junctions, and why:**
+- **j14, split** (the parkway with Fifth Avenue and Fourteenth Street).
+  - Its four points along Redwood Parkway, north to south: s314 (Fourteenth west) at C; s21 (Fifth north-east) at D, 23 m on; s315 (Fifth west) at B, 36 m on; s18 (Fourteenth south-east) at A, 30 m on.
+  - `--split-junction j14 s315,s18,s290`. Now **j14** = C+D (arms s294, s314, s313, s21; through s21-s314, s294-s313) and **j144** = B+A (arms s313, s315, s290, s18; through s18-s315, s290-s313).
+  - s313 from 23.04 to 59.38 m (36.3 m) is now a street, "Redwood Parkway", from j14 to j144. It has 14.3 m of plain street between the two box edges, but only **3.9 m between the facing stop lines**: less than the storage. That is why the grouping had joined them, and it is the one stated exception in `road_model_39`.
+  - By the rule, Fifth Avenue no longer runs straight on across the parkway: s21 runs on as s314 at j14, and s315 as s18 at j144. The names stay.
+- **j0, split** (the arterial s274 with the boulevard pair bv1).
+  - Its south-east point is a T: s38 meets the arterial where s272 runs on as s274_0. It lies 28.6 m along s274_0 from the boulevard's point.
+  - `--split-junction j0 s38,s272`. The T is **j145** (arms s38, s274_0, s272; through s272-s274_0); the rest stays j0.
+  - Split because the facing stop lines leave 6.6 m (at least the storage), with 17 m of plain street between the box edges.
+  - j0's other gaps stay inside it. bv1_in to bv1_out (40 m) is one divided road, one junction by construction. The s1 link to the s0/s2 T (25 m) has no room: its stop lines would overlap.
+- **j90, left:** three points 6-14 m apart, one compact junction.
+- **j119, left:** its far point (s230, 31-39 m west) lies inside the junction's one drawn paved area; the drawn junction is one place.
+- **j135, left:**
+  - A crossroads and a staggered pair of local T's, 25 m and 22 m apart along the diagonal arterial.
+  - Split, the s321 stretch between them would have its two stop lines overlap by 0.5 m, and its box edges 2 m apart.
+  - Tried on a copy, not kept.
+
+**Before and after** (`lanes_tool lanegraph` with step 8's seven vehicles, bus, car, goods, moped, motorcycle, truck, van; `lanes_tool build`; `lanes_tests`). river_town and agent_lab give the same numbers.
+
+| | before | after |
+|---|---|---|
+| Stated turns that fit no vehicle (none of the seven may take them) | 137 | 113 |
+| ... at j14 (now j14 + j144) / j0 (now j0 + j145) | 14 / 17 | 0 / 7 |
+| Stated turns with a corner fault for some vehicle; for the car | 722; 327 | 698; 299 |
+| Car's lane paths reachable with lane changes / without | 82.3% / 47.3% | 82.5% / 48.6% |
+| Bus, with / without | 62.0% / 28.0% | 62.2% / 28.2% |
+| Corner walks laid; corners with no walk, kerb end out (B1) / two pieces (B2) | 555; 13 / 3 | 561; 13 / 1 |
+| Lone walk ends; sidewalks cut off (largest part on foot) | 31; 10 (604 of 614) | 31; 10 (608 of 618) |
+| Deck cracks / odd boundaries / roads over their grade | 335 / 46 / 38 | 335 / 46 / 38 |
+
+- The two-piece corners gone are j0 6-0 and j14 5-0, the walks round a block face between kerb ends 37-48 m out (ADR-0472). Those kerbs are now each street's own sidewalk between two junctions.
+- **The mesh:** the build's checks and its plan SVG are byte-identical. Only the paint moves: arrows 698 to 701, lane lines +97 m dashed, +42 m solid, the new stop bars and crosswalks on s313 and s274_0. The bake key sees the stated arms (ADR-0428), so river_town and agent_lab re-bake at S7.
+
+**Picture:** `out/corner_pictures/split_j14_before_after.png`: j14 before (one junction over four points) and after (j14 and j144, the parkway between them a street, the new paint on it).
+
+**Checked:**
+- `lanes_tool junctions <file> --top 100000` (the grouping's own view of the roads, which do not change) prints the same lines before and after, apart from the file's path on its first line.
+- The files' junction lists: j0..j143 in place, only j0 and j14 rewritten, j144 and j145 at the end.
+- `layout --write` on a copy prints "unchanged, byte for byte"; `--arm-order`: 0 of 146 differ.
+
+**Tests:**
+- `road_model_46_the_staggered_junctions_are_stated_apart` (new). In both files:
+  - the ids, j0..j145 in order;
+  - the three parts' arms and through pairs;
+  - s313 as a street from j14 to j144, with its name, and the other streets' names;
+  - `junctionOverNodes` over j14's and j144's points together gives back the grouping's one six-arm junction;
+  - a split that does not divide the points is refused.
+- Re-pinned, old to new, why in each comment:
+  - `road_model_19` (junctions listing their points 30 to 31);
+  - `road_model_39` (the two short facing stop lines on s313 as the one stated exception, none before; too-close arms: j14:0 out, j0:5 in, still 26);
+  - `road_model_41` (two-piece corners 3 to 1).
+- Suites: lanes_tests 154/154, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513.
+
+**Format and caches:** no format, no tag. Each file's bytes change its bake key and its saved road model's key.
+
+**One model:**
+- Concepts touched: roads (which points are one junction; streets' names).
+- A junction from its points is still made by one function, now named and used by both the grouping and the split.
+- No road fact is computed outside `roads/`, and no second structure was made.
+
+**For players** (after S7's re-bake): at river_town's Redwood Parkway and Fifth Avenue the two staggered crossings are two junctions with their own stop lines and crosswalks on the parkway between them. Cars can now take every turn there that the old six-arm junction refused (14 turns no vehicle could take, now 0).
+
+**Revisit when** the planner states junctions as it plans them (no grouping by storage); when Glenn wants j135 or j0's link split anyway (their stop lines overlap: the box edge rule would need a cap there too); or when a split junction's short street (s313, 3.9 m between stop lines) shows up as a queueing problem in driving.
