@@ -817,7 +817,10 @@ proposed to him:
    `scatter.faces` and `scatter.join` each give a list of placements for `m:use(piece, placements)`. A placement
    may now say `up = {x,y,z}` (and `spin`) in place of `turn`: the piece's own +y stands along it. Even spacing
    only; nothing random, and nothing that follows a curved surface between the points given.
-6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path.
+6. **Cable and rope:** a hanging curve between two points; a twisted strand along a path. BUILT 2026-11-20 as a
+   Lua library, `assets/scripts/cable.lua`: `cable.hang(a, b, { sag })` gives the points of a hanging curve (the
+   true one when the ends are level), `cable.wire` one round wire along points, `cable.rope` strands twisted along
+   them, `cable.length` the length. Shapes that stand still: a rope that swings is #311.
 7. **Cage deform:** move a few control points and the mesh inside follows.
 8. **Un-subdivide:** drop every other loop of a quad mesh, for an orderly lower level.
 

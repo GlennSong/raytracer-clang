@@ -61,7 +61,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 4bf5527f | openings: `assets/scripts/openings.lua` (`openings.window`, `openings.hole`), a hole through a wall with a frame and a pane; `bridge` lets a hole reach the solid's edge; `tests/test_openings.cpp` |
 | e013964e | truss: `assets/scripts/truss.lua` (`truss.build`), a lattice of members along a path; tested in `tests/test_openings.cpp` |
 | 19fd8fc2 | the crane rebuilt with the tools: lattice mast and boom, a cab with framed windows, bevelled edges; the same nodes, markers and shapes |
-| (this) | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
+| ff719461 | scatter: `assets/scripts/scatter.lua` (rings, lines, grids and face middles as placements for a use); a placement's `up` and `spin` |
+| (this) | cable and rope: `assets/scripts/cable.lua` (`cable.hang`, `wire`, `rope`, `length`) |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -134,8 +135,9 @@ models, then modelling tools.**
    `prefab_lab.json`). Nothing broke. Still to try: a building part, a model from a `.glb`, something with
    textures baked by the recipe.
 3. **Modelling tools,** in the order listed in the design note ("Modelling tools still to build"). Edge bevel, loop
-   cut, slice, bridge, openings, the truss and scatter are built; cable and rope is next. Scratch recipes that show them:
-   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua`, `bolts.lua` (not tracked).
+   cut, slice, bridge, openings, the truss, scatter, and cable and rope are built. Left: cage deform and
+   un-subdivide. The four Lua libraries are tested in `tests/test_openings.cpp`. Scratch recipes that show them:
+   `build-viewer/sheets/bevel.lua`, `cuts.lua`, `window.lua`, `truss.lua`, `bolts.lua`, `cables.lua` (not tracked).
 
 The design note's "The crane Glenn asked for" maps each of his wishes for the crane to the system it waits on.
 

@@ -1,5 +1,6 @@
 // The modelling libraries written in Lua over the mesh words (#191): openings.lua, a hole through a wall with a
-// frame and a pane; truss.lua, a lattice of members along a path; scatter.lua, where to put many copies of a piece.
+// frame and a pane; truss.lua, a lattice of members along a path; scatter.lua, where to put many copies of a piece;
+// cable.lua, a line that hangs and a rope of twisted strands.
 #include "test_framework.h"
 
 #include "../src/engine/mesh_builder.h"
@@ -210,4 +211,54 @@ TEST_CASE(scatter_gives_placements_that_stand_each_copy_along_the_surface) {
     // spin turns the piece about its own up: its +x goes round to -z
     const Mat4 spun = m.uses[0].placements[4].matrix();
     CHECK((Vec3(spun.m[0][0], spun.m[1][0], spun.m[2][0]) - Vec3(0, 0, -1)).length() < 1e-9);
+}
+
+TEST_CASE(cable_hangs_between_two_points_and_a_rope_twists_along_a_line) {
+    ProcModel m;
+    std::string err;
+    const bool ok = runModel(R"LUA(
+        local cable = require "cable"
+        local function near(a, b, eps) return math.abs(a - b) < (eps or 1e-6) end
+        -- level ends 4 m apart, 0.5 m of sag: the ends are where they were given, the lowest point is the middle,
+        -- 0.5 m down, and the curve is the same either side of it
+        local pts = cable.hang({ 0, 3, 0 }, { 4, 3, 0 }, { sag = 0.5, steps = 16 })
+        assert(#pts == 17)
+        assert(near(pts[1][2], 3) and near(pts[17][2], 3) and near(pts[1][1], 0) and near(pts[17][1], 4))
+        assert(near(pts[9][2], 2.5), "the middle is 0.5 m down: " .. pts[9][2])
+        for i = 1, 8 do
+          assert(near(pts[i][2], pts[18 - i][2]), "the same both sides")
+          assert(pts[i][2] > pts[i + 1][2], "falling to the middle")
+        end
+        -- it is longer than the straight line, and a hanging curve, not a parabola: a quarter of the way along, a
+        -- parabola has dropped exactly three quarters of the sag; the hanging curve a little more
+        assert(cable.length(pts) > 4.1 and cable.length(pts) < 4.3)
+        assert(3 - pts[5][2] > 0.75 * 0.5 and 3 - pts[5][2] < 0.78 * 0.5, "a quarter along: " .. (3 - pts[5][2]))
+        -- taut: a straight line
+        local taut = cable.hang({ 0, 1, 0 }, { 0, 3, 4 }, { steps = 4 })
+        assert(near(cable.length(taut), math.sqrt(20)) and near(taut[3][2], 2) and near(taut[3][3], 2))
+        -- ends at different heights: still pinned at both, and below the straight line between
+        local leant = cable.hang({ 0, 2, 0 }, { 3, 4, 0 }, { sag = 0.3, steps = 10 })
+        assert(near(leant[1][2], 2) and near(leant[11][2], 4))
+        assert(near(leant[6][2], 3 - 0.3))
+
+        -- a wire is one tube; a rope is `strands` of them inside the rope's radius
+        local wire = cable.wire(pts, { radius = 0.02 })
+        local rope = cable.rope({ { 0, 0, 0 }, { 0, 2, 0 } }, { radius = 0.05, strands = 3, pitch = 0.25 })
+        assert(mesh.audit(wire).tris > 0 and mesh.audit(rope).tris > mesh.audit(wire).tris)
+        local ok1, why1 = pcall(cable.hang, { 0, 0, 0 }, { 0, 0, 0 })
+        assert(not ok1 and why1:find("the same point"))
+        local ok2, why2 = pcall(cable.rope, { { 0, 0, 0 } })
+        assert(not ok2 and why2:find("two points or more"))
+        local out = model.new()
+        out:add(rope)
+        return out
+    )LUA", m, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    if (m.parts.empty()) { CHECK(false); return; }
+    // the rope stays inside its radius round the line it follows (the y axis), and reaches nearly out to it
+    double farthest = 0;
+    for (const Vertex& v : m.parts[0].mesh.vertices) farthest = std::max(farthest, std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z));
+    CHECK(farthest <= 0.05 + 1e-6);
+    CHECK(farthest > 0.045);
 }
