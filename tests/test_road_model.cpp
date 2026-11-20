@@ -27,6 +27,7 @@
 #include "engine/procgen/city/roads/lanes/road_model_cache.h"   // levelRoadsKey: the city's bake key
 #include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the planned layer reads the ramps composed
 #include "engine/procgen/city/roads/lanes/lanes.h"
+#include "engine/procgen/city/roads/lanes/walk_lanes.h"   // kWalkFromKerb: how far in from the kerb a corner walk runs
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // lotRoadInputs: the roads as the lot pass reads them (ADR-0439)
 #include "engine/procgen/city/city_lots.h"                   // growLotBuildings: the lot pass faces its doors
 #include "engine/level_params.h"                             // readLotGrowParams
@@ -2748,36 +2749,41 @@ nlohmann::json walkTee(const std::string& southSidewalks = std::string(), bool s
     }
     return g;
 }
-// A DIVIDED ROAD CROSSING A STREET, spread over two stated points (test 17's crossing, its points written out): point A
-// at (6, 0) holds the east street's end and the northbound carriageway's two ends, point B at (-6, 0) the west street's
-// and the southbound's. The ring, counter-clockwise from east: east, nb_n, sb_n, west, sb_s, nb_s. `nbsAt`: the station
-// point A states for nb_s's end (94, its end; another: an arm no point holds).
-nlohmann::json walkSpread(double nbsAt = 94.0) {
+// A DIVIDED ROAD CROSSING A STREET, spread over two stated points, as a planned file states one: the street `ew` runs
+// east-west through it (its stretch between the points, stations 96 to 104, lies inside the junction); the divided road's
+// one-way carriageways cross it at x = 4 (northbound, `nb_s` in and `nb_n` out) and x = -4 (southbound). Point A at (4, 0)
+// holds the street's station 104 and the northbound's two ends, point B at (-4, 0) its station 96 and the southbound's.
+// The ring, counter-clockwise from east: east (ew out), nb_n, sb_n, west (ew in), sb_s, nb_s. `nbsAt`: the station point A
+// states for nb_s's end (100, its end; another: an arm no point holds).
+nlohmann::json walkSpread(double nbsAt = 100.0) {
     nlohmann::json g;
     g["name"] = "walk_spread";
     g["classes"]["oneway"] = {{"w", 3.5}, {"fwd", 1}, {"back", 0}, {"sidewalk", 2.0}, {"g_max", 0.09}, {"window", 40}, {"thick", 0.5}};
     struct R { const char* id; const char* cls; Vec2 a, b; };
-    const R roads[] = {{"east", "local", Vec2(8, 0), Vec2(100, 0)},    {"west", "local", Vec2(-100, 0), Vec2(-8, 0)},
-                       {"nb_n", "oneway", Vec2(4, 6), Vec2(4, 100)},   {"nb_s", "oneway", Vec2(4, -100), Vec2(4, -6)},
-                       {"sb_n", "oneway", Vec2(-4, 100), Vec2(-4, 6)}, {"sb_s", "oneway", Vec2(-4, -6), Vec2(-4, -100)}};
-    nlohmann::json edges = nlohmann::json::array(), streets = nlohmann::json::array();
-    for (const R& r : roads) {
+    const R roads[] = {{"ew", "local", Vec2(-100, 0), Vec2(100, 0)},
+                       {"nb_n", "oneway", Vec2(4, 0), Vec2(4, 100)},   {"nb_s", "oneway", Vec2(4, -100), Vec2(4, 0)},
+                       {"sb_n", "oneway", Vec2(-4, 100), Vec2(-4, 0)}, {"sb_s", "oneway", Vec2(-4, 0), Vec2(-4, -100)}};
+    nlohmann::json edges = nlohmann::json::array();
+    for (const R& r : roads)
         edges.push_back({{"id", r.id}, {"class", r.cls}, {"path", {{"type", "polyline"}, {"points", {{r.a.x, r.a.y}, {r.b.x, r.b.y}}}}}});
-        const bool atStart = distance(r.a, Vec2(0, 0)) < distance(r.b, Vec2(0, 0));   // which end is at the junction
-        streets.push_back({{"id", std::string(r.id) + "/1"}, {"road", r.id}, {"from", 0.0}, {"to", distance(r.a, r.b)},
-                           {"junctions", atStart ? nlohmann::json::array({"j", nullptr}) : nlohmann::json::array({nullptr, "j"})}});
-    }
     g["edges"] = edges;
-    g["streets"] = streets;
-    auto arm = [](const char* road, double at, bool in) {
-        return nlohmann::json{{"road", road}, {"at", at}, {"spine", in ? "in" : "out"}, {"street", std::string(road) + "/1"}};
+    const auto street = [](const std::string& id, const char* road, double from, double to, bool atFrom) {
+        return nlohmann::json{{"id", id}, {"road", road}, {"from", from}, {"to", to},
+                              {"junctions", atFrom ? nlohmann::json::array({"j", nullptr}) : nlohmann::json::array({nullptr, "j"})}};
+    };
+    g["streets"] = nlohmann::json::array({street("west", "ew", 0, 96, false), street("east", "ew", 104, 200, true),
+                                          street("nb_n", "nb_n", 0, 100, true), street("nb_s", "nb_s", 0, 100, false),
+                                          street("sb_n", "sb_n", 0, 100, false), street("sb_s", "sb_s", 0, 100, true)});
+    auto arm = [](const char* road, double at, bool in, const char* street) {
+        return nlohmann::json{{"road", road}, {"at", at}, {"spine", in ? "in" : "out"}, {"street", street}};
     };
     nlohmann::json j = {{"id", "j"}, {"at", {0.0, 0.0}}};
-    j["arms"] = nlohmann::json::array({arm("east", 0, false), arm("nb_n", 0, false), arm("sb_n", 94, true), arm("west", 92, true),
-                                       arm("sb_s", 0, false), arm("nb_s", 94, true)});
+    j["arms"] = nlohmann::json::array({arm("ew", 104, false, "east"), arm("nb_n", 0, false, "nb_n"), arm("sb_n", 100, true, "sb_n"),
+                                       arm("ew", 96, true, "west"), arm("sb_s", 0, false, "sb_s"), arm("nb_s", 100, true, "nb_s")});
+    j["inside"] = nlohmann::json::array({{{"road", "ew"}, {"from", 96.0}, {"to", 104.0}}});
     j["nodes"] = nlohmann::json::array(
-        {{{"at", {6.0, 0.0}}, {"points", {{{"road", "east"}, {"at", 0.0}}, {{"road", "nb_n"}, {"at", 0.0}}, {{"road", "nb_s"}, {"at", nbsAt}}}}},
-         {{"at", {-6.0, 0.0}}, {"points", {{{"road", "west"}, {"at", 92.0}}, {{"road", "sb_n"}, {"at", 94.0}}, {{"road", "sb_s"}, {"at", 0.0}}}}}});
+        {{{"at", {4.0, 0.0}}, {"points", {{{"road", "ew"}, {"at", 104.0}}, {{"road", "nb_n"}, {"at", 0.0}}, {{"road", "nb_s"}, {"at", nbsAt}}}}},
+         {{"at", {-4.0, 0.0}}, {"points", {{{"road", "ew"}, {"at", 96.0}}, {{"road", "sb_n"}, {"at", 100.0}}, {{"road", "sb_s"}, {"at", 0.0}}}}}});
     g["junctions"] = nlohmann::json::array({j});
     g["arms_in_ring"] = true;
     return g;
@@ -3071,5 +3077,209 @@ TEST_CASE(road_model_29_the_shipped_levels_corners_and_dead_ends) {
                     ends[StreetEndKind::CarriesOn], ends[StreetEndKind::RampAnchored], ends[StreetEndKind::MeetsAnother],
                     ends[StreetEndKind::PartWay]);
         CHECK(ends[StreetEndKind::DeadEnd] == m.deadEnds.size());
+    }
+}
+
+// ---- 30. the walks the road build lays: sidewalk lanes and corner walks along the drawn pavement (ADR-0465) --------------
+
+namespace {
+// A point counts as on the drawn walk within this (m): the sidewalk's polygons are snapped to a millimetre grid, and the
+// shrunk walk's edge is cut to the same grid.
+constexpr Real kOnPavement = 0.05;
+// THE DRAWN WALK of a build: its sidewalk layer and its footways' paving, grown by kOnPavement.
+PolySet drawnWalk(const Result& r) {
+    PolySet out = r.pavement.sidewalk;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li)
+        if (r.lanes.lanes[li].kind == "footway" && li < r.pavement.footprints.size()) out = unionSets(out, r.pavement.footprints[li]);
+    return offsetSet(out, kOnPavement);
+}
+// How many of a walk's points, and of the middles of its segments, lie off the drawn walk.
+uint32_t offTheWalk(const Lane& w, const PreparedSet& walk) {
+    uint32_t off = 0;
+    const Span<Vec2> xy = w.xy();
+    for (size_t k = 0; k < xy.size(); ++k) {
+        off += walk.contains(xy[k]) ? 0u : 1u;
+        if (k + 1 < xy.size()) off += walk.contains((xy[k] + xy[k + 1]) * 0.5) ? 0u : 1u;
+    }
+    return off;
+}
+// THE KERB END A CORNER'S END SITS ACROSS FROM on arm `arm` (its crosswalk's end on the corner's kerb), and the width of
+// the walk there: false where the arm has no crosswalk.
+bool kerbEndOf(const RoadModel& m, ModelJunctionId j, uint32_t arm, int kerb, Vec2& end, Real& width) {
+    const ModelCrosswalk* c = m.crosswalkAcross(j, arm);
+    const ModelStreet* s = m.streetOf(m.junctions[j.index].arms[arm]);
+    if (!c || !s) return false;
+    end = c->ends[kerb > 0 ? 0 : 1];
+    width = s->section.footway ? s->section.travelWidth() : s->section.sidewalk;
+    return true;
+}
+// A corner's two ends against its arms' crosswalk kerb ends: each lies on that kerb's sidewalk by it, no farther than the
+// sidewalk is wide and kWalkFromKerb (beside a turn pocket the drawn kerb stands out from the stated carriageway's edge).
+// `checked` counts the ends with a crosswalk to check against.
+bool cornerEndsAtKerbEnds(const RoadModel& m, const ModelCorner& c, uint32_t& checked, Real* worst = nullptr) {
+    if (c.walk >= m.walks.size()) return false;
+    const ModelLane& w = m.walks[c.walk];
+    const Vec2 ends[2] = {m.lanePoints()[w.curve.first], m.lanePoints()[w.curve.end() - 1]};
+    bool ok = true;
+    for (int k = 0; k < 2; ++k) {
+        Vec2 kerbEnd;
+        Real width = 0;
+        if (!kerbEndOf(m, c.junction, k == 0 ? c.armA : c.armB, k == 0 ? c.kerbA : c.kerbB, kerbEnd, width)) continue;
+        ++checked;
+        const Real d = distance(ends[k], kerbEnd);
+        if (worst) *worst = std::max(*worst, d - width);
+        ok = ok && d <= width + kWalkFromKerb;
+    }
+    return ok;
+}
+}  // namespace
+
+TEST_CASE(road_model_30_the_build_lays_the_walks_from_its_drawn_pavement) {
+    // A STRAIGHT STREET: a sidewalk lane along each kerb, the middle of its sidewalk (the carriageway's half width and half
+    // the sidewalk out), the +1 kerb's on the side the kerb side is (kerbPerpSign: the plan's -y of an eastbound spine), and
+    // every point of each on the drawn sidewalk
+    {
+        nlohmann::json g;
+        g["name"] = "walk_street";
+        g["edges"] = nlohmann::json::array(
+            {{{"id", "st"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{0.0, 0.0}, {100.0, 0.0}}}}}}});
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        CHECK(r->lanes.walks.size() == 2u);
+        const PreparedSet walk(drawnWalk(*r));
+        const RoadClassSpec& local = r->graph.cls(r->graph.edges[0]);
+        const Real middle = r->graph.carriagewayHalfWidth(r->graph.edges[0]) + local.sidewalk * 0.5;
+        for (const Lane& w : r->lanes.walks) {
+            CHECK(w.kind == "sidewalk" && w.onRoad() && (w.dir == 1 || w.dir == -1));
+            const Real wantY = (w.dir > 0 ? 1.0 : -1.0) * roads::lanes::kerbPerpSign() * middle;   // (perp of +x is +y)
+            for (const Vec2& p : w.xy()) CHECK(approxEqual(p.y, wantY, kSamePoint));
+            CHECK(offTheWalk(w, walk) == 0u);
+        }
+        // the model takes them as its own walks, at the deck's height, on its street
+        const RoadModel m = assembleRoadModel(*r, oneCar());
+        CHECK(m.walks.size() == 2u && m.lanes.size() == r->lanes.lanes.size());
+        for (const ModelLane& w : m.walks) CHECK(w.kind == "sidewalk");
+        // NOTHING DRAWN READS THEM: the lane level's paths are its car lanes' alone, as before
+        for (const Path& p : m.laneLevel.paths) CHECK(p.modelLane == kNoIndex || p.modelLane < m.lanes.size());
+    }
+    // A T: a corner walk for each of its three corners, every point of each on the drawn sidewalk (never across the
+    // carriageway), each end on its kerb's sidewalk across from the crosswalk's kerb end
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(walkTee()));
+        const PreparedSet walk(drawnWalk(*r));
+        uint32_t corners = 0;
+        for (const WalkCorner& wc : r->walkCorners) {
+            CHECK(wc.lane >= 0 && wc.why.empty() && !wc.spread);
+            if (wc.lane < 0) continue;
+            ++corners;
+            CHECK(offTheWalk(r->lanes.walks[static_cast<size_t>(wc.lane)], walk) == 0u);
+        }
+        CHECK(corners == 3u);
+        const RoadModel m = assembleRoadModel(*r, oneCar());
+        uint32_t checked = 0;
+        for (const ModelCorner& c : m.corners) CHECK(cornerEndsAtKerbEnds(m, c, checked));
+        CHECK(m.corners.size() == 3u && checked == 6u);
+        CHECK(m.walks.size() == 3u * 2u + 3u);   // three roads' two sidewalks, three corners
+        // A CORNER OFF ITS PAVEMENT IS CAUGHT: the check above bites (a walk moved 6 m across, into the carriageway)
+        Lane moved = r->lanes.walks[static_cast<size_t>(r->walkCorners.front().lane)];
+        std::shared_ptr<LaneCurves> shifted = std::make_shared<LaneCurves>();
+        for (const Vec2& p : moved.xy()) shifted->points.push_back(p + Vec2(0, 6));
+        shifted->along.assign(shifted->points.size(), 0);
+        moved.curves = shifted;
+        moved.curve = Range{0, static_cast<uint32_t>(shifted->points.size())};
+        CHECK(offTheWalk(moved, walk) > 0u);
+    }
+    // ONE KERB'S SIDEWALK on the T's south road: one sidewalk lane there, and no corner walk on its bare kerb
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(walkTee("along")));
+        uint32_t south = 0;
+        for (const Lane& w : r->lanes.walks)
+            if (w.onRoad() && r->graph.edges[w.edge].id == "south") {
+                ++south;
+                CHECK(w.dir == 1);
+            }
+        CHECK(south == 1u && r->walkCorners.size() == 2u);
+        for (const WalkCorner& wc : r->walkCorners) CHECK(wc.lane >= 0);
+    }
+    // A SPREAD JUNCTION: the two pairs across its points get a walk along the drawn pavement between them -- round by the
+    // street's sidewalk, not across the median the chord between their kerb ends would cut -- and so it has every corner
+    {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(walkSpread()));
+        const PreparedSet walk(drawnWalk(*r));
+        uint32_t spread = 0, laid = 0;
+        for (const WalkCorner& wc : r->walkCorners) {
+            if (wc.lane < 0) {
+                std::printf("      no walk at %s arms %u-%u: %s\n", r->graph.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB, wc.why.c_str());
+                continue;
+            }
+            ++laid;
+            const Lane& w = r->lanes.walks[static_cast<size_t>(wc.lane)];
+            CHECK(offTheWalk(w, walk) == 0u);
+            if (!wc.spread) continue;
+            ++spread;
+            const Span<Vec2> xy = w.xy();
+            const Real chord = distance(xy[0], xy[xy.size() - 1]);
+            const Real along = w.s()[xy.size() - 1];
+            std::printf("      across the points: %u-%u, %.1f m along the pavement, %.1f m straight\n", wc.armA, wc.armB, along, chord);
+            CHECK(along > chord + 1.0);   // (it goes round)
+        }
+        CHECK(laid == 6u && spread == 2u);
+        const RoadModel m = assembleRoadModel(*r, oneCar());
+        uint32_t walked = 0, across = 0;
+        for (const ModelCorner& c : m.corners) {
+            walked += c.walk != kNoIndex ? 1u : 0u;
+            across += c.spread ? 1u : 0u;
+        }
+        CHECK(m.corners.size() == 6u && walked == 6u && across == 2u);
+        // saved and read back whole, walks and all
+        bundle::BinWriter wr;
+        putRoadModel(wr, m);
+        bundle::BinReader rd(wr.bytes.data(), wr.bytes.size());
+        RoadModel back;
+        std::string why;
+        CHECK(getRoadModel(rd, back, &why) && back == m && back.walks.size() == m.walks.size());
+    }
+}
+
+// THE SHIPPED LEVELS' WALKS (ADR-0465): every ring pair's corner, now with the drawn pavement's walk (the spread
+// junctions' too), each on the drawn sidewalk and its ends at its arms' kerb ends; any left without one, with why.
+TEST_CASE(road_model_31_the_shipped_levels_walks) {
+    for (const char* level : {"traffic_lab", "river_town"}) {
+        const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
+        const std::unique_ptr<Result> r =
+            build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+        const RoadModel m = builtRoadModel(*r);
+        const std::vector<RingPair> pairs = ringPairs(m, r->graph);
+        uint32_t walkable = 0, laid = 0, laidSpread = 0, off = 0, offWalks = 0;
+        for (const RingPair& p : pairs) walkable += p.gap == CornerGap::None || p.gap == CornerGap::ApartAtSpread ? 1u : 0u;
+        const PreparedSet walk(drawnWalk(*r));
+        std::map<std::string, uint32_t> whys;
+        for (const WalkCorner& wc : r->walkCorners) {
+            if (wc.lane < 0) {
+                ++whys[wc.why.find("kerb end lies") != std::string::npos ? std::string("a kerb end lies out in the paved junction") : wc.why];
+                std::printf("        no walk: junction %s arms %u-%u%s: %s\n", m.junctions[wc.junction.index].id.c_str(), wc.armA, wc.armB,
+                            wc.spread ? " (across its points)" : "", wc.why.c_str());
+                continue;
+            }
+            ++laid;
+            laidSpread += wc.spread ? 1u : 0u;
+            const uint32_t o = offTheWalk(r->lanes.walks[static_cast<size_t>(wc.lane)], walk);
+            off += o;
+            offWalks += o > 0 ? 1u : 0u;
+        }
+        uint32_t checked = 0, endsAway = 0, sidewalkLanes = 0;
+        Real worst = -1e9;
+        for (const ModelCorner& c : m.corners)
+            if (c.walk != kNoIndex && !cornerEndsAtKerbEnds(m, c, checked, &worst)) ++endsAway;
+        for (const ModelLane& w : m.walks) sidewalkLanes += w.onRoad() ? 1u : 0u;
+        std::printf("      %s: %zu ring pairs, %u walkable (piece 1: corners and spread pairs); walks laid for %u (%u across a spread "
+                    "junction's points); %zu ring pairs now corners; %u sidewalk lanes; %u corner walks with points off the drawn "
+                    "walk (%u points); %u corner ends checked against their crosswalk kerb ends, %u corners with an end farther than "
+                    "its sidewalk is wide (the worst %.2f m past it)\n",
+                    level, pairs.size(), walkable, laid, laidSpread, m.corners.size(), sidewalkLanes, offWalks, off, checked, endsAway, worst);
+        for (const std::pair<const std::string, uint32_t>& w : whys) std::printf("        %u with no walk: %s\n", w.second, w.first.c_str());
+        CHECK(laid + static_cast<uint32_t>(r->walkCorners.size() - laid) == walkable);
+        CHECK(laid > 0u && laidSpread > 0u);
+        CHECK(offWalks == 0u);
+        CHECK(endsAway == 0u);
     }
 }

@@ -691,6 +691,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/terrain_recipe.cpp
             src/engine/procgen/city/roads/lanes/polyline_ops.cpp
             src/engine/procgen/city/roads/lanes/lane_expand.cpp
+            src/engine/procgen/city/roads/lanes/walk_lanes.cpp   # the walks for people on foot, from the drawn pavement (ADR-0465)
             src/engine/procgen/city/roads/lanes/vertical_profile.cpp
             src/engine/procgen/city/roads/lanes/road_design.cpp
             src/engine/procgen/city/roads/lanes/deck_height.cpp

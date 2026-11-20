@@ -380,6 +380,10 @@ struct WalkCrossing {
     int fromEnd = 0;
 };
 const char* crosswalkControlWord(CrosswalkControl c);
+// ACROSS THE ROAD TOWARD A KERB (unit): the kerb of the traffic running `dir` (+1 along the spine, -1 against it), where
+// the spine runs `spine` (unit). Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign; the
+// crosswalks' kerb ends and the walks (lanes/walk_lanes.h) are laid by it.
+Vec2 towardKerb(const Vec2& spine, int dir);
 
 // ---- WHERE PEOPLE ON FOOT CAN WALK (ADR-0464, #306 task 4 piece 1) -----------------------------------------------------
 // The facts the walking paths will be laid from (pieces 2 and 3): stated once, by the planned layer, from stated facts
@@ -420,10 +424,17 @@ const PathUsers& pathUsers();
 // kerb of the traffic running along its spine, -1 the other), from the arm's `spineIn` and the world's kerb side
 // (lane_turns.h kerbSideCounterClockwise): the arriving traffic's kerb lies toward the next arm round the ring the way
 // the kerb side turns. Stated by the planned layer (ringPairs below says which pairs got none, and why).
+//
+// ITS WALK (built layer, ADR-0465): the line along the middle of the drawn sidewalk between the two arms' kerb ends,
+// laid by the road build (lanes/walk_lanes.h): `walk`, an index into RoadModel::walks (kNoIndex: none laid; a planned
+// model has none). The build also lays a corner for each pair of a spread junction's arms that meet it at different
+// points (`spread`: CornerGap::ApartAtSpread, a corner no road file states), from the drawn pavement between them.
 struct ModelCorner {
     ModelJunctionId junction;
     uint32_t armA = 0, armB = 0;
     int kerbA = 1, kerbB = 1;
+    uint32_t walk = kNoIndex;
+    bool spread = false;
 };
 // A DEAD END: a street's end with no junction, nothing it carries on into, and no other road meeting it there (the
 // road just ends: StreetEndKind::DeadEnd). `turnRound`: its two sidewalks are joined across the road's end by a path of
@@ -471,6 +482,12 @@ struct RoadModel {
     // by street (its `from` end first). Stated by the planned layer (see ModelCorner, ModelDeadEnd).
     std::vector<ModelCorner> corners;
     std::vector<ModelDeadEnd> deadEnds;
+    // THE WALKS (built layer, ADR-0465): every sidewalk lane (kind from the path users' table; `dir` the kerb it runs
+    // beside; its streets and the junction at each end as a car lane's) and every corner's walk (no road; named by its
+    // corner), as the road build laid them into the same centre lines (`curves`, with their heights and spine stations
+    // beside them). A list of its own, beside `lanes`: nothing that reads the car lanes meets them. A footway's lane is a
+    // car lane's record of kind "footway" in `lanes`, laid by expand. Nothing reads the walks yet but the tests.
+    std::vector<ModelLane> walks;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -806,7 +823,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 15;   // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)
+constexpr uint32_t kRoadModelFormat = 16;   // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)
+                                            // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)
                                             // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)
                                             // 13:the kerb parking runs; the lane level holds no car spaces (LGRF 14, ADR-0439)
                                             // 12: the lane level holds no through partner (LGRF 13, ADR-0438)

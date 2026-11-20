@@ -43,14 +43,27 @@ struct Lane : LaneFacts {
 
 struct LaneSet {
     std::vector<Lane> lanes;
-    // every lane's centre line (each lane's `curves` is this object); the road model made from the build holds it too
-    std::shared_ptr<const LaneCurves> curves;
+    // THE WALKS (walk_lanes.h, ADR-0465): every sidewalk lane and corner walk the build laid for people on foot, laid into
+    // the same centre lines. Not lanes of the pavement: nothing is drawn from them (buildFootprints reads `lanes` only),
+    // and the road model takes them as its own list (RoadModel::walks), which the lane level does not read yet.
+    std::vector<Lane> walks;
+    // every lane's centre line (each lane's `curves` is this object); the road model made from the build holds it too.
+    // Written by expand (the lanes) and layWalks (the walks), each appending.
+    std::shared_ptr<LaneCurves> curves;
     std::map<std::string, int> byId;
     int find(const std::string& id) const { auto it = byId.find(id); return it == byId.end() ? -1 : it->second; }
     // Ownership rank: connectors yield to every lane; otherwise the parent class rank.
     double rank(int lane, const RoadLabGraph& g) const;
     std::string roadOf(int lane, const RoadLabGraph& g) const;
 };
+
+// ONE LANE LAID BESIDE `spine` (`nrm` its unit normals, `off` the offset along each): its centre line is appended to
+// `curves`, the one object every lane of the build is laid into (road_model_parts.h LaneCurves), and the lane names its
+// stretch of it; nothing may hold a view of an earlier lane's points across this call (the arrays grow). Expand lays the
+// car lanes by it, and layWalks (walk_lanes.h) the walks.
+Lane ribbonLane(const std::shared_ptr<LaneCurves>& curves, const std::string& id, int parent, const std::string& kind,
+                const std::string& cls, double w, int dir,
+                const std::vector<Vec2>& spine, const std::vector<Vec2>& nrm, const std::vector<double>& off);
 
 // Ramps get their composed geometry (mutates the graph's ramp edges), then every paved edge
 // expands into lanes and the declared connectors are generated. Each lane is given its slot and its stretch of spine.

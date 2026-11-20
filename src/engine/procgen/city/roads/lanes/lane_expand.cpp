@@ -12,11 +12,7 @@
 namespace engine {
 namespace roads::lanes {
 
-namespace {
-
-// One lane laid beside `spine`. Its centre line is appended to `curves`, the one object every lane of the build is laid
-// into (road_model_parts.h LaneCurves), and the lane names its stretch of it; nothing may hold a view of an earlier
-// lane's points across this call (the arrays grow).
+// (declared in lane_expand.h: the walks are laid by it too, walk_lanes.cpp)
 Lane ribbonLane(const std::shared_ptr<LaneCurves>& curves, const std::string& id, int parent, const std::string& kind,
                 const std::string& cls, double w, int dir,
                 const std::vector<Vec2>& spine, const std::vector<Vec2>& nrm, const std::vector<double>& off) {
@@ -35,8 +31,6 @@ Lane ribbonLane(const std::shared_ptr<LaneCurves>& curves, const std::string& id
     l.curves = curves;
     return l;
 }
-
-}  // namespace
 
 LaneSlot anchorSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::string& side) {
     std::vector<LaneSlot> slots = laneSlots(g.cls(host), host.lanes);
@@ -130,7 +124,8 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out, const std::shared_pt
     for (const LaneSlot& sl : slots) {
         laneOfSlot[sl.name] = static_cast<int>(out.lanes.size());
         std::vector<double> off(e.xy.size(), sl.offset);
-        out.lanes.push_back(ribbonLane(curves, e.id + "." + sl.name, ei, "through", e.cls, w, sl.dir, e.xy, nrm, off));
+        // (a footway's lane is a walk: its kind is the path users' word for one, ADR-0465; laid and drawn as before)
+        out.lanes.push_back(ribbonLane(curves, e.id + "." + sl.name, ei, c.footway ? "footway" : "through", e.cls, w, sl.dir, e.xy, nrm, off));
         out.lanes.back().slot = std::atoi(sl.name.c_str() + 1);   // f0 / b0: by the centre line (laneSlots' names)
         out.lanes.back().spineFrom = e.s.front();
         out.lanes.back().spineTo = e.s.back();

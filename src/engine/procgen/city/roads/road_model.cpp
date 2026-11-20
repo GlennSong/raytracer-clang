@@ -212,13 +212,12 @@ Vec2 spineDirection(const StreetLine& l, Real from, Real to) {
     const Vec2 seg = l.xy[spot.seg + 1] - l.xy[spot.seg];
     return strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
 }
-// ACROSS THE ROAD TOWARD A KERB (unit): the kerb of the traffic running `dir` (+1 along the spine, -1 against it),
-// where the spine runs `spine`. Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign.
+
+}  // namespace
+
 Vec2 towardKerb(const Vec2& spine, int dir) {
     return perp(spine * static_cast<Real>(dir)) * static_cast<Real>(roads::lanes::kerbPerpSign());
 }
-
-}  // namespace
 
 bool junctionLit(const ModelJunction& J) {
     const AttachmentKind* pole = attachmentKinds().find(attachmentKinds().use("signal_pole"));
@@ -736,20 +735,9 @@ RoadModel builtRoadModel(const Result& r) {
     m.curves = r.lanes.curves;
     m.heights.assign(m.lanePoints().size(), 0.0);
     m.spineStations.assign(m.lanePoints().size(), kNotStated);
-    for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
-        const Lane& l = r.lanes.lanes[li];
-        CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
-        ModelLane L;
-        static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
-        // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
-        std::size_t i0 = 0;
-        const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
-        if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
-        const Span<Vec2> xy = l.xy();
-        for (std::size_t k = 0; k < xy.size(); ++k) {
-            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
-            m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
-        }
+    // where a lane laid along road `e` lies on the stated streets: its stretches, and the junction at each end where it
+    // reaches that end of its street (a car lane's, and a sidewalk lane's: ADR-0465)
+    const auto placeOnStreets = [&](ModelLane& L, const EdgeSpec* e) {
         const std::map<std::string, std::vector<uint32_t>>::const_iterator own = e ? streetsOf.find(e->id) : streetsOf.end();
         if (own != streetsOf.end()) {
             for (uint32_t si : own->second) {
@@ -767,8 +755,89 @@ RoadModel builtRoadModel(const Result& r) {
             L.atStart = L.dir > 0 ? atFrom : atTo;
             L.atEnd = L.dir > 0 ? atTo : atFrom;
         }
+    };
+    for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const Lane& l = r.lanes.lanes[li];
+        CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
+        ModelLane L;
+        static_cast<LaneFacts&>(L) = l;   // the lane's facts, the builder's taken whole (declared once: road_model_parts.h)
+        // the spine sample each point was laid beside (lane_expand.cpp ribbonLane: point k of a lane laid from spineFrom)
+        std::size_t i0 = 0;
+        const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
+        if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
+        const Span<Vec2> xy = l.xy();
+        for (std::size_t k = 0; k < xy.size(); ++k) {
+            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
+            m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
+        }
+        placeOnStreets(L, e);
         for (const ModelLaneSpan& sp : L.streets) m.streets[sp.street.index].lanes.push_back(ModelLaneId(static_cast<uint32_t>(li)));
         m.lanes.push_back(std::move(L));
+    }
+    // ---- THE WALKS (ADR-0465), as the build laid them (lanes/walk_lanes.h): each sidewalk lane where it lies on the
+    // streets, at its road's deck; each corner walk at the deck of the nearer of its two arms' roads. And the corners the
+    // build found a walk for: a stated one keeps its place with its walk (none where no drawn pavement joins its arms:
+    // its why is the build's, r.walkCorners); a spread junction's pair becomes a corner only where the build laid one.
+    {
+        std::vector<int> cornerOfWalk(r.lanes.walks.size(), -1);
+        for (std::size_t c = 0; c < r.walkCorners.size(); ++c)
+            if (r.walkCorners[c].lane >= 0 && static_cast<std::size_t>(r.walkCorners[c].lane) < cornerOfWalk.size())
+                cornerOfWalk[static_cast<std::size_t>(r.walkCorners[c].lane)] = static_cast<int>(c);
+        for (std::size_t wi = 0; wi < r.lanes.walks.size(); ++wi) {
+            const Lane& l = r.lanes.walks[wi];
+            CHECK(l.curves == r.lanes.curves);
+            ModelLane W;
+            static_cast<LaneFacts&>(W) = l;
+            const EdgeSpec* e = l.onRoad() ? &g.edges[l.edge] : nullptr;
+            // a corner's roads: its two arms'
+            std::array<int, 2> armRoads{{-1, -1}};
+            if (!e && cornerOfWalk[wi] >= 0) {
+                const roads::lanes::WalkCorner& wc = r.walkCorners[static_cast<std::size_t>(cornerOfWalk[wi])];
+                const ModelJunction& J = m.junctions[wc.junction.index];
+                for (int k = 0; k < 2; ++k) {
+                    const std::map<std::string, int>::const_iterator it = g.index.find(J.arms[k == 0 ? wc.armA : wc.armB].road);
+                    if (it != g.index.end()) armRoads[static_cast<std::size_t>(k)] = it->second;
+                }
+            }
+            std::size_t i0 = 0;
+            if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
+            const Span<Vec2> xy = l.xy();
+            for (std::size_t k = 0; k < xy.size(); ++k) {
+                int road = e ? static_cast<int>(l.edge) : -1;
+                if (!e) {
+                    double nearest = std::numeric_limits<double>::infinity();
+                    for (const int a : armRoads) {
+                        if (a < 0) continue;
+                        const EdgeSpec& ae = g.edges[static_cast<std::size_t>(a)];
+                        const double d = roads::lanes::project(ae.xy, ae.s, xy[k]).distance;
+                        if (d < nearest) {
+                            nearest = d;
+                            road = a;
+                        }
+                    }
+                }
+                m.heights[l.curve.first + k] = r.heights && road >= 0 ? r.heights->deckRoad(road, xy[k]) : 0.0;
+                m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
+            }
+            if (e) placeOnStreets(W, e);
+            m.walks.push_back(std::move(W));
+        }
+        std::vector<ModelCorner> corners;
+        for (const roads::lanes::WalkCorner& wc : r.walkCorners) {
+            if (wc.spread && wc.lane < 0) continue;
+            ModelCorner c{wc.junction, wc.armA, wc.armB, wc.kerbA, wc.kerbB, wc.lane >= 0 ? static_cast<uint32_t>(wc.lane) : kNoIndex, wc.spread};
+            corners.push_back(c);
+        }
+        // (a stated corner the build did not reach, its road unknown to it, stays as stated)
+        for (const ModelCorner& c : m.corners) {
+            bool found = false;
+            for (const roads::lanes::WalkCorner& wc : r.walkCorners) found = found || (wc.junction == c.junction && wc.armA == c.armA);
+            if (!found) corners.push_back(c);
+        }
+        std::stable_sort(corners.begin(), corners.end(), [](const ModelCorner& a, const ModelCorner& b) {
+            return std::make_pair(a.junction.index, a.armA) < std::make_pair(b.junction.index, b.armA);
+        });
+        m.corners = std::move(corners);
     }
     for (ModelStreet& S : m.streets) {
         std::sort(S.lanes.begin(), S.lanes.end());
@@ -1623,10 +1692,14 @@ std::string dumpRoadModel(const RoadModel& m) {
     const auto streetId = [&](ModelStreetId s) { return s.index < m.streets.size() ? m.streets[s.index].id : std::string("?"); };
     for (const ModelCorner& c : m.corners) {
         const ModelJunction& J = m.junctions[c.junction.index];
-        out += fmt("corner: junction %s, arm %u (%s, the %s kerb) to arm %u (%s, the %s kerb)\n", J.id.c_str(), c.armA,
+        out += fmt("corner: junction %s, arm %u (%s, the %s kerb) to arm %u (%s, the %s kerb)%s%s\n", J.id.c_str(), c.armA,
                    streetId(J.arms[c.armA].street).c_str(), c.kerbA > 0 ? "along" : "against", c.armB,
-                   streetId(J.arms[c.armB].street).c_str(), c.kerbB > 0 ? "along" : "against");
+                   streetId(J.arms[c.armB].street).c_str(), c.kerbB > 0 ? "along" : "against", c.spread ? ", across its points" : "",
+                   c.walk < m.walks.size() ? fmt(", walk %s (%u points)", m.walks[c.walk].id.c_str(), m.walks[c.walk].curve.count).c_str() : "");
     }
+    for (const ModelLane& w : m.walks)
+        if (w.onRoad()) out += fmt("walk: %s, a %s along road %u, the %s kerb, %.1f m wide\n", w.id.c_str(), w.kind.c_str(), w.edge,
+                                   w.dir > 0 ? "along" : "against", w.width);
     for (const ModelDeadEnd& d : m.deadEnds)
         out += fmt("dead end: street %s, its %s end%s\n", streetId(d.street).c_str(), d.end == 0 ? "`from`" : "`to`",
                    d.turnRound ? ", its sidewalks joined across" : "");
@@ -1734,8 +1807,16 @@ std::string reportRoadModel(const RoadModel& m) {
     {   // where people on foot can walk (ADR-0464)
         uint32_t turnRound = 0;
         for (const ModelDeadEnd& d : m.deadEnds) turnRound += d.turnRound ? 1u : 0u;
-        out += fmt("  %zu corners round the junctions' rings; %zu dead ends, %u of them with their sidewalks joined across (ADR-0464)\n",
-                   m.corners.size(), m.deadEnds.size(), turnRound);
+        uint32_t walked = 0, spread = 0, sidewalks = 0;
+        for (const ModelCorner& c : m.corners) {
+            walked += c.walk != kNoIndex ? 1u : 0u;
+            spread += c.spread ? 1u : 0u;
+        }
+        for (const ModelLane& w : m.walks) sidewalks += w.onRoad() ? 1u : 0u;
+        out += fmt("  %zu corners round the junctions' rings (%u with a walk the build laid, %u of those across a spread junction's "
+                   "points); %zu dead ends, %u of them with their sidewalks joined across (ADR-0464); %zu walks: %u sidewalk lanes "
+                   "(ADR-0465)\n",
+                   m.corners.size(), walked, spread, m.deadEnds.size(), turnRound, m.walks.size(), sidewalks);
     }
     {
         std::map<std::string, uint32_t> byKind;
@@ -1913,7 +1994,9 @@ template <class IO, class C> void fields(IO& io, C& c, ModelCrosswalk*) {
     c.control = static_cast<CrosswalkControl>(control);
     io(c.laneCrosswalk);
 }
-template <class IO, class C> void fields(IO& io, C& c, ModelCorner*) { io(c.junction); io(c.armA); io(c.armB); io(c.kerbA); io(c.kerbB); }
+template <class IO, class C> void fields(IO& io, C& c, ModelCorner*) {
+    io(c.junction); io(c.armA); io(c.armB); io(c.kerbA); io(c.kerbB); io(c.walk); io(c.spread);
+}
 template <class IO, class D> void fields(IO& io, D& d, ModelDeadEnd*) { io(d.street); io(d.end); io(d.turnRound); }
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
@@ -1953,7 +2036,7 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     m.curves = std::move(curves);
     io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
     io(m.crosswalks);
-    io(m.corners); io(m.deadEnds);
+    io(m.corners); io(m.deadEnds); io(m.walks);
     io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }

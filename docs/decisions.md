@@ -22527,3 +22527,84 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** pieces 2-3 lay the walking paths from these facts, when the walk between a spread junction's points is stated, or when the build paves one kerb only (then the problem line goes).
+
+## ADR-0465 — The road build lays the walks: a sidewalk lane along each kerb, and each corner's walk along the drawn pavement, a spread junction's too (#306 task 4, piece 2)
+**Status:** Provisional · **Date:** 2026-11-19
+
+What it does: the road build now lays the lines people on foot will walk, into the same store of centre lines as the car lanes, and the road model takes them into its built layer:
+- **a sidewalk lane** along each kerb that has a sidewalk;
+- **a corner walk** round each junction corner, read off the pavement the build actually draws.
+
+That includes the corners between a spread junction's points, which no road file states: Glenn chose (2026-11-19, option 2) that the builder states them from the pavement it draws, with no road-file change and no re-planning. Nothing reads the walks yet except the tests. Piece 3 lays them as paths in the lane level.
+
+Words:
+- **Kerb end:** where a person steps off the kerb at an arm: its crosswalk's end on that kerb (`ModelCrosswalk::ends`). With no crosswalk, it is the carriageway's edge level with the arm's stated box edge.
+- **Drawn walk:** the pavement the build draws for people: its sidewalk layer (`Pavement::sidewalk`) and its footways' own paving.
+- **Seam:** the hairline the build leaves where two roads' sidewalks are drawn up to one another, each cut at its own end and angle on the 1 mm grid. The mesh does not show it.
+- **Spread junction:** one the plan made of several points (ADR-0425).
+
+**Added** (`lanes/walk_lanes.h/.cpp`, `layWalks`, run as the build's last step):
+- **Sidewalk lanes.** One for each kerb with a sidewalk (ADR-0464's per-kerb facts), along each road whose class has a sidewalk and carries cars.
+  - It is laid by the builder's one lane layer (`ribbonLane`, now declared in `lane_expand.h`) in the road's own frame: the carriageway's half width and half the sidewalk out from the spine.
+  - Kind `sidewalk`; `dir` is the kerb it runs beside; slot 0.
+- **Footway lanes.** The lane expand already laid for a footway road now has kind `footway`, the path users' word for it (ADR-0464), instead of `through`. It is laid and drawn as before.
+- **Corner walks.** One for each ring pair ADR-0464 states a corner for, and for each pair of a spread junction's arms that meet it at different points (`CornerGap::ApartAtSpread`). For each:
+  - the drawn walk is cut to a window `kCornerWindow` (30 m) round the two kerb ends;
+  - its seams up to `kSeamBridge` (5 cm) are closed;
+  - it is shrunk by `kWalkFromKerb` (0.5 m), so the walk keeps off the kerb and the back of the pavement;
+  - the edge of it that both kerb ends lie by (each within its sidewalk's width plus `kWalkFromKerb`, since beside a turn pocket the drawn kerb stands out from the stated one) is followed the shorter way between the points nearest the two kerb ends.
+  - The result is a curve along the drawn pavement, never a chord. A corner whose two crosswalks meet at the kerb's corner gets a walk of no length.
+  - Where no drawn walk joins the two kerb ends, none is laid, and `WalkCorner::why` says why: either a kerb end lies out in the paved junction N m from the nearest drawn sidewalk, or the drawn sidewalks by the two kerb ends are two pieces.
+- **In the model** (`builtRoadModel`):
+  - `RoadModel::walks`: its own list of `ModelLane` records beside `lanes`, so nothing that reads the car lanes meets them. Sidewalk lanes are placed on their streets as car lanes are (one shared lambda). Heights come from their road's deck; a corner's from the nearer of its two arms' roads.
+  - `ModelCorner::walk` (an index into `walks`) and `ModelCorner::spread`. A spread pair becomes a corner only where the build laid a walk. A stated corner keeps its place with no walk where none could be laid.
+  - `towardKerb` is now declared in `road_model.h` (one statement of which side a kerb is, used by the crosswalks and the walks).
+  - The build lists the walks in `LaneSet::walks` and the corners with their reasons in `Result::walkCorners`. `LaneSet::curves` is writable so the walks can be appended. Nothing is drawn from the walks: `buildFootprints` reads `lanes` only.
+
+**Seams, measured.** With no seam closing, traffic_lab left 56 corners without a walk and river_town 57. The renders of the failures showed hairlines between two roads' sidewalks and kerb ends out in wide paved junctions. Closing 5 cm joins 34 and 13 of them. Closing 20 cm or 50 cm joins only 3 to 7 more, and would also close real gaps (a narrow median between two carriageways' sidewalks). So `kSeamBridge` is 5 cm.
+
+**The shipped levels** (`road_model_31`):
+
+| | traffic_lab | river_town |
+|---|---|---|
+| Ring pairs / walkable (ADR-0464's corners and spread pairs) | 553 / 545 | 571 / 571 |
+| Corner walks laid | 523 | 527 |
+| ...of them across a spread junction's points | 33 of 41 | 55 of 74 |
+| Corners in the built model | 537 | 552 |
+| Left with no walk: a kerb end out in the paved junction | 13 | 27 |
+| Left with no walk: the drawn sidewalk in two pieces | 9 | 17 |
+| Sidewalk lanes | 634 | 716 |
+| Corner walks with any point (or segment middle) off the drawn walk | 0 | 0 |
+| Corner ends checked against their crosswalk's kerb end / farther than the sidewalk is wide plus 0.5 m | 982 / 0 | 1053 / 0 |
+
+- **Left with no walk, by junction:**
+  - traffic_lab, kerb end out: j0 5-6, j4 2-3, j19 0-1, j22 0-1, j24 0-1, j37 2-3, j41 0-1, j70 0-1*, j81 2-3, j84 3-4, j92 3-4*, j93 2-3, j96 0-1.
+  - traffic_lab, two pieces: j7 1-2*, j7 2-3*, j14 1-2*, j55 0-1*, j84 4-5*, j93 4-0*, j94 2-0, j119 1-2, j129 0-1.
+  - river_town, kerb end out: j0 5-6, j4 2-3, j7 0-1*, j18 1-2*, j19 3-0*, j28 1-2, j29 3-0*, j35 2-3*, j37 0-1, j44 3-0, j56 0-1, j71 0-1, j72 0-1, j72 2-3, j73 2-3, j75 2-0, j90 2-3*, j90 3-4*, j92 3-0, j115 1-2, j116 1-2, j119 0-1*, j119 2-3*, j120 1-2, j129 0-1*, j130 1-2, j135 1-2.
+  - river_town, two pieces: j0 4-5*, j6 1-2*, j6 2-3, j7 2-3*, j18 0-1*, j19 1-2*, j23 2-3*, j29 2-3*, j35 1-2*, j39 2-3, j52 1-2*, j87 2-0, j90 0-1, j116 3-0, j131 2-0, j137 2-0, j138 2-0.
+  - (* across a spread junction's points.)
+- **What the renders showed:**
+  - **A kerb end out in the paved junction:** the crosswalk's kerb end is placed at the stated carriageway's edge, but the junction is paved much wider (two roads meeting at a sharp angle, a merged junction), so the stated kerb end lies 6 to 20 m inside the asphalt. The crosswalk stands where nobody can wait. This is the same family as ADR-0452's kerb ends in another road and the river_town j29 jam.
+  - **Two pieces:** a gap wider than 5 cm in the drawn sidewalk where two roads' sidewalks meet at an angle (wedge-shaped), or the sidewalk cut where a spread junction's inside stretch crosses it.
+  - Both are faults in the drawn junction or the stated crosswalks, not in the walks. They are listed for the planner or for step 9's junction drawing. They are not guessed round.
+
+**Tests:**
+- `road_model_30_the_build_lays_the_walks_from_its_drawn_pavement`:
+  - a straight street (two sidewalk lanes, each on its kerb's sidewalk middle, every point on the drawn sidewalk, and the lane level still the car lanes' alone);
+  - a T (three corner walks on the drawn sidewalk, each end by its crosswalk's kerb end; a walk moved 6 m into the carriageway is caught);
+  - a one-sided street (one sidewalk lane there; no corner on the bare kerb);
+  - a spread junction (the two pairs across its points get walks that go round by the street's sidewalk, 7.5 m along against 3.5 m straight; all six corners have walks), saved and read back whole.
+- `road_model_31_the_shipped_levels_walks`: the table above.
+- The spread scene of ADR-0464's tests now runs its street through the junction (its stretch inside), as a planned file states one. Before, it ended at each point, and nothing joined the points' pavements.
+
+**Format and caches:** `kRoadModelFormat` 16 (the walks; a corner's walk and spread flag), so each level's saved road model (`cache/roadmodel`) is made again once. No bake key moved and no lots tag was bumped. `lanes_tool build` gives byte-identical `.glb` and `.svg` against the tool at 6a8315c4 (built apart, from `git archive`) for traffic_lab, river_town, light_rail_lab and rail_loop (the last two have footways, for the relabelled lane kind). Laying the walks takes 0.2 s on traffic_lab and 0.4 s on river_town.
+
+**One model:**
+- Concepts touched: roads (sidewalk lanes, corner walks, footway lane kind, kerb side).
+- The walks are laid once, by the builder, into its one store of centre lines, and held once by the model (`walks`).
+- The street placement of a lane is one lambda for car lanes and sidewalk lanes.
+- No second model of the roads was made. No road fact is computed outside `roads/`.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** piece 3 lays these as lane-level paths; when the stated crosswalks' kerb ends or the junction drawing are fixed for the junctions listed above (their corners then get walks); or when the build paves one kerb only.

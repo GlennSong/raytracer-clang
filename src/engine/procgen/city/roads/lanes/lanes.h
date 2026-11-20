@@ -53,6 +53,20 @@ struct JunctionSpan {
 };
 struct LaneLookup;   // deck_mesh.h: which lanes' footprints hold a point, asked many times
 
+// ONE CORNER WALK THE BUILD LAID (walk_lanes.h, ADR-0465), or why a ring pair has none: the junction, the two arms next
+// to each other round its ring and the kerb of each that faces the corner (road_model.h ringPairs); `lane` its walk (an
+// index into LaneSet::walks), -1: none, and `why` says why. `spread`: the two arms meet a spread junction at different
+// points (a corner the road file cannot state; the drawn pavement says where the kerb runs between them).
+struct WalkCorner {
+    ModelJunctionId junction;
+    uint32_t armA = 0, armB = 0;
+    int kerbA = 1, kerbB = 1;
+    bool spread = false;
+    int lane = -1;
+    Vec2 anchorA, anchorB;           // each arm's kerb end on the corner's kerb (its crosswalk's end there, else at its box edge)
+    std::string why;
+};
+
 struct Result {
     RoadLabGraph graph;
     LaneSet lanes;
@@ -72,6 +86,10 @@ struct Result {
     // The lane footprints prepared for point tests (deck_mesh.h LaneLookup), made once at the end of build(), for the
     // mesher and the lane level to use again.
     std::shared_ptr<const LaneLookup> lookup;
+    // THE CORNER WALKS (walk_lanes.h layWalks, ADR-0465): every ring pair the road model states a corner for or leaves
+    // to the drawn pavement (a spread junction's), with its walk or why it has none; the walks themselves are in
+    // `lanes.walks`.
+    std::vector<WalkCorner> walkCorners;
 };
 
 // A step in the driving surface: a deck boundary edge (a slab side face) standing more than kerb height
