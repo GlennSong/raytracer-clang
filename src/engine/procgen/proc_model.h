@@ -355,6 +355,18 @@ std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m);
 // used piece. Bridges a model to single-mesh consumers.
 RenderMesh flattenModel(const ProcModel& m);
 
+// THE MIRRORED TWIN of a model, left to right (across the plane x = 0 through its origin): a right door from the
+// left door, authored once. Every mesh is mirrored and wound to face out again (MeshBuilder::mirrored), and every
+// node, marker and copy is put where the mirror puts it, so the twin is an ordinary model that any renderer draws
+// as it draws the first. (Mirroring by a copy's matrix would not do: the renderers cull by a fixed winding, and a
+// mirroring matrix turns every face inside out.) A piece the model uses is mirrored once however often it is used.
+// Names are kept.
+//   - A frame keeps its up (y) and its facing (z), mirrored; its own x swaps sides, as it must for the frame to stay
+//     a rotation. So a marker that faced out of the left door faces out of the right one.
+//   - Left to right only. For another plane, hang the twin on a turned node.
+// Returns null, with `why` when given, for a model that grades terrain: that has no mirror here.
+std::shared_ptr<ProcModel> mirroredModel(const ProcModel& m, std::string* why = nullptr);
+
 }  // namespace engine
 
 #endif

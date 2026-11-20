@@ -380,3 +380,152 @@ TEST_CASE(the_game_draws_one_group_per_part_of_a_piece_and_stamps_its_colliders)
     world.destroyAll();
     assets.clear();
 }
+
+// --- the mirrored twin --------------------------------------------------------------------------------------------
+
+namespace {
+
+// A door that is nothing like its mirror image: a slab hung off a turned hinge node, a handle on a node under that
+// (itself turned), a handle marker, and two screws that are one piece used at two turned, scaled placements.
+std::shared_ptr<ProcModel> makeDoor() {
+    std::shared_ptr<ProcModel> door = std::make_shared<ProcModel>();
+    const int hinge = door->addNode("hinge", 0, ProcFrame{Vec3(0.9, 0.5, 1.0), Quat::fromEuler(0.1, 0.5, -0.2)});
+    { ProcPart p; p.mesh = MeshBuilder::box(Vec3(0.06, 1.0, 1.1)); MeshBuilder::transform(p.mesh, Mat4::translate(0.03, 0.2, -0.6)); p.node = hinge; door->parts.push_back(p); }
+    const int handle = door->addNode("handle", hinge, ProcFrame{Vec3(0.08, 0.3, -1.0), Quat::fromEuler(0.3, 0.0, 0.4)});
+    { ProcPart p; p.mesh = MeshBuilder::box(Vec3(0.03, 0.04, 0.2)); MeshBuilder::transform(p.mesh, Mat4::translate(0.02, 0, 0.05)); p.node = handle; door->parts.push_back(p); }
+    ProcMarker grip;
+    grip.name = "grip";
+    grip.frame = ProcFrame{Vec3(0.05, 0, 0.1), Quat::fromEuler(0, 0.7, 0)};
+    door->addMarker(handle, grip);
+    ProcUse screws;
+    screws.piece = ProcModel::ofMesh(MeshBuilder::box(Vec3(0.02, 0.01, 0.03)));
+    screws.node = handle;
+    screws.placements.push_back(ProcPlacement{Vec3(0.01, 0.03, 0.02), Quat::fromEuler(0.2, 0.3, 0.4), 1.5});
+    screws.placements.push_back(ProcPlacement{Vec3(0.01, -0.03, 0.12), Quat::fromEuler(-0.4, 0.1, 0.9), 0.7});
+    door->uses.push_back(screws);
+    return door;
+}
+
+// Every vertex of one flattened model is, reflected, a vertex of the other: checked through sums that only agree
+// when the two sets of points agree (the sum, and the sum of each point's cube).
+struct PointSums {
+    Vec3 sum, cubes;
+    std::size_t count = 0;
+};
+PointSums sumsOf(const RenderMesh& mesh, const Vec3* reflectAcross) {
+    PointSums s;
+    for (const Vertex& v : mesh.vertices) {
+        Vec3 p = v.position;
+        if (reflectAcross != nullptr) p = p - *reflectAcross * (2.0 * dot(p, *reflectAcross));
+        s.sum = s.sum + p;
+        s.cubes = s.cubes + Vec3(p.x * p.x * p.x, p.y * p.y * p.y, p.z * p.z * p.z);
+        ++s.count;
+    }
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE(a_models_mirrored_twin_is_its_mirror_image_and_faces_out) {
+    const std::shared_ptr<ProcModel> door = makeDoor();
+    const Vec3 n(1, 0, 0);
+    const std::shared_ptr<ProcModel> twin = mirroredModel(*door);
+    CHECK(twin != nullptr);
+    if (twin == nullptr) return;
+    // The same tree, materials and names; nothing shared that the mirror changes.
+    CHECK(twin->nodes.size() == door->nodes.size() && twin->parts.size() == door->parts.size());
+    CHECK(twin->findNode("handle") == door->findNode("handle"));
+    CHECK(twin->uses.size() == 1 && twin->uses[0].piece != door->uses[0].piece);
+
+    // Every point the door draws, reflected, is a point the twin draws.
+    const RenderMesh was = flattenModel(*door), is = flattenModel(*twin);
+    const PointSums a = sumsOf(was, &n), b = sumsOf(is, nullptr);
+    CHECK(a.count == b.count && a.count > 0);
+    CHECK(near(a.sum, b.sum, 1e-9));
+    CHECK(near(a.cubes, b.cubes, 1e-9));
+
+    // Every face still looks outward. The door, built by the toolkit, says which way a triangle's winding runs
+    // against its vertex normals; the twin must run the same way on every triangle, not inside out.
+    auto agreeing = [](const RenderMesh& mesh) {
+        long agree = 0;
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const Vertex& v0 = mesh.vertices[mesh.indices[i]];
+            const Vertex& v1 = mesh.vertices[mesh.indices[i + 1]];
+            const Vertex& v2 = mesh.vertices[mesh.indices[i + 2]];
+            if (dot(cross(v1.position - v0.position, v2.position - v0.position), v0.normal) > 0) ++agree;
+        }
+        return agree;
+    };
+    const long doorAgree = agreeing(was), twinAgree = agreeing(is);
+    const long triangles = static_cast<long>(was.indices.size() / 3);
+    CHECK(doorAgree == 0 || doorAgree == triangles);      // the door is wound one way throughout
+    CHECK(twinAgree == doorAgree);
+
+    // A marker goes where the mirror puts it; its facing (z) and its up (y) are the mirror's image of the old ones,
+    // and its own x has swapped sides.
+    ProcFrame grip, twinGrip;
+    CHECK(door->markerFrame("grip", grip) && twin->markerFrame("grip", twinGrip));
+    CHECK(near(twinGrip.position, reflect(grip.position, n)));
+    CHECK(near(twinGrip.rotation.rotate(Vec3(0, 0, 1)), reflect(grip.rotation.rotate(Vec3(0, 0, 1)), n)));
+    CHECK(near(twinGrip.rotation.rotate(Vec3(0, 1, 0)), reflect(grip.rotation.rotate(Vec3(0, 1, 0)), n)));
+    CHECK(near(twinGrip.rotation.rotate(Vec3(1, 0, 0)), reflect(grip.rotation.rotate(Vec3(1, 0, 0)), n) * -1.0));
+
+    // Mirrored twice it is the door again.
+    const std::shared_ptr<ProcModel> back = mirroredModel(*twin);
+    CHECK(back != nullptr);
+    if (back != nullptr) {
+        const PointSums c = sumsOf(flattenModel(*back), nullptr), d = sumsOf(was, nullptr);
+        CHECK(near(c.sum, d.sum, 1e-9) && near(c.cubes, d.cubes, 1e-9));
+        ProcFrame again;
+        CHECK(back->markerFrame("grip", again) && near(again.position, grip.position));
+        CHECK(near(again.rotation.rotate(Vec3(0, 0, 1)), grip.rotation.rotate(Vec3(0, 0, 1))));
+    }
+}
+
+TEST_CASE(a_shared_piece_is_mirrored_once_and_some_models_have_no_twin) {
+    const std::shared_ptr<ProcModel> tire = makeTire(ProcModel::ofMesh(MeshBuilder::box(Vec3(0.02, 0.02, 0.02))));
+    const ProcModel car = makeCar(tire);
+    const std::shared_ptr<ProcModel> twin = mirroredModel(car);
+    CHECK(twin != nullptr);
+    if (twin != nullptr) {
+        CHECK(twin->uses.size() == 4);
+        for (const ProcUse& u : twin->uses) CHECK(u.piece == twin->uses[0].piece);   // still one tire
+        CHECK(twin->uses[0].piece != tire);
+        CHECK(drawnPieces(*twin).size() == 3);
+        CHECK(near(twin->nodeFrame(twin->findNode("wheel_fl")).position, Vec3(-0.8, 0.3, 1.3)));
+        ProcFrame valve;
+        CHECK(twin->markerFrame("wheel_fl/valve", valve) && near(valve.position, Vec3(-0.9, 0.5, 1.3)));
+    }
+
+    std::string why;
+    ProcModel graded;
+    graded.flatten.push_back(TerrainFlatten{});
+    CHECK(mirroredModel(graded, &why) == nullptr);
+    CHECK(why.find("grades terrain") != std::string::npos);
+    ProcModel boxed;
+    ProcCollider box;
+    box.kind = ProcCollider::Kind::Box;
+    box.center = Vec3(2, 1, 0);
+    box.yaw = 0.4;
+    boxed.colliders.push_back(box);
+    const std::shared_ptr<ProcModel> boxedTwin = mirroredModel(boxed);
+    CHECK(boxedTwin != nullptr && near(boxedTwin->colliders[0].center, Vec3(-2, 1, 0)) && boxedTwin->colliders[0].yaw == -0.4);
+
+    // Lua: the right door is the left door, mirrored; both hang on the one car.
+    ProcModel m;
+    std::string err;
+    CHECK(runModel(R"LUA(
+        local door = model.new()
+        door:add(mesh.translate(mesh.box{ 0.06, 1.0, 1.1 }, { 0.83, 0.7, 0 }))
+        door:marker("handle", { pos = { 0.87, 0.8, -0.4 } })
+        local car = model.new()
+        car:node("door_fl"):use(door)
+        car:node("door_fr"):use(door:mirrored())
+        local l, r = car:marker_at("door_fl/handle"), car:marker_at("door_fr/handle")
+        assert(math.abs(l[1] - 0.87) < 1e-9 and math.abs(r[1] + 0.87) < 1e-9 and math.abs(l[3] - r[3]) < 1e-9)
+        assert(door:part_count() == 1)                       -- the door itself is untouched
+        return car
+    )LUA", m, &err));
+    if (!err.empty()) std::printf("    script error: %s\n", err.c_str());
+    CHECK(m.uses.size() == 2 && m.uses[0].piece != m.uses[1].piece);
+}

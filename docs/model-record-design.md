@@ -311,10 +311,30 @@ Glenn's call: the instance group is extended into this, not kept beside it. Ther
 
 Left as they were, on purpose:
 
-- **No mirroring.** A left and a right door cannot yet be one mirrored model. Wanted (Glenn, 2026-11-19); to be its
-  own commit once it is known how the renderer treats a mirrored copy.
+- **No mirroring by a copy's placement.** A right door from a left door is the mirrored twin, below.
 - **A used piece's own collision shapes** come with the model's `shapes` (step 7). Today a use says how its copies
   collide.
+
+### The mirrored twin (2026-11-19)
+
+```lua
+car:node("door_fl"):use(door)
+car:node("door_fr"):use(door:mirrored())     -- the right door is the left door, mirrored; authored once
+```
+
+- **`m:mirrored()` gives a new model that is `m` mirrored left to right** (across x = 0 through its origin). `m` is
+  not changed.
+- **The model is mirrored, not the copy's matrix.** Both renderers decide which side of a face is the front by a
+  fixed winding, so a copy placed by a mirroring matrix would be drawn inside out. The twin's meshes are mirrored
+  and wound to face out again (`MeshBuilder::mirrored`, which the toolkit already had), and its nodes, markers and
+  copies are put where the mirror puts them. It is an ordinary model: no renderer changed.
+- **The cost** is that the twin's meshes are held as well as the first's. A piece used many times inside the model
+  is still mirrored only once.
+- **A frame keeps its up and its facing, mirrored; its own x swaps sides.** A handle marker that faces out of the
+  left door faces out of the right one.
+- **Left to right only.** For another plane, hang the twin on a turned node. (A general plane was tried and cut: a
+  frame has to stay a rotation, so one of its axes must swap, and which one only has a natural answer left to right.)
+- **A model that grades terrain has no twin**; asking for one is an error.
 
 ### Rules for a rig, from Glenn's car example (2026-11-19)
 
@@ -327,7 +347,9 @@ Written down here so step 4 builds them in.
   turn)`. The moving nodes are in the car's space, so the same steer value turns both front wheels the same way and
   the same spin rolls both forward.
 - **The same value means the same action on both sides.** A right door's hinge axis points the other way, so "open
-  40" opens either door.
-- **Open question: one rig for a kind.** A script that opens doors needs every car to name its joints alike. The
-  proposal is a rig table in Lua per kind (names, axes, default limits) that each recipe applies, the recipe giving
-  only positions. Not decided.
+  40" opens either door. A mirrored twin's hinge node comes out with its turn already running the other way round,
+  which is the first thing step 4 has to check against this rule.
+- **One rig table per kind of thing** (Glenn, 2026-11-19: "I think a rig table makes sense"). A rig table is Lua
+  data for a kind (car, crane, door): the joints' names, how each moves (turn or slide), about which axis, and its
+  default limits. A recipe applies the table and gives only what is its own: where each joint is, and any limit
+  that differs. So every car has a `door_fl` that opens the same way, and one script drives them all.

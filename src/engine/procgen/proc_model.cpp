@@ -103,4 +103,72 @@ RenderMesh flattenModel(const ProcModel& m) {
     return out;
 }
 
+namespace {
+
+const Vec3 kLeftRight(1, 0, 0);   // the mirror plane's normal
+
+// A frame as the mirror shows it. The position is reflected; the rotation is the mirror's image of the turn (the
+// same angle about the reflected axis, the other way round), which is again a plain rotation. Its y and z come out
+// reflected; its x reflected and reversed.
+ProcFrame reflectFrame(const ProcFrame& f) {
+    const Vec3 axis = reflect(Vec3(f.rotation.x, f.rotation.y, f.rotation.z), kLeftRight);
+    return ProcFrame{reflect(f.position, kLeftRight), Quat(-axis.x, -axis.y, -axis.z, f.rotation.w)};
+}
+
+using MirrorMemo = std::map<const ProcModel*, std::shared_ptr<ProcModel>>;
+
+std::shared_ptr<ProcModel> mirrorInto(const ProcModel& m, MirrorMemo& memo, std::string* why) {
+    const MirrorMemo::iterator known = memo.find(&m);
+    if (known != memo.end()) return known->second;
+    if (!m.flatten.empty()) {
+        if (why != nullptr) *why = "a model that grades terrain has no mirrored twin";
+        return nullptr;
+    }
+    std::shared_ptr<ProcModel> out = std::make_shared<ProcModel>();
+    out->materials = m.materials;
+    out->nodes = m.nodes;
+    for (ProcNode& node : out->nodes) {
+        node.frame = reflectFrame(node.frame);
+        for (ProcMarker& mk : node.markers) mk.frame = reflectFrame(mk.frame);
+    }
+    for (const ProcPart& part : m.parts) {
+        ProcPart twin = part;
+        twin.mesh = MeshBuilder::mirrored(part.mesh, kLeftRight);   // in its node's space, whose frame is mirrored with it
+        out->parts.push_back(std::move(twin));
+    }
+    for (const ProcCollider& c : m.colliders) {
+        ProcCollider twin = c;
+        if (c.kind == ProcCollider::Kind::Mesh) {
+            twin.mesh = MeshBuilder::mirrored(c.mesh, kLeftRight);
+        } else {
+            twin.center = reflect(c.center, kLeftRight);
+            twin.yaw = -c.yaw;   // a turn about the vertical runs the other way in the mirror
+        }
+        out->colliders.push_back(std::move(twin));
+    }
+    for (const ProcUse& use : m.uses) {
+        ProcUse twin = use;
+        if (use.piece != nullptr) {
+            twin.piece = mirrorInto(*use.piece, memo, why);
+            if (twin.piece == nullptr) return nullptr;
+        }
+        for (ProcPlacement& p : twin.placements) {
+            const ProcFrame f = reflectFrame(ProcFrame{p.position, p.rotation});
+            p.position = f.position;
+            p.rotation = f.rotation;
+        }
+        if (!use.collisionProto.vertices.empty()) twin.collisionProto = MeshBuilder::mirrored(use.collisionProto, kLeftRight);
+        out->uses.push_back(std::move(twin));
+    }
+    memo[&m] = out;
+    return out;
+}
+
+}  // namespace
+
+std::shared_ptr<ProcModel> mirroredModel(const ProcModel& m, std::string* why) {
+    MirrorMemo memo;
+    return mirrorInto(m, memo, why);
+}
+
 }  // namespace engine

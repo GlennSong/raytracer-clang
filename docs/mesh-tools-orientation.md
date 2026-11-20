@@ -33,7 +33,8 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 4301e016, 7fb30148 | the design note and the model file name conventions |
 | 664eb630 | model step 1, nodes: `ProcNode` and `ProcFrame` in `procgen/proc_model.h`, Lua `m:node` and the node words, read by the bake, the loader, `m:flatten` and the model sheet; `tests/test_model_nodes.cpp` |
 | dc9bda04 | model step 2, markers and named materials: `ProcMarker`, the model's material table (`ProcPart::material` is an index), Lua `m:marker`, `m:material`, `m:add(mesh, "paint")`; `tests/test_model_markers.cpp` |
-| (this commit) | model step 3, uses: `ProcUse` replaces the instance group; the one walk in `procgen/proc_model.cpp` (`placedUses`, `drawnPieces`, `flattenModel`); Lua `n:use`, `m:use`; `tests/test_model_uses.cpp` |
+| b8d4fb81 | model step 3, uses: `ProcUse` replaces the instance group; the one walk in `procgen/proc_model.cpp` (`placedUses`, `drawnPieces`, `flattenModel`); Lua `n:use`, `m:use`; `tests/test_model_uses.cpp` |
+| (this commit) | the mirrored twin: `mirroredModel` in `procgen/proc_model.cpp`, Lua `m:mirrored()`, left to right only |
 
 The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run; nothing here changes baked output.
 
@@ -65,12 +66,10 @@ The unit suite passed 1525 of 1525 on bdff2422. The level suite has not been run
 
 ## What is next
 
-1. **Mirroring on a use** (Glenn asked, 2026-11-19): so a right door is the left door's model mirrored. Find out
-   first how the renderer and the path tracer treat a copy whose matrix mirrors (faces turn inside out unless the
-   draw accounts for it). Its own small commit.
-2. **Model step 4 in the design note: motion limits and poses.** Turn and slide on nodes, with limits; the model
-   sheet takes `--set cabin=90` to draw a pose. The design note's "Rules for a rig" section holds what Glenn's car
-   example settled, and one open question (one rig table per kind) to ask him before building.
+**Model step 4 in the design note: motion limits and poses.** Turn and slide on nodes, with limits; the model sheet
+takes `--set cabin=90` to draw a pose. Before building, read the design note's "Rules for a rig" section: it holds
+what Glenn's car example settled (motion sits above any flip, the same value means the same action on both sides)
+and his call that a kind of thing has ONE rig table in Lua which each recipe applies.
 
 The design note's last section, "What is built", lists what each step left alone and which later step owns it.
 

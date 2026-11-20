@@ -4003,6 +4003,21 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
     m.uses.push_back(std::move(use));
 }
 
+// m:mirrored() -> model : the model's mirrored twin, left to right (across x = 0 through its origin). A right door
+// from the left door. A new model; `m` is not changed. For another plane, hang the twin on a turned node.
+int l_model_mirrored(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    ModelPtr twin;
+    {
+        std::string why;
+        twin = mirroredModel(m, &why);
+        if (twin == nullptr) lua_pushstring(L, why.c_str());   // the reason goes to Lua's stack; the string ends here
+    }
+    if (twin == nullptr) return luaL_error(L, "mirrored: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(twin));
+    return 1;
+}
+
 // m:use(piece [, placements] [, opts]) -> m : place another model (or a mesh) in this one, on the root. Chainable.
 int l_model_use(lua_State* L) {
     addUseFromLua(L, checkModel(L, 1), 0);
@@ -4958,6 +4973,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_add_solid);      lua_setfield(L, -2, "add_solid");
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
         lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
+        lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
         lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
         lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");
         lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
