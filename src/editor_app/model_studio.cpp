@@ -254,6 +254,16 @@ bool ModelStudioPanel::save() {
     return true;
 }
 
+void ModelStudioPanel::showPiece(int line, const QString& what) {
+    if (path_.isEmpty()) return;
+    if (line > 0) {
+        gotoLine(line);
+        setStatus(QString("line %1 made this: %2").arg(line).arg(what) + (dirty() ? "  (the pane has unsaved edits: the line may have moved)" : ""), false);
+    } else {
+        setStatus("This is " + what + " (no script line is recorded for it).", false);
+    }
+}
+
 void ModelStudioPanel::noteLog(bool isError, const QString& line) {
     if (path_.isEmpty()) return;
     // The loader's line when this level's model cannot be built:  prefab entity 'model': prefab '<recipe>': ...

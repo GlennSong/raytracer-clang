@@ -217,6 +217,10 @@ struct ModelPiece {
     Mat4 local;          // where it stands in the model's space
     Real from = 0;       // the band of distances it is drawn in (ProcModelDraw); until 0: no end
     Real until = 0;
+    // WHAT MADE THIS (the model studio): the recipe line that put it there, and what it is in words ("steel on boom,
+    // 1,240 triangles"), for whatever shows a clicked piece.
+    int line = 0;
+    std::string what;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).

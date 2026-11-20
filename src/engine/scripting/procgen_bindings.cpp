@@ -3873,6 +3873,19 @@ int levelOpt(lua_State* L, int opts, const ProcModel& m) {
 }
 
 // A part from the arguments (mesh [, material] [, { level = n }]) starting at stack slot 2, hung on `node`.
+// WHAT MADE THIS: the line of the RECIPE that is running now. The outermost Lua frame is the recipe's own chunk
+// (a library it calls sits above it), so a part added inside truss.build is put down to the recipe's line that
+// called truss.build: the line its author wrote. 0 when no script is running.
+int recipeLine(lua_State* L) {
+    lua_Debug ar;
+    int line = 0;
+    for (int level = 0; lua_getstack(L, level, &ar) != 0; ++level) {
+        if (lua_getinfo(L, "Sl", &ar) == 0) continue;
+        if (ar.currentline > 0) line = ar.currentline;
+    }
+    return line;
+}
+
 void addPart(lua_State* L, ProcModel& m, int node) {
     const int material = materialArg(L, 3, m);   // first: an error here must leave no mesh half made
     const int level = levelOpt(L, lua_istable(L, 4) ? 4 : (lua_istable(L, 3) ? 3 : 0), m);
@@ -3881,6 +3894,7 @@ void addPart(lua_State* L, ProcModel& m, int node) {
     part.material = material;
     part.node = node;
     part.level = level;
+    part.line = recipeLine(L);
     m.parts.push_back(std::move(part));
 }
 
@@ -4344,6 +4358,7 @@ void addUseFromLua(lua_State* L, ProcModel& m, int node) {
     use.piece = pieceArg(L, 2, opts, m);
     use.node = node;
     use.level = level;
+    use.line = recipeLine(L);
     if (placements != 0) readPlacements(L, placements, false, use.placements);
     else use.placements.push_back(ProcPlacement{});
     readUseCollision(L, opts, use);

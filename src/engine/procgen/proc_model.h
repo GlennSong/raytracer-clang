@@ -129,6 +129,9 @@ struct ProcPart {
     int material = 0;      // an index into ProcModel::materials
     int node = 0;          // an index into ProcModel::nodes
     int level = 0;         // which level of detail it belongs to: an index into ProcModel::levelFrom (0 = the full one)
+    // WHAT MADE THIS (#191, the model studio): the line of the recipe that added the part (its `m:add`, or the line
+    // that called the library that did). 0 when it was not made by a script.
+    int line = 0;
 };
 
 // A composable procedural model (ADR-0042): the value a recipe returns at any
@@ -192,6 +195,7 @@ struct ProcUse {
     std::shared_ptr<const ProcModel> piece;
     int node = 0;                             // the node whose space the placements are in
     int level = 0;                            // which level of detail of the USING model draws these copies
+    int line = 0;                             // the recipe's line that made the use (see ProcPart::line)
     std::vector<ProcPlacement> placements;    // one per copy
     // Optional collision per copy (ADR-0042). `collisionProto` overrides the piece's own triangles for Mesh
     // collision (a cheaper-but-faithful collision surface); empty means collide with the piece itself.
@@ -466,6 +470,7 @@ struct ProcPlacedUse {
     const ProcUse* use = nullptr;
     std::vector<Mat4> transforms;
     std::string prefix;   // the path the piece's own nodes are named by in a pose ("door_fl/")
+    int line = 0;         // the line that used the piece in the model asked (through however many pieces)
 };
 
 // Every use of a model at every depth, placed. THE one walk of the uses: the offline bake, the level loader,
@@ -481,6 +486,7 @@ struct ProcDrawnPiece {
     const ProcModel* piece = nullptr;
     const ProcPart* part = nullptr;
     std::vector<Mat4> transforms;
+    std::vector<int> lines;   // beside `transforms`: for each copy, the line that used the piece in the model asked
 };
 
 // Every instanced draw of a model, over `placedUses`: what the offline bake, the level loader, flatten and the model
@@ -495,6 +501,8 @@ struct ProcModelDraw {
     Mat4 local;                          // where it stands, in the asked model's space
     Real from = 0;
     Real until = 0;                      // 0: no end (the last level)
+    // the recipe line that put it there: a part's own, or for a copy of a used piece the line that used the piece
+    int line = 0;
 };
 
 // Everything a model draws at every distance, for what draws one copy of a model as one thing (a stamped prefab):

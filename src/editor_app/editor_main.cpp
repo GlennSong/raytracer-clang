@@ -1703,7 +1703,16 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     QTimer panelTimer;
+    engine::Entity studioShown;   // the piece the studio last showed the line of
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
+        // The model studio: a piece of the model picked in the viewport shows the script line that made it.
+        if (engine::World* world = bridge.world(); world != nullptr && !modelStudio->scriptPath().isEmpty()) {
+            const engine::Entity picked = bridge.selected();
+            if (picked.valid() && !(picked == studioShown)) {
+                if (const engine::ModelPiece* piece = world->get<engine::ModelPiece>(picked)) modelStudio->showPiece(piece->line, QString::fromStdString(piece->what));
+            }
+            studioShown = picked;
+        }
         panels.refresh();
         refreshChrome();
         pollBakeJob();

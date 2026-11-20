@@ -879,8 +879,13 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
 
 1. DONE the same day: while a recipe has a mistake the viewport shows the model as it last built (the stamp
    falls back to the store's last model for a prefab straight from a recipe, and still reports the error).
-2. "What made this?": each part, node, marker and shape recording the script line that added it; a click in the
-   viewport showing it and putting the pane on that line. One way, scene to script.
+2. "What made this?" PARTLY DONE the same day. A part and a use record the recipe line that made them
+   (`ProcPart::line`, `ProcUse::line`: the outermost Lua frame, so a part added inside `truss.build` is put down to
+   the recipe's line that called it); a stamped piece carries it with a description (`ModelPiece::line`, `what`:
+   "steel on boom, 1,240 triangles"); picking a piece in the viewport puts the pane on that line and says what it
+   is. Tested up to the stamped piece; the click in the editor has not been tried by a person yet. Not done: nodes,
+   markers and collision shapes recording their lines; a label passed through a library for finer tags than one
+   line; a highlight on the picked piece that covers every piece of the same line.
 3. A "copy what I am looking at" button (part, script line, camera, a screenshot's path) for pointing at things
    in a message.
 4. "Save as model and prefab": the line in `models.lua` and `prefabs.lua`.

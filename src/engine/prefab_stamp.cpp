@@ -70,7 +70,15 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
         const Entity e = world.create();
         world.add<Transform>(e, Transform());
         world.add<PrevTransform>(e, PrevTransform{Transform()});
-        world.add<ModelPiece>(e, ModelPiece{entity, d.local, d.from, d.until});
+        ModelPiece piece{entity, d.local, d.from, d.until, d.line, std::string()};
+        {
+            const std::string& material = d.owner->materials[static_cast<std::size_t>(d.part->material)].name;
+            const std::string& node = d.owner->nodes[static_cast<std::size_t>(d.part->node)].name;
+            piece.what = (material.empty() ? std::string("plain") : material) + " on " + node + ", " + std::to_string(d.part->mesh.indices.size() / 3) + " triangles";
+            if (d.owner != shown.get()) piece.what += d.owner->name.empty() ? " (a used piece)" : " (the piece '" + d.owner->name + "')";
+            if (d.from > 0) piece.what += ", the level from " + std::to_string(static_cast<int>(d.from)) + " m";
+        }
+        world.add<ModelPiece>(e, piece);
         if (dresser != nullptr) {
             Renderable r;
             r.mesh = dresser->dress(d.owner->materialOf(*d.part), d.part->mesh, keyBase + std::to_string(number), r.material);

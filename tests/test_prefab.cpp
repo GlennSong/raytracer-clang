@@ -645,3 +645,56 @@ TEST_CASE(a_level_shows_a_model_straight_from_a_recipe_and_watches_what_it_is_bu
     modelStore().forget(recipeModelName("test_prefab_studio_tmp", "{\"tall\":3}"));
     modelStore().forget(recipeModelName("test_prefab_studio_tmp"));
 }
+
+TEST_CASE(a_stamped_piece_knows_the_recipe_line_that_made_it) {
+    // The model studio's "what made this?": a part records the line of its m:add; a part added inside a library
+    // the recipe calls records the recipe's line that called the library; a copy of a used piece records the
+    // line of the use.
+    Folder f;
+    f.write("test_prefab_lines_lib_tmp.lua",
+            "local M = {}\n"
+            "function M.post(m)\n"
+            "  m:add(mesh.translate(mesh.box{ 0.2, 2, 0.2 }, { 3, 1, 0 }))\n"
+            "end\n"
+            "return M\n");
+    f.write("test_prefab_lines_tmp.lua",
+            "local lib = require \"test_prefab_lines_lib_tmp\"\n"                       // 1
+            "local m = model.new()\n"                                                     // 2
+            "m:material(\"paint\", material.new{ roughness = 0.5 })\n"                  // 3
+            "m:add(mesh.box{ 1, 1, 1 }, \"paint\")\n"                                   // 4
+            "\n"                                                                          // 5
+            "lib.post(m)\n"                                                               // 6
+            "local arm = m:node(\"arm\", { pos = { 0, 2, 0 } })\n"                      // 7
+            "arm:add(mesh.box{ 2, 0.2, 0.2 })\n"                                          // 8
+            "local bolt = model.new()\n"                                                  // 9
+            "bolt:add(mesh.box{ 0.1, 0.1, 0.1 })\n"                                       // 10
+            "m:use(bolt, { { pos = { 1, 0, 0 } }, { pos = { -1, 0, 0 } } })\n"            // 11
+            "return m\n");
+    ModelStore store;
+    std::string err;
+    const std::shared_ptr<const ProcModel> model = obtainRecipeModel("test_prefab_lines_tmp", std::string(), f.dir, &err, &store);
+    CHECK(model != nullptr);
+    if (model == nullptr) { std::printf("    %s\n", err.c_str()); return; }
+    CHECK(model->parts.size() == 3);
+    CHECK(model->parts[0].line == 4);
+    CHECK(model->parts[1].line == 6);        // made inside the library: the recipe's line that called it
+    CHECK(model->parts[2].line == 8);
+    CHECK(model->uses.size() == 1 && model->uses[0].line == 11);
+
+    World world;
+    Prefab prefab;
+    prefab.name = prefab.recipe = "test_prefab_lines_tmp";
+    const Entity e = stampPrefab(world, nullptr, prefab, Transform(), f.dir, &err, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    int at4 = 0, at6 = 0, at8 = 0, at11 = 0;
+    for (Entity pe : world.get<ModelInstance>(e)->pieces) {
+        const ModelPiece* piece = world.get<ModelPiece>(pe);
+        if (piece->line == 4) { ++at4; CHECK(piece->what == "paint on root, 12 triangles"); }
+        if (piece->line == 6) { ++at6; CHECK(piece->what == "plain on root, 12 triangles"); }
+        if (piece->line == 8) { ++at8; CHECK(piece->what == "plain on arm, 12 triangles"); }
+        if (piece->line == 11) { ++at11; CHECK(piece->what.find("a used piece") != std::string::npos); }   // not the bolt's own line 10
+    }
+    CHECK(at4 == 1 && at6 == 1 && at8 == 1);
+    CHECK(at11 == 2);                        // both copies of the bolt
+}

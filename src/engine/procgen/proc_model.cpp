@@ -14,7 +14,7 @@ namespace {
 
 // `outer` is every copy of the piece `m` is, in the asked model's space; null when `m` is the asked model. `pose`
 // (may be null: at rest) moves each moving node; `prefix` is the path `m`'s nodes are named by in it ("door_fl/").
-void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, Real distance, const ProcPose* pose, const std::string& prefix,
+void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, Real distance, const ProcPose* pose, const std::string& prefix, int outerLine,
               std::vector<ProcPlacedUse>& out) {
     const int level = m.levelAt(distance);
     for (const ProcUse& use : m.uses) {
@@ -31,8 +31,9 @@ void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, Real distance,
                 for (const ProcPlacement& p : use.placements) transforms.push_back(onRoot ? o * p.matrix() : o * node * p.matrix());
         }
         const std::string inside = prefix + m.nodes[static_cast<std::size_t>(use.node)].name + "/";
-        out.push_back(ProcPlacedUse{&use, transforms, inside});
-        walkUses(*use.piece, &transforms, distance, pose, inside, out);
+        const int line = outer == nullptr ? use.line : outerLine;   // what the asked model's recipe wrote
+        out.push_back(ProcPlacedUse{&use, transforms, inside, line});
+        walkUses(*use.piece, &transforms, distance, pose, inside, line, out);
     }
 }
 
@@ -40,7 +41,7 @@ void walkUses(const ProcModel& m, const std::vector<Mat4>* outer, Real distance,
 
 std::vector<ProcPlacedUse> placedUses(const ProcModel& m, Real distance, const ProcPose* pose) {
     std::vector<ProcPlacedUse> out;
-    walkUses(m, nullptr, distance, pose, std::string(), out);
+    walkUses(m, nullptr, distance, pose, std::string(), 0, out);
     return out;
 }
 
@@ -85,9 +86,10 @@ std::vector<ProcDrawnPiece> drawnPieces(const ProcModel& m, Real distance, const
             std::map<const ProcPart*, std::size_t>::iterator slot = known.find(&part);
             if (slot == known.end()) {
                 slot = known.emplace(&part, out.size()).first;
-                out.push_back(ProcDrawnPiece{&piece, &part, {}});
+                out.push_back(ProcDrawnPiece{&piece, &part, {}, {}});
             }
             std::vector<Mat4>& transforms = out[slot->second].transforms;
+            out[slot->second].lines.insert(out[slot->second].lines.end(), placed.transforms.size(), placed.line);
             // The piece's root is its own space: a part on it stands exactly where the copy does.
             if (part.node == 0) {
                 transforms.insert(transforms.end(), placed.transforms.begin(), placed.transforms.end());
@@ -211,7 +213,7 @@ std::vector<ProcModelDraw> modelDraws(const ProcModel& m, const ProcPose* pose) 
         const Real from = bands[b];
         const Real until = b + 1 < bands.size() ? bands[b + 1] : Real(0);
         // The same part at the same place in the band before: that draw goes on through this one.
-        auto emit = [&](const ProcPart& part, const ProcModel& owner, const Mat4& local) {
+        auto emit = [&](const ProcPart& part, const ProcModel& owner, const Mat4& local, int line) {
             std::vector<std::size_t>& known = drawsOf[&part];
             for (std::size_t i : known) {
                 if (out[i].until != from || from == 0 || !sameMatrix(out[i].local, local)) continue;
@@ -219,15 +221,15 @@ std::vector<ProcModelDraw> modelDraws(const ProcModel& m, const ProcPose* pose) 
                 return;
             }
             known.push_back(out.size());
-            out.push_back(ProcModelDraw{&part, &owner, local, from, until});
+            out.push_back(ProcModelDraw{&part, &owner, local, from, until, line});
         };
         const int level = m.levelAt(from);
         for (const ProcPart& p : m.parts) {
             if (p.level != level || p.mesh.indices.empty()) continue;
-            emit(p, m, p.node == 0 ? Mat4::identity() : (pose != nullptr ? m.nodeFrame(p.node, *pose) : m.nodeFrame(p.node)).matrix());
+            emit(p, m, p.node == 0 ? Mat4::identity() : (pose != nullptr ? m.nodeFrame(p.node, *pose) : m.nodeFrame(p.node)).matrix(), p.line);
         }
         for (const ProcDrawnPiece& d : drawnPieces(m, from, pose))
-            for (const Mat4& xf : d.transforms) emit(*d.part, *d.piece, xf);
+            for (std::size_t i = 0; i < d.transforms.size(); ++i) emit(*d.part, *d.piece, d.transforms[i], d.lines[i]);
     }
     return out;
 }

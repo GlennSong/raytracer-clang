@@ -39,6 +39,9 @@ public:
     // One line of the engine's log (from the console's drain): the studio reads its own model's errors and its
     // rebuilds out of it.
     void noteLog(bool isError, const QString& line);
+    // WHAT MADE THIS: something of the model was clicked in the viewport. `line` is the script line that put it
+    // there (0: not known), `what` says what it is. The pane goes to the line.
+    void showPiece(int line, const QString& what);
     // Is a script open with changes not yet written?
     bool dirty() const;
     QString scriptPath() const { return path_; }
