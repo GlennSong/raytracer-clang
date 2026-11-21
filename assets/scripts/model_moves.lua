@@ -11,6 +11,9 @@
 --   { node = "rock", sway = 10, period = 3 [, phase = 0.5] }  swing either side of where it was placed, like a weight on
 --                                                             a string: `sway` degrees each way, `period` seconds there and back
 --   { node = "arms", step = 120, speed = 90, wait = 3 }       turn on by `step` degrees, wait, and again (a turnstile)
+--   { node = "step_3", loop = 0.4, speed = 0.5 }               slide from where it was placed to `loop` metres on, then
+--                                                             jump back and go again (an escalator's step, each taking
+--                                                             the place of the next); a negative speed runs it backward
 --
 -- A move stopped short by the model's own limits counts as arrived, so `to` may ask for more than a part can give
 -- and the limit decides (a shutter's sections all sent up 5 m, each stopping in the box).
@@ -47,6 +50,9 @@ function M.script(parts)
         st.time = st.time + dt
         local rate = 2 * math.pi / p.period
         entity.model_set(e, p.node, p.sway * math.sin(rate * (st.time - (p.phase or 0))), p.sway * rate * 1.5)
+      elseif st and p.loop then
+        st.time = (st.time + p.speed * dt) % p.loop
+        entity.model_set(e, p.node, st.time)
       elseif st and p.step then
         st.hold = st.hold - dt
         if st.hold <= 0 then

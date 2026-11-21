@@ -1109,6 +1109,49 @@ What these do NOT do yet, and why:
 - **Nothing in the city places any of them.** The interiors still place the kit's still `office_chair` and `desk`.
   Swapping furniture over is #315.
 
+### The fourth: pieces for the city's own kinds of place (2026-11-21)
+
+Glenn: "if you know what kind of buildings are in the city you can design prefabs for them". The city's places
+(`assets/scripts/places.lua`, `trades.lua`, `floor_programs.lua`) are homes and apartments, offices, shops by trade
+(bakery, bookshop, boutique, electronics, grocery, konbini, pharmacy), cafe, restaurant, bar, club, supermarket,
+department store, hotel, the campus (teaching hall, library, residence hall, sports field), civic buildings and
+parks. 46 more models and 81 more prefabs from 22 recipes, chosen against that list and against the furniture
+kit's 92 still pieces (which already has the counters, booths, lecture rows, bookcases and beds):
+
+| Place | Models | What moves |
+|---|---|---|
+| Any building | `door`, `door_glass`, `double_door`, `kitchen_swing_doors`, `automatic_doors` | leaves on hinges (a swing door both ways); glass panels that part |
+| Konbini, grocery, supermarket | `drinks_fridge` (and `_single`), `ice_cream_freezer`, `cash_register`, `microwave`, `vending_machine` (and `_red`), `shopping_cart`, `basket_stack`, `atm` | glass doors; sliding lids; the till's drawer and screen; the plate; the flap; the cart's child seat and casters |
+| Cafe, restaurant | `espresso_machine`, `round_table_turning`, `sandwich_board`, `diner_stool` | the lever and steam wand; the table's middle; the board folds; the seat turns |
+| Bar, club | `bar_stool_swivel`, `beer_taps`, `mirror_ball`, `dj_deck` | seat; tap handles; the ball; two records and the crossfader |
+| Campus | `lecture_seats`, `lecture_blackboards`, `projector_screen`, `lab_stool`, `lockers`, `book_truck` | seat pans fold and tablets swing; one board up as the other comes down; the screen unrolls; doors |
+| Cinema, station | `cinema_seats`, `coin_lockers`, `ticket_machine` | seat pans; doors |
+| Civic | `queue_posts`, `flagpole`, `ticket_machine` | the flag runs up the pole |
+| Hotel, apartments | `luggage_cart`, `mailboxes` | casters; doors |
+| Mall, department store, boutique, bookshop | `escalator`, `mall_directory`, `clothes_rail_round`, `postcard_rack`, `display_turntable`, `capsule_machines`, `kiddie_ride_car`, `kiddie_ride_rocket` | steps; racks and the turntable turn; knobs; the ride rocks and bobs |
+| Park, plaza | `fountain`, `fountain_plaza` | none (markers for water and sound) |
+
+New in how they are made:
+
+- **Stock that is drawn many times.** The fridge's and the vending machine's bottles and cans, and the capsule
+  machines' capsules, are each stored once and placed by `scatter.grid` / `scatter.along` (`m:use`).
+- **A loop.** `model_moves.lua` gained `{ node, loop = metres, speed }`: slide that far and jump back. The
+  escalator's steps each move up by exactly one step's place, so the jump cannot be seen and the stairs flow. Its
+  script reads how far that is from two markers on the model (`run_from`, `run_to`), because it depends on the
+  rise and slope the model was built with. `escalator_up` and `escalator_down` are the same model.
+- **Cloth that unrolls** again (the projector screen), as the awning and the shutter.
+
+Seen: a sheet of each, and all 37 moving prefabs in the editor in play (the escalator from its foot).
+
+### What step 9 must build on: the furniture kit already has seats and verbs
+
+Found while choosing these (not known when the markers above were named): `assets/scripts/furniture_library.lua`
+already gives each kit piece SPOTS (places a body goes) and VERBS (how a body uses them: `sit`, `lie`, with where
+the eye goes and where the person stands up), and the player uses them with E. That is an interaction system for
+furniture, in data, in use. Step 9's "offers at markers" must be that system extended, with a marker as a spot and
+new verbs beside sit and lie (pull, press, open, push), and not a second one. The `seat`, `handle_N`, `lever`,
+`control` markers on the pieces above are the hooks for it; none is wired to it yet.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

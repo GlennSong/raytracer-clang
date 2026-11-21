@@ -79,6 +79,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 2ad5f8ad | the park sculpture, the first model made in the studio: `park_sculpture.lua`, `park_sculpture_turn.lua`, two models and two prefabs |
 | afc9ee0b | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
 | c4e42954 | furniture and street pieces with moving parts: `model_kit.lua` (the furniture kit's shape words on a model's nodes), `model_moves.lua` (one behaviour, a list per prefab), 21 recipes, 39 models, 67 prefabs; behaviour scripts can `require` (`ScriptSystem::setModuleSource`, `ScriptWatch::add`) |
+| (next commit) | pieces for the city's kinds of place (doors, shop fridges and machines, cafe and bar things, campus seats and boards, an escalator, racks, rides, trolleys, a fountain): 22 recipes, 46 models, 81 prefabs; `model_moves.lua` gains `loop` |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -168,7 +169,9 @@ waits: a recipe, a line in `models.lua`, a line in `prefabs.lua`.
 For a new piece of furniture or street kit with moving parts: build it with `model_kit.lua` (never a private copy
 of the furniture kit's helpers), give its prefab a script that is a list for `model_moves.lua` (never a new loop),
 and check it with `rt_model_sheet assets/scripts/<recipe>.lua --set <node>=<value>` and then in the editor in play.
-The list of what exists is the table in `docs/model-record-design.md`, "The third".
+The lists of what exists are the tables in `docs/model-record-design.md`, "The third" and "The fourth" (by kind of
+place). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
+(`furniture_library.lua`), and interactions on prefabs must extend that, not sit beside it.
 
 
 Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen
