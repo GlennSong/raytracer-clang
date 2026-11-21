@@ -77,6 +77,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 759a9e4f | the model and the studio on the control channel: `models?`, `model?`, `model_set` (engine), `studio?`, `studio_open`, `studio_args`, `studio_pick` (editor); `engine/model_inspect.{h,cpp}`, the one description of a stamped model's tree; `web/engine/commands.json` refreshed |
 | 517f8c0b | the studio views a model OR a prefab: `savePrefab` and the entry rewrite in `scripting/prefab_list`, the prefab form in the Inspector dock, `--prefab <name>`, play keeping the player's place on a rebuild, `engine/model_overlay` (shapes, markers, joints as lines); commands `prefabs?`, `prefab?`, `model_overlay`, `studio_prefab`, `studio_prefab_set`, `play`, `stop` |
 | 2ad5f8ad | the park sculpture, the first model made in the studio: `park_sculpture.lua`, `park_sculpture_turn.lua`, two models and two prefabs |
+| (next commit) | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -157,6 +158,11 @@ test.
 Turning the city's furniture (interior and exterior) into prefabs is NOT this branch's work: issue #315 has the
 plan (step 9, then step 10 "many copies", then ports from park pieces inward). Glenn, 2026-11-20: "a bigger thing
 that we may not want to do in this branch". The park sculpture is a prefab a level places by name; no park picks it.
+
+The same goes for the playground pieces (`playground_*.lua`): each is a prefab, and a playground is NOT one. Glenn,
+2026-11-20: "the playground itself would not be a prefab but a site", the place the pieces are set out in. Sites
+are not built; see #315 and, for buildings, #316. More pieces of the same kind are safe to add while the branch
+waits: a recipe, a line in `models.lua`, a line in `prefabs.lua`.
 
 
 Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen

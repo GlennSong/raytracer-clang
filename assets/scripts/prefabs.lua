@@ -29,4 +29,15 @@ return {
   -- park furniture: a sculpture on a plinth to sit on; the second turns slowly, and is another finish and shape
   park_sculpture = { model = "park_sculpture", physics = { body = "static" } },
   park_sculpture_turning = { model = "park_sculpture_steel", physics = { body = "static" }, script = "park_sculpture_turn.lua" },
+  -- playground pieces, each solid and still, and the three that move as they are when children are on them
+  -- (a script moves them for now; riders will, once prefabs carry interactions)
+  playground_swing = { model = "playground_swing", physics = { body = "static" } },
+  playground_swing_in_use = { model = "playground_swing", physics = { body = "static" }, script = "playground_swing_sway.lua" },
+  playground_swing_four = { model = "playground_swing_four", physics = { body = "static" }, script = "playground_swing_sway.lua" },
+  playground_seesaw = { model = "playground_seesaw", physics = { body = "static" } },
+  playground_seesaw_in_use = { model = "playground_seesaw", physics = { body = "static" }, script = "playground_seesaw_rock.lua" },
+  playground_roundabout = { model = "playground_roundabout", physics = { body = "static" } },
+  playground_roundabout_in_use = { model = "playground_roundabout", physics = { body = "static" }, script = "playground_roundabout_spin.lua" },
+  playground_slide = { model = "playground_slide", physics = { body = "static" } },
+  playground_slide_tall = { model = "playground_slide_tall", physics = { body = "static" } },
 }

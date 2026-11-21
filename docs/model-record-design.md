@@ -1021,6 +1021,36 @@ park's furniture comes from the city's own lists, and wiring a prefab into those
 Seen: the sheet (`rt_model_sheet assets/scripts/park_sculpture.lua`), the editor's prefab view, and play (the form
 turning). Its collision box is one turned box and fits a strongly twisted form loosely.
 
+**The second: playground pieces** (Glenn, 2026-11-20: build the pieces as models, each a prefab; "the playground
+itself would not be a prefab but a site", the place the pieces are set out in). Four recipes over one small library
+(`assets/scripts/playground_kit.lua`: the shared materials and paint colours, a pipe along a line of points with
+its corners rounded, a foot plate):
+
+| Recipe | What it is | What moves | What it takes |
+|---|---|---|---|
+| `playground_swing.lua` | a top bar on two A-shaped ends, seats on chains | each seat, `seat_1`..., swings about the bar, 65 degrees either way | seats (1 to 4), height, paint |
+| `playground_seesaw.lua` | a plank on a pivot, a seat and a handle each end, half a tyre under each end | the plank, `beam`, tips until an end meets its tyre (the limit is worked out from the plank's length) | length, paint, seats' colour |
+| `playground_roundabout.lua` | a round deck with studs and grab rails on a bearing | the deck, `deck`, turns without end, rails and post with it | radius, rails (3 to 8), two colours |
+| `playground_slide.lua` | steps to a railed platform, a steel chute down from it | nothing | height, paint |
+
+Each has collision shapes on the node they belong to (so a seat's box swings with the seat), a level seen from
+40 or 50 m, and markers for what step 9 will hang on them: `seat_N` and `ride_N` (role seat or stand), `push`,
+`hold_N`, `slide_start`, `slide_end`, and `creak` or `rumble` where a sound would come from. The slide's steps,
+platform and chute are solid: a player dropped on the platform stays there, and one put on the chute slides down
+it (its shapes have a friction of 0.08).
+
+Six models and nine prefabs (`models.lua`, `prefabs.lua`). The three that move each have a still prefab and an
+`_in_use` one with a script that moves it the way riders would: `playground_swing_sway.lua` (each seat a sine
+swing, out of step with the next; it finds how many seats the model has), `playground_seesaw_rock.lua` (asks for
+more tilt than the model allows and lets the limits stop it), `playground_roundabout_spin.lua` (pushed up to
+speed, then slowing). When prefabs carry interactions (step 9) the riders move them and the scripts go.
+Seen: a sheet of each (`rt_model_sheet assets/scripts/playground_swing.lua`, with `--shapes` for the collision
+shapes), and each prefab in the editor in play, its joints read twice 1.5 s apart.
+
+Not done, on purpose: **the playground itself.** Setting pieces out on a patch of park, with a surface under them
+and a fence round them, is a site: something that holds prefabs at places, like the building of #316. Nothing here
+places a piece; a level does, by name. That is part of #315.
+
 Left from what was agreed: the field declarations are written in C++ next to the reader (`prefabFieldsJson`), not
 declared by each component kind in data; that comes with step 9, when there is more than one kind to declare.
 Model rows in the Inspector (read-only facts) are not there: a picked piece shows the entity's ordinary properties.

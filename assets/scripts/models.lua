@@ -26,4 +26,11 @@ return {
   -- a sculpture for a park, on a plinth to sit on: written in the model studio (park_sculpture.lua)
   park_sculpture = { recipe = "park_sculpture" },
   park_sculpture_steel = { recipe = "park_sculpture", args = { finish = "steel", height = 3.4, twist = -110, taper = 0.45, strings = 17 } },
+  -- playground pieces (playground_kit.lua): each a model of its own; a playground is the place they are set out in
+  playground_swing = { recipe = "playground_swing" },
+  playground_swing_four = { recipe = "playground_swing", args = { seats = 4, height = 2.7, paint = "blue" } },
+  playground_seesaw = { recipe = "playground_seesaw" },
+  playground_roundabout = { recipe = "playground_roundabout" },
+  playground_slide = { recipe = "playground_slide" },
+  playground_slide_tall = { recipe = "playground_slide", args = { height = 2.2, paint = "orange" } },
 }
