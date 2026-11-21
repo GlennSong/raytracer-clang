@@ -327,24 +327,29 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // 0xbacfb8b215f04aa1 -> 0xf0e62a8d7fffa45b. Away from a kerb end 3.24% -> 1.93%. STILL FAILING, on the known-bugs
     // list: ONE RING OF WAITS (a deadlock) from about minute 30 (the rings checks above), and the longest stand
     // 193 s -> 1247.6 s (car 109).
+    // And its second half (the street furniture planned on the road model: one signal pole per arriving arm, a
+    // sidewalk's width back from its mouth; lamps and kerb life along each kerb, so the walkers' obstacles stand
+    // elsewhere): the most on the road 87 at minute 9 -> 89 at minute 10; parked 238 -> 234; arrivals 470 -> 472; hash
+    // 0xf0e62a8d7fffa45b -> 0xec0a6a6e55e90ddc; away from a kerb end 1.93% -> 1.95%. The ring of waits and the longest
+    // stand (1247.6 s, car 109) are the same.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 209u);
         CHECK(withCar == 222);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 87);
-        CHECK(mostOnRoadAt == 9);
+        CHECK(mostOnRoad == 89);
+        CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 16);
         CHECK(b.counts().tripsBegun == 313u);
-        CHECK(b.counts().parkedReports == 238u);
+        CHECK(b.counts().parkedReports == 234u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 470u);
+        CHECK(b.machine()->counts().arrivals == 472u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xf0e62a8d7fffa45bull);
+        CHECK(hash == 0xec0a6a6e55e90ddcull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

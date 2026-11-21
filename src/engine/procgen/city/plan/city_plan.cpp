@@ -11,8 +11,7 @@
 
 #include "../parcel.h"
 #include "../site_plan.h"
-#include "../../../ai/nav_graph.h"
-#include "../../../ai/pathfind.h"
+#include <queue>   // the commute sample's quickest way (planScore)
 
 #include <algorithm>
 #include <cmath>
@@ -3322,9 +3321,65 @@ PlanScore evaluatePlan(CityPlan& plan) {
                 all.edges.push_back(r);
             }
         }
-        NavBuildParams np;
-        np.oneWayRamps = false;
-        const NavGraph nav = buildNavGraph(all, np);
+        // THE QUICKEST WAY over the plan's own graph (the street map and its router went with #306; the simplest port):
+        // each edge both ways at its class's speed, a street edge into a street junction 6 s more (the old router's
+        // street-junction delay); does it use the
+        // freeway. A plain Dijkstra over a plan's few thousand nodes is quick enough for 300 samples.
+        const int N = static_cast<int>(all.nodes.size());
+        std::vector<std::vector<int>> at(static_cast<std::size_t>(N));
+        for (int e = 0; e < static_cast<int>(all.edges.size()); ++e) {
+            const RoadEdge& E = all.edges[static_cast<std::size_t>(e)];
+            if (E.a < 0 || E.b < 0 || E.a >= N || E.b >= N) continue;
+            at[static_cast<std::size_t>(E.a)].push_back(e);
+            at[static_cast<std::size_t>(E.b)].push_back(e);
+        }
+        auto nearestNode = [&](const Vec2& p) {
+            int best = -1; Real bd = 1e30;
+            for (int i = 0; i < N; ++i) {
+                if (at[static_cast<std::size_t>(i)].empty()) continue;
+                const Real d = (all.nodes[static_cast<std::size_t>(i)].pos - p).length();
+                if (d < bd) { bd = d; best = i; }
+            }
+            return best;
+        };
+        // (true: found; `viaFreeway`: its way uses a freeway edge)
+        auto quickest = [&](int from, int to, bool& viaFreeway) {
+            std::vector<Real> cost(static_cast<std::size_t>(N), 1e30);
+            std::vector<int> byEdge(static_cast<std::size_t>(N), -1);
+            using Item = std::pair<Real, int>;
+            std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+            cost[static_cast<std::size_t>(from)] = 0;
+            open.push({0, from});
+            while (!open.empty()) {
+                const Item it = open.top();
+                open.pop();
+                const int u = it.second;
+                if (it.first > cost[static_cast<std::size_t>(u)]) continue;
+                if (u == to) break;
+                for (int e : at[static_cast<std::size_t>(u)]) {
+                    const RoadEdge& E = all.edges[static_cast<std::size_t>(e)];
+                    const int v = E.a == u ? E.b : E.a;
+                    const Real len = (all.nodes[static_cast<std::size_t>(v)].pos - all.nodes[static_cast<std::size_t>(u)].pos).length();
+                    // (a street edge into a street junction waits there; a freeway or a ramp does not)
+                    const bool street = E.klass != RoadClass::Freeway && E.klass != RoadClass::Ramp;
+                    const Real wait = street && v != to && at[static_cast<std::size_t>(v)].size() >= 3 ? 6.0 : 0.0;
+                    const Real c = it.first + len / classSpeed(E.klass) + wait;
+                    if (c < cost[static_cast<std::size_t>(v)]) {
+                        cost[static_cast<std::size_t>(v)] = c;
+                        byEdge[static_cast<std::size_t>(v)] = e;
+                        open.push({c, v});
+                    }
+                }
+            }
+            if (cost[static_cast<std::size_t>(to)] >= 1e29) return false;
+            viaFreeway = false;
+            for (int v = to; v != from && byEdge[static_cast<std::size_t>(v)] >= 0;) {
+                const RoadEdge& E = all.edges[static_cast<std::size_t>(byEdge[static_cast<std::size_t>(v)])];
+                viaFreeway = viaFreeway || E.klass == RoadClass::Freeway;
+                v = E.a == v ? E.b : E.a;
+            }
+            return true;
+        };
         std::vector<int> homes, jobs;
         for (std::size_t i = 0; i < plan.blocks.size(); ++i) {
             const PlanBlock& b = plan.blocks[i];
@@ -3333,18 +3388,17 @@ PlanScore evaluatePlan(CityPlan& plan) {
             else homes.push_back(static_cast<int>(i));
         }
         int via = 0, routed = 0;
-        if (!homes.empty() && !jobs.empty() && nav.nodeCount() > 1) {
+        if (!homes.empty() && !jobs.empty() && N > 1) {
             for (int k = 0; k < 300; ++k) {
                 const uint32_t h = hash3(k, 91, B.seed);
                 const PlanBlock& hb = plan.blocks[static_cast<std::size_t>(homes[h % homes.size()])];
                 const PlanBlock& jb = plan.blocks[static_cast<std::size_t>(jobs[(h >> 12) % jobs.size()])];
-                const int hn = nav.nearestNode(centroid(hb.buildable)), jn = nav.nearestNode(centroid(jb.buildable));
+                const int hn = nearestNode(centroid(hb.buildable)), jn = nearestNode(centroid(jb.buildable));
                 if (hn < 0 || jn < 0 || hn == jn) continue;
-                const Route r = findRoute(nav, hn, jn);
-                if (!r.valid()) continue;
+                bool fw = false;
+                if (!quickest(hn, jn, fw)) continue;
                 ++routed;
-                for (int li : r.links)
-                    if (nav.links[static_cast<std::size_t>(li)].klass == RoadClass::Freeway) { ++via; break; }
+                via += fw ? 1 : 0;
             }
         }
         s.commutesSampled = routed;

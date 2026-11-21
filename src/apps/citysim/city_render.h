@@ -299,8 +299,7 @@ public:
     // the head is dark: the new driving does not drive here), and what it shows now (driving::headAt), as lit in the
     // post instance's bottom row (headFaceNumber) and the arrow lens groups (signalGroup).
     struct SignalHead {
-        int link = -1;                        // the street-map link it was planted along
-        int city = -1, junction = -1, arm = -1;
+        int city = -1, junction = -1, arm = -1;   // the road-model arm it governs
         engine::Mat4 arrowLens[2];            // its arrow lens lit for a far turn [0] or a near turn [1]
     };
     std::size_t signalHeadCount() const { return signalHeads_.size(); }
@@ -690,7 +689,7 @@ private:
     // ImGui section. Default on, so the J key alone behaves exactly as before.
     bool showAgentWidgets_ = true;   // per-agent state rings + intent arrows
     bool showVisionCones_ = true;    // per-agent sensing wedges
-    bool showNavGraph_ = true;       // lane strips + junction-node rings
+    bool showWalkPoints_ = true;     // the walk points' strips and rings (the "nav" layer)
     bool showPlan_ = true;           // city-plan outlines: blocks + lots (L key)
     bool showColliders_ = false;     // building physics prisms (rims + posts)
     bool rebuildRoadsRequested_ = false;   // panel button → host reseeds + reloads

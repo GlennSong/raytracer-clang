@@ -47,7 +47,7 @@ using engine::Real;   // the engine's scalar (double); used throughout the sim
 
 // The agent-based city simulation (ADR-0060). An Agent is a person on foot: it walks the road model's walks (the cars are the
 // driving's car entities, city_car.h; a person in one is `inCar`, ADR-0444). The player is modelled as an agent too
-// (playerControlled = its brain is host input). This is the deterministic core (kinematic motion along the NavGraph).
+// (playerControlled = its brain is host input). This is the deterministic core (kinematic motion along the road model's walks).
 // (The old driving's agents in their own cars went with ADR-0461..0463.)
 
 struct Agent {

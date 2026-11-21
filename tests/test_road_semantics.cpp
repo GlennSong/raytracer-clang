@@ -1,12 +1,10 @@
 // The road-graph SEMANTIC LAYER (roads-v2.2, issue #17): classifyRoadGraph
 // stamps JunctionKind on nodes and access bits on edges; the bake stamps its
 // gores and landings as hints. These tests pin the classification rules and
-// the carriers (netGraph hint copy, streetsOnly degradation, nav knot-merge
-// priority) BEFORE any consumer reads the fields — stage S1 must be
-// behaviorally invisible.
+// the carriers (netGraph hint copy, streetsOnly degradation) BEFORE any
+// consumer reads the fields — stage S1 must be behaviorally invisible.
 #include "test_framework.h"
 
-#include "../src/engine/ai/nav_graph.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_semantics.h"
 
@@ -65,35 +63,8 @@ TEST_CASE(semantics_freeway_edges_lose_street_access) {
     for (const RoadEdge& e : g.edges) CHECK(e.access == 0);
 }
 
-TEST_CASE(semantics_nav_carries_kind_through_knot_merge) {
-    // Two junction nodes 4 m apart (inside the 7 m merge radius): a hinted
-    // Landing glued to a street Intersection — the cluster keeps Landing.
-    RoadGraph g;
-    g.nodes.push_back({ Vec2(0, 0) });     // street intersection
-    g.nodes.push_back({ Vec2(4, 0) });     // landing (hinted)
-    g.nodes.push_back({ Vec2(-60, 0) });
-    g.nodes.push_back({ Vec2(0, 60) });
-    g.nodes.push_back({ Vec2(0, -60) });
-    g.nodes.push_back({ Vec2(64, 0) });
-    g.nodes.push_back({ Vec2(4, 60) });
-    g.addEdge(0, 2, 10);
-    g.addEdge(0, 3, 10);
-    g.addEdge(0, 4, 10);
-    g.addEdge(0, 1, 10);
-    g.addEdge(1, 5, 10);
-    g.addEdge(1, 6, 6, RoadClass::Ramp);
-    g.nodes[1].kind = JunctionKind::Landing;   // the bake's hint
-    NavGraph nav = buildNavGraph(g);
-    int landings = 0;
-    for (int i = 0; i < nav.nodeCount(); ++i)
-        if (nav.kindOf(i) == JunctionKind::Landing) ++landings;
-    CHECK(landings == 1);
-    // And access bits ride the links.
-    bool sawRampNoAccess = false;
-    for (const NavLink& l : nav.links)
-        if (l.klass == RoadClass::Ramp && l.access == 0) sawRampNoAccess = true;
-    CHECK(sawRampNoAccess);
-}
+// (semantics_nav_carries_kind_through_knot_merge went with the street map, #306: it pinned how the street map's knot
+// merge carried a node's kind and access bits onto its links.)
 
 // [1] Review S4b: the audit's spatial hash must register every cell a
 // segment passes through (DDA supercover), not point-sample at cell width.

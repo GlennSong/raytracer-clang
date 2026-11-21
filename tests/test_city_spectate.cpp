@@ -13,7 +13,7 @@ namespace {
 
 // A bare Agent with just the fields the pure spectate helpers read. The sim
 // builds full agents; here we only need released / playerControlled / inCar /
-// heading, so hand-rolling keeps the tests independent of a NavGraph.
+// heading, so hand-rolling keeps the tests independent of any roads.
 Agent makeAgent(bool released = false, bool playerControlled = false) {
     Agent a;
     a.released = released;

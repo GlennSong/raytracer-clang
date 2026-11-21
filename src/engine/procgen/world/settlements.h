@@ -41,7 +41,7 @@ struct SettlementKind {
     int interchanges = 1;                 // the diamonds it is given first (more first)
     int linkCandidates = 4;               // link roads offered to the freeway...
     double linkSpacing = 300.0;           // ...their freeway ends this far apart
-    int busRoutes = 1, busStops = 8;      // its local bus network (BusNetwork::build); 0 routes: none
+    int busRoutes = 1, busStops = 8;      // its local bus network (unplanned since #306 took its builder; read, kept)
     bool signedFar = false;               // named on the island's distance and control-city signs
     std::string limitSign = "TOWN LIMIT";
     std::string naming = "town";          // place_names.h: "city", "town", "mountain"

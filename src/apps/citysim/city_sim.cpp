@@ -549,8 +549,6 @@ void CitySim::build(int pedCount, uint32_t seed) {
             // BOTH directions must route (the graph is directed — one-way ramps):
             // a valid home->work with no work->home used to retry a failing A*
             // every single tick once the agent wanted to come home.
-            // (There and back is one strongly connected component -- engine::stronglyConnected, computed
-            // once for the build, not two searches a try.)
             // (on foot, there and back: the same part of the walks)
             auto commutable = [&](int h, int w) { return w != h && walkPoints_.samePart(h, w); };
             bool ok = commutable(a.home, a.work);

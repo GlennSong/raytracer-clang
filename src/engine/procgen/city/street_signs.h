@@ -29,7 +29,6 @@
 #include "../../text/font.h"
 #include "road_network.h"
 #include "street_names.h"
-#include "../../ai/nav_graph.h"   // the street map whose links a post keeps clear of
 #include "../../../renderer/renderer.h"   // RenderMesh
 
 #include <nlohmann/json.hpp>
@@ -102,8 +101,9 @@ struct SignCarriageway {
     Vec2 a, b;
     Real width = 0;
 };
-// The level's street map's links as carriageways (ADR-0425; a two-way street's two links are one carriageway, given once).
-std::vector<SignCarriageway> carriagewaysOf(const NavGraph& streets);
+// A road model's streets as carriageways: each piece of each car street's centre line, at its travel width.
+struct RoadModel;
+std::vector<SignCarriageway> carriagewaysOf(const RoadModel& m);
 // `carriageways`: the level's roads (pieces with their widths), which a post keeps clear of.
 std::vector<StreetSignPost> planStreetSigns(
     const std::vector<SignCorner>& corners, const std::vector<SignCarriageway>& carriageways,

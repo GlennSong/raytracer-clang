@@ -1148,12 +1148,17 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // model's walks (city_walk_points.h), not street-map nodes, so every walker's day, and every driver's stops for
     // them, moved. STILL FAILING, not loosened, on the known-bugs list: car 10 stands 0.56 m off its lane for 14.8 s
     // (kOffLaneKnownWorst).
+    // And its second half (the street furniture planned on the road model -- one signal pole per arriving arm, a
+    // sidewalk's width back from its mouth; lamps, trees and kerb props along each kerb -- so what the cars and walkers
+    // meet stands elsewhere): in 120 -> 113, out 90 -> 77, 0xed4281eb889d8e9b -> 0x3c4be4561e729e50 (the most near the
+    // same, 20 at minute 12). WORSE, on the known-bugs list, not loosened: contacts 0 -> 7, hits on parked cars 0 -> 1,
+    // on walkers 0 -> 5, on other things 0 -> 14, the longest off its lane 14.8 s -> 18.7 s (car 1, 1.95 m off).
     CHECK(mostNear == 20);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 120u);
-    CHECK(c.intoLane == 90u);
+    CHECK(c.intoPhysics == 113u);
+    CHECK(c.intoLane == 77u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xed4281eb889d8e9bull);
+    CHECK(hash == 0x3c4be4561e729e50ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

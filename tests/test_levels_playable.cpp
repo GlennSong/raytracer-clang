@@ -29,7 +29,6 @@
 #include "../src/engine/level_params.h"      // readTerrainParams (the island water check)
 #include "../src/engine/procgen/hydrology.h"   // the editor's save (road_signs round trip)
 #include "../src/engine/drawn_road.h"
-#include "../src/engine/ai/pathfind.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
@@ -94,19 +93,33 @@ std::string levelsDir() {
 // the nodes, and every number here was tuned on the other one. RT_CITYSIM_LEVEL
 // points them at it, so "does the sim work on a lane-built city" is a measurement
 // rather than an opinion.
-// THE LEVEL'S STREET MAP (engine::LevelRoadModel::streetMap, ADR-0425: built from the road model at load, every agent routes on it) as
-// a road graph of its pieces -- a two-way street's two links once, with their widths and classes: what the measurements
-// below walk. Empty when the level has none.
-engine::RoadGraph streetMapGraph(World& world) {
+// THE LEVEL'S STREETS (engine::LevelRoadModel::cities: the road model's streets, every city) as a road graph of their
+// pieces -- each piece of each car street's centre line, at its travel width and class, the points shared where lines
+// meet (to the centimetre): what the measurements below walk. Empty when the level has none. (Was the street map, which
+// went with #306.)
+engine::RoadGraph modelStreetGraph(World& world) {
     engine::RoadGraph g;
-    std::shared_ptr<const engine::NavGraph> map;
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!map && m.streetMap) map = m.streetMap; });
-    if (!map) return g;
-    for (int n = 0; n < map->streetNodeCount(); ++n) g.nodes.push_back(engine::RoadNode{map->nodes[static_cast<std::size_t>(n)]});
-    for (int li = 0; li < map->streetLinkCount(); ++li) {
-        const engine::NavLink& L = map->links[static_cast<std::size_t>(li)];
-        if (!L.footpath) g.addEdge(L.from, L.to, L.width, L.klass);
-    }
+    std::map<std::pair<long long, long long>, int> at;
+    auto nodeOf = [&](const Vec2& v) {
+        const std::pair<long long, long long> k{std::llround(v.x * 100.0), std::llround(v.y * 100.0)};
+        const auto it = at.find(k);
+        if (it != at.end()) return it->second;
+        g.nodes.push_back(engine::RoadNode{v});
+        at.emplace(k, static_cast<int>(g.nodes.size()) - 1);
+        return static_cast<int>(g.nodes.size()) - 1;
+    };
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+        for (const std::shared_ptr<engine::RoadModel>& c : m.cities) {
+            if (!c) continue;
+            for (const engine::ModelStreet& S : c->streets) {
+                if (!S.section.carriesCars() || S.line.count < 2) continue;
+                for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
+                    const int a = nodeOf(c->linePoints[i]), b = nodeOf(c->linePoints[i + 1]);
+                    if (a != b) g.addEdge(a, b, S.section.travelWidth(), S.section.klass);
+                }
+            }
+        }
+    });
     return g;
 }
 
@@ -773,7 +786,7 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         const CityMap* cm = nullptr;
         world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
         if (!cb || !cm || !cm->data) continue;
-        const NavGraph& rg = cm->data->nav;   // the street map (ADR-0425)
+        const RoadGraph rg = modelStreetGraph(world);   // the road model's streets (the street map went, #306)
         int offenders = 0;
         Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
         for (std::size_t i = 0; i < cb->records.size(); ++i) {
@@ -781,10 +794,9 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
             if (r.plan.size() < 3) continue;
             bool bad = false;
             for (const Vec2& v : r.plan) {
-                for (int e = 0; e < rg.streetLinkCount(); ++e) {
-                    const NavLink& ed = rg.links[static_cast<std::size_t>(e)];
-                    const Real d = distToSegment(v, rg.nodes[static_cast<std::size_t>(ed.from)],
-                                                 rg.nodes[static_cast<std::size_t>(ed.to)]);
+                for (const RoadEdge& ed : rg.edges) {
+                    const Real d = distToSegment(v, rg.nodes[static_cast<std::size_t>(ed.a)].pos,
+                                                 rg.nodes[static_cast<std::size_t>(ed.b)].pos);
                     const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
                     if (into > Real(0.25)) {
                         bad = true;
@@ -1101,7 +1113,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
         sidewalk = std::max(sidewalk, static_cast<Real>(net.look.sidewalk));
     });
-    const RoadGraph streets = streetMapGraph(world);
+    const RoadGraph streets = modelStreetGraph(world);
     const RoadGraph* graph = streets.edges.empty() ? nullptr : &streets;
     const StreetFurniture* sf = nullptr;
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
@@ -1567,15 +1579,12 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
                                           view, assets, false);
     CHECK(loaded);
     if (!loaded) return;
-    // the street map, which a post keeps clear of (as the loader plans the posts: ADR-0425)
-    std::shared_ptr<const engine::NavGraph> streetMap;
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!streetMap && m.streetMap) streetMap = m.streetMap; });
-    const engine::NavGraph* graph = streetMap.get();
-    // THE NAMES AND THE JUNCTIONS ARE THE LEVEL'S ROAD MODEL'S (ADR-0420)
+    // THE NAMES, THE JUNCTIONS AND THE CARRIAGEWAYS A POST KEEPS CLEAR OF ARE THE LEVEL'S ROAD MODEL'S (ADR-0420; the
+    // carriageways were the street map's until #306)
     const engine::LevelRoadModel* level = nullptr;
     world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!level) level = &m; });
-    CHECK(graph && level && !level->cities.empty() && level->cities.front());
-    if (!graph || !level || level->cities.empty() || !level->cities.front()) return;
+    CHECK(level && !level->cities.empty() && level->cities.front());
+    if (!level || level->cities.empty() || !level->cities.front()) return;
     const engine::RoadModel& model = *level->cities.front();
     const engine::Font* font = engine::signFont();
     CHECK(font != nullptr);
@@ -1601,7 +1610,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         const std::string n = engine::streetName(model, engine::ModelStreetId(static_cast<uint32_t>(s)));
         if (!n.empty()) namedStreets.insert(n);
     }
-    const std::vector<engine::SignCarriageway> carriageways = engine::carriagewaysOf(*graph);
+    const std::vector<engine::SignCarriageway> carriageways = engine::carriagewaysOf(model);
     const std::vector<engine::StreetSignPost> posts = engine::planStreetSigns(signCorners, carriageways, nullptr, sp);
     const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
     int fits = 0, legible = 0, abbreviated = 0, condensed = 0, wrongNames = 0, inRoad = 0;
@@ -1733,7 +1742,7 @@ CityFacts gatherCityFacts(const std::string& levelName) {
                                  assets, /*editorMode=*/false);
     if (!f.loaded) return f;
 
-    const engine::RoadGraph nav = streetMapGraph(world);
+    const engine::RoadGraph nav = modelStreetGraph(world);
     f.navNodes = nav.nodes.size();
     f.navEdges = nav.edges.size();
 
@@ -2072,7 +2081,7 @@ TEST_CASE(front_doors_face_their_street) {
             CHECK(false);
             continue;
         }
-        const engine::RoadGraph nav = streetMapGraph(world);
+        const engine::RoadGraph nav = modelStreetGraph(world);
         CHECK(!nav.edges.empty());
         if (nav.edges.empty()) continue;
 
@@ -3548,7 +3557,7 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     World world;
     RenderView view;
     CHECK(LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, /*editorMode=*/false));
-    const engine::RoadGraph nav = streetMapGraph(world);
+    const engine::RoadGraph nav = modelStreetGraph(world);
     std::vector<const engine::RoadDeckField*> decks;
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
     struct Steep { double grade; engine::Vec2 at; int klass; };

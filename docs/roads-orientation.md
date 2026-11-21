@@ -156,10 +156,11 @@ that set them beside it. Measured before W3: river_town has 98 of 799 crowd plac
 part, and 136 doors snap to park/quad footpaths the lane level does not hold. Since W3 people walking there stand where
 no route leaves their part (river_town's crowd test fails; ADR-0480 W3; waiting on the walks' fix).
 
-**The street map's links** (ADR-0437). A link's `width`, `klass`, `lanes`, `oneWay`, `walkable`, `access`,
-`parkOffset` and `parkWidth` are a compiled look-up, written only in `layLinks` (`street_map.cpp`) from the street's
-stated cross-section; routing and every agent's position read them each tick. Do not write them anywhere else. The
-arm a link arrives by is not kept; ask `armReachedAt`.
+**No street map** (#306, ADR-0480's sweep). The street map (`NavGraph`, `street_map.h`, its router `pathfind.h`) is
+deleted. Every reader asks the model: the city sim's people rest at walk points on its walks
+(`src/apps/citysim/city_walk_points.h`) and walk by the one router; the furniture plans along its streets' centre
+lines and at its junctions' arms; the probes, the map, the signs and the day/night footprint read its streets. The
+arm a street arrives by at a station is asked of the model (`armReachedAt`).
 
 **Walkways** (ADR-0475). A path for people on foot beside no street is stated by whoever draws it (S6b: the lot pass),
 with where each end lands looked up once when drawn. `stateWalkways` is the one way in; the lane level trusts the ends,
@@ -167,8 +168,7 @@ cuts the walk each lands on and joins there, and returns what did not land. Noth
 Since ADR-0476 the lot pass states every path it draws (`LotBuilding::walkways`, ids `lot<i>.p<k>`, kinds `park_path` /
 `footway`, each end looked up once by `stateLotPaths`: another path, a street by `frontageOf`, or a dead end; a door on a
 path states it in its walkway slot), and the loader hands them to the built model it publishes (`lots_producer.h
-stateLotWalkways`); the bake's lot producer does the same only to log the faults. The street map reads them from the
-model (`street_map.h appendWalkways`); `NavGraph::appendFootpaths` joins only what it is told (`FootpathPlan`).
+stateLotWalkways`); the bake's lot producer does the same only to log the faults. The lane level lays them as walks.
 
 ## 2. File map
 
@@ -178,7 +178,6 @@ Under `src/engine/procgen/city/roads/`:
 |---|---|
 | `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). `line_frontage.h` declares the one step from a centre-line hit to a station and kerb (`frontageOnLine`, defined in road_model.cpp), small so the lot pass can include it (ADR-0474). |
 | `road_model_parts.h` | The one set of junction, arm, street, node and stretch types (`ModelJunction`, `ModelArm`, `ModelStreet`...). The road file is read into them (`RoadLabGraph::junctions` / `streets`), the layout and the control plan write them, and `plannedRoadModel` copies them whole and adds what only the model knows. A junction or street named by another is a place in the same list, not an id string. `graph_index.h` holds the index types it shares with the lane graph. |
-| `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
 | `control_signs.h/.cpp` | The stop, give-way, do-not-enter and one-way signs that follow from stated facts (ADR-0424). Also ADR-0419's stop-line rule, `stopLineFromMouth`. |
 | `lane_graph.h/.cpp` | The lane graph's types (paths, sections, junctions, crossing points), its save/load (LGRF), `validate`, dump, reach. It holds where a car can be and the ids the model is asked by, no fact about what the road is and no regulation (ADR-0436, ADR-0437). Beside the paths, in a list of their own, the walks people take and where their ends meet (`Walk`, `walkJoins`, `reachableWalks`; ADR-0466): nothing that reads `paths` meets one. A place on it: `PathPoint`, `WalkPoint` (ADR-0467). |
@@ -222,7 +221,7 @@ by kind, each kind with what it means.
 Tests:
 - `lanes_tests`: `test_lanes.cpp`, `test_road_model.cpp`, `test_control_plan.cpp`; unit scenes in
   `assets/lanelab/*.json`; `tests/lane_level_scene.h` gives a scene the lane-level facts.
-- `run_tests`: `test_lane_graph.cpp`, `test_nav_graph.cpp`, `test_street_signs.cpp` and more.
+- `run_tests`: `test_lane_graph.cpp`, `test_street_signs.cpp`, `test_street_furniture.cpp` and more.
 - `driving_tests`: lane tables laid by hand inside a small road model the test states its facts on
   (`tests/driving_test_roads.h`).
 - `level_tests`: `test_traffic_lab_v2.cpp`, `test_levels_playable.cpp`.
@@ -231,13 +230,16 @@ Tests:
 
 - **Street names, name signs, the map**: planned layer (ADR-0420). Loader: `mapStreetsOf`, `signCornersOf`,
   `attachSignBlades`.
-- **Lights and furniture**: each junction's stated control (ADR-0421). The street map's nodes carry their junction,
-  and `NavGraph::signalControlled` reads the stated signal.
+- **Lights and furniture**: each junction's stated control (ADR-0421). `planStreetFurniture` (street_furniture.h)
+  stands one pole at the mouth of each arriving arm of a lit junction (`junctionLit`; a road file stating no control:
+  junctions of four arms or more), and marches lamps, street trees and kerb props along each kerb of each street's
+  centre line that has a sidewalk there.
 - **Control signs**: `control_signs.h` over stated arms and regulations (ADR-0424). Placed at load and attached to
   arms.
-- **Street map / routing**: `LevelRoadModel::streetMap`, the level-wide routing table held by the one road object
-  beside its `cities` (built by `appendStreetMap`, street_map.h, ADR-0425). Read by the city sim, buses, rail riders,
-  parking, walkers, the trip planner, furniture, the day/night system and the light probes.
+- **Routing**: cars by the one route-finder over the lane paths (`findRoute`), people by it over the walks
+  (`findWalkRoute`). The street map that every agent once routed on (`LevelRoadModel::streetMap`, ADR-0425) is gone
+  (#306). The light probes (`placeProbeSites`), the day/night footprint and the signs' carriageways
+  (`carriagewaysOf`) read the model's streets.
 - **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429). The
   host makes nothing: it hands the driving the lane level of the built model the loader published in `LevelRoadModel`
   (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only the levels naming
@@ -286,10 +288,12 @@ Still working roads out for itself:
   measuring: which street a lot fronts and a door faces is the NEAREST street a building may front, not the street
   bounding its block as `enclosedRegions` states it; blocks are the gaps in the built pavement; alleys are the lot
   pass's own segments, not streets of the model.
-- **The planner's scoring**: still builds its own nav graph (`buildNavGraph` in `plan/city_plan.cpp`).
+- **The planner's scoring**: its commute sample takes the quickest way over the plan's own road graph (a plain
+  Dijkstra in `plan/city_plan.cpp scorePlan`), not over the model.
 - **Bus-stop next-stop names**: `streetNameNear` finds the nearest named street within 40 m. The model answers it,
   but by position.
-- **`NavGraph::signalledByDegree`**: the old count-the-arms rule, used where a map has no stated signals.
+- **The count-the-arms rule** (four arms or more: lit) stands where a road file states no control
+  (`StreetFurnitureParams::controlsStated`).
 - **The old driving (v1)**: reads the lane match (`LaneMap` in `src/apps/citysim`), tied by road, direction,
   stretch and slot since ADR-0425. Its own junction boxes and stop lines are listed in the design doc; not checked
   here *(unsure)*.
@@ -531,9 +535,8 @@ data rows.
   circle on the near side. It is listed per junction in the arm-order tables and is unchanged.
 - **Deferred levels' road files are unmarked** (`arms_in_ring`). They load with a logged problem line and get no lane
   level until `lanes_tool layout <file> --arm-order --write` is run on them.
-- **Deferred levels**: every lanes level but traffic_lab, river_town and agent_lab lacks `lane_rules`. Levels without
-  `junctions[].nodes` get no street map (agent_lab, river_town and traffic_lab have them). The one-agent lab's car
-  still drives v1. Steps 5, 6 and 9 are open (design step table).
+- **Deferred levels**: every lanes level but traffic_lab, river_town and agent_lab lacks `lane_rules`, so has no lane
+  level and no walks: no city sim. Steps 5, 6 and 9 are open (design step table).
 - **Real cases the lane-graph checks found and name** (test_lanes.cpp, per scene): lanes of two roads crossing at one
   level before their stop lines at traffic_lab j0 (s33 and s36, four), j84 (s147, s149) and j22's approach (s57, s60);
   ring_city's two ramps crossing at grade; grid_city's boulevard lane crossing a local street's at a 100-degree carry-on.

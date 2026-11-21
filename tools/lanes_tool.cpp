@@ -28,8 +28,6 @@
 //   lanes_tool reframe <graph.json> <carriageway a> <carriageway b> <ramp> ... [--write]   each system-interchange ramp's
 //                      stated centre line set out again in the freeway's frame turning smoothly, without the sideways steps
 //                      the planner's old frame left at every point of the freeway (ADR-0473)
-//   lanes_tool streetmap <graph.json> [--route x0 z0 x1 z1]   the street map agents route on, built from the file's road
-//                      model alone, in words; --route: a car's route between two points, street by street (ADR-0425)
 //   lanes_tool model <graph.json> [--out <dir>] [--door x y ...]   build the roads and assemble THE ROAD MODEL: model.txt,
 //                      report.txt, model.svg (the kerb parking spaces drawn on it) and parking.txt (every kerb parking
 //                      space in words: its stations, where a car in it stands, the kerb lane path beside it; ADR-0439);
@@ -46,8 +44,6 @@
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
-#include "engine/procgen/city/roads/street_map.h"   // streetmap: the graph agents route on, from the model (ADR-0425)
-#include "engine/ai/pathfind.h"                     // streetmap --route
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
@@ -704,36 +700,6 @@ int main(int argc, char** argv) {
         std::ofstream(argv[2], std::ios::binary) << out;
         std::printf("wrote %s (%zu bytes before, %zu after)\n", argv[2], text.size(), out.size());
         return 0;
-    }
-    if (argc >= 3 && std::strcmp(argv[1], "streetmap") == 0) {
-        // THE STREET MAP (street_map.h, ADR-0425): the graph agents route on, built from the road file's planned layer alone
-        // (no build: no deck heights), in words -- its counts and every place the stated facts leave unjoined
-        try {
-            RoadLabGraph g = RoadLabGraph::load(argv[2]);
-            (void)expand(g);   // the ramps composed, as the loader reads them
-            const RoadModel model = plannedRoadModel(g);
-            NavGraph map;
-            StreetMapReport rep;
-            const bool ok = appendStreetMap(map, model, 0, nullptr, &rep);
-            std::printf("%s: %s\n", argv[2], describeStreetMap(rep).c_str());
-            // --route x0 z0 x1 z1: the car's route between the nodes nearest two points, street by street, with its time
-            for (int i = 3; i + 4 < argc; ++i) {
-                if (std::strcmp(argv[i], "--route") != 0) continue;
-                const int a = map.nearestNode(Vec2(std::atof(argv[i + 1]), std::atof(argv[i + 2])));
-                const int b = map.nearestNode(Vec2(std::atof(argv[i + 3]), std::atof(argv[i + 4])));
-                const Route r = findRoute(map, a, b, false);
-                std::printf("route %d -> %d: %zu links, %.1f m, %.1f s\n", a, b, r.links.size(), r.length(map), routeSeconds(map, r, false));
-                for (std::size_t k = 0; k < r.links.size(); ++k) {
-                    const NavLink& L = map.links[static_cast<std::size_t>(r.links[k])];
-                    const Vec2 p = map.nodes[static_cast<std::size_t>(L.from)];
-                    std::printf("  %s %s (%.0f, %.0f) %.0f m, %.1f s%s\n",
-                                L.street >= 0 ? model.streets[static_cast<std::size_t>(L.street)].id.c_str() : "inside",
-                                L.junction >= 0 ? model.junctions[static_cast<std::size_t>(L.junction)].id.c_str() : "", p.x, p.y, L.length,
-                                linkTravelSeconds(map, k > 0 ? r.links[k - 1] : -1, r.links[k], b, false), map.isJunction(L.to) ? " (junction)" : "");
-                }
-            }
-            return ok ? 0 : 1;
-        } catch (const std::exception& e) { std::fprintf(stderr, "lanes_tool: %s\n", e.what()); return 1; }
     }
     if (argc >= 3 && std::strcmp(argv[1], "model") == 0) {
         // THE ROAD MODEL (road_model.h, ADR-0417): the roads built, the model assembled from the build; `model` writes its

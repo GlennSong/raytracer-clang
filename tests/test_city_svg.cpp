@@ -3,7 +3,7 @@
 #include "../src/engine/procgen/city/city_svg.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"   // buildRoadNetMesh: a real deck for the census
-#include "../src/engine/ai/nav_graph.h"
+#include "model_scene.h"   // the loop as a road model, for its furniture
 
 #include <cmath>
 #include <cstdio>
@@ -29,8 +29,14 @@ CityMapData smallCity() {
     g.addEdge(1, 2, 10.0);
     g.addEdge(2, 3, 10.0);
     g.addEdge(3, 0, 10.0);
-    m.nav = buildNavGraph(g);
-    m.furniture = planStreetFurniture(m.nav, [](Real, Real) { return Real(0); });
+    // its furniture, planned on the loop built as a level's roads are (model_scene.h; the street map it was planned on
+    // went with #306)
+    // (a stub off one corner: a road file with no junction gets no lane level)
+    RoadGraph withStub = g;
+    const int stub = withStub.addNode({260, 0});
+    withStub.addEdge(1, stub, 10.0);
+    const citytest::ModelScene& scene = citytest::graphScene("svg_small_city", withStub);
+    m.furniture = planStreetFurniture({FurnitureCity{scene.model.get(), 0}}, [](Real, Real) { return Real(0); });
     // The road model's streets and junctions (what the loader hands the map, ADR-0420): the loop's four sides at their
     // travel width, two of them named.
     const char* const sideNames[] = {"Acme Street", "", "Harbour Road", ""};

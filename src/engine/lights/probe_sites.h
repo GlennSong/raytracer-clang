@@ -14,7 +14,7 @@
 
 namespace engine {
 
-struct NavGraph;
+struct RoadModel;
 
 struct ProbeSite {
     Vec3 position;
@@ -39,10 +39,10 @@ struct ProbeRules {
 // Ground height at (x, z), for nodes whose elevation is above the ground
 using ProbeGroundFn = std::function<double(double, double)>;
 
-// Sites along every street of `map` (the level's street map, LevelRoadModel::streetMap, ADR-0425: its links follow the streets'
-// curves; a two-way street's two links are one piece): a piece of length L takes max(1, round(L / spacing)) evenly
-// spaced, merged at junctions.
-void placeProbeSites(const NavGraph& map, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out);
+// Sites along every street of `map` (a city of the level's road model, LevelRoadModel::cities: each piece of each
+// street's centre line): a piece of length L takes max(1, round(L / spacing)) evenly spaced, merged at junctions, at the
+// height `ground` gives.
+void placeProbeSites(const RoadModel& map, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out);
 
 // A storey's sites (ADR-0380): its footprint as an oriented box (centre, the two axes, the half extents), its floor and
 // ceiling; a grid of cells `spacing` across (at least one), a probe in each at `height` over the floor, its box the

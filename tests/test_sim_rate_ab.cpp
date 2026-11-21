@@ -15,7 +15,7 @@
 #include "../src/engine/procgen/city/plan/city_plan.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/world.h"
-#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
+#include "test_world_roads.h"   // a test world's road model, from its road entities
 
 #include <chrono>
 #include <cstdio>

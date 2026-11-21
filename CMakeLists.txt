@@ -222,8 +222,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/structure_set.cpp
     src/engine/procgen/city/block_grade.cpp
-    src/engine/ai/nav_graph.cpp
-    src/engine/ai/pathfind.cpp
     src/engine/asset_root.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
@@ -606,7 +604,6 @@ add_library(citysim STATIC
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_roles.cpp
     src/apps/citysim/activities.cpp
-    src/apps/citysim/city_bus.cpp   # bus loops planned over the street map (the island planner's local lines)
     src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
     src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
     src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
@@ -718,7 +715,6 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/road_problem.cpp   # a problem the road build found, as a record (ADR-0438)
             src/engine/procgen/city/roads/vehicle_size.cpp   # the body a road is checked against per vehicle tag (ADR-0435)
             src/engine/procgen/city/roads/lane_turns.cpp   # which turns a junction offers, which lane takes each (ADR-0426)
-            src/engine/procgen/city/roads/street_map.cpp   # the street map agents route on, from the road model (ADR-0425)
             src/engine/procgen/city/roads/control_signs.cpp   # the signs that follow from its facts (ADR-0424)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
@@ -1002,8 +998,6 @@ add_executable(run_tests
     tests/test_height_pyramid.cpp
     tests/test_residency.cpp
     tests/test_terrain_async.cpp
-    tests/test_nav_graph.cpp
-    tests/test_pathfind.cpp
     tests/test_perception.cpp
     tests/test_agent_memory.cpp
     tests/test_state_machine.cpp

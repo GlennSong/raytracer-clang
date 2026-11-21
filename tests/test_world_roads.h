@@ -1,11 +1,11 @@
-#ifndef RAYTRACER_TESTS_STREET_MAP_TEST_UTIL_H
-#define RAYTRACER_TESTS_STREET_MAP_TEST_UTIL_H
+#ifndef RAYTRACER_TESTS_TEST_WORLD_ROADS_H
+#define RAYTRACER_TESTS_TEST_WORLD_ROADS_H
 
 // A TEST WORLD'S ROAD MODEL, MADE AS A LEVEL'S IS (#306 piece 6 W2). A level publishes its road model
 // (engine::LevelRoadModel::cities, ADR-0435), and the city host reads only that. A test world drawn as RoadEntity
 // components is turned into a road file, built by the one road builder into a road model with its lane level
-// (model_scene.h), and published the same way: its first city the built model. (It was a hand-made street map,
-// buildNavGraph over the drawn graph, with no road model behind it; the street map itself went with #306.)
+// (model_scene.h), and published the same way: its first city the built model. (It was a hand-made street map over the
+// drawn graph, with no road model behind it; the street map itself went with #306.)
 
 #include "model_scene.h"
 
@@ -18,13 +18,13 @@
 
 namespace testmap {
 
-// (Re)publish the world's road model and street map from every RoadEntity in it, merged in the order they were added
-// into one road file (one city). The scene is built once a run for each drawing (model_scene.h sceneNamed, by the road
-// file's text) and checked to have built cleanly.
-inline void publishStreetMap(engine::World& world) {
+// (Re)publish the world's road model from every RoadEntity in it, merged in the order they were added into one road
+// file (one city). The scene is built once a run for each drawing (model_scene.h sceneNamed, by the road file's text)
+// and checked to have built cleanly.
+inline void publishRoads(engine::World& world) {
     engine::RoadGraph combined;
     world.each<engine::RoadEntity>([&](engine::Entity, engine::RoadEntity& net) {
-        const engine::RoadGraph& g = net.graph;   // the drawing itself: each edge one road (not the sampled street-map graph)
+        const engine::RoadGraph& g = net.graph;   // the drawing itself: each edge one road
         const int base = static_cast<int>(combined.nodes.size());
         for (const engine::RoadNode& n : g.nodes) combined.nodes.push_back(n);
         for (engine::RoadEdge e : g.edges) {
@@ -47,10 +47,10 @@ inline void publishStreetMap(engine::World& world) {
     roads->laneLevelReport = "test world: " + std::to_string(s.model->laneLevel.walks.size()) + " walks";
 }
 
-// A road entity added to a test world, and the world's road model and street map published again with it.
+// A road entity added to a test world, and the world's road model published again with it.
 inline void addRoads(engine::World& world, engine::RoadEntity net) {
     world.add<engine::RoadEntity>(world.create(), std::move(net));
-    publishStreetMap(world);
+    publishRoads(world);
 }
 
 }  // namespace testmap

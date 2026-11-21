@@ -78,7 +78,7 @@ inline bool isGore(JunctionKind k) {
 // and STORED, so consumers stop re-deriving "freeway-ness" with their own
 // class checks. Whether pedestrians travel along an edge or a link, and
 // whether a link is a footpath, are NOT bits here: each has one home, the
-// bools `walkable` (RoadEdge, NavLink) and NavLink::footpath. (Bits 1 and 16
+// bool `walkable` (RoadEdge). (Bits 1 and 16
 // once repeated them and nothing read them: ADR-0438. The bits left keep
 // their values.)
 namespace road_access {
@@ -133,7 +133,7 @@ struct RoadEdge {
     // Roads-v2 S8: may pedestrians travel along this edge? Baked from the
     // edge's RoadSpec band list (any Sidewalk band => true) where a spec is
     // known; edges without specs keep the permissive default and rely on the
-    // class rule (pathfind's onFoot skip of Freeway/Ramp) as the backstop.
+    // class rule (no walking on a Freeway or a Ramp) as the backstop.
     bool walkable = true;
     // Semantic layer: access bits (road_access::k*), derived by
     // classifyRoadGraph from class/spec/elevation/neighbours and stored.

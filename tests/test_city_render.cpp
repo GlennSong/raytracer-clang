@@ -10,7 +10,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/vehicle_lamps.h"   // the lit-lamp mask bits (ADR-0342)
 #include "../src/engine/world.h"
-#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
+#include "test_world_roads.h"   // a test world's road model, from its road entities
 
 #include <algorithm>
 #include <cmath>

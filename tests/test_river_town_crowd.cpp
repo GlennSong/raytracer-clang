@@ -235,13 +235,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 98);
-        CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 292u);
-        CHECK(b.counts().parkedReports == 240u);
+        CHECK(mostOnRoad == 99);   // (98 at minute 10 -> 99 at minute 11 with the furniture on the model, below)
+        CHECK(mostOnRoadAt == 11);
+        CHECK(b.counts().tripsBegun == 290u);       // (292 -> 290, the same)
+        CHECK(b.counts().parkedReports == 237u);    // (240 -> 237, the same)
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 472u);
+        CHECK(b.machine()->counts().arrivals == 475u);   // (472 -> 475, the same)
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -255,7 +255,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // is the same.
         // 0x83b99189cfc16fbd -> 0xc02460bd06f44189 (ADR-0478, the S7 re-bake): the counts above.
         // 0xc02460bd06f44189 -> 0xa15a1ec8afaff85d (ADR-0479, the pavement layers cleaned): the counts above.
-        // 0xa15a1ec8afaff85d -> 0x9362ecbc934c82cf (#306, the street map's deletion): the counts above.
-        CHECK(hash == 0x9362ecbc934c82cfull);
+        // 0xa15a1ec8afaff85d -> 0x9362ecbc934c82cf (#306, the street map's deletion, its first half): the counts above.
+        // 0x9362ecbc934c82cf -> 0xf9c704ff73207220 (#306, its second half): the street furniture planned on the road
+        // model -- one signal pole per arriving arm, a sidewalk's width back from its mouth; lamps and kerb life along
+        // each kerb -- so the walkers' obstacles (the poles and the furniture) stand elsewhere: the counts above.
+        CHECK(hash == 0xf9c704ff73207220ull);
     }
 }

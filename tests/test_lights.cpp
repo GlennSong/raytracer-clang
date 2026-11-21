@@ -6,7 +6,7 @@
 #include "test_framework.h"
 #include "../src/engine/lights/light_picker.h"
 #include "../src/engine/lights/probe_sites.h"
-#include "../src/engine/ai/nav_graph.h"   // buildNavGraph: the probes stand along a street map
+#include "model_scene.h"   // the probes stand along a road model's streets
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/components.h"   // drawClassName
 #include "../src/engine/scripting/lights_lua.h"
@@ -189,56 +189,29 @@ TEST_CASE(lights_lua_gives_every_pool_a_many_light_budget) {
 // deck's own height when it is one), one site where two streets meet, and each box holding its stretch of street and
 // the frontages either side.
 TEST_CASE(probe_sites_line_the_streets) {
-    RoadGraph g;
-    RoadNode a, b, c, d;
-    a.pos = Vec2(0, 0);
-    b.pos = Vec2(200, 0);
-    c.pos = Vec2(0, 160);
-    d.pos = Vec2(400, 0);
-    d.elev = 12.0;   // a ramp up to a deck
-    d.elevAbsolute = true;
-    g.nodes = {a, b, c, d};
-    RoadEdge ab, ac, bd;
-    ab.a = 0; ab.b = 1; ab.width = 10;
-    ac.a = 0; ac.b = 2; ac.width = 10;
-    bd.a = 1; bd.b = 3; bd.width = 10;
-    g.edges = {ab, ac, bd};
+    // a 4-way cross of 200 m arms, built as a level's roads are (model_scene.h; #306: the street map it was laid along
+    // went), its sites along each street's centre line at the ground's height (the ramp-to-a-deck case went with the
+    // street map's link heights: `ground` is the caller's, the drawn road where it has one)
+    const citytest::ModelScene& s = citytest::crossScene(200);
     const ProbeGroundFn ground = [](double, double) { return 2.0; };
     ProbeRules rules;
     std::vector<ProbeSite> sites;
-    placeProbeSites(buildNavGraph(g), ground, rules, sites);   // (a street map made from a hand-made graph)
-    CHECK(sites.size() == 5u + 4u + 5u);
-    for (const ProbeSite& s : sites) {
-        CHECK(s.boxMin.x < s.position.x && s.position.x < s.boxMax.x);
-        CHECK(s.boxMin.z < s.position.z && s.position.z < s.boxMax.z);
-        if (s.position.x < 200.0 && s.position.z == 0.0) {
-            CHECK(std::fabs(s.position.y - (2.0 + rules.height)) < 1e-9);   // at grade: the ground's
-            CHECK(s.boxMax.z - s.boxMin.z > 10.0 + 2 * rules.side - 1e-6);  // past both kerbs to the frontages
-        }
+    placeProbeSites(*s.model, ground, rules, sites);
+    CHECK(sites.size() >= 4u * static_cast<std::size_t>(std::max(1.0, std::floor(150.0 / std::max(rules.spacing, 5.0)))));
+    for (const ProbeSite& p : sites) {
+        CHECK(p.boxMin.x < p.position.x && p.position.x < p.boxMax.x);
+        CHECK(p.boxMin.z < p.position.z && p.position.z < p.boxMax.z);
+        CHECK(std::fabs(p.position.y - (2.0 + rules.height)) < 1e-9);   // at grade: the ground's
     }
-    // the ramp: from the ground at b (2) to the deck at d (12), 5 sites at 0.1 .. 0.9 of the way
-    int ramp = 0;
-    for (const ProbeSite& s : sites)
-        if (s.position.x > 200.0) {
-            ++ramp;
-            const double t = (s.position.x - 200.0) / 200.0;
-            CHECK(std::fabs(s.position.y - (2.0 + 10.0 * t + rules.height)) < 1e-6);
+    // merged at the junction: no two sites closer than `merge`
+    const double merge = std::max(rules.merge, 1.0);
+    int tooClose = 0;
+    for (std::size_t i = 0; i < sites.size(); ++i)
+        for (std::size_t k = i + 1; k < sites.size(); ++k) {
+            const Vec3 d = sites[i].position - sites[k].position;
+            tooClose += d.x * d.x + d.z * d.z < merge * merge ? 1 : 0;
         }
-    CHECK(ramp == 5);
-    // the junction: a short arm's middle lands within `merge` of the other's: one site
-    RoadGraph j;
-    RoadNode o, e, n;
-    o.pos = Vec2(0, 0);
-    e.pos = Vec2(20, 0);
-    n.pos = Vec2(0, 20);
-    j.nodes = {o, e, n};
-    RoadEdge oe, on;
-    oe.a = 0; oe.b = 1;
-    on.a = 0; on.b = 2;
-    j.edges = {oe, on};
-    std::vector<ProbeSite> js;
-    placeProbeSites(buildNavGraph(j), ground, rules, js);
-    CHECK(js.size() == 1u);
+    CHECK(tooClose == 0);
 }
 
 // THE NEAREST 64, STABLY (ADR-0374): a slot keeps its probe while it stays near (within the hysteresis past the

@@ -41,8 +41,7 @@
 #include "lane_level_scene.h"                               // a scene with the lane level's facts, in memory
 #include "engine/procgen/city/roads/control_signs.h"   // the signs that follow from the facts (ADR-0424)
 #include "engine/procgen/city/roads/route.h"   // the one route-finder: cars and walkers (ADR-0467)
-#include "engine/procgen/city/roads/street_map.h"      // appendStreetMap: what routing reads
-#include "engine/ai/nav_graph.h"                        // rightOf: the kerb side
+#include "engine/procgen/city/polygon.h"                // rightOf: the kerb side
 #include "engine/script_assets.h"                       // loadScriptCode: the rule set's file
 #include "apps/citysim/control_policy_file.h"   // loadControlPolicy: the shared placement policy (ADR-0422)
 #ifdef RT_ENABLE_SCRIPTING
@@ -1023,19 +1022,7 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
         const ModelArm& arm = turned.junctions[static_cast<std::size_t>(s.junction)].arms[static_cast<std::size_t>(s.arm)];
         CHECK(arm.road == "o0" && !arm.spineIn);   // at the T, its exit end: where its spine runs OUT of the junction
     }
-    // ROUTING: one link, one way, from its far end (200, 150) into the T
-    engine::NavGraph map;
-    engine::StreetMapReport rep;
-    CHECK(engine::appendStreetMap(map, turned, 0, nullptr, &rep));
-    int along = 0;
-    for (const engine::NavLink& L : map.links) {
-        if (L.street != static_cast<int>(o0.index)) continue;
-        ++along;
-        CHECK(L.oneWay);
-        CHECK_APPROX(L.width, 3.5, 1e-12);
-        CHECK(map.nodes[static_cast<std::size_t>(L.from)].y > map.nodes[static_cast<std::size_t>(L.to)].y);   // toward the T at y = 0
-    }
-    CHECK(along >= 1);
+    // (ROUTING over the street map's one-way link went with the street map, #306: the section above says it once.)
 
     // ONE WIDTH. A road with two lanes forward and one back, 3.5 m lanes and a 1 m median gap: 3 x 3.5 + 1 = 11.5 m across
     // (the street map said 1 + 2 x 2 x 3.5 = 15). A one-way road that states a gap has no median to put it in: 2 x 3.5 = 7
@@ -1052,8 +1039,6 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
     }
     const RoadLabGraph graph = RoadLabGraph::fromJson(g);
     const RoadModel m = plannedRoadModel(graph);
-    engine::NavGraph widths;
-    CHECK(engine::appendStreetMap(widths, m, 0, nullptr, &rep));
     struct RoadWidth { const char* road; double width; };
     for (const RoadWidth& x : {RoadWidth{"l2", 11.5}, RoadWidth{"o0", 7.0}}) {
         const ModelStreetId s = streetNamed(m, x.road);
@@ -1064,13 +1049,6 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
         for (const LaneSlot& slot : laneSlots(graph.cls(*graph.find(x.road)), graph.find(x.road)->lanes))
             outermost = std::max(outermost, std::fabs(slot.offset) + 1.75);
         CHECK_APPROX(outermost, x.width / 2, 1e-5);
-        int links = 0;
-        for (const engine::NavLink& L : widths.links) {
-            if (L.street != static_cast<int>(s.index)) continue;
-            ++links;
-            CHECK_APPROX(L.width, x.width, 1e-12);
-        }
-        CHECK(links >= 1);
     }
 }
 
@@ -2028,44 +2006,24 @@ TEST_CASE(road_model_20_one_answer_for_the_arm_a_street_is_and_where_its_ends_ar
     CHECK(m.streetOf(stray) == nullptr);
 }
 
-// THE ARM A LINK OF THE STREET MAP ARRIVES BY IS ASKED OF THE MODEL (ADR-0437): the link carries its street and the
-// station at its far end, and the model says which arm that is (RoadModel::armReachedAt). The link once kept a copy of
-// the arm, written when the map was built; a junction whose arms are stated again then left the copy pointing at
-// another road's arm.
-TEST_CASE(road_model_21_the_arm_a_street_map_link_arrives_by_is_the_models) {
+// THE ARM A STREET ARRIVES BY AT A STATION IS ASKED OF THE MODEL (ADR-0437): a reader holding a street and a station asks
+// the model which arm that is (RoadModel::armReachedAt), and keeps no copy -- a junction whose arms are stated again then
+// answers the new way at once. (Was asked by the street map's links, which went with #306.)
+TEST_CASE(road_model_21_the_arm_a_street_arrives_by_is_the_models) {
     // the signed scene: the arterial a0 runs 200 m from its dead end at (-200, 0) to the crossing at (0, 0)
     RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
     const ModelStreetId a0 = streetNamed(m, "a0");
     CHECK(a0.valid());
     if (!a0.valid()) return;
-    engine::NavGraph map;
-    engine::StreetMapReport rep;
-    CHECK(engine::appendStreetMap(map, m, 0, nullptr, &rep));
-    const auto armsReached = [&](std::vector<int>& atCrossing, std::vector<int>& elsewhere) {
-        atCrossing.clear();
-        elsewhere.clear();
-        for (const engine::NavLink& L : map.links) {
-            if (L.street != static_cast<int>(a0.index)) continue;
-            const int arm = m.armReachedAt(ModelStreetId(static_cast<uint32_t>(L.street)), L.stationTo);
-            (approxEqual(L.stationTo, 200.0, kWrittenStation) ? atCrossing : elsewhere).push_back(arm);
-        }
-    };
-    std::vector<int> atCrossing, elsewhere;
-    armsReached(atCrossing, elsewhere);
-    // one link arrives at the crossing, by arm 2 (road a0, its spine running in); every other link of the street
-    // arrives at no junction arm (along the street, or at its dead end)
-    CHECK(atCrossing == std::vector<int>{2});
-    CHECK(!elsewhere.empty());
-    for (int arm : elsewhere) CHECK(arm == -1);
+    // at the crossing, by arm 2 (road a0, its spine running in); anywhere else along the street, or at its dead end, none
+    CHECK(m.armReachedAt(a0, 200.0) == 2);
     CHECK(m.armReachedAt(a0, 100.0) == -1 && m.armReachedAt(a0, 0.0) == -1 && m.armReachedAt(a0, 200.004) == 2);
     CHECK(m.armReachedAt(ModelStreetId(9999), 200.0) == -1);
-    // THE CROSSING'S ARMS STATED AGAIN, its first arm now listed last: a0's arm is 1, and the same links say so with no
-    // new map built
+    // THE CROSSING'S ARMS STATED AGAIN, its first arm now listed last: a0's arm is 1, asked the same way
     ModelJunction& cross = m.junctions[m.streets[a0.index].junctions[1].index];
     std::rotate(cross.arms.begin(), cross.arms.begin() + 1, cross.arms.end());
     CHECK(cross.arms[1].road == "a0" && cross.arms[1].spineIn);
-    armsReached(atCrossing, elsewhere);
-    CHECK(atCrossing == std::vector<int>{1});
+    CHECK(m.armReachedAt(a0, 200.0) == 1);
 }
 
 // ---- 22. the regulations along a path are the model's (ADR-0437) -----------------------------------------------------------

@@ -161,7 +161,7 @@ constexpr Real kSamePoint = 1e-3;
 //     apart, so the value must lie between the two: half a centimetre sits exactly on the first (the last bit of a sum
 //     would decide) and a whole centimetre exactly on the second. The ONE value for every join made by station
 //     (roads/road_model_parts.h sameWrittenStation; the ordered helpers above with this as their eps). Issue #292: it
-//     was 1 cm here and in lanes/lane_expand.h, half a centimetre in street_map.cpp and lanes/road_layout.cpp, and a
+//     was 1 cm here and in lanes/lane_expand.h, half a centimetre in the old street map and lanes/road_layout.cpp, and a
 //     millionth of a metre in lanes/road_layout.cpp. The same value answers for two plan POINTS the planner wrote to the
 //     centimetre (two road ends made from one point: lanes/road_layout.cpp, a planned city's junctions): the same point
 //     written twice is the same text, and two different written points are a whole centimetre apart or more.

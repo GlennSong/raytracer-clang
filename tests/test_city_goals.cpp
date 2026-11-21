@@ -621,7 +621,7 @@ TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
 }
 
 // (DELETED in #306 piece 6 W2: `footpaths_are_walked_across_a_block_and_never_driven`, which joined a diagonal to the
-// hand-made street map with NavGraph::appendFootpaths and routed it with the street map's findRoute. It tested the street
+// hand-made street map with its own footpath joining and routed it with the street map's router. It tested the street
 // map's own footpath links, which piece 10 deletes. What it showed is shown on the one road model: a walkway is walked
 // and never driven, joined where its ends are stated (road_model_43, road_model_45, lanes_tests), and a crowd walks one
 // to work in the sim (below).)

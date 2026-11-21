@@ -24036,3 +24036,53 @@ Words:
 - A place whose door joins no walk takes the walk point nearest its entrance.
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1510/1510; lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23.
+
+### The sweep, midpoint 2 — the street map is deleted: the furniture, the signs, the probes, the map and the tools read the road model
+
+What it does: the second half of the street map's deletion. Everything that still read the street map now reads the road model, and the street map, its router and the bus network builder that planned over it are deleted. `grep -r "NavGraph\|street_map\|StreetMap" src tools tests` finds nothing.
+
+Words:
+- **Street piece:** two neighbouring points of a street's centre line (`RoadModel::linePoints`), with the street's carriageway half-width and class. What the furniture, the signs' carriageways, the probes and the map walk along.
+- **Mouth:** where a junction's area begins along an arm's street (`ModelArm::boxEdge`; not stated: 10 m back from the arm's end).
+
+**What changed:**
+- **The street furniture** (`street_furniture.h/.cpp`, `planStreetFurniture(cities, ground, params)`), rewritten over the model:
+  - one signal pole per arriving arm of a lit junction (`junctionLit`; a road file that states no control: a junction of four arms or more), on the arm's kerb corner a sidewalk's width back from its mouth, pushed out of every other street's carriageway and off the drawn asphalt; else the other kerb, else across the junction. A pole carries its city, junction and arm (`SignalSpot`; `packFurnitureArm`), not a link.
+  - lamps, street trees, bins, bike racks, news boxes and the data kinds (street_props.lua) along each kerb of each street piece that has a sidewalk there (`ModelSection::sidewalkOnKerb`), with the rules they had (spacing, junction clearance, off every carriageway and the drawn asphalt). A lamp carries its street (`LampStreet`), which `attachFurniture` attaches it to.
+  - `StreetFurnitureParams`: `approachArm` and `junctionPoints` are gone (the planner asks the model); `streetRun(city, street)`; `controlsStated`.
+- **Components:** `LevelRoadModel::streetMap` and `stateSignals` are deleted; `StreetFurniture::Signal::link` and `navLinkCount` are deleted.
+- **The loader:** no street map is made; the furniture is planned on every city's model; the city map's lit junctions are each junction's stated control; the furniture dump lists the lit junctions and each pole's arm; `RT_SIGNAL_NEAR` prints a pole's city, junction and arm.
+- **The street signs:** `carriagewaysOf(const RoadModel&)`: each car street's pieces at its travel width.
+- **The probes** (`placeProbeSites(const RoadModel&, ...)`) and **the day/night footprint** read the streets' centre lines.
+- **The city map (SVG)**: the sidewalk census labels a hit with the nearest street piece (`CityMapData::streets`); the "nav" layer draws the streets' centre lines. `CityMapData::nav` is deleted. The `lot?` command measures against the streets' pieces.
+- **The planner's scoring (D1):** its commute sample takes the quickest way over the plan's own road graph (a plain Dijkstra, each edge at its class speed, a street edge into a street junction 6 s more, as the old router charged).
+- **The island's bus lines (D3):** the local loops are not planned (`BusNetwork`, `city_bus.h/.cpp`, is deleted: it planned over a street map of each place's plan); an intercity line runs straight from its stop to the place's edge.
+- **The tools:** `lanes_tool streetmap` is deleted; `city_plan`'s place centre is its plan's street node nearest the core.
+- **`rightOf`** lives in `polygon.h`, **`classSpeed`** in `road_network.h`.
+
+**Deleted** (lines): `nav_graph.h/.cpp` (243 + 366), `pathfind.h/.cpp` (102 + 373), `roads/street_map.h/.cpp` (80 + 556), `citysim/city_bus.h/.cpp` (127 + 586); tests `test_nav_graph.cpp` (218), `test_pathfind.cpp` (252). `tests/street_map_test_util.h` is now `tests/test_world_roads.h` (`publishRoads`).
+
+**Tests, old -> new:**
+- `test_street_furniture.cpp` rewritten on model scenes: one pole per arriving arm of a lit cross, clear of every carriageway; none at an unlit T; no lamp in any carriageway on the grid town; kerb life on both kerbs and off the road; planting by character. Deleted with the street map's links: `signal_poles_clear_every_arm_at_an_acute_corner`, `signal_poles_dedupe_collinear_approaches`, `signal_poles_stand_clear_of_the_junction_pad` (their acute and collinear-stub street maps).
+- `probe_sites_line_the_streets` on a model cross (at the ground's height; the ramp-to-a-deck case went with the links' heights).
+- `semantics_nav_carries_kind_through_knot_merge` deleted (the street map's knot merge).
+- `road_model_21` asks `armReachedAt` directly (renamed `road_model_21_the_arm_a_street_arrives_by_is_the_models`); road_model_10's street-map routing and width checks removed (the section says them).
+- test_levels_playable: `modelStreetGraph` (the model's street pieces) in place of the street map's links; the street signs' carriageways from the model.
+- The city map SVG test's furniture is planned on its loop built as a road file (a stub off one corner gives it a lane level).
+- **river_town's crowd:** the most on the road 98 at minute 10 -> 99 at minute 11; trips 292 -> 290; parked 240 -> 237; arrivals 472 -> 475; hash 0x9362ecbc934c82cf -> 0xf9c704ff73207220 (the poles and furniture the walkers keep clear of stand elsewhere). No walk refused.
+- **brain_crowd:** the most on the road 87 at minute 9 -> 89 at minute 10; parked 238 -> 234; arrivals 470 -> 472; hash 0xf0e62a8d7fffa45b -> 0xec0a6a6e55e90ddc.
+- **The near crowd:** in 120 -> 113, out 90 -> 77, hash 0xed4281eb889d8e9b -> 0x3c4be4561e729e50.
+
+**Known bugs after the sweep** (both halves):
+- **Local buses gone; intercity buses run in a straight line from stop to town edge — rework both on the road model.**
+- **The near crowd:** contacts 0 -> 7, hits on parked cars 0 -> 1, on walkers 0 -> 5, on other things 0 -> 14, the longest off its lane 18.7 s (car 1, 1.95 m). (With the poles only a kerb gap back from the mouth: other things 46, walkers 3, contacts 0.)
+- **brain_crowd:** one ring of waits (a deadlock) from about minute 30; the longest stand 1,247.6 s (car 109).
+- **river_town:** arrivals 475 of the old 730; about 410 of the 630 walking at any minute.
+- A drive is priced over the sidewalks: no freeway in a plan's price.
+- Probes and furniture on a deck stand at the height `ground` gives (the loader's drawn-road sampler); the probe test's deck case went.
+- A place whose door joins no walk takes the walk point nearest its entrance.
+- Island_8 is out of scope and was not run.
+
+**Suites, all with RT_TEST_FILTER:** the whole tree builds; run_tests 1483/1483 (1510 less the street map's and the router's own tests, the furniture's link tests, the knot-merge test, plus the furniture's new ones); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` runs to the end and passes, re-pinned; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, failing only their known bugs (above).
+
+**Try it:** in the worktree, `cmake --build build-viewer --target viewer`, then `./build-viewer/viewer assets/levels/river_town.json --play`; the city debug panel's "Nav graph" box draws the walk points.

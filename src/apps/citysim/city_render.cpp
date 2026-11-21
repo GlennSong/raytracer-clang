@@ -22,7 +22,6 @@
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/roads/road_entity.h"
 #include "../../engine/procgen/city/roads/lanes/road_model_cache.h"   // the level's built road model, from its cache
-#include "../../engine/procgen/city/roads/street_map.h"   // appendWalkways: the model's walkways on the street map (ADR-0476)
 #include "../../engine/procgen/city/road_mesh.h"     // strokeRibbon (closed lot/block outlines)
 #include "../../engine/procgen/city/street_kit.h"   // trafficSignalProto, SignalParams
 #include "../../engine/procgen/noise.h"             // Noise (carved-terrain sampler)
@@ -1292,7 +1291,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // the loader's post instances, in its order (a shared pole has none): one head each
             if (s.shared) continue;
             SignalHead h;
-            h.link = s.link;
             h.city = s.city;
             h.junction = s.junction;
             h.arm = s.arm;
@@ -2189,7 +2187,7 @@ void CityRenderSystem::syncGroups(World& world) {
         // leave the groups empty when it's off (mirrors the vanishing rings).
         InstanceGroup* navL = world.get<InstanceGroup>(navLinkGroup_);
         InstanceGroup* navN = world.get<InstanceGroup>(navNodeGroup_);
-        const bool showNav = debugWidgets_ && showNavGraph_;
+        const bool showNav = debugWidgets_ && showWalkPoints_;
         if (navL) navL->transforms = showNav ? navLinkBake_ : std::vector<Mat4>{};
         if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
         // City-plan outlines (static bakes, same show-or-empty pattern).
@@ -3055,7 +3053,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         if (r.layer == "master") debugWidgets_ = r.on;
         else if (r.layer == "agents") showAgentWidgets_ = r.on;
         else if (r.layer == "cones") showVisionCones_ = r.on;
-        else if (r.layer == "nav") showNavGraph_ = r.on;
+        else if (r.layer == "nav") showWalkPoints_ = r.on;
         else if (r.layer == "plan") showPlan_ = r.on;
     }
     layerRequests_.clear();
@@ -3339,7 +3337,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
         ImGui::Indent();
         ImGui::Checkbox("Agent rings + intent", &showAgentWidgets_);
         ImGui::Checkbox("Vision cones", &showVisionCones_);
-        ImGui::Checkbox("Nav graph", &showNavGraph_);
+        ImGui::Checkbox("Nav graph", &showWalkPoints_);
         ImGui::Checkbox("City plan: blocks + lots (L)", &showPlan_);
         ImGui::Checkbox("Building colliders (prisms)", &showColliders_);
         ImGui::Unindent();

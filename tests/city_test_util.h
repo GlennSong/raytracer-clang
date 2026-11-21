@@ -3,7 +3,7 @@
 
 // The grid town the citysim tests' towns are drawn from: a road DRAWING, never a street map. The tests build it into a
 // road model as a level's roads are (model_scene.h gridScene, #306 piece 6 W2); the hand-made street maps that were
-// here (cross4, tee, straightRoad, cityNav: buildNavGraph over a drawing) are gone with that.
+// here (cross4, tee, straightRoad, cityNav: a street map over a drawing) are gone with that.
 
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/proc_rng.h"

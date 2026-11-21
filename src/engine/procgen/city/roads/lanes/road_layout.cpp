@@ -392,7 +392,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         }
         // A STREET'S END IS AT A JUNCTION OR CARRIES ON, NEVER BOTH (ADR-0435). Where the file's own list states a junction
         // at this meeting (a control plan that gives carry-ons a control makes each a junction of two arms), the junction
-        // says how the street runs on (its through pair), and every reader asks the junction first (street_map.cpp,
+        // says how the street runs on (its through pair), and every reader asks the junction first (the road model,
         // lanes/lane_level.cpp). The grouping above still reports the meeting as a carry-on; stating it too wrote a
         // second answer nothing read into the file (traffic_lab: 40 street ends).
         if (out.streets[static_cast<std::size_t>(st[0])].junctions[static_cast<std::size_t>(end[0])].valid() ||

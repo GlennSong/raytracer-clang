@@ -98,7 +98,6 @@ bool wouldCreateCycle(World& world, Entity child, Entity parent) {
 }  // namespace engine
 
 
-#include "ai/nav_graph.h"   // LevelRoadModel::stateSignals
 #include "bundle/bundle.h"  // fnv1aStr: LevelRoadModel::runKey
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/road_model.h"
@@ -173,24 +172,6 @@ bool LevelRoadModel::lit(const Place& j) const {
     const ModelJunction* J = junctionAt(j.city, j.junction);
     return J && junctionLit(*J);
 }
-
-void LevelRoadModel::stateSignals(NavGraph& nav, int* untied, bool* stated) const {
-    if (untied) *untied = 0;
-    if (stated) *stated = controlsStated();
-    nav.statedSignal.assign(static_cast<std::size_t>(nav.nodeCount()), 0);
-    for (int n = 0; n < nav.streetNodeCount(); ++n) {
-        if (nav.kindOf(n) != JunctionKind::Intersection) continue;
-        // the node's own junction, by id (ADR-0425: the street map carries it)
-        Place j;
-        j.city = nav.cityOf(n);
-        j.junction = nav.junctionOf(n);
-        if (j.city < 0 || j.junction < 0 || static_cast<std::size_t>(j.city) >= cities.size()) {
-            if (untied) ++*untied;
-            continue;
-        }
-        nav.statedSignal[static_cast<std::size_t>(n)] = lit(j) ? 1 : 0;
-    }
-}
 #else
 const ModelJunction* LevelRoadModel::junctionAt(int, int) const { return nullptr; }
 std::shared_ptr<RoadModel> LevelRoadModel::builtCity() const { return nullptr; }
@@ -198,10 +179,6 @@ std::vector<Vec2> LevelRoadModel::junctionPoints() const { return {}; }
 uint64_t LevelRoadModel::runKey(const Place&) const { return 0; }
 bool LevelRoadModel::controlsStated() const { return false; }
 bool LevelRoadModel::lit(const Place&) const { return false; }
-void LevelRoadModel::stateSignals(NavGraph&, int* untied, bool* stated) const {
-    if (untied) *untied = 0;
-    if (stated) *stated = false;
-}
 #endif
 
 }  // namespace engine

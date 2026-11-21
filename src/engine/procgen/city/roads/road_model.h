@@ -672,8 +672,7 @@ struct RoadModel {
     int armAt(ModelStreetId street, int end) const;
     // THE ARM REACHED AT A STATION OF A STREET (ADR-0437): where `station` (along the street's road's spine) is one of
     // the street's two ends, to the written centimetre, the arm the street is there (armAt); -1 anywhere else along
-    // it. What a link of the street map asks to learn the arm it arrives by: it carries its street and the station at
-    // its far end (NavLink::street, stationTo), and keeps no copy of the arm.
+    // it. What a reader holding a street and a station asks to learn the arm it arrives by.
     int armReachedAt(ModelStreetId street, Real station) const;
     // A STREET'S CENTRE LINE (or a stretch inside a junction's: ModelStretch::line), `from` to `to`, as plan points.
     // Empty: none kept.

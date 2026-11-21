@@ -1,7 +1,7 @@
 // THE SHIPPED LEVELS' WALKS AND THE SIM (#306 task 4, piece 6; ADR-0480): every lanes level hands the city sim its road
 // model, and what its walks are.
 //
-// (DELETED in piece 6 W3: `level_walk_join_the_street_maps_lookups_beside_the_one_query`, ADR-0468's comparison of the
+// (DELETED in piece 6 W3: the level test that set ADR-0468's comparison beside the one query -- the comparison of the
 // street map's three look-ups -- placing a place, starting a walk, finishing one -- with the road model's one answer,
 // RoadModel::walkJoinOn / walkJoinNear. The sim's walks now start and end at that one answer, and the street map's
 // look-ups it compared against -- CitySim::walkStartNode, kerbSideLink, kerbLinkNear, the stop-short -- are deleted.)

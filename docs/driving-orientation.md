@@ -172,12 +172,8 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 
 ## 6. Known faults and open work
 
-- The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
-  junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
-- The sim's `junctionRadius` still measures the roads from the street map (`nodeBoxRadius_`, the widest street at a
-  node, worked out at build: a road fact computed outside `roads/`). Its car readers went with ADR-0463; the walkers read
-  it (`onStreet`, `stopLineBack`, the place a walker stands back from a junction), so taking it away moves the walkers
-  (and the pinned hashes): that part is task 4's (people route on the road model), not a deletion.
+- (The sim's people walk the road model's walks and the street map is gone, #306: the two faults listed here -- people
+  on the street map's kerb-side line, and `junctionRadius` measured from it -- went with it.)
 - A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
   never reached: `refreshPose` returns for every walker before it (an explicit `return` since ADR-0463, commented).
   Found in ADR-0461, not fixed (it moves the walkers and every pinned hash); likely part of brain_crowd's

@@ -104,9 +104,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/road_network.h"
 #include "engine/procgen/city/polygon.h"
 #include "apps/citysim/city_sim.h"
-#include "engine/ai/nav_graph.h"
 #include "engine/procgen/city/roads/road_model.h"   // plannedRoadModel: the street map's source (ADR-0425)
-#include "engine/procgen/city/roads/street_map.h"   // appendStreetMap
 #include <algorithm>
 #include <cstdio>
 #include <set>
