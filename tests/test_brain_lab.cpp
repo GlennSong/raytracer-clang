@@ -494,7 +494,9 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     CHECK(stopLines >= 1);
     // (three of the lights were red when it reached them: checkDrove held where it stood at each. 2 -> 3 at ADR-0452:
     // drivers give way to people at crosswalks now, and the drive's timing moved so it met a third red, at path 875)
-    CHECK(redLightStands(r.watch) == 3);
+    // (3 -> 1 at the S7 re-bake, ADR-0478: the roads of ADR-0470..0473 moved its route, 12 -> 13 junctions entered, and the
+    // drive is quicker, 14024 -> 8240 ticks on the road; it now meets one red, at path 1073)
+    CHECK(redLightStands(r.watch) == 1);
     // WHERE THE CAR ENDS: in the space that was held, exactly where a car in it stands and faces, off the driving's
     // road, and nobody holds a space any more. It is the nearest space to work on foot.
     CHECK(b.carSpaceName() == "s182 against 3");

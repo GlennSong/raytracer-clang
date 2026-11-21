@@ -3854,10 +3854,26 @@ static GrownLots growCityLots(
         }
         if (!fromBundle) {
             r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-            // the roads the grow reads: the level's one road model's streets and the drawn deck (gin.roads points at it)
-            g_lanes.lotRoads = engine::roads::lanes::lotRoadInputs(lanesLevelRoads().cities, g_lanes.deck);
+            // the roads the grow reads: the level's PLANNED road model's streets (the lots grow before the built model
+            // is assembled, ADR-0476) and the drawn deck (gin.roads points at it)
+            std::vector<std::string> notes;
+            g_lanes.lotRoads = engine::roads::lanes::lotRoadInputs(engine::roads::lanes::levelPlannedRoadModels(g_lanes.inputs, &notes), g_lanes.deck);
+            for (const std::string& n : notes) LOG_WARN << "[lanelab] the level's road model: " << n;
             r = engine::growCity(gin);
             LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
+        }
+        // THE LOTS' PATHS, STATED ON THE ROAD MODEL OF THE CITY THEY GROW ON (ADR-0476): the model the loader publishes,
+        // once a load
+        {
+            const std::vector<std::shared_ptr<engine::RoadModel>>& cities = lanesLevelRoads().cities;
+            const int c = engine::roads::lanes::lotsCity(cities);
+            if (c < 0 || !cities[static_cast<std::size_t>(c)] || cities[static_cast<std::size_t>(c)]->walkways.empty()) {
+                const std::vector<engine::WalkwayProblem> faults = engine::roads::lanes::stateLotWalkways(cities, r.lots);
+                LOG_INFO << "[lanelab] the lots' paths stated as walkways of city " << c << "'s road model: "
+                         << (c >= 0 && cities[static_cast<std::size_t>(c)] ? cities[static_cast<std::size_t>(c)]->walkways.size() : 0);
+                if (!faults.empty())
+                    LOG_WARN << "[lanelab] " << faults.size() << " path faults: " << engine::roads::lanes::describeWalkwayProblems(faults);
+            }
         }
         g.lots = std::move(r.lots); g.plan = std::move(r.plan); g.parts = std::move(r.parts); g.flatParts = std::move(r.flatParts); g.gradeFlatten = std::move(r.gradeFlatten); g.grown = true;
         return g;
@@ -6976,10 +6992,10 @@ bool LevelLoader::load(const std::string& path,
                         p.hasEntrance = true;
                         p.ex = static_cast<float>(d0.foot.x + d0.normal.x * 1.5);
                         p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
+                        p.frontage = d0.frontage;   // where it fronts, as the lot pass recorded it (ADR-0474)
                         break;
                     }
-                    for (const engine::LotBuilding::Walk& k : lb.walks)
-                        cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
+                    // (its paths are the road model's walkways now, stated when the lots were read: ADR-0476)
                     for (const engine::LotBuilding::SitSpot& sp : lb.sitSpots)
                         cfg.sitSpots.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, sp.hip});
                     for (const engine::LotBuilding::Area& ar : lb.areas)

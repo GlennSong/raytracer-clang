@@ -29,8 +29,10 @@ the stage that states it and never worked out again. It has two layers:
 `lanes/road_model_cache.h`. It returns one model per lane-built city: the first city's built model (read from
 `cache/roadmodel` or built and saved) when its road file states what the lane level needs, otherwise its planned
 layer; every later city's planned layer. The loader calls it once a load (`lanesLevelRoads` in `level_loader.cpp`) and
-publishes the result as `LevelRoadModel` (components.h). The lot pass grown at load and the driving host read that
-object. The bake's lot producer and the offline tracer run without the loader and call the same function. Nothing else
+publishes the result as `LevelRoadModel` (components.h). The driving host reads that object. THE LOT PASS READS THE
+PLANNED MODEL ONLY (ADR-0476: `levelPlannedRoadModels(in)`, each city's planned layer from its road file, no build): the
+lots are grown before the built model is assembled, and their paths are stated on the built one after. The bake's lot
+producer and the offline tracer do the same. Nothing else
 makes a road model for a level. A tool or a test that has a road file and no level calls `plannedRoadModel` or
 `assembleRoadModel` itself.
 
@@ -88,9 +90,10 @@ move the loop into it; never a private loop in the reader.
 | The kerb lane path beside a space (or a station) and how far along it: where a car stops to turn in, or rejoins | `RoadModel::kerbLaneBeside(space)`, `kerbLaneAt(street, dir, station)` |
 | The space nearest a point within a distance | `RoadModel::nearestKerbSpace(point, reach)` |
 | How far along a lane path a station of its spine falls | `RoadModel::alongPathAt(path, station)` |
-| Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, interim); `frontageOn(street, station, dir)` (stated facts) |
+| Where a point (a door) fronts the road: street, station, kerb | `RoadModel::frontageAt(point)` (a search, for what states nothing); `frontageOn(street, station, dir)` (stated facts); the station and kerb from a search's hit on a centre line, the one statement both the model and the lot pass use: `frontageOnLine` (`line_frontage.h`, ADR-0474) |
+| Where a lot's building and each door front, recorded at plan time (ADR-0474) | `LotBuilding::frontage`, `DoorSpec::frontage`, `AuthoredPlace::frontage` (`StatedFrontage`, road_network.h: street id, station, kerb; or a walkway id and metres along it, ADR-0475: a door on a lot's path, ADR-0476) |
 | From a frontage: the nearest place to walk, the kerb lane to set down in, the kerb spaces in walking order | `RoadModel::sidewalkBeside(f, out)`, `kerbLaneBeside(f)`, `kerbSpacesNear(f, reach, most)` |
-| Where a place (a marker, a door) joins the walks: a point on a walk along its street, its kerb, and whether held to a sidewalk's end, across the road, cut off (ADR-0468, THE ONE ANSWER for placing a place, starting and ending a walk; built layer) | `RoadModel::walkJoinOn(frontage, openWalks, parts)` (stated: `frontageOn`); the one fallback by position `walkJoinNear(point, ...)` (`frontageAt`, then the same); `WalkJoin`, `WalkJoinWhy`; a station's place on a walk: `walkAlongAt(walk, station)` |
+| Where a place (a marker, a door) joins the walks: a point on a walk along its street, its kerb, and whether held to a sidewalk's end, across the road, cut off (ADR-0468, THE ONE ANSWER for placing a place, starting and ending a walk; built layer) | `RoadModel::walkJoinOn(frontage, openWalks, parts)` (stated: `frontageOn`; or straight from what a place states, `walkJoinOn(StatedFrontage, ...)`, which also answers a door on a walkway: ADR-0475); the one fallback by position `walkJoinNear(point, ...)` (`frontageAt`, then the same); `WalkJoin`, `WalkJoinWhy`; a station's place on a walk: `walkAlongAt(walk, station)` |
 | Every stretch of road with a centre line, in the order searches by position use | `RoadModel::roadLines()` |
 | The crosswalks (ADR-0452): across an arm; by id; of a lane-level record; the paths over one; which a walk round a junction crosses; where a person waits at a kerb end | `RoadModel::crosswalkAcross`, `crosswalk`, `crosswalkOfLane`, `crossersOf`, `crosswalksOnWalk`, `ModelCrosswalk::kerbWait` (stated once by `stateCrosswalks` in road_model.cpp; laid in the lane level by `layLaneCrosswalks`) |
 | Where people on foot can walk (ADR-0464): the corners round each junction's ring (which kerb of each arm); the ring pairs with no corner and why; the dead ends and whether they are joined across; what is at a street's end; is there a sidewalk (or any walk) along a kerb | `RoadModel::corners` (`ModelCorner`), `ringPairs(m, g)` (`CornerGap`), `RoadModel::deadEnds` (`ModelDeadEnd`, `deadEndsOf`), `streetEndKind(g, street, end)`, `ModelSection::sidewalkOnKerb`, `pavementOnKerb` (stated once by `plannedRoadModel`; the walks are laid from them: ADR-0465, ADR-0466). A street end "meets another road" only where the two can meet at grade, by the crossing policy (`meetAtGrade`, `lanes/road_design.h`; ADR-0469): a street ending under the freeway is a dead end |
@@ -98,6 +101,7 @@ move the loop into it; never a private loop in the reader.
 | The walks the road build laid (ADR-0465): each kerb's sidewalk lane along each road, each corner's walk along the drawn pavement (a spread junction's pairs across its points too), and why a ring pair has none | `RoadModel::walks` (`ModelLane`: kind `sidewalk` with `dir` the kerb, or `corner`), `ModelCorner::walk`, `ModelCorner::spread`; in the build, `LaneSet::walks` and `Result::walkCorners` (`WalkCorner::why`, and its kind `WalkCorner::fault`: a kerb end out in the paved junction, or the drawn sidewalk in two pieces; ADR-0469), laid by `layWalks` (`lanes/walk_lanes.h`). A footway's lane is a car lane's record of kind `footway`. Read by the lane level (next row) |
 | Where a person steps off the kerb at an arm (a station along its road) | `kerbEndStation(m, junction, arm)` (ADR-0466): the corner walks end there and the lane level cuts the sidewalks and footways there |
 | The walks of the lane level (ADR-0466): each sidewalk's stretch per street and kerb, each corner walk, a crossing over each crosswalk people use, a turn-round across each joined dead end, each footway's stretch per street; which walk ends meet; every end that meets nothing, with why | `LaneGraph::walks` (`Walk`: its curve, and one of `modelWalk`, `modelLane`, `modelCrosswalk`, `modelDeadEnd`), `Walk::atStart` / `atEnd` into `LaneGraph::walkJoins` (`WalkEnd`), `LaneGraphBuild::walkEndsAlone` (a kerb end whose ring pair the build tried and could not lay says so with the build's fault, a spread junction's pair too, never "no corner is stated": ADR-0469); laid by `layWalkPaths` in `lanes/lane_level.cpp`, the lane level's last step |
+| Paths for people on foot beside no street (ADR-0475): a park's path, a plaza's, a cut-through. Each states its kind (a path users' row: `footway`, `park_path`), width, line with heights, and where each end lands: a street's sidewalk (street id, station, kerb: a `StatedFrontage`), another walkway (id, metres along), or a stated dead end. Laid in the lane level as walks (`Walk::modelWalkway`), the sidewalk or walkway landed on cut there and joined; an end that does not land is a fault with why | `RoadModel::walkways` (`ModelWalkway`, `WalkwayEnd`), supplied ONLY by `stateWalkways(model, walkways)` on a built model (returns `WalkwayProblem`s: `WalkwayFault` and why), which calls `layWalkways` (`lanes/lane_level.h`). The types live in `roads/walkway.h`. The lot pass states its paths as them (ADR-0476: `city_lots.h stateLotPaths`, handed over by `lots_producer.h stateLotWalkways`); the street map reads them (`street_map.h appendWalkways`) |
 | The kind of a lane path or walk; every lane path and walk a mover may use (the one mover filter); the parts of the walks a person can get round | `RoadModel::pathKind(path)`, `walkKind(walk)`, `openTo(mover, users)` (`OpenPaths`: per path, per walk); `reachableWalks(g, open)` (`lane_graph.h`) |
 | Who may use which kind of path; how a dead end is joined; the wait a mover adds for stepping onto a kind (a crossing's) | `pathUsers()` (`PathUsers::usersOf`, `mayUse`, `mover`, `deadEndJoin`; `PathMover::waitOn`), from `assets/data/path_users.json`; read by `RoadModel::openTo` and the router's `bindWalker` |
 | A route between two places on the lane level (the one route-finder, ADR-0467): a car's over the lane paths (legs, turns, which lanes lead on); a walker's over the walks (the walks taken with their direction, metres, seconds, the crosswalks crossed and from which kerb end) | `route.h`: `findRoute(model, studyRoads(model), RouteClass, PathPoint, PathPoint)`; `findWalkRoute(model, bindWalker(model, mover, pace), WalkPoint, WalkPoint)` (`WalkRoute`, `WalkStep`, `WalkCrossing`). A place: `PathPoint` / `WalkPoint` (`lane_graph.h`); a walk's point: `LaneGraph::pointAt(WalkId, along)` |
@@ -132,14 +136,17 @@ table holds no spaces (its unused `CarSpace` is deleted); the kerb lane path bes
 (`kerbLaneBeside`). The outlines painted on the road are drawn from these spaces on a level the new driving drives.
 The old city sim still lays and parks in its own bays (`CitySim::ParkingBay`, a different list); they go with it.
 
-**From a door to the road** (ADR-0439). `frontageAt(point)` is a search by position, an interim: a built lot records
-nothing about the street its door fronts. It is the same search the lot pass faces its doors by: both call
-`nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with `buildingMayFront` as the rule.
-`lotRoadInputs` makes the lot pass's roads from that list; never add a road to one and not the other.
+**From a door to the road** (ADR-0439, ADR-0474). `frontageAt(point)` is a search by position. It is the same search
+the lot pass faces its doors by: both call `nearestLine` (polyline.h) over `RoadModel::roadLines()`, in its order, with
+`buildingMayFront` as the rule, and both turn the hit into a station and kerb by `frontageOnLine` (line_frontage.h).
+`lotRoadInputs` makes the lot pass's roads from that list, with each line's stations as the model states them; never
+add a road to one and not the other. Since ADR-0474 the lot pass records the answer (`StatedFrontage` on each building
+and door, lot format 6), so a reader of a lot asks `frontageOn` with no search; `frontageAt` stays for what states
+nothing.
 
 **From a place to the walks** (ADR-0468). `walkJoinOn` answers from a stated frontage (the brain's markers state
-street, station and kerb); `walkJoinNear` is the only fallback by position (a lot's door states nothing: `LotBuilding`
-and `DoorSpec` record no street; recording it is a lot format bump and a re-bake, left for Glenn). Only walks along a
+street, station and kerb; since ADR-0474 so do a lot's buildings and doors, carried to the sim as
+`AuthoredPlace::frontage`, read by nobody until piece 6); `walkJoinNear` is the only fallback by position. Only walks along a
 street (`Walk::street` set: sidewalk and footway stretches) are joined, never a corner, crossing or turn-round, never a
 walk closed to the mover; `cutOff` says when the walk is outside the largest part on foot. The street map's three
 look-ups it replaces in piece 6 are named for the comparison (`CitySim::walkStartNode`, `kerbLinkNear`, `kerbSideLink`;
@@ -152,13 +159,22 @@ level does not hold; both need an answer before piece 6 switches over.
 stated cross-section; routing and every agent's position read them each tick. Do not write them anywhere else. The
 arm a link arrives by is not kept; ask `armReachedAt`.
 
+**Walkways** (ADR-0475). A path for people on foot beside no street is stated by whoever draws it (S6b: the lot pass),
+with where each end lands looked up once when drawn. `stateWalkways` is the one way in; the lane level trusts the ends,
+cuts the walk each lands on and joins there, and returns what did not land. Nothing joins a walkway by distance.
+Since ADR-0476 the lot pass states every path it draws (`LotBuilding::walkways`, ids `lot<i>.p<k>`, kinds `park_path` /
+`footway`, each end looked up once by `stateLotPaths`: another path, a street by `frontageOf`, or a dead end; a door on a
+path states it in its walkway slot), and the loader hands them to the built model it publishes (`lots_producer.h
+stateLotWalkways`); the bake's lot producer does the same only to log the faults. The street map reads them from the
+model (`street_map.h appendWalkways`); `NavGraph::appendFootpaths` joins only what it is told (`FootpathPlan`).
+
 ## 2. File map
 
 Under `src/engine/procgen/city/roads/`:
 
 | File | What it holds |
 |---|---|
-| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). |
+| `road_model.h/.cpp` | The model: types, planned and built layers, save/load, `dump`, `streetNameNear`. The built model holds the lane level and is saved whole by `lanes/road_model_cache`. Also the kerb parking runs and their questions, the kerb parking rules' reader (`kerbParkingRules`), and the door-to-road questions (ADR-0439). `line_frontage.h` declares the one step from a centre-line hit to a station and kerb (`frontageOnLine`, defined in road_model.cpp), small so the lot pass can include it (ADR-0474). |
 | `road_model_parts.h` | The one set of junction, arm, street, node and stretch types (`ModelJunction`, `ModelArm`, `ModelStreet`...). The road file is read into them (`RoadLabGraph::junctions` / `streets`), the layout and the control plan write them, and `plannedRoadModel` copies them whole and adds what only the model knows. A junction or street named by another is a place in the same list, not an id string. `graph_index.h` holds the index types it shares with the lane graph. |
 | `street_map.h/.cpp` | The street map every agent routes, drives and walks on (`NavGraph`), built at load from the planned layer and the deck heights (ADR-0425). |
 | `lane_turns.h/.cpp` | Which arriving lane takes which turn: reads `assets/data/lane_turns.json`; `turnsAtJunction` is the one function that applies it (ADR-0426). Also `laneLineBetween`, the one rule for whether the line between two lanes may be crossed (its lane kinds are the table's `lane_lines`). |
@@ -180,7 +196,7 @@ Under `src/engine/procgen/city/roads/`:
 | `lanes/pavement.*`, `geom2d.*`, `polyline_ops.*` | 2-D geometry: footprints, the one triangulation, the Clipper2/CDT seam, polyline helpers. `buildFootprints` draws each road's bands (asphalt, shoulder, sidewalk) from its spine and mitres them where the road file states two ends meet at a kink, at one level (`bandKinks`, `mitrePieces`, `kMitreLimit`; ADR-0472): the outside of a bend is paved to the bisector, not cut square. `smoothTangentAtStation` (polyline_ops.h, ADR-0473) is a line's direction turning smoothly between its points (a Catmull-Rom spline's), for setting points out sideways from a line without a jump at each of its points. |
 | `lanes/interchange.*` | Diamond interchanges (ramps at the streets a freeway crosses), and system interchanges (`systemInterchange`: a freeway crossing a freeway, its loop ramps of 60 m and corner links of 80 m set out in the through freeway's frame). That frame turns smoothly since ADR-0473 (`Frame::at` on `smoothTangentAtStation`); before, a ramp 90-150 m out jumped 2-5 m sideways at each point of a curving freeway (river_town's eight interchange ramps; its file was set right with `lanes_tool reframe`). The solid stretch before a stop line is handed in (`DiamondOptions::solidBeforeStopLine`): the planner's `SceneOptions::solidBeforeStopLine`, which it also writes into the road file's `lane_rules` (ADR-0435). |
 | `vehicle_size.h/.cpp` | The body a road is checked against per vehicle tag (`VehicleSize`, `addVehicleSize`), and how a wheelbase and a tightest turn follow from the vehicle data. The driving library derives its classes with the same functions. |
-| `lanes/lane_level.h/.cpp` | **The lane level as a table built from the model** (`buildLaneLevel`, ADR-0426): the last step of `assembleRoadModel`, which fills `RoadModel::laneLevel` (ADR-0429). The header lists where each part comes from. |
+| `lanes/lane_level.h/.cpp` | **The lane level as a table built from the model** (`buildLaneLevel`, ADR-0426): the last step of `assembleRoadModel`, which fills `RoadModel::laneLevel` (ADR-0429). The header lists where each part comes from. Also `layWalkways` (ADR-0475): the stated walkways laid on a built model's lane level, after the build, by `stateWalkways`; needs no `Result`. |
 | `lanes/lane_graph_build.h/.cpp` | What is left of the old builder: report types (`LaneGraphBuild`, `CornerFault`), `cutFolds`, bend profiles, kinks, the vehicle sizes. Has the `kLaneGraphBuildVersion` cache version. `LaneGraphBuild::problems` is a list of records (`RoadProblem`), not sentences (ADR-0438). |
 | `lanes/lane_graph_connect.h/.cpp` | Connector shaping and `fitConnector`, the per-class corner-fit test that produces corner faults; `reachReport`. Step 9 will change what it reports, not delete it *(unsure)*. |
 | `lanes/lane_graph_crossings.h/.cpp` | Crossing points: where two paths' bodies could touch (a kept measurement). |
@@ -193,7 +209,10 @@ Under `src/engine/procgen/city/roads/`:
 Tools: `tools/lanes_tool.cpp` (all subcommands; its top comment lists them, with every `layout` flag since ADR-0438)
 and `city_plan` (the planner; `city_plan controls`). One-off edits to a frozen road file (ADR-0473), each writing only what it names, in place, through
 road_layout.h's text writers: `layout <file> --state-arm J ROAD --write` (a road's end at a junction's point stated as
-one of its arms, in its ring, with the through pairs the rule gives it; then the layout), `reclass <file> <class> <road>
+one of its arms, in its ring, with the through pairs the rule gives it; then the layout), `layout <file> --split-junction J
+R1,R2,... --write` (ADR-0477: J's points holding those roads become a new junction at the list's end, each part made by
+the grouping's own `factsOverNodes` via `junctionOverNodes`; then the layout; a street the file names keeps its name),
+`reclass <file> <class> <road>
 ... --write`, and `reframe <file> <carriageway a> <carriageway b> <ramp> ... --write` (a system interchange's ramps set
 out again in the freeway's frame turning smoothly). `lanes_tool lanegraph` prints the lane level's problems counted
 by kind, each kind with what it means.
@@ -354,6 +373,8 @@ it (before `streets`), so one write is final (ADR-0437; the same test).
   road model's key (`roadModelTablesHash`), not of any bake key. Its kinds are read by `RoadModel::openTo`, the one mover filter
   (ADR-0466). A mover may state `waits` (ADR-0467): `{kind: seconds}` a walker's route adds for each walk of that kind
   it steps onto (the walker's `crossing`: 10 s); refused on the vehicles' mover. The router's `bindWalker` reads both.
+  A walkway (ADR-0475) names its kind from the same rows: `footway` (between buildings, across a plaza) or `park_path`
+  (through a park), both the walker's only.
 - `assets/data/streets.json`: name words and sign look (names only).
 
 ## 6. Checking a change quickly
@@ -456,9 +477,9 @@ data rows.
   this is down to traffic_lab 4 corners and river_town 13 (was 13 and 27): the junctions too close for their angle,
   above, and river_town j19, j116, j119, which the rule's straight strips do not reach. The wedges and notches of
   bare ground at a kink between two roads' bands (B2, traffic_lab 9, river_town 18) are gone since ADR-0472 mitres
-  the bands. Three river_town corners still read "two pieces", none at a kink: j0 6-0 and j14 5-0 (their kerb ends
-  stand 37-48 m out since ADR-0471 and the walk round the block leaves the 30 m `kCornerWindow`), and j90 0-1 (arm 0's
-  kerb end on a scrap of s228's sidewalk inside s227's carriageway). Sidewalks cut off from the largest part on foot:
+  the bands. One river_town corner still reads "two pieces", not at a kink: j90 0-1 (arm 0's kerb end on a scrap of
+  s228's sidewalk inside s227's carriageway). (j0 6-0 and j14 5-0, walks round a block face, went when ADR-0477 stated
+  j0 and j14 each as two junctions.) Sidewalks cut off from the largest part on foot:
   traffic_lab 0, river_town 10 (14 until ADR-0473 made the freeway's turn-round loops tn0/tn1 ramps, with no
   sidewalks). The s337/s277 hairpin's open end is now paved over by the capped mitre.
 - **Two traffic_lab ramps carry no car** (d0_0_a_on, d1_0_a_off). Their hosts' kerb lanes end at freeway joints
@@ -468,6 +489,11 @@ data rows.
   and x1_outR_link state a merge past the host lane's end. s320 carries on into s287 where no lane leaves. Dead-end
   spokes under the freeway ring (dead ends, ADR-0469). The planner no longer reproduces river_town's road file (ADR-0423). Car reach 41%
   without lane changes, 81% with: lane changes come first.
+- **Staggered junctions stated apart** (ADR-0477): river_town/agent_lab j14 is now j14 (north) and j144 (south), and
+  j0's south-east T is j145. The new ids are at the list's end; no other id moved. The street between j14 and j144 (s313)
+  has only 3.9 m between its facing stop lines, the one stated exception in `road_model_39`. j90, j119 and j135 are left
+  as single junctions (reasons in the ADR). A junction file list is no longer exactly what the grouping (`lanes_tool
+  junctions`) gives for river_town: the grouping still chains these points.
 - **river_town j103 stands 21 m in the air** (ADR-0473, not fixed): the design stage's height agreement lifts the
   junction from 6.5 m to 27.3 m over 30 rounds while the ground is 5-7 m, so every street leaving it is far too steep
   (s192 42 %, s334 41 %, s193 30 %, s335 23.7 %). The pump is at j90, 82 m away along s334: s334's end lies inside

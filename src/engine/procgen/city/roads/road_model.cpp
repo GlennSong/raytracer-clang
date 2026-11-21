@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/road_model.h"
+#include "engine/procgen/city/roads/line_frontage.h"   // frontageOnLine: where a point fronts a centre line (ADR-0474)
 
 #include "engine/bundle/bundle.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"         // junctionAreas: each arm's stop line, the one rule
@@ -217,6 +218,18 @@ Vec2 spineDirection(const StreetLine& l, Real from, Real to) {
 
 Vec2 towardKerb(const Vec2& spine, int dir) {
     return perp(spine * static_cast<Real>(dir)) * static_cast<Real>(roads::lanes::kerbPerpSign());
+}
+
+LineFrontage frontageOnLine(const Vec2* xy, const Real* stations, const NearestLine& hit, const Vec2& p) {
+    LineFrontage f;
+    const std::size_t k = hit.seg;
+    f.station = stations[k] + (stations[k + 1] - stations[k]) * hit.t;
+    const Vec2 seg = xy[k + 1] - xy[k];
+    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
+    // which kerb the point is on: the one it lies toward from the centre line (on the line itself: the +1 kerb)
+    f.dir = dot(p - hit.on, towardKerb(spine, 1)) >= 0 ? 1 : -1;
+    f.towards = towardKerb(spine, f.dir);
+    return f;
 }
 
 bool junctionLit(const ModelJunction& J) {
@@ -1266,18 +1279,15 @@ RoadFrontage RoadModel::frontageAt(const Vec2& door) const {
         [](std::size_t) { return Real(0); }, [&](std::size_t i) { return buildingMayFront(lines[i].section->klass, false); });
     if (n.line < 0) return f;
     const RoadLine& l = lines[static_cast<std::size_t>(n.line)];
-    const uint32_t k = l.line.first + static_cast<uint32_t>(n.seg);
     f.street = l.street;
     f.junction = l.junction;
     f.section = l.section;
-    f.station = lineStations[k] + (lineStations[k + 1] - lineStations[k]) * n.t;
     f.distance = n.distance;
     f.on = n.on;
-    const Vec2 seg = linePoints[k + 1] - linePoints[k];
-    const Vec2 spine = strictlyPast(seg.length(), 0, kSamePoint) ? normalize(seg) : Vec2(1, 0);
-    // which kerb the door is on: the one it lies toward from the centre line (on the line itself: the +1 kerb)
-    f.dir = dot(door - n.on, towardKerb(spine, 1)) >= 0 ? 1 : -1;
-    f.towards = towardKerb(spine, f.dir);
+    const LineFrontage lf = frontageOnLine(linePoints.data() + l.line.first, lineStations.data() + l.line.first, n, door);
+    f.station = lf.station;
+    f.dir = lf.dir;
+    f.towards = lf.towards;
     return f;
 }
 
@@ -1398,6 +1408,31 @@ const char* walkJoinWhyWord(WalkJoinWhy why) {
     case WalkJoinWhy::NoStreet: return "fronts no street (none near, or a stretch of road inside a junction)";
     case WalkJoinWhy::NoWalk: return "no walk is laid along its street";
     case WalkJoinWhy::NotOpen: return "the walks along its street are closed to the mover";
+    case WalkJoinWhy::NoWalkway: return "names a walkway the lane level does not hold";
+    }
+    return "?";
+}
+
+const char* walkwayFaultWord(WalkwayFault f) {
+    switch (f) {
+    case WalkwayFault::None: return "laid";
+    case WalkwayFault::NoLaneLevel: return "the model has no lane level to lay it in";
+    case WalkwayFault::AlreadyLaid: return "the lane level already holds walkways";
+    case WalkwayFault::NoId: return "it has no id";
+    case WalkwayFault::SameId: return "another walkway has its id";
+    case WalkwayFault::NoLine: return "its line has fewer than two points, a height missing, or no length";
+    case WalkwayFault::NoWidth: return "it has no width";
+    case WalkwayFault::KindNotListed: return "its kind is not a row of the path users' table";
+    case WalkwayFault::StatesNothing: return "the end names no street or walkway and is not stated a dead end";
+    case WalkwayFault::StatesTwo: return "the end names more than one of a street, a walkway and a dead end";
+    case WalkwayFault::NoSuchStreet: return "the end names a street the model does not have";
+    case WalkwayFault::OffStreet: return "the end's station is off its street";
+    case WalkwayFault::NoSidewalk: return "the end's kerb has no sidewalk laid there";
+    case WalkwayFault::PastSidewalk: return "the end's station is past where the sidewalk on its kerb runs";
+    case WalkwayFault::NoSuchWalkway: return "the end names a walkway the model does not have";
+    case WalkwayFault::OwnWalkway: return "the end names its own walkway";
+    case WalkwayFault::WalkwayNotLaid: return "the end names a walkway that was not laid";
+    case WalkwayFault::OffWalkway: return "the end's metres along the walkway are off its line";
     }
     return "?";
 }
@@ -1466,6 +1501,63 @@ WalkJoin RoadModel::walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>
     }
     if (!j.valid()) j.why = anyWalk ? WalkJoinWhy::NotOpen : WalkJoinWhy::NoWalk;
     return j;
+}
+
+WalkJoin RoadModel::walkJoinOn(const StatedFrontage& f, const std::vector<uint8_t>& openWalks, const ReachableParts* parts) const {
+    if (f.onStreet()) return walkJoinOn(frontageOn(streetNamed(*this, f.street), f.station, f.dir), openWalks, parts);
+    WalkJoin j;
+    if (!f.onWalkway()) {
+        j.why = WalkJoinWhy::NoStreet;
+        return j;
+    }
+    uint32_t way = kNoIndex;
+    for (uint32_t i = 0; i < walkways.size() && way == kNoIndex; ++i)
+        if (walkways[i].id == f.walkway) way = i;
+    // the walkway's walks (several where others meet it part way), each holding its stretch of metres along the walkway
+    bool anyWalk = false;
+    uint32_t best = kNoIndex;
+    Real bestHeld = std::numeric_limits<Real>::infinity(), bestAt = 0;
+    for (uint32_t w = 0; w < laneLevel.walks.size() && way != kNoIndex; ++w) {
+        const Walk& k = laneLevel.walks[w];
+        if (k.modelWalkway != way) continue;
+        anyWalk = true;
+        if (!openWalks.empty() && (w >= openWalks.size() || !openWalks[w])) continue;
+        const Real at = std::min(std::max(f.along, k.stationFrom), k.stationTo);
+        const Real held = std::fabs(f.along - at);
+        if (best == kNoIndex || strictlyBefore(held, bestHeld, kWrittenStation)) {
+            best = w;
+            bestHeld = held;
+            bestAt = at;
+        }
+    }
+    if (best == kNoIndex) {
+        j.why = anyWalk ? WalkJoinWhy::NotOpen : WalkJoinWhy::NoWalkway;
+        return j;
+    }
+    const Walk& k = laneLevel.walks[best];
+    j.at.walk = WalkId(best);
+    j.at.along = std::min(std::max(bestAt - k.stationFrom, Real(0)), k.length);
+    j.walkway = way;
+    j.station = bestAt;
+    j.point = laneLevel.pointAt(j.at.walk, j.at.along);
+    j.held = atOrBefore(bestHeld, 0, kWrittenStation) ? Real(0) : bestHeld;
+    if (parts && best < parts->partOf.size()) {
+        j.part = parts->partOf[best];
+        j.cutOff = j.part != parts->largest;
+    }
+    return j;
+}
+
+std::vector<WalkwayProblem> stateWalkways(RoadModel& m, std::vector<ModelWalkway> walkways) {
+    for (const Walk& k : m.laneLevel.walks)
+        if (k.modelWalkway != kNoIndex) {   // (the model keeps the walkways its lane level was laid with)
+            WalkwayProblem p;
+            p.fault = WalkwayFault::AlreadyLaid;
+            p.why = walkwayFaultWord(p.fault);
+            return {p};
+        }
+    m.walkways = std::move(walkways);
+    return roads::lanes::layWalkways(m);
 }
 
 WalkJoin RoadModel::walkJoinNear(const Vec2& p, const std::vector<uint8_t>& openWalks, const ReachableParts* parts) const {
@@ -2014,7 +2106,8 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelRamp>::value || std::is_same<T, ModelCrossing>::value || std::is_same<T, ModelAttachment>::value ||
            std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
            std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value || std::is_same<T, ModelCrosswalk>::value ||
-           std::is_same<T, ModelCorner>::value || std::is_same<T, ModelDeadEnd>::value;
+           std::is_same<T, ModelCorner>::value || std::is_same<T, ModelDeadEnd>::value || std::is_same<T, StatedFrontage>::value ||
+           std::is_same<T, WalkwayEnd>::value || std::is_same<T, ModelWalkway>::value;
 }
 
 struct Writer {
@@ -2109,6 +2202,11 @@ template <class IO, class C> void fields(IO& io, C& c, ModelCorner*) {
     io(c.junction); io(c.armA); io(c.armB); io(c.kerbA); io(c.kerbB); io(c.walk); io(c.spread);
 }
 template <class IO, class D> void fields(IO& io, D& d, ModelDeadEnd*) { io(d.street); io(d.end); io(d.turnRound); }
+template <class IO, class F> void fields(IO& io, F& f, StatedFrontage*) { io(f.street); io(f.station); io(f.dir); io(f.walkway); io(f.along); }
+template <class IO, class E> void fields(IO& io, E& e, WalkwayEnd*) { io(e.meets); io(e.deadEnd); }
+template <class IO, class W> void fields(IO& io, W& w, ModelWalkway*) {
+    io(w.id); io(w.kind); io(w.width); io(w.line); io(w.heights); io(w.ends);
+}
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -2147,7 +2245,7 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     m.curves = std::move(curves);
     io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
     io(m.crosswalks);
-    io(m.corners); io(m.deadEnds); io(m.walks);
+    io(m.corners); io(m.deadEnds); io(m.walks); io(m.walkways);
     io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }
@@ -2331,6 +2429,7 @@ const std::string& RoadModel::walkKind(WalkId walk) const {
     if (k.modelLane < lanes.size()) return lanes[k.modelLane].kind;
     if (k.modelCrosswalk < crosswalks.size()) return kCrossingKind;
     if (k.modelDeadEnd < deadEnds.size()) return pathUsers().deadEndJoin;
+    if (k.modelWalkway < walkways.size()) return walkways[k.modelWalkway].kind;
     return kNoneStated;
 }
 

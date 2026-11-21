@@ -254,16 +254,19 @@ struct Walk {
     Real length = 0;
     Real width = 0;
     Range atStart, atEnd;                // into LaneGraph::walkJoins: the walk ends that meet its start, its end
-    // WHAT IT IS ON THE ROAD MODEL (road_model.h), by the model's ids; one of the four is set. A sidewalk or a corner
+    // WHAT IT IS ON THE ROAD MODEL (road_model.h), by the model's ids; one of the five is set. A sidewalk or a corner
     // walk: its walk (RoadModel::walks). A footway: its lane (RoadModel::lanes). A crossing: its crosswalk
     // (RoadModel::crosswalks; the walk starts at the crosswalk's kerb end 0). A turn-round: its dead end
-    // (RoadModel::deadEnds; it starts on the +1 kerb's sidewalk).
+    // (RoadModel::deadEnds; it starts on the +1 kerb's sidewalk). A walkway's stretch: its walkway
+    // (RoadModel::walkways, ADR-0475; it runs the way the walkway's line does).
     uint32_t modelWalk = kNoIndex;
     uint32_t modelLane = kNoIndex;
     uint32_t modelCrosswalk = kNoIndex;
     uint32_t modelDeadEnd = kNoIndex;
+    uint32_t modelWalkway = kNoIndex;
     // A sidewalk's or a footway's stretch: its street, and the stations along that street's road's spine at its start
-    // and its end (kNoIndex: none, a corner, crossing or turn-round).
+    // and its end (kNoIndex: none, a corner, crossing, turn-round or walkway). A walkway's stretch: no street, and the
+    // metres along the walkway's line at its start and its end.
     uint32_t street = kNoIndex;
     Real stationFrom = 0, stationTo = 0;
     Range joins(int end) const { return end == 0 ? atStart : atEnd; }

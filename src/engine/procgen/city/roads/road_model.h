@@ -62,6 +62,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"        // Turn; bundle::BinWriter
 #include "engine/procgen/city/roads/road_model_parts.h"  // junctions, arms, streets: the types the road file is read into
+#include "engine/procgen/city/roads/walkway.h"           // ModelWalkway: a path for people on foot beside no street
 
 #include <nlohmann/json.hpp>
 
@@ -259,14 +260,17 @@ enum class WalkJoinWhy : uint8_t {
     NoStreet,   // the frontage names no street: no road a building may front is near, or the nearest is a stretch of road
                 // inside a junction (a spread junction's), along which no walk is laid
     NoWalk,     // the lane level lays no walk along that street (its class has no sidewalk, a planned-only model, ...)
-    NotOpen,    // it lays walks along that street, but none the mover may use
+    NotOpen,    // it lays walks along that street (or that walkway), but none the mover may use
+    NoWalkway,  // the frontage names a walkway the lane level does not hold (ADR-0475)
 };
 const char* walkJoinWhyWord(WalkJoinWhy why);
 struct WalkJoin {
     WalkPoint at;                    // the walk and metres along it from its start (not valid: none; `why`)
-    ModelStreetId street;            // the street that walk runs along
+    ModelStreetId street;            // the street that walk runs along (none: a walkway's)
+    uint32_t walkway = kNoIndex;     // the walkway it is a stretch of (RoadModel::walkways; ADR-0475), else kNoIndex
     int dir = 1;                     // the kerb it runs beside (a footway's walk is its middle: the asked kerb)
-    Real station = 0;                // where along the street's road's spine it joins (the asked station, held to the walk)
+    Real station = 0;                // where along the street's road's spine it joins (the asked station, held to the walk);
+                                     // on a walkway, the metres along the walkway
     Vec2 point;                      // where that is on the walk (LaneGraph::pointAt)
     Real held = 0;                   // metres along the spine from the asked station to the walk's end it joins at (0: beside it)
     bool across = false;             // joined on the other kerb: the asked kerb has no walk the mover may use there
@@ -419,6 +423,7 @@ const char* crosswalkControlWord(CrosswalkControl c);
 // the spine runs `spine` (unit). Which side a kerb lies is the one statement, lanes/lane_graph_build.h kerbPerpSign; the
 // crosswalks' kerb ends and the walks (lanes/walk_lanes.h) are laid by it.
 Vec2 towardKerb(const Vec2& spine, int dir);
+// (where a point fronts a road's centre line, from a search's hit on it: line_frontage.h frontageOnLine, ADR-0474)
 
 // ---- WHERE PEOPLE ON FOOT CAN WALK (ADR-0464, #306 task 4 piece 1) -----------------------------------------------------
 // The facts the walking paths will be laid from (pieces 2 and 3): stated once, by the planned layer, from stated facts
@@ -486,6 +491,38 @@ struct ModelDeadEnd {
     bool turnRound = false;
 };
 
+// ---- WALKWAYS (ADR-0475, #306 task 4 piece 9): ModelWalkway and WalkwayEnd, in roads/walkway.h (the lot pass states
+// them, ADR-0476, and cannot include this header) ------------------------------------------------------------------------
+// WHAT IS WRONG WITH A STATED WALKWAY (or one of its ends), as the lane level found it laying it. A walkway wrong as a
+// whole is not laid; an end that does not land is left meeting nothing, and said.
+enum class WalkwayFault : uint8_t {
+    None,
+    NoLaneLevel,      // the model has no lane level to lay it in (a planned-only model)
+    AlreadyLaid,      // the lane level already holds walkways: lay the lane level again to state them anew
+    NoId,             // it has no id
+    SameId,           // another walkway has its id (the first keeps it)
+    NoLine,           // fewer than two points, a height missing, or no length
+    NoWidth,          // no width
+    KindNotListed,    // its kind is not a row of the path users' table (open to nobody)
+    StatesNothing,    // the end names no street or walkway and is not stated a dead end
+    StatesTwo,        // the end names more than one of a street, a walkway and a dead end
+    NoSuchStreet,     // the end names a street the model does not have
+    OffStreet,        // ...a station off that street (outside its `from` to `to`)
+    NoSidewalk,       // ...a kerb with no sidewalk laid there
+    PastSidewalk,     // ...a station past where the sidewalk on that kerb runs (nearer a junction than its kerb end)
+    NoSuchWalkway,    // the end names a walkway the model does not have
+    OwnWalkway,       // ...its own walkway
+    WalkwayNotLaid,   // ...a walkway that was not laid (its own fault says why)
+    OffWalkway,       // ...metres along it off its line
+};
+const char* walkwayFaultWord(WalkwayFault f);
+struct WalkwayProblem {
+    uint32_t walkway = kNoIndex;     // into RoadModel::walkways (kNoIndex: all of them)
+    int end = -1;                    // 0 or 1; -1: the walkway as a whole
+    WalkwayFault fault = WalkwayFault::None;
+    std::string why;                 // in words, with the numbers
+};
+
 struct RoadModel {
     std::string name;
     bool built = false;                   // the built layer is here (assembleRoadModel); false: the planned layer alone
@@ -528,6 +565,9 @@ struct RoadModel {
     // beside them). A list of its own, beside `lanes`: nothing that reads the car lanes meets them. A footway's lane is a
     // car lane's record of kind "footway" in `lanes`, laid by expand. The lane level lays them as its walks (ADR-0466).
     std::vector<ModelLane> walks;
+    // THE WALKWAYS (ADR-0475): the paths for people on foot beside no street, as their drawer stated them, in the order
+    // stated. Supplied by stateWalkways (below), which lays them in the lane level. Empty until something states one.
+    std::vector<ModelWalkway> walkways;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -676,9 +716,10 @@ struct RoadModel {
     std::vector<RoadLine> roadLines() const;
     // WHERE A PLAN POINT (A DOOR) FRONTS THE ROAD: the nearest road a building may front (buildingMayFront), by its
     // centre line -- the same search over the same lines, in the same order, as the lot pass faces its doors by
-    // (LotRoads::nearestFrontable), so a door built facing a street is answered that street. AN INTERIM: a search by
-    // position, because a built lot does not record the street, station and side its door fronts; when the lot pass
-    // records them, a reader hands them to frontageOn below and nothing is searched.
+    // (LotRoads::nearestFrontable), so a door built facing a street is answered that street. The station and kerb come
+    // from frontageOnLine, as the lot pass's do. The lot pass now records them on each building and door
+    // (StatedFrontage, ADR-0474); a reader of a lot hands them to frontageOn below and nothing is searched. This search
+    // stays for what states nothing.
     RoadFrontage frontageAt(const Vec2& door) const;
     // ...the same answer from stated facts, with no search: a street, a station along its spine and a kerb.
     RoadFrontage frontageOn(ModelStreetId street, Real station, int dir) const;
@@ -711,6 +752,12 @@ struct RoadModel {
     // round (reachableWalks over the same open walks), so the answer says when it lies in a part cut off from the rest.
     // Ties: the lower walk id.
     WalkJoin walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>& openWalks = {},
+                        const ReachableParts* parts = nullptr) const;
+    // ...FROM WHAT A PLACE STATES (StatedFrontage: a lot's building or door, ADR-0474). On a walkway (ADR-0475): the
+    // walk of that walkway whose stretch holds the stated metres along it (a walkway cut where others meet it is several
+    // walks), `held` past its ends, `walkway` set and no street. On a street: the answer above, from frontageOn. Neither:
+    // not joined, NoStreet; a walkway the lane level does not hold, NoWalkway.
+    WalkJoin walkJoinOn(const StatedFrontage& f, const std::vector<uint8_t>& openWalks = {},
                         const ReachableParts* parts = nullptr) const;
     // THE FALLBACK, BY POSITION: only where nothing states a place's frontage (a lot's door: the lot pass records no
     // street; a person standing anywhere). The frontage is the one search by position (frontageAt: the nearest road a
@@ -749,7 +796,7 @@ struct RoadModel {
     // a connector's, kConnectorKind. Empty: none stated (a hand-made table).
     const std::string& pathKind(PathId path) const;
     // THE KIND OF A WALK: a sidewalk's or corner's, its model walk's; a footway's, its lane's; a crossing, kCrossingKind;
-    // a turn-round, the path users' dead-end join (pathUsers().deadEndJoin). Empty: none stated.
+    // a turn-round, the path users' dead-end join (pathUsers().deadEndJoin); a walkway's, its stated kind. Empty: none.
     const std::string& walkKind(WalkId walk) const;
     // EVERY LANE PATH AND WALK MOVER `mover` MAY USE, by its kind and the path users' table `users` (per lane path and per
     // walk, 1: open). A mover or kind the table does not name: closed. The one mover filter: a car's route sees no walk
@@ -780,6 +827,12 @@ bool stateCrosswalk(RoadModel& m, const ModelCrosswalk& c, uint32_t* id = nullpt
 // findCrossingPoints). THE ONE PLACE a crosswalk becomes a lane-level record: buildLaneLevel calls it, and a test's lane
 // table made by hand calls it the same way. Replaces any crosswalks the lane level held.
 void layLaneCrosswalks(RoadModel& m);
+
+// STATES THE WALKWAYS on a built model (ADR-0475): THE ONE PLACE they are supplied. Kept in RoadModel::walkways and laid
+// in its lane level at once (lanes/lane_level.h layWalkways): each walkway as a walk of its kind, cut and joined where
+// its ends say. Returns what did not land, with why; a walkway wrong as a whole is kept but not laid. Once per lane
+// level: the lane level must be laid again (buildLaneLevel) before stating them anew.
+std::vector<WalkwayProblem> stateWalkways(RoadModel& m, std::vector<ModelWalkway> walkways);
 
 // Field for field, exactly (the saved bytes of each compared).
 bool operator==(const RoadModel& a, const RoadModel& b);
@@ -914,7 +967,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 17;   // 17: the lane level's walks and their joins (LGRF 16, ADR-0466)
+constexpr uint32_t kRoadModelFormat = 18;   // 18: the walkways; a walk may be a walkway's (LGRF 17, ADR-0475)
+                                            // 17: the lane level's walks and their joins (LGRF 16, ADR-0466)
                                             // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)
                                             // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)
                                             // 14: the crosswalks; the lane level's name the model's (LGRF 15, ADR-0452)

@@ -65,6 +65,13 @@ struct StreetMapReport {
 // False, with `report.errors`, when the model lacks a fact the map needs; nothing is appended then.
 bool appendStreetMap(NavGraph& map, const RoadModel& m, int city, const RoadDeckField* deck, StreetMapReport* report);
 
+// THE MODEL'S WALKWAYS ON THE STREET MAP (ADR-0476), read through the model, never joined by distance: each walkway a
+// walk from end to end; an end stated on another walkway is one node with it there (cutting it part way: a `tee`); an
+// end stated on a street joins the link of city `city`'s street map along that street holding its station, from the
+// pavement on its stated kerb; a dead end, or an end whose street or walkway is not found, joins nothing (`unjoined`).
+// Goes with the street map (#306 task 4, piece 10).
+NavGraph::FootpathReport appendWalkways(NavGraph& map, const RoadModel& m, int city);
+
 // The street map's links and nodes in words (counts by kind, the notes): what the loader logs.
 std::string describeStreetMap(const StreetMapReport& report);
 

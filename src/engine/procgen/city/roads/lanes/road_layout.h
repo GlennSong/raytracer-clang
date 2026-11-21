@@ -269,6 +269,19 @@ constexpr const char* kArmOrderCommand = "lanes_tool layout <road file> --arm-or
 std::string insertArmText(const std::string& text, const RoadLabGraph& asRead, const std::string& junction, const std::string& road,
                           std::string* added = nullptr, std::string* err = nullptr);
 
+// ONE JUNCTION STATED AS TWO, IN PLACE (ADR-0477; the one-off `lanes_tool layout <file> --split-junction J R1,R2,...
+// --write`): for a junction the grouping made of points that are really two junctions (a staggered pair along a through
+// road, ADR-0419's storage rule chaining them). Its stated points (`nodes`) holding any of the named roads become a new
+// junction, id "j<N>" after the list's last (N: the list's length), written after it; the rest stay as junction J, its
+// element written again in place. Each part is made as the grouping makes a junction (control_plan.h junctionOverNodes:
+// its arms, the stretches inside it, its through pairs by the one rule) and its arms put in their ring; both keep J's
+// control, its reason and each arm's stated signs. The road between the two parts is inside neither: the layout, run
+// straight after, makes it a street from one to the other. No other junction moves. `added` (optional): each part's arms,
+// through pairs and inside stretches, in words. Empty (with `err`) when the points do not split in two by those roads, a
+// part would have fewer than three arms, or a point names a ramp.
+std::string insertSplitJunctionText(const std::string& text, const RoadLabGraph& asRead, const std::string& junction,
+                                    const std::vector<std::string>& movingRoads, std::string* added = nullptr, std::string* err = nullptr);
+
 // ONE MEMBER OF ONE ROAD (an edge) WRITTEN AGAIN, IN PLACE (ADR-0473; the one-off `lanes_tool reclass` and `lanes_tool
 // reframe`): the value at `keyPath` inside the edge whose "id" is `edge` (e.g. {"class"}, or {"path", "points"}) replaced
 // by `value`, laid out as the file lays out its own values (its indent per level, from the member's own lead). The member

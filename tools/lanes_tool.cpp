@@ -21,7 +21,9 @@
 //                      --arm-order lists each junction whose arms are not listed in their ring (exit 3 when one is not, or
 //                      the file does not say they are), and with --write puts them in order and marks the file (ADR-0427);
 //                      --state-arm J ROAD states the end of ROAD at junction J's point as one of J's arms, in its ring, with
-//                      the through pairs the rule gives it, then writes the layout (ADR-0473)
+//                      the through pairs the rule gives it, then writes the layout (ADR-0473); --split-junction J R1,R2,...
+//                      states junction J as two: its points holding those roads become a new junction at the list's end,
+//                      then writes the layout (ADR-0477)
 //   lanes_tool reclass <graph.json> <class> <road> ... [--write]   each road's class set, in place (ADR-0473)
 //   lanes_tool reframe <graph.json> <carriageway a> <carriageway b> <ramp> ... [--write]   each system-interchange ramp's
 //                      stated centre line set out again in the freeway's frame turning smoothly, without the sideways steps
@@ -50,6 +52,7 @@
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
 #include "engine/procgen/city/lot_cache.h"                   // regions-lots: the lots the bundle stores
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // regions-lots: the built model the lots' paths are stated on
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include <set>
@@ -314,11 +317,20 @@ int main(int argc, char** argv) {
         // street and heading, the street's end junction). For a file that keeps its own grouping (traffic_lab, ADR-0419).
         bool write = false, fresh = false, names = false, nodes = false, armOrder = false;
         double laneRules = -1;
-        std::string armJunction, armRoad;
+        // --split-junction J R1,R2,... (ADR-0477): ONCE, junction J stated as two, its points holding those roads a new
+        // junction at the list's end (road_layout.h insertSplitJunctionText); then the layout as usual.
+        std::string armJunction, armRoad, splitJunction;
+        std::vector<std::string> splitRoads;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--state-arm") == 0 && i + 2 < argc) {
                 armJunction = argv[i + 1];
                 armRoad = argv[i + 2];
+            }
+            if (std::strcmp(argv[i], "--split-junction") == 0 && i + 2 < argc) {
+                splitJunction = argv[i + 1];
+                std::stringstream list(argv[i + 2]);
+                for (std::string r; std::getline(list, r, ',');)
+                    if (!r.empty()) splitRoads.push_back(r);
             }
             if (std::strcmp(argv[i], "--arm-order") == 0) armOrder = true;
             if (std::strcmp(argv[i], "--write") == 0) write = true;
@@ -336,13 +348,15 @@ int main(int argc, char** argv) {
             text = ss.str();
         }
         const std::string original = text;
-        if (!armJunction.empty()) {
-            // ONE ARM STATED, then the layout below writes its street and heading and the street's end (with --write)
+        if (!armJunction.empty() || !splitJunction.empty()) {
+            // ONE ARM STATED, or ONE JUNCTION SPLIT, then the layout below writes the streets and headings (with --write)
             const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
             std::string err, added;
             std::string out;
             try {
-                out = insertArmText(text, RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir), armJunction, armRoad, &added, &err);
+                const RoadLabGraph asRead = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir.empty() ? "." : dir);
+                out = !armJunction.empty() ? insertArmText(text, asRead, armJunction, armRoad, &added, &err)
+                                           : insertSplitJunctionText(text, asRead, splitJunction, splitRoads, &added, &err);
                 if (!out.empty()) (void)RoadLabGraph::fromJson(nlohmann::json::parse(out), dir.empty() ? "." : dir);
             } catch (const std::exception& ex) {
                 std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], ex.what());
@@ -820,6 +834,64 @@ int main(int argc, char** argv) {
         std::ofstream(outDir + "/lots_grown.txt") << dumpGrown;
         std::ofstream(outDir + "/lots_stored.txt") << dumpStored;
         std::printf("the lots grown in memory and the lots the bundle stores dump %s\n", dumpGrown == dumpStored ? "byte-identical" : "DIFFERENTLY");
+        // the grown part meshes, counted and hashed (positions, normals, colours, uvs, indices), so two grows' geometry compare
+        for (const std::vector<RenderMesh>* set : {&grown.parts, &grown.flatParts}) {
+            bundle::Fnv h;
+            std::size_t vertices = 0, indices = 0;
+            for (const RenderMesh& m : *set) {
+                h.pod(m.materialIndex);
+                for (const Vertex& v : m.vertices) {
+                    h.pod(v.position);
+                    h.pod(v.normal);
+                    h.pod(v.color);
+                    h.pod(v.u);
+                    h.pod(v.v);
+                }
+                if (!m.indices.empty()) h.bytes(m.indices.data(), m.indices.size() * sizeof(m.indices[0]));
+                vertices += m.vertices.size();
+                indices += m.indices.size();
+            }
+            std::printf("%s: %zu meshes, %zu vertices, %zu indices, hash %016llx\n", set == &grown.parts ? "parts" : "flat parts", set->size(), vertices,
+                        indices, static_cast<unsigned long long>(h.h));
+        }
+        // where they front, as the lot pass recorded it (ADR-0474)
+        std::size_t buildings = 0, buildingsStated = 0, doors = 0, doorsStated = 0;
+        for (const LotBuilding& lb : grown.lots) {
+            if (lb.units.empty()) continue;
+            ++buildings;
+            buildingsStated += lb.frontage.onStreet() ? 1 : 0;
+            for (const BuildingUnit& u : lb.units)
+                for (const DoorSpec& d : u.doors) {
+                    ++doors;
+                    doorsStated += d.frontage.onStreet() ? 1 : 0;
+                }
+        }
+        std::printf("frontage: %zu of %zu buildings and %zu of %zu doors state the street they front\n", buildingsStated, buildings, doorsStated, doors);
+        // the lots' paths as walkways (ADR-0476): where their ends land, the doors on them, and what the built model
+        // says does not land
+        {
+            std::size_t ways = 0, onStreet = 0, onWalkway = 0, deadEnd = 0, doorsOnPath = 0;
+            for (const LotBuilding& lb : grown.lots) {
+                ways += lb.walkways.size();
+                for (const ModelWalkway& w : lb.walkways)
+                    for (const WalkwayEnd& e : w.ends) {
+                        onStreet += e.meets.onStreet() ? 1 : 0;
+                        onWalkway += e.meets.onWalkway() ? 1 : 0;
+                        deadEnd += e.deadEnd ? 1 : 0;
+                    }
+                for (const BuildingUnit& u : lb.units)
+                    for (const DoorSpec& d : u.doors) doorsOnPath += d.frontage.onWalkway() ? 1 : 0;
+            }
+            std::printf("walkways: %zu; ends on a street %zu, on another walkway %zu, dead ends %zu; doors on a walkway %zu\n", ways, onStreet,
+                        onWalkway, deadEnd, doorsOnPath);
+            const LevelBuiltRoads built = obtainLevelRoadModel(in, levelRoadModelCacheDir());
+            const std::vector<WalkwayProblem> faults = stateLotWalkways(built.cities, grown.lots);
+            const int c = lotsCity(built.cities);
+            std::printf("stated on city %d's road model: %zu walkways, %zu faults%s%s\n", c,
+                        c >= 0 && built.cities[static_cast<std::size_t>(c)] ? built.cities[static_cast<std::size_t>(c)]->walkways.size() : 0,
+                        faults.size(), faults.empty() ? "" : ": ", describeWalkwayProblems(faults).c_str());
+            for (std::size_t k = 0; k < faults.size() && k < 12; ++k) std::printf("  %s\n", faults[k].why.c_str());
+        }
         std::printf("wrote %s/lots_grown.txt, lots_stored.txt\n", outDir.c_str());
         return 0;
     }

@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <map>
 #include <memory>
 #include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <algorithm>
@@ -24,7 +25,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-11-14.1";   // the lot pass reads the road model's streets and the drawn deck, not a copy of the road graph (ADR-0430); 2026-11-06.3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
+const char* const kLotsBuildTag = "2026-11-20.2";   // a lot's paths stated as walkways with their ends, read from the planned road model (ADR-0476); .1 every building and door records the street it fronts, its station and kerb (ADR-0474); 2026-11-14.1 the lot pass reads the road model's streets and the drawn deck, not a copy of the road graph (ADR-0430); 2026-11-06.3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -268,8 +269,38 @@ LotsCityInputs lotsCityInputs(const CityProducts& p) {
     return city;
 }
 
+int lotsCity(const std::vector<std::shared_ptr<RoadModel>>& cities) { return static_cast<int>(cities.size()) - 1; }
+
 LotRoadInputs lotRoadInputs(const std::vector<std::shared_ptr<RoadModel>>& cities, const RoadDeckField& deck) {
-    return lotRoadInputs(cities.empty() || !cities.back() ? RoadModel() : *cities.back(), deck);
+    const int c = lotsCity(cities);
+    return lotRoadInputs(c < 0 || !cities[static_cast<std::size_t>(c)] ? RoadModel() : *cities[static_cast<std::size_t>(c)], deck);
+}
+
+std::vector<WalkwayProblem> stateLotWalkways(RoadModel& built, const std::vector<LotBuilding>& lots) {
+    std::vector<ModelWalkway> all;
+    for (const LotBuilding& lb : lots) all.insert(all.end(), lb.walkways.begin(), lb.walkways.end());
+    if (all.empty()) return {};
+    return stateWalkways(built, std::move(all));
+}
+
+std::vector<WalkwayProblem> stateLotWalkways(const std::vector<std::shared_ptr<RoadModel>>& cities, const std::vector<LotBuilding>& lots) {
+    const int c = lotsCity(cities);
+    if (c >= 0 && cities[static_cast<std::size_t>(c)]) return stateLotWalkways(*cities[static_cast<std::size_t>(c)], lots);
+    bool any = false;
+    for (const LotBuilding& lb : lots) any = any || !lb.walkways.empty();
+    if (!any) return {};
+    WalkwayProblem p;
+    p.fault = WalkwayFault::NoLaneLevel;
+    p.why = std::string(walkwayFaultWord(p.fault)) + ": the level has no road model for the city its lots grow on";
+    return {p};
+}
+
+std::string describeWalkwayProblems(const std::vector<WalkwayProblem>& problems) {
+    std::map<std::string, int> byKind;
+    for (const WalkwayProblem& p : problems) ++byKind[walkwayFaultWord(p.fault)];
+    std::string out;
+    for (const std::pair<const std::string, int>& k : byKind) out += (out.empty() ? "" : "; ") + std::to_string(k.second) + " " + k.first;
+    return out;
 }
 
 LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck) {
@@ -282,6 +313,19 @@ LotRoadInputs lotRoadInputs(const RoadModel& planned, const RoadDeckField& deck)
         LotRoad r;
         r.id = l.street.valid() ? planned.streets[l.street.index].id : planned.junctions[l.junction.index].id;
         r.line = planned.centreLine(l.line);
+        if (l.line.end() <= planned.lineStations.size())   // its stations as the model states them (ADR-0474)
+            r.stations.assign(planned.lineStations.begin() + l.line.first, planned.lineStations.begin() + l.line.end());
+        r.insideJunction = !l.street.valid();
+        if (l.street.valid()) {   // where its sidewalks run: from kerb end to kerb end (the model's kerbEndStation, ADR-0476)
+            const ModelStreet& S = planned.streets[l.street.index];
+            r.sidewalkFrom = S.from;
+            r.sidewalkTo = S.to;
+            for (int end = 0; end < 2; ++end) {
+                const int arm = planned.armAt(l.street, end);
+                const Real at = arm >= 0 ? kerbEndStation(planned, S.junctions[static_cast<std::size_t>(end)], static_cast<uint32_t>(arm)) : kNotStated;
+                if (stated(at)) (end == 0 ? r.sidewalkFrom : r.sidewalkTo) = at;
+            }
+        }
         r.halfWidth = section.carriagewayHalfWidth();   // (as the deck is drawn: city_producer.cpp deckFromResult)
         r.sidewalk = section.sidewalk;
         r.klass = section.klass;
@@ -359,11 +403,11 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.holes = &city.holes;
     const std::vector<std::vector<Vec2>> water = levelWaterKeepOut(in.level);   // blocks stand back from rivers (ADR-0104)
     gin.water = &water;
-    // the streets by id, from the level's one road model (road_model_cache.h: the model the loader publishes, read from
-    // its cache or built here when this runs before any load, as the bake does), and the drawn deck
-    const LevelBuiltRoads levelRoads = obtainLevelRoadModel(in, levelRoadModelCacheDir());
-    for (const std::string& n : levelRoads.notes) LOG_WARN << "[lots] the level's road model: " << n;
-    const LotRoadInputs roads = lotRoadInputs(levelRoads.cities, city.deck);
+    // the streets by id, from the level's PLANNED road model (read from its road file: the lots grow before the built
+    // model is assembled, ADR-0476), and the drawn deck
+    std::vector<std::string> plannedNotes;
+    const LotRoadInputs roads = lotRoadInputs(levelPlannedRoadModels(in, &plannedNotes), city.deck);
+    for (const std::string& n : plannedNotes) LOG_WARN << "[lots] the level's road model: " << n;
     gin.roads = &roads;
     gin.pavedSidewalk = city.pavedSidewalk;
     gin.smoothGround = smoothGround;
@@ -378,13 +422,23 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     LotGrowSetup s;
     NetLotResult r = growCity(gin, &s);
     const std::size_t blockCount = r.plan.blocks.size();
+    // THE PATHS STATED ON THE BUILT MODEL (ADR-0476), here only to say what does not land: the loader states them again
+    // on the model it publishes (the saved road model holds none)
+    std::size_t walkwayFaults = 0;
+    {
+        const LevelBuiltRoads levelRoads = obtainLevelRoadModel(in, levelRoadModelCacheDir());
+        for (const std::string& n : levelRoads.notes) LOG_WARN << "[lots] the level's road model: " << n;
+        const std::vector<WalkwayProblem> faults = stateLotWalkways(levelRoads.cities, r.lots);
+        walkwayFaults = faults.size();
+        if (!faults.empty()) LOG_WARN << "[lots] paths that do not land on the road model: " << describeWalkwayProblems(faults);
+    }
     if (report) {
         size_t units = 0; for (const LotBuilding& b : r.lots) units += b.units.size();
         size_t partTris = 0; for (const RenderMesh& m : r.parts) partTris += m.indices.size() / 3;
         const double seconds = secondsSince(t0);
         *report = {{"summary", std::to_string(blockCount) + " blocks, " + std::to_string(r.plan.lots.size()) + " lots, " + std::to_string(r.lots.size()) + " buildings, " + std::to_string(units) + " units, " + std::to_string(partTris) + " part triangles"},
                    {"blocks", blockCount}, {"lots", r.plan.lots.size()}, {"buildings", r.lots.size()}, {"units", units}, {"parts", r.parts.size()}, {"partTriangles", partTris},
-                   {"flatParts", r.flatParts.size()}, {"terraces", r.gradeFlatten.size()}, {"planOnly", s.planOnly}, {"lod1", s.wantFlat && !s.planOnly}, {"hasTerrain", city.hasTerrain}, {"spawn", haveSpawn}, {"seconds", seconds}};
+                   {"flatParts", r.flatParts.size()}, {"terraces", r.gradeFlatten.size()}, {"planOnly", s.planOnly}, {"lod1", s.wantFlat && !s.planOnly}, {"hasTerrain", city.hasTerrain}, {"spawn", haveSpawn}, {"seconds", seconds}, {"walkwayFaults", walkwayFaults}};
     }
     return r;
 }

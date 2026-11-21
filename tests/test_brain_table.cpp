@@ -379,6 +379,7 @@ TEST_CASE(brain_includes_nothing_past_its_boundary) {
         "engine/ai/pathfind.h",                     // ... and its router
         "engine/procgen/city/road_network.h", "engine/procgen/city/road_spec.h", "engine/procgen/city/polygon.h",
         "engine/procgen/city/roads/road_model.h", "engine/procgen/city/roads/road_model_parts.h",
+        "engine/procgen/city/roads/walkway.h",      // the road model's walkways (ADR-0475; their own header since ADR-0476)
         "engine/procgen/city/roads/lane_graph.h", "engine/procgen/city/roads/graph_index.h",
         "engine/procgen/city/roads/vehicle_size.h",
         "engine/procgen/city/roads/route.h",        // the one route-finder the driving routes cars by (ADR-0467)

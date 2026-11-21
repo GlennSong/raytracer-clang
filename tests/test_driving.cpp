@@ -231,6 +231,7 @@ const std::vector<std::string> kLibraryAllowed = {
     "engine/procgen/city/roads/road_model.h",   // the road it drives on (read, never owned): the road model, whose lane
                                                 // level is where the cars are and whose facts it asks (ADR-0436)
     "engine/procgen/city/roads/road_model_parts.h",   // ... whose junctions, arms and streets road_model.h brings
+    "engine/procgen/city/roads/walkway.h",      // ... and its walkways (ADR-0475; a header of their own since ADR-0476)
     "engine/procgen/city/road_network.h",       // ... which gives a street's engine class (RoadClass)
     "engine/procgen/city/road_spec.h",          // ... which road_network.h brings (a road's band table)
     "engine/procgen/city/roads/lane_graph.h",   // the model's lane level: the paths, junctions and crossing points
@@ -249,6 +250,7 @@ const std::vector<std::string> kScriptingAllowed = {
     "engine/procgen/city/polyline.h",
     // the road file's junctions and streets are the road model's own types, which road_graph_spec.h brings
     "engine/procgen/city/roads/road_model_parts.h", "engine/procgen/city/road_network.h",
+    "engine/procgen/city/roads/walkway.h",   // (the road model's walkways, ADR-0476)
     "engine/scripting/tag_names.h",   // the one reader of a vehicle's tag list (ADR-0435)
 };
 

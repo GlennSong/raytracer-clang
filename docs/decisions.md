@@ -23202,3 +23202,347 @@ Words:
 **For players** (after S7's re-bake): on traffic_lab, Fifth Avenue's south arm reaches its crossroads with Fourteenth Boulevard, with a crosswalk and a stop line, and cars turn into and out of it. On river_town and agent_lab the four cloverleaf loops and four corner links are smooth curves instead of a run of sideways steps, and the freeway's two turn-round loops are one-lane ramps with barriers instead of three-lane boulevards with sidewalks.
 
 **Revisit when** the design stage's agreement is reworked at spread junctions (j103 / j90 above); when the planner makes a loop a true circle in plan; or when the spur's four lanes should taper to the loop's one before it (the deck cracks at tn0/tn1's ends).
+
+## ADR-0474 — Every lot building and every door records the street it fronts, the station along it and the kerb, at plan time, from the road model's own rule (#306 re-bake bundle, S5; ADR-0468's "left for later" option a)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: when the lot pass builds a city, it now writes down, on each building and on each of its doors, which street that building or door faces. Until now it worked this out to turn the building, then threw the answer away, and anything that later wanted to know (where a door joins the sidewalks, ADR-0468) had to search again by distance. Now the answer is kept, so a reader can ask the road model "where is this door" from stated facts, with no search. Nothing reads it yet: piece 6 of #306 task 4 will.
+
+Words:
+- **Frontage:** where a place faces the road: a **street** (by the road model's id, e.g. `s75`), a **station** (metres along that street's centre line) and a **kerb** (+1: the kerb of the traffic running along the centre line; -1: the other one). The same three facts the brain's markers state (ADR-0441, ADR-0468).
+- **Walkway:** a path for people on foot that is not a street's sidewalk (a later sitting, S6, makes them). The record has room for "fronts walkway w, a metres along it", left empty for now.
+- **Facing step:** the point in the lot pass where a building is turned to face the nearest street a building may front (never a freeway or a ramp: `buildingMayFront`).
+- **Nearest-line hit:** what the shared search `nearestLine` (polyline.h) returns: which line, which segment of it, how far along that segment, and the nearest point.
+
+**What changed:**
+- **One record type,** `StatedFrontage` (road_network.h, beside `buildingMayFront`): street id, station, kerb, and the empty walkway slot (walkway id, metres along). It lives on `LotBuilding::frontage`, `DoorSpec::frontage` and `AuthoredPlace::frontage` (components.h), so the three holders share one type.
+- **One rule for the station and kerb.** The lines that turned a nearest-line hit into a station and a kerb were inside `RoadModel::frontageAt`. They are now one function, `frontageOnLine` (`roads/line_frontage.h`, defined in road_model.cpp beside `towardKerb`). `frontageAt` calls it, and so does the lot pass (`LotRoads::frontageOf`). The lot pass does no projection of its own. It is a small header of its own because the whole road model header cannot be included in city_lots.cpp (its `Section` type clashes with the building toolkit's).
+- **The lot pass's roads carry what the rule needs.** `LotRoad` gains each centre line's stations, copied from the model (`RoadModel::lineStations`) by `lotRoadInputs`, and `insideJunction` (a stretch of road inside a junction, which no place fronts: the model's `walkJoinOn` answers "fronts no street" there). A hand-made road's stations are its lengths from its first point (`lotRoadsFromLines`, by polyline.h `stations`). `LotRoads::Found` keeps the whole hit.
+- **The building:** at the facing step, the same `nearestFrontable` answer that turns it is kept: `b.frontage = lotRoads.frontageOf(street, b.site)`. That is from the lot's centroid at that moment (a building's `site` moves later to its plan's centre).
+- **Each door:** once every unit stands (after the party-wall pass, which grows some units again, doors and all), every door's foot is asked `frontageOf(foot)`: the same search and the same rule as `RoadModel::frontageAt(foot)`.
+- **To the sim:** the level loader copies the entrance door's frontage onto the place it makes (`AuthoredPlace::frontage`). Shop fronts and authored markers leave it empty. Nothing reads it yet.
+- **`lanes_tool regions-lots`** now also prints the grown part meshes' counts and a hash, and how many buildings and doors state a street, so two grows' geometry can be compared.
+
+**Not done (stopped, as the brief allowed):** `level_walk_join_...` still uses the fallback by position for doors. Wiring stated doors to `walkJoinOn` would mean carrying the frontage from `AuthoredPlace` into the old sim's `citysim::Place`. That is piece 6's switch-over, not a small test change, and the level tests cannot see the new fields until the S7 re-bake anyway.
+
+**Geometry is unchanged.** river_town's lots grown in memory (`RT_BUNDLE_WRITE=0 lanes_tool regions-lots`, nothing written), at HEAD (a temporary detached work tree, now deleted) and with this change:
+- 626 lots; the per-lot dump (site, size, yaw, heights, lot line, plan, every door's foot, facing and size, to 0.1 mm) is byte-identical;
+- parts: 70 meshes, 13,837,642 vertices, 20,523,288 indices, hash `afe8a5402046cc6f`, both times; flat (middle detail) parts: 70 meshes, 1,274,244 vertices, 1,707,684 indices, hash `fb1f1e49993f74c2`, both times.
+- What river_town's lots now state: 470 of 475 buildings and 858 of 863 doors name the street they front. The other 5 and 5 are nearest a stretch inside a junction, and say nothing.
+
+**Format and caches:** `kLotsFormatVersion` 5 -> 6 and `kLotsVersion` 14 -> 15 (the new fields in the lot record), `kLotsBuildTag` 2026-11-14.1 -> 2026-11-20.1. Every level that grows lots re-bakes at S7; no level was baked here and the level tests were not run. No road key, `kLanesBuildTag` or road model format moved.
+
+**Tests:**
+- `lot_cache` round trip: a building's and a door's frontage (street, station, kerb, walkway, along) come back equal; a park's says nothing.
+- `road_model_25` (lanes_tests): on its hand-made model (a freeway and a street), every grown building states the street it was turned to face, and every door's street, station and kerb equal `RoadModel::frontageAt` for its foot.
+- Suites: full build; lanes_tests 150/150 (road_model_25: 7 buildings, 8 doors stated and agreeing); driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes). No pinned value or hash moved.
+
+**One model:**
+- Concepts touched: roads (where a point fronts a street) and places (a lot's building and door).
+- The station and kerb are worked out once, in `roads/` (`frontageOnLine`), and the lot pass asks it; the street is found by the one shared search over the model's own list of lines, as before (ADR-0439). The stations copied onto `LotRoad` are the model's values in the lot pass's look-up made from the model on request, never saved and holding nothing of their own.
+- No road fact is computed outside `roads/`; no second structure of the roads. `StatedFrontage` is a value written onto the place's own record, not a table of its own.
+
+**For players:** nothing changes.
+
+**Revisit when** piece 6 switches the walks over (doors then ask `walkJoinOn` from this); when S6 makes walkways (the walkway slot gets filled); or if a building should state the street from its final site rather than from where it was turned.
+
+## ADR-0475 — The road model holds walkways: paths for people on foot beside no street, each stated with where its two ends land, laid in the lane level as walks and joined there, never by distance (#306 task 4, piece 9, S6a)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: people on foot can now be given paths that run beside no street (through a park, across a plaza, between two buildings), and the road model holds them like its sidewalks. Whoever draws such a path says, once, where each end of it lands: on a street's sidewalk, on another such path, or nowhere. The lane level (the table of paths the router walks) lays each path as a walk and joins it exactly there. Nothing is joined by "these two ends are close". No level has one yet: the next sitting (S6b) makes the lot pass state the paths it draws today, and deletes its second walking network.
+
+Words:
+- **Walkway:** a path for people on foot that is not a street's sidewalk: a park's path, a plaza's, a cut-through between buildings. Today these live only in the lot pass (`LotBuilding::walks`) and the old street map joins them to the sidewalks by distance (`NavGraph::appendFootpaths`).
+- **Walk:** one piece of path a person can take in the lane level, either way (ADR-0466): a sidewalk's stretch, a corner, a crossing, a turn-round, a footway's stretch, and now a walkway's stretch.
+- **Join:** the lane level's statement that a person at one walk's end may go on along another walk from its end.
+- **Station:** metres along a street's centre line. **Kerb:** which side of the street (+1: beside the traffic running along the centre line; -1: the other).
+- **The architect:** whoever draws the walkway. In S6b, the lot pass.
+- **Cut:** splitting one walk into two at a point along it, so a third walk can join both halves there.
+
+**The model** (`road_model.h`):
+- `ModelWalkway`: an id, a kind, a width, a centre line with a height at each point, and two ends (`WalkwayEnd`).
+- **Its kind** is a row of the path users' table (`assets/data/path_users.json`), which says who may use it: `footway` (already the word for a footway road, ADR-0465) for a path between buildings or across a plaza, and a new row `park_path` for a path through a park. Both are open to the walker and to no vehicle. A new kind is a new row (Kinds Are Data).
+- **An end** (`WalkwayEnd`) is the record a door already uses, `StatedFrontage` (ADR-0474), plus one flag:
+  - (a) a street's id, station and kerb: "this end lands on that street's sidewalk, there";
+  - (b) a walkway's id and metres along it: "this end lands on that walkway, there";
+  - (c) `deadEnd`: "this end meets nothing", said on purpose.
+  An end stating none of these, or two, is a fault.
+- `RoadModel::walkways` holds them, saved with the model (`kRoadModelFormat` 18).
+- **The one place they are supplied:** `stateWalkways(model, walkways)`. It keeps them and lays them in the model's lane level at once. It needs only the built model, not the road build: the lot pass runs after the road model is made, so S6b will state its walkways on the level's model after it is made (at load, and in the bake's lot producer), as one step.
+
+**The lane level** (`layWalkways`, `lanes/lane_level.cpp`, after the walks ADR-0466 lays):
+- Each walkway becomes a walk of its own (`Walk::modelWalkway`; its kind is asked of the model, `walkKind`, as for every walk). A walkway's walk keeps the metres along the walkway in `stationFrom` / `stationTo`, the fields a sidewalk's walk keeps its stations in.
+- **An end on a street** asks `walkJoinOn` (ADR-0468, the one answer for "where does a place on this street and kerb join the sidewalk") for the walk and the metres along it. Where that is part way along the sidewalk walk, the walk is cut there in two, the two halves joined to each other and to the walkway's end, the same way a corner's walk meets a sidewalk at a kerb end. Where it is the sidewalk walk's own end, the walkway joins everything already meeting that end.
+- **An end on another walkway** lands on that walkway's walk at the metres stated, cut and joined the same way. Two ends landing within a millimetre of each other make one cut.
+- **A dead end** meets nothing, and nothing reports it.
+- **A cut** keeps the walk's id for its first half and adds its other halves at the end of the list; the halves keep the model's ids (its sidewalk, its street) and their stations; what met the whole walk's far end now meets the last half's. No car path or other walk moves.
+- **What does not land is a fault, with why** (`WalkwayProblem`: the walkway, which end, `WalkwayFault`, and a sentence with the numbers), returned by `stateWalkways`. The end is left meeting nothing; the walkway is still laid. A walkway wrong as a whole is not laid at all.
+  - An end: names a street the model does not have; a station off that street; a kerb with no sidewalk there (the street has none on that kerb, or none at all); a station past where the sidewalk on that kerb runs (nearer a junction than where a person steps off the kerb: the architect should state the kerb end's station); a walkway the model does not have, its own walkway, a walkway that was not laid, or metres off that walkway's line; nothing at all, or two things.
+  - A whole walkway: no id, an id already used, a line of fewer than two points or no length or a height missing, no width, a kind the path users' table does not list.
+  - On a planned-only model (no lane level), or a lane level that already holds walkways: refused as a whole, nothing changed. To state them anew, lay the lane level again.
+- The walk ends ADR-0466 lists as meeting nothing (`LaneGraphBuild::walkEndsAlone`) never include a walkway's: a walkway's lone end is either stated a dead end, or one of the faults returned.
+
+**A door on a walkway:** `walkJoinOn(StatedFrontage)` (new) answers from what a place states. A walkway and metres along it: the walk of that walkway holding those metres (on either side of a cut), `held` when past its ends, `WalkJoin::walkway` set and no street. A street: the street's answer, as before (it calls `walkJoinOn(frontageOn(...))`). Neither: "fronts no street". A walkway the lane level does not hold: `NoWalkway`. `walkJoinNear` stays the one fallback by position.
+
+**The router** walks them with no case of its own: a walkway's walk is a plain walk, open or closed to a mover by its kind (`openTo`), joined by the lane level's joins (`findWalkRoute`, `bindWalker` unchanged).
+
+**Every level is unchanged:** with no walkway stated, `layWalkways` returns at once, and nothing else reads the new fields. `lanes_tool lanegraph` on traffic_lab and river_town gives the same lane graph dump, problems, reach and corner faults as the tool at 8c97b5da (built before the change). The road meshes are untouched (no builder code changed). No bake key, `kLanesBuildTag`, lots tag or `kLaneGraphBuildVersion` moved: what the road build makes is the same. The saved road model's format (18) and the lane graph's (LGRF 17) moved, and the path users' table's bytes (part of the saved road model's key), so each level's saved road model (`cache/roadmodel`) is made again once.
+
+**Tests** (`lanes_tests`):
+- `road_model_43_walkways_are_stated_and_laid_as_walks_joined_where_their_ends_land`, on the T of ADR-0466's tests with two walkways north of it:
+  - a walkway from the east street's north sidewalk at station 50 to the west street's at station 50: each sidewalk cut at station 50 into two walks, both meeting each other and the walkway's end, at the sidewalk point there; what met the sidewalks' ends before still does;
+  - a T of two walkways: a stem leaving the first where it passes x = 0 cuts it in two, and its start meets both halves; its other end is a stated dead end, meets nothing and is no fault;
+  - cars may use none of the walkway walks, the walker all; a pedestrian allowed sidewalks and walkways but no corner or crossing walks from one street to the other over the walkway (203 m), and, with footways shut, not at all; from the stem's dead end, down the stem and the walkway;
+  - a door stated on the walkway: either side of the cut, held past its end, closed to the mover, a walkway nobody stated; a door stated on a street answers as the street's question does;
+  - saved and read back whole; stating walkways a second time refused, nothing changed.
+- `road_model_44_a_walkway_end_that_does_not_land_is_a_fault_with_why`: one walkway per fault above, each said with its end and why; the faulty-ended ones laid with that end alone, the wrong-as-a-whole ones not laid; no sidewalk cut; a planned-only model refused.
+- `road_model_28b`: `park_path` is the walker's and no vehicle's.
+- Suites: full build; lanes_tests 152/152; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513. No pinned value or hash moved. Level tests not run and no level baked (no level states a walkway).
+
+**One model:**
+- Concepts touched: roads (walkways: paths for people on foot, where their ends land), paths' users (a new kind row).
+- A walkway's end reuses the door's record (`StatedFrontage`), and a street end lands by the one answer for a place on a street (`walkJoinOn`), not a second search. Its walks are the lane level's own, in its one list of walks, joined by its one list of joins. No road fact is computed outside `roads/`, and no second graph is made.
+- The lot pass's walks (`LotBuilding::walks`) and the street map's `appendFootpaths` remain the second walking network until S6b deletes them. Nothing here reads them.
+
+**For players:** nothing changes.
+
+**Left for S6b:** the lot pass states its paths as walkways (a kind per path: `park_path` for a park's, `footway` for the quad's and cut-throughs'), each end looked up once when drawn (the street, station and kerb by `frontageOnLine`, as a door's; another path by its id and metres; else a dead end); a door on a path records it in `StatedFrontage`'s walkway slot; the loader and the bake's lot producer call `stateWalkways` on the level's model and log the faults; then the street map's `appendFootpaths` and `LotBuilding::walks` go. A walkway that crosses a street's carriageway is not checked (nothing says where it may cross); S6b should draw none, or state a crossing.
+
+**Revisit when** S6b states the lot pass's paths (the faults then get counted per level); when a walkway should cross a street (a crossing of its own kind); or when a mover other than the walker may use a walkway (a row in the path users' table).
+
+## ADR-0476 — The lot pass states its paths as walkways of the one road model, each end looked up once; its own list of walks and the street map's joining by distance are gone (#306 task 4, piece 9, S6b)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: the paths the lot pass draws through parks, across the campus quad, down a paseo and into open lots used to be kept as loose line pieces on each lot (`LotBuilding::walks`), and the old street map stitched them to each other and to the sidewalks afterwards by "these ends are close". Now the lot pass hands them to the road model as walkways (ADR-0475): each path gets an id, a kind and its heights, and for each of its two ends the lot pass says, once, where it lands: on another path, on a street's sidewalk (which street, how far along, which side), or nowhere. The road model lays them as walks, and the street map reads them from the model. Nothing joins paths by distance after the lot pass has drawn them. The lot pass also now reads only the planned road model, so the lots never depend on the built one.
+
+Words:
+- **Walkway:** a path for people on foot beside no street (ADR-0475). **Walk:** one piece of path the walking router can take.
+- **Planned model:** the road model read straight from the road file, in milliseconds (streets, junctions, centre lines). **Built model:** the planned model plus everything the road build and the lane level add (lanes, turns, sidewalk walks); about 16 s to make, so it is cached.
+- **Station / kerb:** metres along a street's centre line / which side of it (ADR-0474).
+- **Tee:** a path's end landing part way along another path.
+- **Street map:** the old graph the city sim's people route on (`NavGraph`), to be removed in piece 10.
+
+**What changed:**
+- **The lot pass states its paths** (`city_lots.cpp`). Every place that drew a walk now calls `addPath`, giving a kind: `park_path` for a park's ring and spokes, `footway` for the quad's walks and round, the paseo's walks and an open lot's walk in and its inner paths. The drawing says what it draws; the kind is a row of `assets/data/path_users.json`. A walk that may not land on a street (the walk to a hall's quad door; a playground's and a garden's inner path) is drawn with both ends marked "no street".
+- **Where each end lands, looked up once** (`stateLotPaths`, the last step of the lot pass, after every unit stands; Glenn's option 1: draw as before, then look up once and record):
+  - each path gets the id `lot<i>.p<k>` and a height per point (the ground the lots grow on);
+  - an end within 0.8 m of another path's end lands on that path at its end; else an end within 1.6 m (or half the other's width and 0.2 m) of another path's middle lands there (a tee). The same numbers the street map joined by, now used once, by the architect, and written down;
+  - else, unless marked "no street", the street a building may front nearest the end within 14 m of its centre line: its id, station and kerb by `LotRoads::frontageOf`, the road model's own rule (`frontageOnLine`, ADR-0474);
+    - where that station lies past where the street's sidewalks run (by a junction, nearer it than where a person steps off the kerb), the end states the kerb end's station instead, if it is no more than 3 m past (`kKerbEndReach`); farther, a dead end. Where the sidewalks run comes from the model, not from the lot pass: `lotRoadInputs` records each street's two kerb ends (`LotRoad::sidewalkFrom` / `sidewalkTo`, from `kerbEndStation` at each end's junction arm, the station the lane level cuts the sidewalk at; the street's own end where it meets no junction);
+  - else a stated dead end. (An end whose nearest road is a stretch inside a junction is a dead end too: no street.)
+  - A door whose foot is within 4 m of a path and 6 m or more past the street's pavement opens onto that path: its `StatedFrontage` names the walkway and the metres along it, and no street (the paseo's shop doors, a hall's quad door).
+  - Each path is also looked along every 0.5 m between its ends for a carriageway under it; a path that crosses one is counted in the log. None does on river_town.
+  - Paths shorter than 0.5 m are dropped, as the street map dropped them.
+- **Handed to the model** (`lots_producer.h stateLotWalkways`, which calls `stateWalkways`, the one place walkways are supplied): every lot's walkways in the lots' order, on the model of THE CITY THE LOTS GROW ON.
+  - **How lots are tied to a city today:** a level runs ONE lot pass, over all its blocks, and it reads the streets of its LAST lane-built city (`lotRoadInputs(cities)`, as the lots producer reads that city's products). Every shipped level has exactly one lane-built city (island_8's towns are all one city, one road file), so that is the first city too. The rule is now one named function, `lotsCity(cities)`, which `lotRoadInputs`, `stateLotWalkways(cities, lots)` and the tool all use, so street ends always name streets of the model they are stated on. On a level with several cities whose lots' city is not the built one, `stateWalkways` refuses (no lane level) and the fault is logged, never dropped silently.
+  - The loader states them on that city's model as it publishes it, once a load, straight after the lots are read or grown, and logs the faults by kind (`describeWalkwayProblems`).
+  - The bake's lot producer states them on the model it obtains, only to say the faults (the saved road model holds no walkways; the loader states them again at every load). The count goes in the producer's report (`walkwayFaults`).
+- **The loop untangled** (the "lots read the planned model" decision). Before: the lot pass read the BUILT model (`obtainLevelRoadModel`'s cities) in the bake's producer, the loader's grow in place and the offline tracer, though it used only planned facts (each street's and junction inside stretch's centre line, stations, widths, class: `roadLines`). Now all three read `levelPlannedRoadModels(in)` (road_model_cache.h, new: each city's planned layer from its road file, no build, no cache). The lot output is the same: river_town's lot dump is byte-identical to S5's and the part meshes hash the same (below). It was small: about 20 lines.
+- **The second walking network is deleted:**
+  - `LotBuilding::walks` (and its `Walk` type) gone; `LotBuilding::walkways` (the road model's own `ModelWalkway`, moved to `roads/walkway.h` so the lot pass can hold it without the whole road model) in its place, saved in the lot record.
+  - `CitySimConfig::footpaths` and the loader's copy into it gone; `CityRenderSystem::footpaths_` gone.
+  - `NavGraph::appendFootpaths`' distance joining gone (merging ends within 0.8 m, teeing within 1.6 m, joining loose ends to the nearest street link within 14 m). It now takes a `FootpathPlan` the caller states: nodes, the walks between them, and which node joins which street link on which side.
+  - The street map gets its walks from the model: `appendWalkways(map, model, city)` (street_map.h, new) reads `RoadModel::walkways` and their stated ends: an end on another walkway is one node with it (cutting it part way for a tee); an end on a street joins the street map's link along that street holding its station, from the pavement on the stated kerb (`frontageOn(...).towards`); a dead end joins nothing. The city sim calls it for EVERY city whose model holds walkways, each joined to that city's own streets on the map.
+- **Every reader moved:** the loader (no `cfg.footpaths`; states the walkways), `CityRenderSystem` (`appendWalkways` instead of `appendFootpaths(segs)`), `PlaceMap::snapToWalks` (unchanged: it reads the street map's footpath links, which now come from the model), `lanes_tool regions-lots` (prints the walkways' counts and the faults), the tests below. Nothing else read `LotBuilding::walks`.
+
+**river_town, grown in memory** (`RT_BUNDLE_WRITE=0 lanes_tool regions-lots assets/levels/river_town.json`, nothing written):
+- 626 lots; the per-lot dump byte-identical to S5's; parts 70 meshes, 13,837,642 vertices, hash `afe8a5402046cc6f`; flat parts hash `fb1f1e49993f74c2` (both as S5).
+- 1,465 walkways (none dropped). Their 2,930 ends: 2,871 on another walkway, 29 on a street, 30 dead ends (1 because the nearest road is a stretch inside a junction, 1 because it lands too far past a sidewalk's kerb end).
+- 25 doors open onto a walkway; the doors stating a street go 858 -> 833 of 863.
+- 0 paths cross a carriageway.
+- Stated on city 0's model: 1,465 walkways, 0 faults.
+- The two paths of lot 557 that reach s329 (kerb -1) by a junction: before the kerb-end rule both were faults, landing past the sidewalk's end at station 69.30. Now `lot557.p2` (0.77 m past) states station 69.30, the kerb end, and lands there; `lot557.p8` (6.10 m past) is a stated dead end.
+
+**Format and caches:** `kLotsFormatVersion` 6 -> 7, `kLotsVersion` 15 -> 16 (the lot record holds walkways, not walks), `kLotsBuildTag` 2026-11-20.1 -> 2026-11-20.2. The road model's format is unchanged (S6a already saves walkways; the saved model holds none). No level was baked; the level tests were not run (S7 re-bakes).
+
+**Pins that read the footpaths** (level_tests, not run; they may move and are retaken at S7): `river_town_crowd` (its crowd hash, `0x83b99189cfc16fbd`), `level_walk_join_the_street_maps_lookups_beside_the_one_query` (river_town's door counts: 136 doors snapped to a park's or the quad's footpath), `level_brain_crowd_...` (its places and walks), `metro_pedestrians_walk_and_keep_apart` and every level whose crowd walks a park or the quad. No unit-suite pin moved.
+
+**Tests:**
+- `road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_states` (lanes_tests): the T of test 43 and a lot whose path runs in three pieces from the east road's north sidewalk to the west road's, with a door on its middle piece. Both street ends state the right street, station 50 and kerb (as `frontageAt` answers); the corners state the next piece and metres along; the door states the middle walkway and the metres along it, no street; handed to the model, nothing is a fault; a walker allowed sidewalks and footways only gets from one street to the other over the three pieces (203 m); `walkJoinOn` answers the door on its walkway.
+- `lot_cache` round trip: two walkways, every field, an end on a street, on a walkway and a dead end.
+- `footpaths_are_walked_across_a_block_and_never_driven`, `a_crowd_walks_a_footpath_to_work` (run_tests): the street map is told its walks by a stated plan (`FootpathPlan`), not by segments it joins itself. Re-pinned: `rep.tees == 1` dropped (tees are the caller's to count now) and the link count checked as a range (a street node over 80 m from the walk's end is not joined, as before); every other check unchanged and passing.
+- The driving's and the brain's include boundaries (`driving_includes_nothing_past_its_boundary`, `brain_includes_nothing_past_its_boundary`) list `roads/walkway.h`, which road_model.h now brings.
+- Suites: full build; lanes_tests 153/153; driving_tests 200/200; brain_tests 23/23; run_tests 1513/1513 (tolerance_literals passes).
+
+**One model:**
+- Concepts touched: roads (walkways and where their ends land), places (a door on a path), the street map (its walks).
+- The lot pass states facts once (where its paths' ends land) and the road model holds them; the road model's own rule gives a street end's station and kerb. No road fact is computed outside `roads/` except by those shared functions. The lot pass's second list of walks and the street map's distance joining are deleted, not kept beside the new ones.
+- Not yet one: the street map itself (piece 10), and the doors' walkway slot is read by nobody until piece 6.
+
+**For players:** after S7's re-bake, people cross parks, the quad and the paseos as before; one path of lot 557 on river_town (p8) ends at nothing where it reaches the street by a junction.
+
+**Revisit when** piece 6 starts places and walks from `walkJoinOn` (the doors on walkways then count); when a path ending far past a kerb end should be drawn to the kerb end instead (lot557.p8); when a level has several lane-built cities with lots of their own (a lot pass per city); or when a path must cross a street (a crossing of its own kind).
+
+## ADR-0477 — Two river_town "junctions" that were really two junctions each are stated as two: j14 becomes j14 and j144, j0 gives up its south-east T as j145 (#306 re-bake bundle, before S7)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: river_town's and agent_lab's road files (the same roads) state each junction as a list of the points where roads meet. The grouping that wrote those lists (ADR-0419) joins two points into one junction when a car could not wait between their stop lines. At j14 that chained two staggered crossings on Redwood Parkway into one six-arm junction. Fifth Avenue's two halves, 55 m apart, then counted as one "straight" that ran diagonally over a kerb corner (pictures in `out/corner_pictures/`). Glenn decided (2026-11-20) that such junctions are split before the one re-bake. j14 and j0 are now each stated as two junctions with a plain street between; j90, j119 and j135 are left as they are.
+
+Words:
+- **Point (node):** where road ends meet; a junction spread over several lists them (`nodes`, ADR-0425).
+- **Grouping:** `findJunctions`, which made the files' junction lists: two points become one junction when the street between their stop lines is shorter than the storage, 6.5 m (one car and its gap).
+- **Box edge / stop line:** where a junction's area begins along an arm, and where traffic stops, 5.2 m further back (ADR-0428, ADR-0471).
+- **Through pair:** two arms that are one street running on, stated by the one rule (`throughPairs`: arms leaving within 30 degrees of opposite ways).
+- **Staggered pair:** two side streets meeting a through road from opposite sides at different places along it.
+
+**The tool** (`lanes_tool layout <file> --split-junction J R1,R2,... --write`; road_layout.h `insertSplitJunctionText`):
+- J's stated points holding any of the named roads become a new junction. It takes the next id at the end of the list (`j<length>`) and is written after the list's last element. The rest stay as J, written again in place. No other junction moves.
+- Each part is made by the same function the grouping uses for a group of points. `factsOverNodes` (control_plan.cpp) is factored out of `findJunctions`; `junctionOverNodes` calls it for points named by road and station. That function gives the arms, the stretches inside, and the through pairs by the one rule. Each part's arms are then put in their ring, and it keeps J's control and each arm's stated signs.
+- The road between the parts is inside neither. The layout, run straight after, makes it a street from one part to the other.
+- **Names:** a street the file already names keeps its name. The run naming (`nameStreetRuns`) used to give a whole run its longest street's name, so a through pair joining two differently named streets renamed a whole chain (Fourteenth Street became Fifth Avenue on 10 streets). Now the run's name goes only to streets the file does not name. The three shipped files' layouts still write back byte for byte (`road_model_19`).
+
+**Which junctions, and why:**
+- **j14, split** (the parkway with Fifth Avenue and Fourteenth Street).
+  - Its four points along Redwood Parkway, north to south: s314 (Fourteenth west) at C; s21 (Fifth north-east) at D, 23 m on; s315 (Fifth west) at B, 36 m on; s18 (Fourteenth south-east) at A, 30 m on.
+  - `--split-junction j14 s315,s18,s290`. Now **j14** = C+D (arms s294, s314, s313, s21; through s21-s314, s294-s313) and **j144** = B+A (arms s313, s315, s290, s18; through s18-s315, s290-s313).
+  - s313 from 23.04 to 59.38 m (36.3 m) is now a street, "Redwood Parkway", from j14 to j144. It has 14.3 m of plain street between the two box edges, but only **3.9 m between the facing stop lines**: less than the storage. That is why the grouping had joined them, and it is the one stated exception in `road_model_39`.
+  - By the rule, Fifth Avenue no longer runs straight on across the parkway: s21 runs on as s314 at j14, and s315 as s18 at j144. The names stay.
+- **j0, split** (the arterial s274 with the boulevard pair bv1).
+  - Its south-east point is a T: s38 meets the arterial where s272 runs on as s274_0. It lies 28.6 m along s274_0 from the boulevard's point.
+  - `--split-junction j0 s38,s272`. The T is **j145** (arms s38, s274_0, s272; through s272-s274_0); the rest stays j0.
+  - Split because the facing stop lines leave 6.6 m (at least the storage), with 17 m of plain street between the box edges.
+  - j0's other gaps stay inside it. bv1_in to bv1_out (40 m) is one divided road, one junction by construction. The s1 link to the s0/s2 T (25 m) has no room: its stop lines would overlap.
+- **j90, left:** three points 6-14 m apart, one compact junction.
+- **j119, left:** its far point (s230, 31-39 m west) lies inside the junction's one drawn paved area; the drawn junction is one place.
+- **j135, left:**
+  - A crossroads and a staggered pair of local T's, 25 m and 22 m apart along the diagonal arterial.
+  - Split, the s321 stretch between them would have its two stop lines overlap by 0.5 m, and its box edges 2 m apart.
+  - Tried on a copy, not kept.
+
+**Before and after** (`lanes_tool lanegraph` with step 8's seven vehicles, bus, car, goods, moped, motorcycle, truck, van; `lanes_tool build`; `lanes_tests`). river_town and agent_lab give the same numbers.
+
+| | before | after |
+|---|---|---|
+| Stated turns that fit no vehicle (none of the seven may take them) | 137 | 113 |
+| ... at j14 (now j14 + j144) / j0 (now j0 + j145) | 14 / 17 | 0 / 7 |
+| Stated turns with a corner fault for some vehicle; for the car | 722; 327 | 698; 299 |
+| Car's lane paths reachable with lane changes / without | 82.3% / 47.3% | 82.5% / 48.6% |
+| Bus, with / without | 62.0% / 28.0% | 62.2% / 28.2% |
+| Corner walks laid; corners with no walk, kerb end out (B1) / two pieces (B2) | 555; 13 / 3 | 561; 13 / 1 |
+| Lone walk ends; sidewalks cut off (largest part on foot) | 31; 10 (604 of 614) | 31; 10 (608 of 618) |
+| Deck cracks / odd boundaries / roads over their grade | 335 / 46 / 38 | 335 / 46 / 38 |
+
+- The two-piece corners gone are j0 6-0 and j14 5-0, the walks round a block face between kerb ends 37-48 m out (ADR-0472). Those kerbs are now each street's own sidewalk between two junctions.
+- **The mesh:** the build's checks and its plan SVG are byte-identical. Only the paint moves: arrows 698 to 701, lane lines +97 m dashed, +42 m solid, the new stop bars and crosswalks on s313 and s274_0. The bake key sees the stated arms (ADR-0428), so river_town and agent_lab re-bake at S7.
+
+**Picture:** `out/corner_pictures/split_j14_before_after.png`: j14 before (one junction over four points) and after (j14 and j144, the parkway between them a street, the new paint on it).
+
+**Checked:**
+- `lanes_tool junctions <file> --top 100000` (the grouping's own view of the roads, which do not change) prints the same lines before and after, apart from the file's path on its first line.
+- The files' junction lists: j0..j143 in place, only j0 and j14 rewritten, j144 and j145 at the end.
+- `layout --write` on a copy prints "unchanged, byte for byte"; `--arm-order`: 0 of 146 differ.
+
+**Tests:**
+- `road_model_46_the_staggered_junctions_are_stated_apart` (new). In both files:
+  - the ids, j0..j145 in order;
+  - the three parts' arms and through pairs;
+  - s313 as a street from j14 to j144, with its name, and the other streets' names;
+  - `junctionOverNodes` over j14's and j144's points together gives back the grouping's one six-arm junction;
+  - a split that does not divide the points is refused.
+- Re-pinned, old to new, why in each comment:
+  - `road_model_19` (junctions listing their points 30 to 31);
+  - `road_model_39` (the two short facing stop lines on s313 as the one stated exception, none before; too-close arms: j14:0 out, j0:5 in, still 26);
+  - `road_model_41` (two-piece corners 3 to 1).
+- Suites: lanes_tests 154/154, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513.
+
+**Format and caches:** no format, no tag. Each file's bytes change its bake key and its saved road model's key.
+
+**One model:**
+- Concepts touched: roads (which points are one junction; streets' names).
+- A junction from its points is still made by one function, now named and used by both the grouping and the split.
+- No road fact is computed outside `roads/`, and no second structure was made.
+
+**For players** (after S7's re-bake): at river_town's Redwood Parkway and Fifth Avenue the two staggered crossings are two junctions with their own stop lines and crosswalks on the parkway between them. Cars can now take every turn there that the old six-arm junction refused (14 turns no vehicle could take, now 0).
+
+**Revisit when** the planner states junctions as it plans them (no grouping by storage); when Glenn wants j135 or j0's link split anyway (their stop lines overlap: the box edge rule would need a cap there too); or when a split junction's short street (s313, 3.9 m between stop lines) shows up as a queueing problem in driving.
+
+## ADR-0478 — The one re-bake for the #306 bundle: five levels baked, the level tests run, the pins that moved retaken once; the near crowd got worse and was not pinned (#306 task 4, S7)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: ADR-0469 to ADR-0477 changed the roads and the lots without baking any level. This is the one bake that picks them all up, and the one pass over the level tests that read those levels. Every pinned value that moved is retaken here, with old, new and why in the test's comment. One test moved the wrong way (the near crowd's physics cars now hit things). It was not pinned, and is listed under "Found" for a sitting of its own.
+
+Words:
+- **Bake / bundle:** a level's built city (roads, lots, buildings), saved under `cache/levels/` and reused while its key matches (docs/bakes.md).
+- **Pin:** a value a test checks exactly, taken from a run that was looked at, so any change to it is seen.
+- **Cut off:** a place whose sidewalk is in a part of the walks that cannot be walked to from the largest part.
+- **Held past a sidewalk's end:** the place's stated station lies beyond where its kerb's sidewalk stops, so it is joined to that walk's nearest end instead.
+- **Near crowd:** `near_tier_in_the_crowd_follows_the_player` (physics_tests): brain_crowd's cars, where those within reach of a stand-in player are switched into Jolt physics cars.
+
+**What went into the bake** (ADR-0469..0477):
+- the at-grade rule (0470);
+- box edges set back by the angle the roads meet at (0471);
+- sidewalks mitred at kinks (0472);
+- the road-file fixes: s208, tn0/tn1 ramps, smooth loop ramps (0473);
+- lot frontage, lots format 6 (0474);
+- stated walkways in the road model, and lots stating their paths as walkways, lots format 7 (0475, 0476);
+- the staggered junctions split: j14/j144 and j0/j145 (0477).
+
+Tags: `kLanesBuildTag` 2026-11-20.3, `kLotsBuildTag` 2026-11-20.2, `kLotsFormatVersion` 7, `kRoadModelFormat` 18.
+
+**The bakes** (`build-viewer/rt_bake assets/levels/<level>.json`, one at a time, under `ulimit -v 30000000`):
+
+| Level | Time | Summary |
+|---|---|---|
+| traffic_lab | 33 s | built city: 329 edges, 1118 lanes, 227 cell meshes, 113 pavement holes, 277k triangles (12.4 s); 24.3 MB, 2% shared with the last bundle |
+| brain_lab | 0 s | up to date: the same bundle as traffic_lab (the same roads, no lots) |
+| brain_crowd | 0 s | up to date: the same bundle |
+| river_town | 169 s | built city (1434 lanes, 323 cell meshes, 142 holes, 534k triangles, 37.4 s) and lots (130 blocks, 625 lots, 626 buildings, 88.1 s; 1465 paths stated as walkways, 0 crossing a carriageway, 25 doors onto a path); 229.9 MB, 28% shared |
+| agent_lab | 169 s | the same roads and lots as river_town; 229.9 MB, 28% shared |
+
+No crash, no hang. metro_v2_test was baked inside `metro_pedestrians_walk_and_keep_apart` (124 s).
+
+**Re-pinned** (each test comment says old -> new -> why):
+
+| Test | Value | Old | New | Why |
+|---|---|---|---|---|
+| `level_traffic_lab_v2_drives` | five-minute state hash | 0x55109fe9a8e247b1 | 0x9956a73de1425d39 | stop lines moved (0471), every ramp reachable (0472), s208 stated (0473): routes and waits moved. Arrivals 398 -> 399, mean speed 8.85 -> 9.67 m/s, standing at the end 78 -> 52 |
+| `level_traffic_lab_v2_drives` | ramps used / unused | 6 / {1111, 1114} | 8 / none | j153's and j154's turns fit now (0472) |
+| `..._one_road_model_is_published_and_driven_on` | lane-level paths | 3364 (stale: 3370 at ADR-0453) | 3358 | the turns moved with the box edges, the mitres and s208 |
+| same | kerb spaces: streets / spaces / metres / outlines | 129 / 1098 / 7686 / 1098 | 127 / 1080 / 7560 / 1080 | spaces start 10 m behind a stop line; stop lines stand further back at sharp angles (0471), and s208 gained one (0473) |
+| `level_brain_lab_one_resident_makes_the_trip` | red lights stood at | 3 | 1 | another route, 13 junctions; the drive 14024 -> 8240 ticks |
+| `level_brain_crowd_the_residents_make_their_day` | cars / with one; most on the road (minute); busy minutes; trips; parked; another place; arrivals; no plan; hash | 231 / 249; 91 (10); 13; 261; 205; 1; 422; 1; 0xf0003605a4cb6ba2 | 229 / 246; 88 (11); 12; 233; 179; 0; 426; 0; 0xb67879f5b6ec7210 | no place is cut off any more, so more people walk and fewer drive; fewer kerb spaces, fewer cars; rings 0 |
+| `level_river_town_crowd_drives_on_the_new_driving` | cars / with one; most on the road; trips; parked; walks blocked; another place; arrivals; no plan; hash | 388 / 415; 117; 259; 141; 7; 6; 621; 225; 0x83b99189cfc16fbd | 364 / 393; 135; 322; 210; 11; 9; 753; 9; 0xc02460bd06f44189 | places cut off 97 -> 23, so nobody is stuck in no_way (8 -> 0). Walks blocked and another place are a little worse |
+| `level_walk_join_..._beside_the_one_query`, brain_crowd | cut off; placing / starting / finishing; fallback | 4; 445 / 405 / 405; 445 | 0; 447 / 411 / 411; 447 | corners at sharp angles have walks (0471, 0472) |
+| same, river_town | cut off; placing / starting / finishing; fallback; doors / joined / agree | 97; 751 / 749 / 746; 764; 913 / 902 / 746 | 23; 747 / 745 / 742; 754; 891 / 882 / 821 | cut off 97 -> 23. The street map's nearest is the cross street at a corner 30 -> 40 times (box edges stand back). Doors snapping to a footpath 136 -> 50 (paths are walkways, 0476) |
+
+`level_walk_join` now also prints the places held past a sidewalk's end, per street. `..._one_road_model_...` prints the kerb metres and banded streets it pins.
+
+**Known failures, before -> after:**
+- brain_crowd, walkers waiting away from a kerb end (line 275): 75.45% -> 62.68% of samples. Better, still failing (the target is under 5%).
+- v2_drives, the measurements table (line 1011): only "how a queue empties" fails, 2.40 -> 3.03 s a car (over 8 gaps; turns included 3.09 -> 3.08). Worse, on a thin sample.
+- v2_drives, cars over kLongestStand (line 1035): 12 -> 10; the longest 142.9 -> 169.5 s (car 9, refused room beyond).
+- The stale 3364-paths pin: retaken (above); that test passes.
+- The near crowd's off-lane worst (line 1108): much worse, below.
+
+**Found:**
+- **Stopped, not pinned: the near crowd got worse.**
+  - Before (the C3b build): chassis hits on walkers 0, on other things 0; longest off its lane 9.5 s; most near 13; in 83, out 63; refused 3; hash 0x59168988decd4c99.
+  - Now: hits on walkers **2**, on other things **65** (limit 8); off its lane **220.7 s** (car 148, 1.19 m off); most near 20; in 72, out 55; refused 16 (one "a wreck", one "not upright"); hash 0xd389302ce3688a32.
+  - Where: cars 148, 88 and 21 hit an entity that is not a car on traffic_lab's s211 near j7, at about (-364, -16 to -29), 0.8-2.8 m from the junction road's centre line. Car 148 hit it at 7.44 m/s, then stood off its lane on s24 near j19 (-334, 179).
+  - j7 and j19 are both junctions whose box edges ADR-0471 moved (their crosswalk kerb ends had been in another road's carriageway).
+  - What the cars hit is not yet known. It could be street furniture placed from the moved arms, or a mitre piece of kerb or sidewalk (ADR-0472) standing in a junction road.
+  - The lane-car tests pass, and so do the other 11 near_tier cases.
+  - It needs a sitting: look at those two spots in the viewer.
+- **`metro_pedestrians_walk_and_keep_apart` fails before anyone walks, for a reason outside this bundle.** The city does not build on metro_v2_test. Its road file states no points for 16 spread junctions (j143..j200: "run `lanes_tool layout <road file> --nodes --write` once"). The file was last written 2026-11-13, before ADR-0425 made the street map need them. Not fixed here.
+- **One new cut-off part:** river_town's s169 is a part of its own, one walk, holding 20 places. It was not among ADR-0468's five parts. The other 3 cut-off places are one each on s10, s13 and s172.
+- **Places held past their sidewalk's end:**
+  - brain_crowd: 0 -> 2 (s33 8 m, s57 6 m).
+  - river_town: 0 -> 78. Most are the places once cut off on s10 (29, up to 40 m) and s13 (4, up to 38 m), where the box edges at j7/j8 (ADR-0471's "too close" pairs) leave little sidewalk. They can be reached now, but a walk ends up to 40 m from the place.
+- **Longest stands (not pinned):**
+  - brain_crowd: 341 s (car 123) -> 563 s (car 159, junction 93, from minute 15).
+  - river_town: 1480.9 s (car 76) -> 1540.6 s (car 237, giving way to people crossing from minute 5). The known jam, in another car.
+- `level_river_town_streets_are_drivable_grades` passes (the steepest 67.1% at (393, 274), the viaduct its ratchet names).
+
+**Suites:**
+- level_tests: traffic_lab filter 10/11 (v2_drives's two known), brain_lab 12/12, brain_crowd its one known, river_town 2/2, walk_join 1/1, metro_pedestrians 0/1 (above).
+- physics_tests near_tier: 11/12 (the near crowd, above).
+- lanes_tests 154/154, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513.
+
+**Prune (dry run only, `rt_bake --prune`):**
+- 24 bundles under cache/levels, 7 stale (1.43 GB).
+- 178 terrain, population and road model files, 44 stale (810.4 MB); 46 with no record of their levels (2.41 GB), kept.
+- Nothing was deleted.
+
+**Format and caches:** no tag, format or code moved; tests and this ADR only.
+
+**Revisit when** the near crowd's hits at j7/j19 are found (then retake its pins, and check whether the fix moves any pin here); when metro_v2_test's road file is given its points; or when s169's walk is joined.

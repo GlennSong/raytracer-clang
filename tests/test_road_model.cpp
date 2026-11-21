@@ -1929,9 +1929,11 @@ TEST_CASE(road_model_18_the_shipped_road_files_state_their_arms_in_their_ring) {
 // A street's end is at a junction or carries on, never both: counted here, with each file's own numbers.
 TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_nothing) {
     struct Shipped { const char* file; std::size_t streetsCarryingOn, carryOnEnds, junctionsWithNodes; };
+    // (river_town / agent_lab junctions listing their nodes 30 -> 31, ADR-0477: j14 stated as two, each over two of its
+    // points (j14, j144); j0's split-off T, j145, is over one point and lists none)
     const Shipped files[] = {{"planned/traffic_lab_lanelab.json", 0, 0, 15},
-                             {"planned/river_town_lanelab.json", 22, 32, 30},
-                             {"planned/agent_lab_lanelab.json", 22, 32, 30}};
+                             {"planned/river_town_lanelab.json", 22, 32, 31},
+                             {"planned/agent_lab_lanelab.json", 22, 32, 31}};
     for (const Shipped& f : files) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.file;
         const std::string text = slurp(path);
@@ -2579,9 +2581,19 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
     readLotGrowParams(LotCitysim::of(cityJson), lp);
     lp.roadMargin = 0;
     LotPlanDebug plan;
-    int faced = 0, nearerFreeway = 0;
+    int faced = 0, nearerFreeway = 0, doorsStated = 0;
     for (const LotBuilding& b : growLotBuildings(blocks, lp, &plan, nullptr, &roads, 0.0)) {
         if (b.units.empty()) continue;
+        // WHAT THE LOT PASS RECORDS (ADR-0474): the street the building was turned to face, and each door's street,
+        // station and kerb, the same answer the model gives for the door's foot (both by frontageOnLine)
+        CHECK(b.frontage.street == "st" && b.frontage.dir == 1 && !b.frontage.onWalkway());
+        for (const BuildingUnit& u : b.units)
+            for (const DoorSpec& d : u.doors) {
+                const RoadFrontage at = hand.frontageAt(d.foot);
+                CHECK(at.valid() && at.street.valid() && d.frontage.street == hand.streets[at.street.index].id);
+                CHECK(approxEqual(d.frontage.station, at.station, kSamePoint) && d.frontage.dir == at.dir && !d.frontage.onWalkway());
+                ++doorsStated;
+            }
         const RoadFrontage front = hand.frontageAt(b.site);
         CHECK(front.valid() && front.street == streetNamed(hand, "st"));
         if (!front.valid()) continue;
@@ -2591,8 +2603,10 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
         ++faced;
         nearerFreeway += b.site.y < 40.0 ? 1 : 0;   // (y = 40 is halfway between the two centre lines)
     }
-    std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line\n", faced, nearerFreeway);
-    CHECK(faced >= 2 && nearerFreeway >= 1);
+    std::printf("    [frontage] %d buildings face the street the model answers, %d of them nearer the freeway's centre line; %d doors "
+                "record the model's street, station and kerb\n",
+                faced, nearerFreeway, doorsStated);
+    CHECK(faced >= 2 && nearerFreeway >= 1 && doorsStated >= faced);
 }
 
 // ---- 26. the model's kerb spaces as places the agent brain can hold (ADR-0440) -------------------------------------------
@@ -2986,7 +3000,7 @@ TEST_CASE(road_model_28b_who_may_use_which_kind_of_path_is_its_data_file) {
     const PathMover* vehicles = u.mover("vehicles");
     const PathMover* walker = u.mover("walker");
     CHECK(vehicles && vehicles->vehicles && walker && !walker->vehicles);
-    for (const char* kind : {"sidewalk", "corner", "crossing", "turn_round", "footway"})
+    for (const char* kind : {"sidewalk", "corner", "crossing", "turn_round", "footway", "park_path"})
         CHECK(u.mayUse("walker", kind) && !u.mayUse("vehicles", kind));
     CHECK(!u.deadEndJoin.empty() && u.usersOf(u.deadEndJoin));
     CHECK(!u.usersOf("no_such_kind") && !u.mayUse("walker", "no_such_kind"));
@@ -4493,7 +4507,9 @@ TEST_CASE(road_model_38_the_box_edge_at_the_angle_the_arms_meet) {
 TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction) {
     const std::map<std::string, std::set<std::string>> knownSqueezed = {
         {"traffic_lab", {"j0:5", "j0:6", "j22:0", "j24:0", "j37:3", "j70:0", "j70:1", "j84:3", "j84:4"}},
-        {"river_town", {"j135:4", "j135:5", "j14:0", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
+        // (ADR-0477: j14:0 (s21, too close to j13) -> gone, j14 stated as two and s21 now its arm 3 with the room the
+        // square rule gives; j0:5 (s274_0, too close to j145) new, j0's T stated apart 28.6 m along s274_0)
+        {"river_town", {"j135:4", "j135:5", "j0:5", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
                         "j72:0", "j72:1", "j73:0", "j75:0", "j75:2", "j7:0", "j7:1", "j8:2", "j8:3", "j90:0", "j90:4", "j91:2", "j91:3"}}};
     for (const char* level : {"traffic_lab", "river_town", "agent_lab"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
@@ -4508,9 +4524,11 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
             for (const ModelStretch& in : J.inside)
                 for (const Real s : {in.from, in.to}) onRoad[in.road].push_back(Point{j, s, -1, false});
         }
-        uint32_t pairs = 0, short_ = 0, past = 0;
+        uint32_t pairs = 0, past = 0;
+        std::set<std::string> short_;
         for (uint32_t j = 0; j < m.junctions.size(); ++j)
-            for (const ModelArm& a : m.junctions[j].arms) {
+            for (std::size_t ai = 0; ai < m.junctions[j].arms.size(); ++ai) {
+                const ModelArm& a = m.junctions[j].arms[ai];
                 if (!stated(a.stopLine)) continue;
                 const Real away = a.spineIn ? -1 : 1, back = (a.stopLine - a.station) * away;
                 const Point* facing = nullptr;
@@ -4525,7 +4543,7 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
                 const ModelArm& b = m.junctions[facing->junction].arms[static_cast<std::size_t>(facing->arm)];
                 const Real backB = (b.stopLine - b.station) * (b.spineIn ? -1 : 1);
                 const Real between = (facing->station - a.station) * away - back - backB;
-                if (between < g.rules.storage - kSamePoint) ++short_;
+                if (between < g.rules.storage - kSamePoint) short_.insert(m.junctions[j].id + ":" + std::to_string(ai));
             }
         std::set<std::string> squeezed;
         for (const std::string& p : m.problems) {
@@ -4537,9 +4555,13 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         }
         std::printf("      %s: %u arms facing the next junction along their road, %u with less than the storage between the stop "
                     "lines, %u stop lines past another junction's point; %zu arms too close to the next junction for their angle\n",
-                    level, pairs, short_, past, squeezed.size());
-        CHECK(pairs > 500u && short_ == 0u && past == 0u);
+                    level, pairs, static_cast<unsigned>(short_.size()), past, squeezed.size());
         const std::string known = std::string(level) == "agent_lab" ? "river_town" : level;   // (agent_lab has river_town's roads)
+        // (ADR-0477, the one stated exception: Glenn split river_town's j14 into j14 and j144, whose facing stop lines on
+        // Redwood Parkway's s313 leave 3.9 m between them, less than the 6.5 m storage -- the reason the grouping had made
+        // them one junction. Was none.)
+        const std::set<std::string> knownShort = known == "river_town" ? std::set<std::string>({"j14:2", "j144:0"}) : std::set<std::string>();
+        CHECK(pairs > 500u && short_ == knownShort && past == 0u);
         CHECK(squeezed == knownSqueezed.at(known));
     }
 }
@@ -4749,10 +4771,11 @@ TEST_CASE(road_model_41_the_shipped_kinks_are_mitred) {
     // the corners left with no walk because the drawn sidewalks by their kerb ends are two pieces (junction id, arms)
     const std::map<std::string, std::set<std::string>> knownTwoPieces = {
         {"traffic_lab", {}},
-        // j0 6-0, j14 5-0: S2's box edges put their kerb ends 37-48 m out, and the walk round the block between them leaves
-        // the corner window (kCornerWindow); j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's
-        // carriageway (ADR-0471: j90 arm 0 too close to j120 for its angle)
-        {"river_town", {"j0 6-0", "j14 5-0", "j90 0-1"}}};
+        // j90 0-1: arm 0's kerb end lies on a scrap of s228's sidewalk inside s227's carriageway (ADR-0471: j90 arm 0 too
+        // close to j120 for its angle). (Was also j0 6-0 and j14 5-0, whose kerb ends S2 put 37-48 m out, the walk between
+        // them round a block face; since ADR-0477 states j14 and j0 each as two junctions, those kerbs are each street's
+        // own sidewalk between two junctions, and no corner joins them: 3 -> 1.)
+        {"river_town", {"j90 0-1"}}};
     for (const char* level : {"traffic_lab", "river_town"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
         const std::unique_ptr<Result> r =
@@ -4876,4 +4899,427 @@ TEST_CASE(road_model_42_the_road_files_fixes_hold) {
     // a road whose end is not at the junction is refused, and says how far it ends from it
     CHECK(insertArmText(labText, lab, "j95", "s182", nullptr, &err).empty());
     CHECK(err.find("endpoint tolerance") != std::string::npos);
+}
+
+// ---- 43. walkways: paths beside no street, stated with where their ends land (ADR-0475) ------------------------------------
+
+namespace {
+// A walkway end that lands on a street's kerb (the frontage's street id, station and kerb), on another walkway (its id and
+// the metres along it), or a stated dead end.
+WalkwayEnd endOnStreet(const RoadModel& m, const RoadFrontage& f) {
+    WalkwayEnd e;
+    e.meets.street = m.streets[f.street.index].id;
+    e.meets.station = f.station;
+    e.meets.dir = f.dir;
+    return e;
+}
+WalkwayEnd endOnWalkway(const std::string& id, Real along) {
+    WalkwayEnd e;
+    e.meets.walkway = id;
+    e.meets.along = along;
+    return e;
+}
+WalkwayEnd deadEndHere() {
+    WalkwayEnd e;
+    e.deadEnd = true;
+    return e;
+}
+constexpr Real kTestWalkwayWidth = 2.0;   // m
+ModelWalkway walkwayOf(const std::string& id, const std::string& kind, const std::vector<Vec2>& line, const WalkwayEnd& a,
+                       const WalkwayEnd& b) {
+    ModelWalkway w;
+    w.id = id;
+    w.kind = kind;
+    w.width = kTestWalkwayWidth;
+    w.line = line;
+    w.heights.assign(line.size(), 0.0);
+    w.ends = {a, b};
+    return w;
+}
+// The lane level's walks of model walkway `way`, in order along it.
+std::vector<uint32_t> walksOfWalkway(const LaneGraph& G, uint32_t way) {
+    std::vector<uint32_t> out;
+    for (uint32_t w = 0; w < G.walks.size(); ++w)
+        if (G.walks[w].modelWalkway == way) out.push_back(w);
+    std::sort(out.begin(), out.end(), [&](uint32_t a, uint32_t b) { return G.walks[a].stationFrom < G.walks[b].stationFrom; });
+    return out;
+}
+// The lane level's walks along one street's kerb that were one sidewalk walk (its model walk), in order along the street.
+std::vector<uint32_t> sidewalkPieces(const LaneGraph& G, const Walk& whole) {
+    std::vector<uint32_t> out;
+    for (uint32_t w = 0; w < G.walks.size(); ++w)
+        if (G.walks[w].modelWalk == whole.modelWalk && G.walks[w].street == whole.street) out.push_back(w);
+    std::sort(out.begin(), out.end(), [&](uint32_t a, uint32_t b) { return G.walks[a].stationFrom < G.walks[b].stationFrom; });
+    return out;
+}
+void printWalkwayProblems(const std::vector<WalkwayProblem>& problems) {
+    for (const WalkwayProblem& p : problems) std::printf("      walkway %u end %d: %s\n", p.walkway, p.end, p.why.c_str());
+}
+constexpr Real kOnTheCut = 0.05;   // m: a cut walk's end stands on the stated station's sidewalk point (the slice's rounding)
+}  // namespace
+
+TEST_CASE(road_model_43_walkways_are_stated_and_laid_as_walks_joined_where_their_ends_land) {
+    // THE T (walkTee) and two walkways north of it, where no road is. The BAR runs from the east road's north sidewalk at
+    // station 50 up to y = 30, west to above the west road, and down to its north sidewalk at station 50 (where each
+    // end lands: the street, station and kerb, as the lot pass will state it). The STEM leaves the bar where it passes
+    // x = 0 and runs north 30 m to a stated dead end.
+    BuiltScene s = builtScene(walkTee());
+    CHECK(s.report.error.empty());
+    RoadModel& m = s.m;
+    const LaneGraph& G = m.laneLevel;
+    const RoadFrontage eastN = m.frontageAt(Vec2(50, 20)), westN = m.frontageAt(Vec2(-50, 20));
+    CHECK(eastN.valid() && westN.valid());
+    if (!eastN.valid() || !westN.valid()) return;
+    CHECK(m.streets[eastN.street.index].road == "east" && m.streets[westN.street.index].road == "west");
+    Vec2 eastAt, westAt;
+    CHECK(m.sidewalkBeside(eastN, eastAt) && m.sidewalkBeside(westN, westAt));
+    const uint32_t eastSide = sidewalkOf(m, "east", eastN.dir), westSide = sidewalkOf(m, "west", westN.dir);
+    CHECK(eastSide != kNoIndex && westSide != kNoIndex);
+    if (eastSide == kNoIndex || westSide == kNoIndex) return;
+    const std::size_t walksBefore = G.walks.size();
+    const Walk eastWhole = G.walks[eastSide], westWhole = G.walks[westSide];
+
+    const std::vector<Vec2> barLine = {eastAt, Vec2(eastAt.x, 30), Vec2(westAt.x, 30), westAt};
+    const Real stemAt = stations(barLine)[1] + eastAt.x;   // the bar's metres along where it passes x = 0
+    const Real barLength = stations(barLine).back();
+    const std::vector<WalkwayProblem> problems =
+        stateWalkways(m, {walkwayOf("bar", "footway", barLine, endOnStreet(m, eastN), endOnStreet(m, westN)),
+                          walkwayOf("stem", "park_path", {Vec2(0, 30), Vec2(0, 60)}, endOnWalkway("bar", stemAt), deadEndHere())});
+    printWalkwayProblems(problems);
+    CHECK(problems.empty());
+    for (const std::string& p : validate(G)) std::printf("      [lane level] %s\n", p.c_str());
+    CHECK(validate(G).empty());
+    // two walkways, the bar cut where the stem lands, each street's sidewalk cut where the bar lands
+    CHECK(G.walks.size() == walksBefore + 5);
+    const std::vector<uint32_t> bar = walksOfWalkway(G, 0), stem = walksOfWalkway(G, 1);
+    const std::vector<uint32_t> eastPieces = sidewalkPieces(G, eastWhole), westPieces = sidewalkPieces(G, westWhole);
+    CHECK(bar.size() == 2u && stem.size() == 1u && eastPieces.size() == 2u && westPieces.size() == 2u);
+    if (bar.size() != 2u || stem.size() != 1u || eastPieces.size() != 2u || westPieces.size() != 2u) return;
+    CHECK(m.walkKind(WalkId(bar[0])) == "footway" && m.walkKind(WalkId(stem[0])) == "park_path");
+    CHECK(approxEqual(G.walks[bar[0]].stationTo, stemAt, kWrittenStation) && approxEqual(G.walks[bar[1]].stationFrom, stemAt, kWrittenStation));
+    CHECK(approxEqual(G.walks[bar[0]].length + G.walks[bar[1]].length, barLength, kOnTheCut));
+
+    // KERB JOINS: each street's sidewalk is cut at station 50, its two pieces meet each other and the bar's end there,
+    // at the sidewalk point of that station; what met the whole sidewalk's ends meets the pieces' (none lost)
+    const auto kerbJoin = [&](const std::vector<uint32_t>& pieces, const Walk& whole, const WalkEnd& barEnd, const Vec2& at) {
+        const Walk& a = G.walks[pieces[0]];
+        const Walk& b = G.walks[pieces[1]];
+        CHECK(approxEqual(a.stationFrom, whole.stationFrom, kWrittenStation) && approxEqual(a.stationTo, 50.0, kWrittenStation));
+        CHECK(approxEqual(b.stationFrom, 50.0, kWrittenStation) && approxEqual(b.stationTo, whole.stationTo, kWrittenStation));
+        CHECK(distance(G.pointAt(WalkId(pieces[0]), a.length), at) < kOnTheCut && distance(G.pointAt(WalkId(pieces[1]), 0), at) < kOnTheCut);
+        const WalkEnd aEnd{WalkId(pieces[0]), 1}, bStart{WalkId(pieces[1]), 0};
+        CHECK(walkEndsMeet(G, aEnd, bStart) && walkEndsMeet(G, aEnd, barEnd) && walkEndsMeet(G, barEnd, bStart));
+        CHECK(a.atStart.count == whole.atStart.count && b.atEnd.count == whole.atEnd.count && a.atEnd.count == 2u && b.atStart.count == 2u);
+    };
+    kerbJoin(eastPieces, eastWhole, WalkEnd{WalkId(bar[0]), 0}, eastAt);
+    kerbJoin(westPieces, westWhole, WalkEnd{WalkId(bar[1]), 1}, westAt);
+    CHECK(distance(G.pointAt(WalkId(bar[0]), 0), eastAt) < kOnTheCut);
+
+    // A T OF TWO WALKWAYS: the stem's start meets both halves of the bar where they meet; its far end, a stated dead end,
+    // meets nothing (and is no problem: none was returned)
+    const WalkEnd stemStart{WalkId(stem[0]), 0};
+    CHECK(walkEndsMeet(G, stemStart, WalkEnd{WalkId(bar[0]), 1}) && walkEndsMeet(G, stemStart, WalkEnd{WalkId(bar[1]), 0}) &&
+          walkEndsMeet(G, WalkEnd{WalkId(bar[0]), 1}, WalkEnd{WalkId(bar[1]), 0}));
+    CHECK(G.walks[stem[0]].atEnd.count == 0u);
+
+    // CARS MAY NOT USE THEM; walkers may (the path users' table, by the walkways' kinds)
+    const std::vector<uint8_t> cars = m.openTo("vehicles").walks, walker = m.openTo("walker").walks;
+    for (const uint32_t w : {bar[0], bar[1], stem[0]}) CHECK(cars[w] == 0 && walker[w] == 1);
+    CHECK(openCount(m.openTo("vehicles").paths) == G.paths.size());
+
+    // THE ROUTER WALKS THEM AS IT WALKS ANY WALK (no case of their own). A pedestrian who may use sidewalks and the two
+    // walkway kinds but no corner or crossing gets from the east road's north sidewalk to the west road's only over the
+    // bar; with footways shut too, not at all. And from the stem's dead end to the east sidewalk, down the stem and the bar.
+    {
+        StatedFrontage from, to;
+        from.street = m.streets[eastN.street.index].id;
+        from.station = 80;
+        from.dir = eastN.dir;
+        to.street = m.streets[westN.street.index].id;
+        to.station = 20;
+        to.dir = westN.dir;
+        const WalkJoin a = m.walkJoinOn(from), b = m.walkJoinOn(to);
+        CHECK(a.valid() && b.valid() && a.at.walk.index == eastPieces[1] && b.at.walk.index == westPieces[0]);
+        const route::RouteWalker pedestrian = route::bindWalker(m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "footway", "park_path"}));
+        const route::WalkRoute r = route::findWalkRoute(m, pedestrian, a.at, b.at);
+        std::printf("      east sidewalk to west sidewalk, sidewalks and walkways only:\n");
+        printWalkRoute(m, r);
+        CHECK(r.found && stepsOfKind(m, r, "footway") == 2u && stepsOfKind(m, r, "corner") == 0u && r.crossings.empty());
+        CHECK(approxEqual(r.metres, 30.0 + barLength + 30.0, kOnTheCut));
+        const route::RouteWalker noFootway = route::bindWalker(m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "park_path"}));
+        CHECK(!route::findWalkRoute(m, noFootway, a.at, b.at).found);
+        WalkPoint tip;
+        tip.walk = WalkId(stem[0]);
+        tip.along = G.walks[stem[0]].length;
+        const route::WalkRoute up = route::findWalkRoute(m, pedestrian, tip, a.at);
+        printWalkRoute(m, up);
+        CHECK(up.found && stepsOfKind(m, up, "park_path") == 1u && stepsOfKind(m, up, "footway") == 1u);
+    }
+
+    // A DOOR STATED ON A WALKWAY (StatedFrontage's walkway slot): walkJoinOn answers that walkway's walk holding the metres
+    // along it, on either side of the cut; held past its end; a walkway nobody stated: none, and why. A door stated on a
+    // street answers as the street's question does.
+    {
+        StatedFrontage door;
+        door.walkway = "bar";
+        door.along = 10;
+        WalkJoin j = m.walkJoinOn(door);
+        CHECK(j.valid() && j.at.walk.index == bar[0] && approxEqual(j.at.along, 10.0, kWrittenStation) && j.walkway == 0u &&
+              !j.street.valid() && j.held == 0);
+        CHECK(distance(j.point, G.pointAt(WalkId(bar[0]), 10.0)) < kSamePoint);
+        door.along = stemAt + 15;
+        j = m.walkJoinOn(door);
+        CHECK(j.valid() && j.at.walk.index == bar[1] && approxEqual(j.at.along, 15.0, kWrittenStation));
+        door.along = barLength + 3;
+        j = m.walkJoinOn(door);
+        CHECK(j.valid() && j.at.walk.index == bar[1] && approxEqual(j.at.along, G.walks[bar[1]].length, kWrittenStation) &&
+              approxEqual(j.held, 3.0, kWrittenStation));
+        std::vector<uint8_t> shut = walker;
+        shut[bar[0]] = shut[bar[1]] = 0;
+        door.along = 10;
+        CHECK(!m.walkJoinOn(door, shut).valid() && m.walkJoinOn(door, shut).why == WalkJoinWhy::NotOpen);
+        door.walkway = "moat";
+        CHECK(!m.walkJoinOn(door).valid() && m.walkJoinOn(door).why == WalkJoinWhy::NoWalkway);
+        CHECK(m.walkJoinOn(StatedFrontage()).why == WalkJoinWhy::NoStreet);
+        StatedFrontage onStreet;
+        onStreet.street = m.streets[eastN.street.index].id;
+        onStreet.station = 70;
+        onStreet.dir = eastN.dir;
+        CHECK(sameJoin(m.walkJoinOn(onStreet), m.walkJoinOn(m.frontageOn(eastN.street, 70, eastN.dir))));
+    }
+
+    // SAVED AND READ BACK whole: the walkways and their walks
+    {
+        bundle::BinWriter w;
+        putRoadModel(w, m);
+        bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+        RoadModel back;
+        std::string err;
+        CHECK(getRoadModel(rd, back, &err) && back == m);
+        CHECK(back.walkways.size() == 2u && back.walkways[1].ends[0].meets.walkway == "bar" && back.walkways[1].ends[1].deadEnd &&
+              back.walkways[0].ends[0].meets.street == m.streets[eastN.street.index].id);
+        CHECK(back.laneLevel.walks.size() == G.walks.size() && back.laneLevel.walks[stem[0]].modelWalkway == 1u);
+        RoadModel moved = m;
+        moved.walkways[1].ends[0].meets.along += 1;
+        CHECK(!(moved == m));
+    }
+    // STATED ONCE PER LANE LEVEL: stating again is refused and changes nothing
+    {
+        const RoadModel before = m;
+        const std::vector<WalkwayProblem> again = stateWalkways(m, {});
+        CHECK(again.size() == 1u && again[0].fault == WalkwayFault::AlreadyLaid && m == before);
+    }
+}
+
+TEST_CASE(road_model_44_a_walkway_end_that_does_not_land_is_a_fault_with_why) {
+    // THE T with the south road's sidewalk on its +1 kerb only (walkTee("along")): one good walkway with two dead ends,
+    // and one per fault. A walkway wrong as a whole is not laid; one with a bad end is laid, its end meeting nothing.
+    BuiltScene s = builtScene(walkTee("along"));
+    CHECK(s.report.error.empty());
+    RoadModel& m = s.m;
+    const LaneGraph& G = m.laneLevel;
+    const std::size_t walksBefore = G.walks.size();
+    const ModelStreetId east = streetOfRoad(m, "east"), south = streetOfRoad(m, "south");
+    CHECK(east.valid() && south.valid());
+    if (!east.valid() || !south.valid()) return;
+    const auto line = [](int i) { return std::vector<Vec2>{Vec2(200 + 10 * i, 0), Vec2(200 + 10 * i, 20)}; };
+    const auto onStreet = [&](ModelStreetId st, Real station, int dir) {
+        WalkwayEnd e;
+        e.meets.street = m.streets[st.index].id;
+        e.meets.station = station;
+        e.meets.dir = dir;
+        return e;
+    };
+    WalkwayEnd two = onStreet(east, 50, +1);
+    two.deadEnd = true;
+    struct Case {
+        ModelWalkway w;
+        int end;
+        WalkwayFault fault;
+    };
+    std::vector<Case> cases = {
+        {walkwayOf("ok", "footway", line(0), deadEndHere(), deadEndHere()), -1, WalkwayFault::None},
+        {walkwayOf("no_street", "footway", line(1), onStreet(east, 50, +1), deadEndHere()), 0, WalkwayFault::NoSuchStreet},
+        {walkwayOf("off_street", "footway", line(2), onStreet(east, 500, +1), deadEndHere()), 0, WalkwayFault::OffStreet},
+        {walkwayOf("bare_kerb", "footway", line(3), deadEndHere(), onStreet(south, 50, -1)), 1, WalkwayFault::NoSidewalk},
+        {walkwayOf("by_the_junction", "footway", line(4), onStreet(east, 1, +1), deadEndHere()), 0, WalkwayFault::PastSidewalk},
+        {walkwayOf("no_walkway", "footway", line(5), endOnWalkway("nowhere", 5), deadEndHere()), 0, WalkwayFault::NoSuchWalkway},
+        {walkwayOf("off_walkway", "footway", line(6), endOnWalkway("ok", 500), deadEndHere()), 0, WalkwayFault::OffWalkway},
+        {walkwayOf("own", "footway", line(7), endOnWalkway("own", 5), deadEndHere()), 0, WalkwayFault::OwnWalkway},
+        {walkwayOf("says_nothing", "footway", line(8), WalkwayEnd(), deadEndHere()), 0, WalkwayFault::StatesNothing},
+        {walkwayOf("says_two", "footway", line(9), two, deadEndHere()), 0, WalkwayFault::StatesTwo},
+        {walkwayOf("moat", "moat", line(10), deadEndHere(), deadEndHere()), -1, WalkwayFault::KindNotListed},
+        {walkwayOf("", "footway", line(11), deadEndHere(), deadEndHere()), -1, WalkwayFault::NoId},
+        {walkwayOf("ok", "footway", line(12), deadEndHere(), deadEndHere()), -1, WalkwayFault::SameId},
+        {walkwayOf("one_point", "footway", {Vec2(400, 0)}, deadEndHere(), deadEndHere()), -1, WalkwayFault::NoLine},
+        {walkwayOf("to_the_moat", "footway", line(14), endOnWalkway("moat", 5), deadEndHere()), 0, WalkwayFault::WalkwayNotLaid},
+    };
+    cases[1].w.ends[0].meets.street = "s_nowhere";
+    std::vector<ModelWalkway> stated;
+    for (const Case& c : cases) stated.push_back(c.w);
+    const std::vector<WalkwayProblem> problems = stateWalkways(m, stated);
+    printWalkwayProblems(problems);
+    CHECK(problems.size() == cases.size() - 1);
+    uint32_t laid = 0;
+    for (uint32_t i = 0; i < cases.size(); ++i) {
+        const Case& c = cases[i];
+        bool said = c.fault == WalkwayFault::None;
+        for (const WalkwayProblem& p : problems)
+            if (p.walkway == i) said = p.end == c.end && p.fault == c.fault && !p.why.empty();
+        CHECK(said);
+        if (!said) std::printf("      case %u (%s): not said as expected\n", i, c.w.id.c_str());
+        const std::vector<uint32_t> walks = walksOfWalkway(G, i);
+        const bool whole = c.end < 0 && c.fault != WalkwayFault::None;
+        CHECK(walks.size() == (whole ? 0u : 1u));
+        laid += static_cast<uint32_t>(walks.size());
+        // a laid walkway's ends meet nothing here: its good ends are dead ends, its bad one does not land
+        for (const uint32_t w : walks) CHECK(G.walks[w].atStart.count == 0u && G.walks[w].atEnd.count == 0u);
+    }
+    // nothing else moved: no sidewalk was cut, and the lane level holds together
+    CHECK(G.walks.size() == walksBefore + laid);
+    CHECK(validate(G).empty());
+    // A PLANNED-ONLY MODEL has no lane level to lay them in
+    RoadLabGraph g;
+    RoadModel planned = walkModel(walkTee(), g);
+    const std::vector<WalkwayProblem> none = stateWalkways(planned, {cases[0].w});
+    CHECK(none.size() == 1u && none[0].fault == WalkwayFault::NoLaneLevel && planned.laneLevel.walks.empty());
+}
+
+// ---- 45. a lot's paths are stated as walkways, their ends looked up once (ADR-0476) -----------------------------------
+
+TEST_CASE(road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_states) {
+    // THE T of test 43, and a lot north of it whose path runs, as the lot pass draws one, in three straight pieces: up
+    // from the east road's north sidewalk at station 50, west along y = 30, and down to the west road's north sidewalk at
+    // station 50; and a door on the middle piece, far from any street. The lot pass states where every end lands
+    // (city_lots.h stateLotPaths), the model lays them (lots_producer.h stateLotWalkways), and a walker crosses over them.
+    BuiltScene s = builtScene(walkTee());
+    CHECK(s.report.error.empty());
+    RoadModel& m = s.m;
+    const RoadFrontage eastN = m.frontageAt(Vec2(50, 20)), westN = m.frontageAt(Vec2(-50, 20));
+    Vec2 eastAt, westAt;
+    CHECK(eastN.valid() && westN.valid() && m.sidewalkBeside(eastN, eastAt) && m.sidewalkBeside(westN, westAt));
+    if (!eastN.valid() || !westN.valid()) return;
+    const LotRoadInputs roads = lotRoadInputs(m, RoadDeckField());
+    std::vector<LotBuilding> lots(1);
+    LotBuilding& lot = lots[0];
+    lot.type = "park";
+    const Vec2 ne(eastAt.x, 30), nw(westAt.x, 30);
+    for (const std::pair<Vec2, Vec2>& piece : {std::make_pair(eastAt, ne), std::make_pair(ne, nw), std::make_pair(nw, westAt)}) {
+        ModelWalkway w;   // (as the lot pass draws a path: a kind, a width, two points; city_lots.cpp addPath)
+        w.kind = "footway";
+        w.width = 2.0;
+        w.line = {piece.first, piece.second};
+        lot.walkways.push_back(w);
+    }
+    BuildingUnit hut;
+    DoorSpec door;
+    door.foot = Vec2(0, 31.5);
+    door.normal = Vec2(0, -1);
+    hut.doors.push_back(door);
+    lot.units.push_back(hut);
+
+    const LotPathCounts counts = stateLotPaths(lots, &roads, nullptr);
+    CHECK(counts.walkways == 3 && counts.onStreet == 2 && counts.onWalkway == 4 && counts.deadEnds == 0 && counts.doorsOnWalkway == 1);
+    CHECK(lot.walkways.size() == 3u);
+    if (lot.walkways.size() != 3u) return;
+    const ModelWalkway &up = lot.walkways[0], &across = lot.walkways[1], &down = lot.walkways[2];
+    CHECK(up.id == "lot0.p0" && across.id == "lot0.p1" && down.id == "lot0.p2" && up.heights.size() == 2u);
+    // the two street ends: each street's id, the station level with the end, its own kerb (frontageOnLine's answer)
+    const WalkwayEnd &east = up.ends[0], &west = down.ends[1];
+    CHECK(east.meets.street == m.streets[eastN.street.index].id && approxEqual(east.meets.station, eastN.station, kWrittenStation) &&
+          east.meets.dir == eastN.dir && !east.deadEnd);
+    CHECK(west.meets.street == m.streets[westN.street.index].id && approxEqual(west.meets.station, westN.station, kWrittenStation) &&
+          west.meets.dir == westN.dir && !west.deadEnd);
+    // the corners: each piece's end on the next piece's start (or its end), by id and metres along
+    CHECK(up.ends[1].meets.walkway == "lot0.p1" && approxEqual(up.ends[1].meets.along, 0.0, kWrittenStation));
+    CHECK(down.ends[0].meets.walkway == "lot0.p1" && approxEqual(down.ends[0].meets.along, distance(ne, nw), kWrittenStation));
+    CHECK(across.ends[0].meets.onWalkway() && across.ends[1].meets.onWalkway());
+    // the door states the path and where along it, not a street
+    const StatedFrontage& onPath = lot.units[0].doors[0].frontage;
+    CHECK(onPath.walkway == "lot0.p1" && !onPath.onStreet() && approxEqual(onPath.along, ne.x, kWrittenStation));
+
+    // HANDED TO THE MODEL: every end lands, no fault
+    const std::vector<WalkwayProblem> problems = stateLotWalkways(m, lots);
+    printWalkwayProblems(problems);
+    CHECK(problems.empty() && m.walkways.size() == 3u);
+    CHECK(validate(m.laneLevel).empty());
+    // a walker who may use sidewalks and footways but no corner gets from one street to the other over the lot's path
+    StatedFrontage from, to;
+    from.street = east.meets.street;
+    from.station = 80;
+    from.dir = eastN.dir;
+    to.street = west.meets.street;
+    to.station = 20;
+    to.dir = westN.dir;
+    const WalkJoin a = m.walkJoinOn(from), b = m.walkJoinOn(to);
+    CHECK(a.valid() && b.valid());
+    const route::RouteWalker pedestrian = route::bindWalker(m, "pedestrian", kTestPace, usersWithPedestrian({"sidewalk", "footway"}));
+    const route::WalkRoute r = route::findWalkRoute(m, pedestrian, a.at, b.at);
+    printWalkRoute(m, r);
+    CHECK(r.found && stepsOfKind(m, r, "footway") == 3u && stepsOfKind(m, r, "corner") == 0u);
+    // and the door is answered on the path by the one query
+    const WalkJoin j = m.walkJoinOn(onPath);
+    CHECK(j.valid() && j.walkway == 1u && !j.street.valid() && j.held == 0);
+}
+
+// ---- 46. staggered junctions stated apart (ADR-0477) -------------------------------------------------------------------
+
+TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
+    // river_town's and agent_lab's j14 (two staggered pairs on Redwood Parkway) and j0 (a T 28.6 m along the arterial from
+    // the boulevard pair) are each stated as two: the new parts j144 and j145 at the list's end, no other id moved
+    auto armsOf = [](const ModelJunction& j) {
+        std::vector<std::string> out;
+        for (const ModelArm& a : j.arms) out.push_back(a.road + (a.spineIn ? " in " : " out ") + std::to_string(static_cast<int>(std::lround(a.station * 100))));
+        return out;
+    };
+    auto through = [](const ModelJunction& j) {
+        std::set<std::string> out;
+        for (const std::array<uint32_t, 2>& t : j.through) {
+            const std::string a = j.arms[t[0]].road, b = j.arms[t[1]].road;
+            out.insert(a < b ? a + "-" + b : b + "-" + a);
+        }
+        return out;
+    };
+    for (const char* level : {"river_town", "agent_lab"}) {
+        const std::string dir = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned";
+        const std::string text = slurp(dir + "/" + level + "_lanelab.json");
+        const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir);
+        CHECK(g.junctions.size() == 146u);
+        for (std::size_t i = 0; i < g.junctions.size(); ++i) CHECK(g.junctions[i].id == "j" + std::to_string(i));
+        std::map<std::string, const ModelJunction*> J;
+        for (const ModelJunction& j : g.junctions) J[j.id] = &j;
+        CHECK(armsOf(*J["j14"]) == std::vector<std::string>({"s294 in 4722", "s314 out 0", "s313 out 2304", "s21 in 8268"}));
+        CHECK(armsOf(*J["j144"]) == std::vector<std::string>({"s313 in 5938", "s315 out 0", "s290 in 6393", "s18 in 11485"}));
+        CHECK(armsOf(*J["j145"]) == std::vector<std::string>({"s38 in 9447", "s274_0 out 0", "s272 in 11995"}));
+        // through pairs by the one rule: Fifth Avenue (s21 -> s315) is no longer one straight across the parkway
+        CHECK(through(*J["j14"]) == std::set<std::string>({"s21-s314", "s294-s313"}));
+        CHECK(through(*J["j144"]) == std::set<std::string>({"s18-s315", "s290-s313"}));
+        CHECK(through(*J["j145"]) == std::set<std::string>({"s272-s274_0"}));
+        // the parkway between them is a street now, from j14 to j144, and keeps its name; the streets keep theirs
+        bool seen = false;
+        for (const ModelStreet& s : g.streets) {
+            if (s.id == "s313") {
+                seen = true;
+                CHECK(s.junctions[0].valid() && g.junctions[s.junctions[0].index].id == "j14");
+                CHECK(s.junctions[1].valid() && g.junctions[s.junctions[1].index].id == "j144");
+                CHECK(sameWrittenStation(s.from, 23.04) && sameWrittenStation(s.to, 59.38));
+                CHECK(s.name == "Redwood Parkway");
+            }
+            if (s.id == "s18" || s.id == "s314") CHECK(s.name == "Fourteenth Street");
+            if (s.id == "s21" || s.id == "s315") CHECK(s.name == "Fifth Avenue");
+        }
+        CHECK(seen);
+        // the one making of a junction from its points (junctionOverNodes, findJunctions' own) puts the two back as the
+        // one junction the grouping made: six arms, Redwood Parkway's s292 and s313 inside it
+        std::vector<ModelNode> all = J["j14"]->nodes;
+        all.insert(all.end(), J["j144"]->nodes.begin(), J["j144"]->nodes.end());
+        const JunctionFacts whole = junctionOverNodes(g, all, ControlPolicy());
+        std::set<std::string> inside;
+        for (const ModelStretch& st : whole.inside) inside.insert(st.road);
+        CHECK(whole.arms.size() == 6u && inside == std::set<std::string>({"s21", "s292", "s313"}));
+        // a split whose roads leave every point on one side is refused, and says so
+        std::string err;
+        CHECK(insertSplitJunctionText(text, g, "j90", {"s999"}, nullptr, &err).empty());
+        CHECK(err.find("do not split in two") != std::string::npos);
+    }
 }

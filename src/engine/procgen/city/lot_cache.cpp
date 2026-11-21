@@ -17,7 +17,9 @@ constexpr std::size_t kBuildingParamsSize = 824;   // v24: stairPlace, liftBanks
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 24, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 2;
+// kLotsVersion 16: a lot's paths as walkways (id, kind, width, line, heights, both ends), not lines (ADR-0476);
+// 15: a building's and each door's frontage (street, station, kerb; walkway and along), ADR-0474
+constexpr uint32_t kParamsVersion = 24, kLotsVersion = 16, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 2;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -29,6 +31,23 @@ void putPolys(BinWriter& w, const std::vector<Poly2>& ps) { w.put<uint32_t>(stat
 bool getPolys(BinReader& r, std::vector<Poly2>& ps) { uint32_t n = 0; if (!r.get(n)) return false; ps.resize(n); for (Poly2& p : ps) if (!getPoly(r, p)) return false; return true; }
 void putBool(BinWriter& w, bool b) { w.put<uint8_t>(b ? 1 : 0); }
 bool getBool(BinReader& r, bool& b) { uint8_t v = 0; if (!r.get(v)) return false; b = v != 0; return true; }
+void putFrontage(BinWriter& w, const StatedFrontage& f) { w.putStr(f.street); w.put<double>(f.station); w.put<int32_t>(f.dir); w.putStr(f.walkway); w.put<double>(f.along); }
+bool getFrontage(BinReader& r, StatedFrontage& f) { int32_t dir = 1; if (!r.getStr(f.street) || !r.get(f.station) || !r.get(dir) || !r.getStr(f.walkway) || !r.get(f.along)) return false; f.dir = dir; return true; }
+void putWalkway(BinWriter& w, const ModelWalkway& k) {
+    w.putStr(k.id); w.putStr(k.kind); w.put<double>(k.width);
+    w.put<uint32_t>(static_cast<uint32_t>(k.line.size())); for (const Vec2& q : k.line) putVec2(w, q);
+    w.put<uint32_t>(static_cast<uint32_t>(k.heights.size())); for (Real h : k.heights) w.put<double>(h);
+    for (const WalkwayEnd& e : k.ends) { putFrontage(w, e.meets); putBool(w, e.deadEnd); }
+}
+bool getWalkway(BinReader& r, ModelWalkway& k) {
+    uint32_t n = 0;
+    if (!r.getStr(k.id) || !r.getStr(k.kind) || !r.get(k.width) || !r.get(n)) return false;
+    k.line.resize(n); for (Vec2& q : k.line) if (!getVec2(r, q)) return false;
+    if (!r.get(n)) return false;
+    k.heights.resize(n); for (Real& h : k.heights) if (!r.get(h)) return false;
+    for (WalkwayEnd& e : k.ends) if (!getFrontage(r, e.meets) || !getBool(r, e.deadEnd)) return false;
+    return true;
+}
 }  // namespace
 
 // ---- building parameters (every field, in declaration order) -------------------------------------------
@@ -104,7 +123,7 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         w.put<uint32_t>(static_cast<uint32_t>(lb.units.size()));
         for (const BuildingUnit& u : lb.units) {
             putPoly(w, u.plan); w.put<double>(u.baseY); putBuildingParams(w, u.params);
-            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); putBool(w, d.open); }
+            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); putBool(w, d.open); putFrontage(w, d.frontage); }
             putBool(w, u.enterable);
             w.put<uint32_t>(static_cast<uint32_t>(u.beacons.size())); for (const Vec3& b : u.beacons) putVec3(w, b);
             w.put<uint32_t>(static_cast<uint32_t>(u.roof.size()));   // (format 14: the roof's items)
@@ -117,13 +136,14 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPoly(w, lb.lot);
         putPoly(w, lb.padBound);
         putPolys(w, lb.sealed);   // lots v9: a park's paths and plazas (no grass on them)
-        w.put<uint32_t>(static_cast<uint32_t>(lb.walks.size()));   // lots v10: its walks as lines (the citysim's footpaths)
-        for (const LotBuilding::Walk& k : lb.walks) { putVec2(w, k.a); putVec2(w, k.b); w.put<double>(k.width); putBool(w, k.streetEnds); }
+        w.put<uint32_t>(static_cast<uint32_t>(lb.walkways.size()));   // lots v16: its paths as walkways (ADR-0476)
+        for (const ModelWalkway& k : lb.walkways) putWalkway(w, k);
         putPolys(w, lb.loops);   // lots v11: a track to run
         w.put<uint32_t>(static_cast<uint32_t>(lb.areas.size()));   // lots v12: areas (a pitch)
         for (const LotBuilding::Area& ar : lb.areas) { w.putStr(ar.kind); putVec2(w, ar.center); putVec2(w, ar.axis); w.put<double>(ar.halfL); w.put<double>(ar.halfW); }
         w.put<uint32_t>(static_cast<uint32_t>(lb.sitSpots.size()));   // lots v13: places to sit (a fountain's rim)
         for (const LotBuilding::SitSpot& sp : lb.sitSpots) { putVec2(w, sp.at); putVec2(w, sp.face); w.put<double>(sp.hip); }
+        putFrontage(w, lb.frontage);   // lots v15: where it fronts
     }
 }
 
@@ -142,7 +162,7 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         for (BuildingUnit& u : lb.units) {
             if (!getPoly(r, u.plan) || !r.get(u.baseY) || !getBuildingParams(r, u.params)) return false;
             uint32_t nd = 0; if (!r.get(nd)) return false; u.doors.resize(nd);
-            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height) || !getBool(r, d.back) || !getBool(r, d.open)) return false;
+            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height) || !getBool(r, d.back) || !getBool(r, d.open) || !getFrontage(r, d.frontage)) return false;
             if (!getBool(r, u.enterable)) return false;
             uint32_t nb = 0; if (!r.get(nb)) return false; u.beacons.resize(nb);
             for (Vec3& b : u.beacons) if (!getVec3(r, b)) return false;
@@ -155,14 +175,15 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         if (!getPoly(r, lb.lot)) return false;
         if (!getPoly(r, lb.padBound)) return false;
         if (!getPolys(r, lb.sealed)) return false;
-        uint32_t nw = 0; if (!r.get(nw)) return false; lb.walks.resize(nw);
-        for (LotBuilding::Walk& k : lb.walks) if (!getVec2(r, k.a) || !getVec2(r, k.b) || !r.get(k.width) || !getBool(r, k.streetEnds)) return false;
+        uint32_t nw = 0; if (!r.get(nw)) return false; lb.walkways.resize(nw);
+        for (ModelWalkway& k : lb.walkways) if (!getWalkway(r, k)) return false;
         if (!getPolys(r, lb.loops)) return false;
         uint32_t na = 0; if (!r.get(na)) return false; lb.areas.resize(na);
         for (LotBuilding::Area& ar : lb.areas)
             if (!r.getStr(ar.kind) || !getVec2(r, ar.center) || !getVec2(r, ar.axis) || !r.get(ar.halfL) || !r.get(ar.halfW)) return false;
         uint32_t ns = 0; if (!r.get(ns)) return false; lb.sitSpots.resize(ns);
         for (LotBuilding::SitSpot& sp : lb.sitSpots) if (!getVec2(r, sp.at) || !getVec2(r, sp.face) || !r.get(sp.hip)) return false;
+        if (!getFrontage(r, lb.frontage)) return false;
     }
     return r.ok();
 }

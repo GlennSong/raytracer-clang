@@ -810,10 +810,23 @@ NamingReport nameStreetRuns(std::vector<ModelStreet>& streets, const std::vector
     for (std::size_t k = 0; k < fresh.size(); ++k) runName[toNameRun[k]] = fresh[k];
     rep.generated = static_cast<uint32_t>(fresh.size());
     rep.runs = static_cast<uint32_t>(runs.size());
+    // a street whose own stretch the file names keeps that name, even where a run now joins it to a street named
+    // otherwise (ADR-0477: a junction stated as two can make a through pair of two differently named streets); the
+    // run's name goes to the streets the file names not
+    auto ownName = [&](const ModelStreet& s) {
+        const double mid = 0.5 * (s.from + s.to);
+        const std::map<std::string, std::vector<const NamedStretch*>>::const_iterator kt = keptOn.find(s.road);
+        if (kt != keptOn.end())
+            for (const NamedStretch* k : kt->second)
+                if (atOrPast(mid, k->from, kWrittenStation) && atOrBefore(mid, k->to, kWrittenStation)) return k->name;
+        return std::string();
+    };
+    std::vector<std::string> own(streets.size());
+    for (std::size_t i = 0; i < streets.size(); ++i) own[i] = ownName(streets[i]);
     for (ModelStreet& s : streets) s.name.clear();
     for (std::size_t r = 0; r < runs.size(); ++r)
         for (std::size_t i : runs[r]) {
-            streets[i].name = runName[r];
+            streets[i].name = own[i].empty() ? runName[r] : own[i];
             ++rep.streets;
         }
     return rep;
@@ -1316,6 +1329,105 @@ std::string insertArmText(const std::string& text, const RoadLabGraph& g, const 
                       junction.c_str(), arm.spineIn ? "end" : "start", road.c_str(), arm.station, arm.heading, place, pj.arms.size(),
                       pairsAdded.empty() ? " none" : pairsAdded.c_str());
         *added = b;
+    }
+    return out;
+}
+
+std::string insertSplitJunctionText(const std::string& text, const RoadLabGraph& g, const std::string& junction,
+                                    const std::vector<std::string>& movingRoads, std::string* added, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    std::size_t j = 0;
+    while (j < g.junctions.size() && g.junctions[j].id != junction) ++j;
+    if (j == g.junctions.size()) return fail("the file lists no junction " + junction);
+    const ModelJunction& J = g.junctions[j];
+    const std::string newId = "j" + std::to_string(g.junctions.size());
+    for (const ModelJunction& o : g.junctions)
+        if (o.id == newId) return fail("the file already lists a junction " + newId);
+    // the stated points: a point holding any of the moving roads goes to the new junction, the rest stay
+    std::vector<ModelNode> keep, moved;
+    for (const ModelNode& n : J.nodes) {
+        bool moves = false;
+        for (const ModelNodePoint& p : n.points)
+            moves = moves || std::find(movingRoads.begin(), movingRoads.end(), p.road) != movingRoads.end();
+        (moves ? moved : keep).push_back(n);
+    }
+    if (keep.empty() || moved.empty())
+        return fail("junction " + junction + "'s stated points do not split in two by those roads (" + std::to_string(keep.size()) + " stay, " +
+                    std::to_string(moved.size()) + " move)");
+    // each part made as the grouping makes a junction (control_plan.h junctionOverNodes), its arms in their ring, its
+    // through pairs by the one rule; the control, its reason and each arm's signs as the file states them for the whole
+    const ComposedRoads roads(g);
+    auto part = [&](const std::vector<ModelNode>& nodes, const std::string& id, ModelJunction& pj) {
+        std::string why;
+        const JunctionFacts f = junctionOverNodes(g, nodes, ControlPolicy(), &why);
+        if (!why.empty()) return why;
+        if (f.arms.size() < 3) return "part " + id + " would have " + std::to_string(f.arms.size()) + " arms: no junction";
+        pj = junctionOf(f);
+        pj.id = id;
+        pj.control = J.control;
+        pj.why = J.why;
+        pj.hand = J.hand;
+        pj.nodes = nodes.size() > 1 ? nodes : std::vector<ModelNode>();
+        if (nodes.size() == 1) pj.at = nodes.front().at;
+        for (ModelArm& a : pj.arms)
+            for (const ModelArm& o : J.arms)
+                if (o.road == a.road && o.spineIn == a.spineIn && sameWrittenStation(o.station, a.station)) a.regulations = o.regulations;
+        orderArmsRound(pj, roads);
+        return std::string();
+    };
+    ModelJunction pk, pm;
+    std::string why = part(keep, J.id, pk);
+    if (why.empty()) why = part(moved, newId, pm);
+    if (!why.empty()) return fail("junction " + junction + ": " + why);
+    // the text: the junction's element written again as the part that stays, the new part after the list's last element
+    const Text t(text);
+    std::vector<Member> top, am;
+    std::vector<std::size_t> elems;
+    const Member* listed = t.members(t.ws(0), top) ? memberNamed(top, "junctions") : nullptr;
+    if (!listed || !t.elements(listed->valueBegin, elems) || elems.size() != g.junctions.size())
+        return fail("the file's \"junctions\" list does not fit the graph read from it");
+    if (!t.members(elems[j], am) || am.empty()) return fail("junction " + junction + " is not an object in the file");
+    std::size_t leadStart = elems[j];
+    while (leadStart > 0 && (text[leadStart - 1] == ' ' || text[leadStart - 1] == '\n' || text[leadStart - 1] == '\r' || text[leadStart - 1] == '\t')) --leadStart;
+    const std::string elemLead = text.substr(leadStart, elems[j] - leadStart);
+    const std::string elemIndent = elemLead.substr(elemLead.rfind('\n') == std::string::npos ? 0 : elemLead.rfind('\n') + 1);
+    const std::string memberLead = leadOf(text, am.front());
+    const std::size_t nl = memberLead.rfind('\n');
+    const int step = nl == std::string::npos ? -1 : static_cast<int>(memberLead.size() - nl - 1) - static_cast<int>(elemIndent.size());
+    // laid out as the layout writer leaves a junction: its members in order, then "through" and "nodes" on one line each
+    auto elementText = [&](const ModelJunction& pj) {
+        ModelJunction bare = pj;
+        for (ModelArm& a : bare.arms) a.heading = kNotStated;
+        nlohmann::json body = junctionJson(bare, {});
+        body.erase("through");
+        body.erase("nodes");
+        std::string s;
+        for (char c : body.dump(step)) {
+            s += c;
+            if (c == '\n') s += elemIndent;
+        }
+        std::string tail;
+        if (!pj.through.empty()) tail += "," + memberLead + "\"through\": " + nlohmann::json(pj.through).dump();
+        if (!pj.nodes.empty()) tail += "," + memberLead + "\"nodes\": " + nodesJson(pj.nodes).dump();
+        const std::size_t close = s.rfind(nl == std::string::npos ? "}" : "\n");
+        return s.substr(0, close) + tail + s.substr(close);
+    };
+    const std::size_t lastEnd = t.end(elems.back());
+    std::string out = text.substr(0, elems[j]) + elementText(pk) + text.substr(t.end(elems[j]), lastEnd - t.end(elems[j])) + "," + elemLead +
+                      elementText(pm) + text.substr(lastEnd);
+    if (added) {
+        std::string words;
+        for (const ModelJunction* pj : {&pk, &pm}) {
+            words += (words.empty() ? "" : "; ") + pj->id + ":";
+            for (const ModelArm& a : pj->arms) words += " " + a.road + (a.spineIn ? "(in)" : "(out)");
+            words += ", through";
+            for (const std::array<uint32_t, 2>& p : pj->through) words += " " + std::to_string(p[0]) + "-" + std::to_string(p[1]);
+            for (const ModelStretch& s : pj->inside) words += ", inside " + s.road;
+        }
+        *added = words;
     }
     return out;
 }

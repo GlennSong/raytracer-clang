@@ -23,7 +23,8 @@ namespace {
 // and answers which approaches face each other, ADR-0438; 14: no car spaces: the list was never filled, and the kerb
 // parking spaces are stated in the road model, ADR-0439).
 constexpr char kMagic[4] = {'L', 'G', 'R', 'F'};
-constexpr uint32_t kVersion = 16;   // 16: the walks and their joins (ADR-0466)
+constexpr uint32_t kVersion = 17;   // 17: a walk may be a walkway's (Walk::modelWalkway, ADR-0475)
+                                    // 16: the walks and their joins (ADR-0466)
                                     // 15: a crosswalk names the road model's (Crosswalk::modelCrosswalk, ADR-0452)
 // A path's centre line has at least this many points (a start and an end).
 constexpr uint32_t kMinCurvePoints = 2;
@@ -189,6 +190,7 @@ void putItem(BinWriter& w, const Walk& k) {
     w.put(k.modelLane);
     w.put(k.modelCrosswalk);
     w.put(k.modelDeadEnd);
+    w.put(k.modelWalkway);
     w.put(k.street);
     w.put(k.stationFrom);
     w.put(k.stationTo);
@@ -240,7 +242,7 @@ bool getItem(BinReader& r, BendPiece& b) { return r.get(b.from) && r.get(b.radiu
 bool getItem(BinReader& r, WalkEnd& e) { return getItem(r, e.walk) && r.get(e.end); }
 bool getItem(BinReader& r, Walk& k) {
     return getItem(r, k.curve) && r.get(k.length) && r.get(k.width) && getItem(r, k.atStart) && getItem(r, k.atEnd) &&
-           r.get(k.modelWalk) && r.get(k.modelLane) && r.get(k.modelCrosswalk) && r.get(k.modelDeadEnd) && r.get(k.street) &&
+           r.get(k.modelWalk) && r.get(k.modelLane) && r.get(k.modelCrosswalk) && r.get(k.modelDeadEnd) && r.get(k.modelWalkway) && r.get(k.street) &&
            r.get(k.stationFrom) && r.get(k.stationTo);
 }
 
@@ -549,7 +551,8 @@ bool operator==(const LaneGraph& a, const LaneGraph& b) {
 bool operator==(const Walk& a, const Walk& b) {
     return a.curve == b.curve && a.length == b.length && a.width == b.width && a.atStart == b.atStart && a.atEnd == b.atEnd &&
            a.modelWalk == b.modelWalk && a.modelLane == b.modelLane && a.modelCrosswalk == b.modelCrosswalk &&
-           a.modelDeadEnd == b.modelDeadEnd && a.street == b.street && a.stationFrom == b.stationFrom && a.stationTo == b.stationTo;
+           a.modelDeadEnd == b.modelDeadEnd && a.modelWalkway == b.modelWalkway && a.street == b.street &&
+           a.stationFrom == b.stationFrom && a.stationTo == b.stationTo;
 }
 bool operator==(const WalkEnd& a, const WalkEnd& b) { return a.walk == b.walk && a.end == b.end; }
 
@@ -1042,7 +1045,8 @@ std::vector<std::string> validate(const LaneGraph& g) {
         }
         if (!(std::fabs(g.along[k.curve.end() - 1] - k.length) <= kLengthTolerance) || g.along[k.curve.first] != 0)
             out.push_back(fmt("walk %u: its length %.2f m is not its curve's %.2f m", w, k.length, g.along[k.curve.end() - 1]));
-        const int set = (k.modelWalk != kNoIndex) + (k.modelLane != kNoIndex) + (k.modelCrosswalk != kNoIndex) + (k.modelDeadEnd != kNoIndex);
+        const int set = (k.modelWalk != kNoIndex) + (k.modelLane != kNoIndex) + (k.modelCrosswalk != kNoIndex) +
+                        (k.modelDeadEnd != kNoIndex) + (k.modelWalkway != kNoIndex);
         if (set != 1) out.push_back(fmt("walk %u: names %d things of the road model, not one", w, set));
         for (uint8_t end = 0; end < 2; ++end) {
             const Range r = k.joins(end);
@@ -1373,6 +1377,7 @@ std::string dumpText(const LaneGraph& g) {
         const std::string what = k.modelWalk != kNoIndex       ? fmt("the road model's walk %u", k.modelWalk)
                                  : k.modelLane != kNoIndex      ? fmt("the road model's lane %u", k.modelLane)
                                  : k.modelCrosswalk != kNoIndex ? fmt("over the road model's crosswalk %u", k.modelCrosswalk)
+                                 : k.modelWalkway != kNoIndex   ? fmt("along the road model's walkway %u", k.modelWalkway)
                                                                 : fmt("round the road model's dead end %u", k.modelDeadEnd);
         out += fmt("walk %u: %s, %.1f m long, %.1f m wide", w, what.c_str(), k.length, k.width);
         if (k.street != kNoIndex) out += fmt(", street %u from %.1f to %.1f", k.street, k.stationFrom, k.stationTo);
