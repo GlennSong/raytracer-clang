@@ -75,6 +75,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 3b80f181 | the studio's Arguments box (`luaTableToJson`; `RT_STUDIO_ARGS` types into it unattended); the camera reframes when a rebuilt model is nothing like the last; a part's line is the deepest in the recipe's own chunk |
 | 8d2c6694 | a recipe says what it takes: Lua `params{ ... }` (`declaredParams`, `recipeParams`), and the studio's form of controls for it; `prop_models.lua` and `car_rig_lab.lua` declare theirs |
 | 759a9e4f | the model and the studio on the control channel: `models?`, `model?`, `model_set` (engine), `studio?`, `studio_open`, `studio_args`, `studio_pick` (editor); `engine/model_inspect.{h,cpp}`, the one description of a stamped model's tree; `web/engine/commands.json` refreshed |
+| 517f8c0b | the studio views a model OR a prefab: `savePrefab` and the entry rewrite in `scripting/prefab_list`, the prefab form in the Inspector dock, `--prefab <name>`, play keeping the player's place on a rebuild, `engine/model_overlay` (shapes, markers, joints as lines); commands `prefabs?`, `prefab?`, `model_overlay`, `studio_prefab`, `studio_prefab_set`, `play`, `stop` |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
