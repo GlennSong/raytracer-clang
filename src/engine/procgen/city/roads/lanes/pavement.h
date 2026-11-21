@@ -70,6 +70,13 @@ constexpr double kMitreLimit = 2.0;
 // already one point (a straight carry-on) both pieces are empty, and nothing is added.
 std::array<Ring, 2> mitrePieces(const RoadLabGraph& g, const BandKink& k, double halfWidthA, double halfWidthB);
 
+// Any part of a sidewalk, shoulder or median narrower than twice this is the booleans' rounding, not pavement, and the
+// layers are drawn without it (ADR-0479). Two cutters whose edges lie on one line but were rounded to the 1 mm grid from
+// different end points leave a seam between them under a millimetre wide: a sliver of its own, or a spike metres long on
+// a real piece. The layer's slab gave it kerb faces, and a car met a 10 cm wall in the middle of the carriageway. No
+// sidewalk, shoulder or median anyone could use is 2 cm wide.
+constexpr double kNoBody = 0.01;
+
 // Footprints + closing + layers (needs the lanes' own heights for the same-level test).
 void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& H, Pavement& out);
 // The arrangement, levels, partners and welded surfaces. Sets H's partners as a side effect.

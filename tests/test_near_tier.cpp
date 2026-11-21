@@ -836,6 +836,13 @@ constexpr int kProbeStepsPerFrame = 8;      // the clock's cap (clock.h MAX_STEP
 // person on foot or another near car (each checked: 0). The chassis hits left are the ground: car 83 scraping the road
 // under hard braking (the ground is a static body, which a driver's look never sees). A near car pushed off its line
 // steers back within kSteerBack.
+// STATE AFTER THE #306 RE-BAKE (ADR-0478, ADR-0479): the S7 bake put the near cars across sub-millimetre sidewalk slivers
+// standing as 10 cm kerb faces in traffic_lab's j7 and j19 (hits on other things 0 -> 65, the longest off its lane 9.5 ->
+// 220.7 s, car 148 resting against j19's). ADR-0479 opens the layers by 1 cm and the slivers are gone: hits on other
+// things 65 -> 3 (car 179 on s260's real kerb at 0.69 m/s, and two on a walker), the longest off its lane 220.7 -> 4.3 s.
+// STILL FAILING, left on purpose: hits on walkers 2, car 220 touching a walker on s15 at j11 (-259.8, 47.7) at 1.6 m/s,
+// then 0.15 m/s. The pins below are not retaken until it passes (now: 14 at minute 9, in 76, out 64,
+// 0x79168141d1414b43).
 constexpr uint32_t kChassisHitsKnown = 8;
 constexpr Real kOffLaneKnownWorst = 5;      // s: kSteerBack, the time a car pushed off its line takes to steer back
 

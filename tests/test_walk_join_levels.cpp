@@ -137,12 +137,19 @@ bool crowdPlace(const std::string& name) {
 //   - river_town's doors: 913 -> 891 (the lots regrown), joined 902 -> 882 (26 -> 0 in a cut-off part), agreeing with
 //     the street map's snap 746 -> 821 (snaps to a park's or the quad's footpath 136 -> 50: the lots state their paths
 //     as walkways, ADR-0476).
+// RE-PINNED for ADR-0479 (the pavement layers' sub-millimetre slivers and spikes taken off, the sidewalk's necks kept),
+// river_town only, old (S7) -> new: placing 747 -> 741, starting 745 -> 739, finishing 742 -> 736; doors 891 -> 887,
+// joined 882 -> 878, agreeing 821 -> 815. The fallback (754), walks ending at a node (3), held past a sidewalk's end
+// (78), cut off (23; in 4 -> 3 parts) and brain_crowd unchanged. The lot pass reads the drawn pavement's gaps as blocks,
+// so the lots were regrown (625 -> 622 lots, 626 -> 623 buildings), and the walks laid on the sidewalk lost their sliver
+// pieces (3289 -> 3191 walks, 118 -> 114 parts on foot). (The first try, an opening alone, gave 740 / 735 / 733, 753, 2,
+// 881 / 872 / 815: it cut sidewalks in two at necks; not kept.)
 struct Pinned {
     int places, cutOff, placing, starting, finishing, fallbackSame, rampNodes, atNode, doors, doorsJoined, doorsAgree;
 };
 const Pinned& pinnedFor(const std::string& level) {
     static const Pinned kBrainCrowd{451, 0, 447, 411, 411, 447, 1, 0, 0, 0, 0};
-    static const Pinned kRiverTown{799, 23, 747, 745, 742, 754, 0, 3, 891, 882, 821};
+    static const Pinned kRiverTown{799, 23, 741, 739, 736, 754, 0, 3, 887, 878, 815};
     return level == "brain_crowd.json" ? kBrainCrowd : kRiverTown;
 }
 }  // namespace

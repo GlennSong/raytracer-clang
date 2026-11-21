@@ -5323,3 +5323,52 @@ TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
         CHECK(err.find("do not split in two") != std::string::npos);
     }
 }
+
+// ---- 47. the layers hold no part without a body (ADR-0479) --------------------------------------------------------------
+
+// THE DRAWN SIDEWALK, SHOULDER AND MEDIAN ON traffic_lab HOLD NOTHING NARROWER THAN 2 cm. The cuts that make the layers
+// round each cutter to the 1 mm grid on its own, so two cutters whose edges lie on one line left seams under a millimetre
+// wide: 50 slivers and spikes of sidewalk, up to 12 m long, many in a carriageway (j7's at (-364, -29) and j19's at
+// (-334, 179) are where the near crowd's physics cars on traffic_lab hit a 10 cm kerb face). Each is a NEEDLE in a layer's outline: a corner
+// whose two sides, each 5 cm or longer, leave it within 2 degrees of each other (a sliver has one at each end, a spike at
+// its tip). Each layer is drawn opened by kNoBody, so no outline has one; the sharpest real corner, a mitre cut at
+// kMitreLimit, is tens of degrees.
+TEST_CASE(road_model_47_the_layers_hold_no_part_without_a_body) {
+    constexpr Real kSide = 0.05;              // m: both sides of a needle corner at least this long (a bevel's are under 1 cm)
+    constexpr Real kNeedle = 2 * DEG_TO_RAD;  // a corner sharper than this is a needle
+    const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/traffic_lab_lanelab.json";
+    const std::unique_ptr<Result> r =
+        build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+    const std::pair<const char*, const PolySet*> layers[] = {
+        {"sidewalk", &r->pavement.sidewalk}, {"shoulder", &r->pavement.shoulder}, {"median", &r->pavement.median}};
+    for (const std::pair<const char*, const PolySet*>& layer : layers) {
+        const PolySet& L = *layer.second;
+        uint32_t needles = 0;
+        Real sharpest = PI;
+        Vec2 at;
+        auto look = [&](const Ring& ring) {
+            const std::size_t n = ring.size();
+            for (std::size_t i = 0; i < n && n >= 3; ++i) {
+                const Vec2 a = ring[(i + n - 1) % n] - ring[i], b = ring[(i + 1) % n] - ring[i];
+                if (a.length() < kSide || b.length() < kSide) continue;
+                // (only a corner the material fills: the ring has the material on its left, so it turns left there. A
+                // corner pointing into the material is a crack, which no kerb face stands in the road for)
+                if (cross(ring[i] - ring[(i + n - 1) % n], ring[(i + 1) % n] - ring[i]) <= 0) continue;
+                const Real angle = std::fabs(std::atan2(cross(a, b), dot(a, b)));
+                needles += angle < kNeedle ? 1u : 0u;
+                if (angle < sharpest) {
+                    sharpest = angle;
+                    at = ring[i];
+                }
+            }
+        };
+        for (const Polygon2& p : L) {
+            look(p.outer);
+            for (const Ring& h : p.holes) look(h);
+        }
+        std::printf("      traffic_lab %s: %zu polygons, %.1f m2; %u needle corners; the sharpest corner %.2f degrees at (%.1f, %.1f)\n",
+                    layer.first, L.size(), setArea(L), needles, sharpest * RAD_TO_DEG, at.x, at.y);
+        CHECK(!L.empty());
+        CHECK(needles == 0u);
+    }
+}

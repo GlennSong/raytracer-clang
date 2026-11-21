@@ -216,20 +216,26 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // moved with the stop lines. Worse, small: walks blocked 7 -> 11, another place 6 -> 9. The known jam is still there,
     // another car: car 237 stands 1540.6 s from minute 5 giving way to people crossing (was car 76, 1480.9 s). Rings still
     // 0, touching spells 0. Hash 0x83b99189cfc16fbd -> 0xc02460bd06f44189.
+    // RE-PINNED for ADR-0479 (the pavement layers' rounding slivers and spikes taken off, the sidewalk's necks kept): the
+    // lots regrown on the new pavement gaps and the walks laid on the cleaned sidewalk. Better: walks blocked 11 -> 0,
+    // another place 9 -> 0, no-plans 9 -> 0, the longest stand 1540.6 s (car 237) -> 734.7 s (car 19). Worse, small:
+    // arrivals 753 -> 730, trips 322 -> 318, parked 210 -> 209. Cars 364 -> 383 (with one 393 -> 407), the most on the
+    // road 135 -> 139 (still minute 11). Rings 0, touching spells 0. (An opening alone, without keeping the necks, cut
+    // sidewalks in two and went the wrong way: arrivals 692, walks blocked 21, no way 42; not kept.)
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
-        CHECK(b.cars().size() == 364u);
-        CHECK(withCar == 393);
+        CHECK(b.cars().size() == 383u);
+        CHECK(withCar == 407);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 135);
+        CHECK(mostOnRoad == 139);
         CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 322u);
-        CHECK(b.counts().parkedReports == 210u);
-        CHECK(b.counts().walksBlocked == 11u);
-        CHECK(b.counts().otherPlaces == 9u);
-        CHECK(b.machine()->counts().arrivals == 753u);
-        CHECK(b.machine()->counts().noPlans == 9u);
+        CHECK(b.counts().tripsBegun == 318u);
+        CHECK(b.counts().parkedReports == 209u);
+        CHECK(b.counts().walksBlocked == 0u);
+        CHECK(b.counts().otherPlaces == 0u);
+        CHECK(b.machine()->counts().arrivals == 730u);
+        CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -241,6 +247,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // every household car's number is 15 lower now (the longest stand: car 91 -> 76). Every count, every minute,
         // is the same.
         // 0x83b99189cfc16fbd -> 0xc02460bd06f44189 (ADR-0478, the S7 re-bake): the counts above.
-        CHECK(hash == 0xc02460bd06f44189ull);
+        // 0xc02460bd06f44189 -> 0xa15a1ec8afaff85d (ADR-0479, the pavement layers cleaned): the counts above.
+        CHECK(hash == 0xa15a1ec8afaff85dull);
     }
 }
