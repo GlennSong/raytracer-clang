@@ -19,6 +19,10 @@
 --   kit.put(m, node, k [, o])     what was built on k goes on `node` (the model `m` itself, or one of its nodes),
 --                                 one part for each finish used; o.level puts it in a level of detail
 --   kit.far_box(m, node, finish, size, at, col, level)   a plain box for the far level
+--   kit.carcass(k, finish, W, H, D, T, col [, y0])   a cabinet's shell, open toward +z: two sides, a back, a top
+--                                 and a floor of boards T thick, standing from y0 (0) up to H
+--   kit.facing(mesh)              a shape turned about +y (a disc, a knob) laid over to face +z
+--   kit.ball(r [, segs])          a ball about the origin with few triangles (mesh.sphere's has thousands)
 --
 -- A finish names one of the model's materials, the same ones a furniture piece stamped as a model has
 -- (prop_models.lua): furniture_wood, furniture_fabric, furniture, furniture_metal, furniture_ceramic, lit_band;
@@ -90,6 +94,28 @@ end
 
 function M.far_box(m, node, part, size, at, col, level)
   node:add(mesh.paint(mesh.translate(mesh.box(size), at), col), material_of(m, part), { level = level })
+end
+
+function M.carcass(k, part, W, H, D, T, col, y0)
+  y0 = y0 or 0
+  local h = H - y0
+  for _, x in ipairs{ -W / 2 + T / 2, W / 2 - T / 2 } do k.box(part, M.V(x, y0 + h / 2, 0), M.V(T, h, D), 0.006, col, 1) end
+  k.box(part, M.V(0, y0 + h / 2, -D / 2 + T / 2), M.V(W - 2 * T, h, T), 0.0, col, 1)
+  k.box(part, M.V(0, H - T / 2, 0), M.V(W - 2 * T, T, D), 0.0, col, 1)
+  k.box(part, M.V(0, y0 + T / 2, 0), M.V(W - 2 * T, T, D), 0.0, col, 1)
+end
+
+function M.facing(mesh_) return mesh.rotate_x(mesh_, math.pi / 2) end
+
+function M.ball(r, segs)
+  segs = segs or 12
+  local profile = {}
+  for i = 0, segs // 2 do
+    local t = -math.pi / 2 + math.pi * i / (segs // 2)
+    profile[#profile + 1] = { r * math.cos(t), r * math.sin(t) }
+  end
+  profile[1][1], profile[#profile][1] = 0, 0
+  return mesh.lathe{ profile = profile, segments = segs, smooth = true }
 end
 
 -- a caster standing on y = 0 under the origin: a fork and a wheel, `r` the wheel's radius

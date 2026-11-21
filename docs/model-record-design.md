@@ -1143,6 +1143,48 @@ New in how they are made:
 
 Seen: a sheet of each, and all 37 moving prefabs in the editor in play (the escalator from its foot).
 
+### The fifth: pieces for a home (2026-11-21)
+
+Glenn: "Things for a home?" 34 more models and 67 more prefabs from 11 recipes (two of the models are older
+recipes at a home's size), chosen against the furniture kit's still pieces (which already has the sofa, beds,
+tables, kitchen units, bathtub and vanity) and the earlier batches (fridge, washer, cupboard, recliner, lamp, fan):
+
+| Room | Models | What moves |
+|---|---|---|
+| Kitchen | `oven`, `dishwasher`, `toaster`, `stand_mixer`, `rice_cooker` | the oven's door and five knobs; the dishwasher's door and two racks; the lever and the toast; the mixer's head and whisk; the cooker's lid |
+| Bathroom | `toilet_lidded`, `pedal_bin`, `bathroom_cabinet`, `shower` | lid, seat and flush handle; pedal and lid; two mirrored doors; a glass door |
+| Bedroom | `wall_bed`, `sliding_wardrobe` | the bed comes down out of its cabinet and its legs fold out; two doors pass each other |
+| Child's room | `cradle`, `rocking_horse`, `toy_chest`, `baby_mobile` | rocking; the lid; the mobile turns |
+| Windows | `sash_window`, `casement_window`, `shoji_screens`, `curtains`, `venetian_blind`, `roller_blind` | the lower sash; two leaves; two paper screens on two tracks; twelve folds; every slat; the blind unrolls |
+| Living room | `upright_piano`, `grandfather_clock`, `record_player`, `metronome`, `globe`, `laptop` | the key cover and top; pendulum and three hands; platter, arm and cover; the arm; the globe; the screen |
+| Garden, porch, garage | `garden_gate`, `porch_swing`, `bbq`, `rotary_dryer`, `weathervane`, `wind_chime`, `garage_door` | the gate; the bench on its chains; the lid; the line's head; the vane; five tubes and a striker; the door's sections |
+
+`roller_blind` is the projector screen's recipe and `garage_door` the roller shutter's, each with a home's sizes
+in `models.lua`: a new size of a thing is a line of data.
+
+New in how they are made:
+
+- **Moves by the clock.** A part that goes and comes back used to time its wait from when it arrived. Parts with
+  different limits arrive at different times, so a shutter's sections, an awning's strips and a screen's strips
+  slowly fell out of step with each other. `model_moves.lua` gained `travel = seconds`: that long is allowed for
+  each move however soon the part stops, so parts given the same numbers stay in step for good. The shutter, the
+  awning and the projector screen now use it, as do the curtains, the blind, the wall bed and its legs, and any
+  two parts that must take turns (the wardrobe's doors).
+- **Curtains.** The strips trick sideways: each fold is a node that slides toward its side and stops where it is
+  gathered, so sending all of them outward at one speed bunches the curtain up fold by fold.
+- **Three more shared words** in `model_kit.lua`: `kit.carcass` (a cabinet's shell), `kit.facing` (a turned shape
+  laid over to face forward: a dial, a knob) and `kit.ball` (a ball of about a hundred triangles; `mesh.sphere`
+  makes about four thousand, which is too many for a knob).
+- **A script made of two.** `grandfather_clock_run.lua` calls the wall clock's script for the hands and a
+  `model_moves` list for the pendulum, so neither is copied.
+
+Seen: a sheet of each, and all 34 moving prefabs in the editor in play (and the shutter, the awning and the projector screen again).
+
+Not done: the window and door pieces are not yet what the building grammar cuts openings for (it draws its own
+windows); hanging pieces (`baby_mobile`, `roller_blind`) still sit half in the floor in the studio; and the older
+recipes that use `mesh.sphere` for small knobs (the espresso lever, the kiddie rides, the capsule machines, the
+racks, the barber pole, the queue posts) should change to `kit.ball`.
+
 ### What step 9 must build on: the furniture kit already has seats and verbs
 
 Found while choosing these (not known when the markers above were named): `assets/scripts/furniture_library.lua`

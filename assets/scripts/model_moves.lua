@@ -15,6 +15,12 @@
 --                                                             jump back and go again (an escalator's step, each taking
 --                                                             the place of the next); a negative speed runs it backward
 --
+--   { node = "strip_3", from = 0, to = 10, speed = 0.3,        the same going and coming back, but BY THE CLOCK: `travel`
+--     travel = 9, wait = 7 [, wait_back = 5] [, delay = 2] }  seconds are allowed for each move however soon the part
+--                                                             arrives. Parts given the same numbers stay in step for
+--                                                             good, which parts with different limits need (a
+--                                                             shutter's sections, a curtain's folds)
+--
 -- A move stopped short by the model's own limits counts as arrived, so `to` may ask for more than a part can give
 -- and the limit decides (a shutter's sections all sent up 5 m, each stopping in the box).
 --
@@ -59,6 +65,15 @@ function M.script(parts)
           st.target = st.target + p.step
           st.hold = (p.wait or 1) + math.abs(p.step) / p.speed
           entity.model_set(e, p.node, st.target, p.speed)
+        end
+      elseif st and p.travel then
+        st.time = st.time + dt
+        local t = st.time - (p.delay or 0)
+        local out_for = p.travel + (p.wait or 1)
+        local out = t >= 0 and t % (out_for + p.travel + (p.wait_back or p.wait or 1)) < out_for
+        if out ~= st.out then
+          st.out = out
+          entity.model_set(e, p.node, out and p.to or p.from, p.speed)
         end
       elseif st then
         if st.moving then

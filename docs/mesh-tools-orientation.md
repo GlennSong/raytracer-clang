@@ -168,9 +168,10 @@ waits: a recipe, a line in `models.lua`, a line in `prefabs.lua`.
 
 For a new piece of furniture or street kit with moving parts: build it with `model_kit.lua` (never a private copy
 of the furniture kit's helpers), give its prefab a script that is a list for `model_moves.lua` (never a new loop),
+and when two of its parts must stay in step or take turns give them `travel` (moves timed by the clock),
 and check it with `rt_model_sheet assets/scripts/<recipe>.lua --set <node>=<value>` and then in the editor in play.
-The lists of what exists are the tables in `docs/model-record-design.md`, "The third" and "The fourth" (by kind of
-place). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
+The lists of what exists are the tables in `docs/model-record-design.md`, "The third", "The fourth" (by kind of
+place) and "The fifth" (a home, by room). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
 (`furniture_library.lua`), and interactions on prefabs must extend that, not sit beside it.
 
 
