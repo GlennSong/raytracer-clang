@@ -1263,6 +1263,55 @@ prefabs indoors is then a change to what one entry names, not a new planner.
 after the parent branch's agent-brain work is merged: parks and kerbs choose prefabs, then the floor planner, then
 the building grammar's doors and windows, each deleting what it replaces. The last three change baked output.
 
+### Arguments on a placement, and one palette (agreed with Glenn, 2026-11-21; not built)
+
+Glenn, on windows of different sizes: "I like the idea of arguments." And on finishes: "we should have a palette
+of a dozen colors or materials so we can have a variety but not an infinite variety."
+
+**What it is.** A placement may carry arguments: `{ prefab = "curtains", args = { width = 2.3, height = 2.1 } }`.
+The engine lays them over the prefab's own model line and asks the model store for that model. Copies with the
+same arguments share one model, as copies of any model do now. Collision, markers, levels of detail and moving
+parts come from the model, so they follow the size without being told.
+
+**Rules, so it does not get muddy:**
+
+1. **A prefab line lists what a placement may set** (`open = { "width", "height", "fabric" }`). Anything else is
+   fixed by the line. An argument that changes what the thing is (the kitchen recipe's `kind`) is never open.
+2. **Sizes snap.** A size is rounded to the recipe's step (10 cm unless the recipe says otherwise) before the
+   model is asked for, so a street of nearly equal windows is a few models, not hundreds.
+3. **Out of range is an error at the placement**, reported with the place. It is not clamped: 4 m curtains on a
+   6 m window is a planner's mistake to fix, not to hide.
+4. **No script or interaction hard-codes a count or a distance.** It reads the model (its nodes, its markers), as
+   the escalator and the shutter scripts do.
+5. **A line or an argument?** A separate prefab line when the city treats it as a different thing (other tags,
+   other places it belongs: `garage_door`). An argument when it is the same thing fitted to its spot.
+6. **No scaling of a built model**, and no arguments on states or behaviour: size and finish only.
+
+**One palette.** Finishes are chosen by NAME from short lists, never as a free colour:
+
+| List | How many | Where it is today |
+|---|---|---|
+| woods | 4 (oak, walnut, birch, ebonised) | the furniture kit's swatch book |
+| fabrics | 8 | the furniture kit's swatch book |
+| paints | 5 (red, blue, yellow, green, orange) | `playground_kit.lua` |
+| metals and plain finishes | white, black, steel, brass, chrome | written again in each recipe, with slightly different greys |
+
+The last row is a duplication found while checking: about a dozen of the new recipes each define their own
+"steel" and "white". The work is to bring all four lists to about a dozen entries each IN ONE PLACE (the kit's
+swatch books, which `model_kit.lua` already reads), and have every recipe's `finish` choose from it by name.
+
+**A style** is then a few names (this flat: walnut, sage, brass) applied as arguments to every piece placed in
+that flat or on that floor. That is how homes and offices differ without a second system, and it keeps the
+number of distinct models small: a piece in four woods is four models, however many flats use them.
+
+**Windows.** The building grammar knows each opening's width, height and sill. It passes them to whatever dresses
+the window (curtains in a home, blinds in an office, a shutter on a shop: the style decides which), the way the
+floor planner passes a place to a chair.
+
+**Where it goes in the order:** with "many copies", because both are about how copies share a model. The palette
+clean-up can be done before either. The proof is in `prefab_town`: windows of several sizes cut into its rooms,
+each dressed from its own size, and the flat in one style and the office in another.
+
 ### The test level: prefab_town (2026-11-21)
 
 A small place to stand prefabs in before the city does it: `assets/levels/prefab_town.json`.
