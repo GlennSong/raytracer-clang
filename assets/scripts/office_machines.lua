@@ -12,7 +12,7 @@ local kit = require "model_kit"
 local V = kit.V
 
 local a = params{ kind = { "printer", "shredder", "server_rack", "flip_chart", "paper_trimmer" } }
-local BODY, DARK, PAPER = V(0.86, 0.86, 0.84), kit.BLACK * 1.6, V(0.97, 0.97, 0.95)
+local BODY, DARK, PAPER = kit.paint.white, kit.paint.black, V(0.97, 0.97, 0.95)
 local m = model.new()
 local far = m:level(30)
 local c = kit.maker()

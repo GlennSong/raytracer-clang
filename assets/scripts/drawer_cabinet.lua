@@ -16,8 +16,7 @@ local a = params{
 }
 local count = math.floor(a.drawers + 0.5)
 local W, D, DH = a.width, a.depth, a.drawer
-local part = a.finish == "wood" and "wood" or "paint"
-local col = ({ steel = V(0.55, 0.57, 0.6), white = kit.WHITE, black = kit.BLACK * 1.8, wood = kit.wood(a.wood) })[a.finish]
+local col, part = kit.finish(a.finish == "wood" and a.wood or a.finish)
 local handle = a.finish == "black" and kit.CHROME or kit.BLACK * 2
 
 local m = model.new()

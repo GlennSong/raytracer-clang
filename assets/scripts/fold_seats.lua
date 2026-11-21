@@ -12,7 +12,8 @@ local a = params{
   fabric = kit.fabric_names,
   wood   = kit.wood_names,
 }
-local N, fabric, wood = math.floor(a.seats + 0.5), kit.fabric(a.fabric), kit.wood(a.wood)
+local N, wood = math.floor(a.seats + 0.5), kit.wood(a.wood)
+local fabric, cloth = kit.upholstery(a.fabric)
 local cinema = a.kind == "cinema"
 local m = model.new()
 local far = m:level(40)
@@ -29,11 +30,11 @@ for i = 0, N do                                  -- the standards between the se
 end
 for i = 1, N do                                  -- the backs
   local x = -W / 2 + (i - 0.5) * PITCH
-  if cinema then c.cushion("fabric", V(x, 0.72, -0.2), V(PITCH - 0.07, 0.62, 0.1), fabric, { face = "z", r = 0.06, crown = 0.02, tilt = -0.18 })
+  if cinema then c.cushion(cloth, V(x, 0.72, -0.2), V(PITCH - 0.07, 0.62, 0.1), fabric, { face = "z", r = 0.06, crown = 0.02, tilt = -0.18 })
   else c.tilted("wood", V(x, 0.66, -0.2), V(PITCH - 0.06, 0.44, 0.018), 0.01, -0.2, wood) end
 end
 kit.put(m, m, c)
-kit.far_box(m, m, cinema and "fabric" or "wood", { W, 0.9, 0.12 }, { 0, 0.55, -0.2 }, cinema and fabric or wood, far)
+kit.far_box(m, m, cinema and cloth or "wood", { W, 0.9, 0.12 }, { 0, 0.55, -0.2 }, cinema and fabric or wood, far)
 m:shape("backs", { box = { W, 0.95, 0.1 }, pos = { 0, 0.5, -0.2 }, turn = { -11, 0, 0 } })
 
 for i = 1, N do
@@ -41,7 +42,7 @@ for i = 1, N do
   -- the pan stands up against the back; turning it about its hinge brings it down level
   local seat = m:node("seat_" .. i, { pos = { x, 0.42, -0.14 }, motion = { turn = { 1, 0, 0 }, min = 0, max = 80 } })
   local k = kit.maker()
-  if cinema then k.cushion("fabric", V(0, 0.22, 0.03), V(PITCH - 0.08, 0.44, 0.09), fabric, { face = "z", r = 0.05, crown = 0.02 })
+  if cinema then k.cushion(cloth, V(0, 0.22, 0.03), V(PITCH - 0.08, 0.44, 0.09), fabric, { face = "z", r = 0.05, crown = 0.02 })
   else k.box("wood", V(0, 0.2, 0.012), V(PITCH - 0.07, 0.4, 0.022), 0.01, wood, 1) end
   kit.put(m, seat, k)
   seat:shape("seat_" .. i, { box = { PITCH - 0.08, 0.42, 0.06 }, pos = { 0, 0.21, 0.02 } })

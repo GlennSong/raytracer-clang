@@ -15,7 +15,7 @@ local kit = require "model_kit"
 local V = kit.V
 
 local a = params{ kind = { "ballot_box", "room_safe", "fire_hose_cabinet", "reception_bell", "teller_window", "ticket_dispenser" } }
-local STEEL, DARK, BRASS = V(0.72, 0.73, 0.75), kit.BLACK * 1.5, V(0.8, 0.62, 0.25)
+local STEEL, DARK, BRASS = kit.metal.steel, kit.paint.black, kit.metal.brass
 local m = model.new()
 local far = m:level(30)
 local c = kit.maker()

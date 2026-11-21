@@ -11,7 +11,7 @@ local a = params{
   finish = { "steel", "black", "bronze" },
 }
 local R, H = a.radius, a.height
-local col = ({ steel = V(0.7, 0.71, 0.73), black = kit.BLACK * 1.8, bronze = V(0.45, 0.33, 0.2) })[a.finish]
+local col, part = kit.finish(a.finish)
 local GLASS = V(0.8, 0.9, 0.92)
 local m = model.new()
 local far = m:level(60)

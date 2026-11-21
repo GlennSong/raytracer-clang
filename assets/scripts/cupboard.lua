@@ -19,8 +19,7 @@ local a = params{
 }
 local W, H, D, FOOT = a.width, a.height, a.depth, a.plinth
 local doors, shelves = math.floor(a.doors + 0.5), math.floor(a.shelves + 0.5)
-local part = a.finish == "wood" and "wood" or "paint"
-local col = ({ wood = kit.wood(a.wood), white = kit.WHITE, black = kit.BLACK * 1.8, steel = V(0.55, 0.57, 0.6) })[a.finish]
+local col, part = kit.finish(a.finish == "wood" and a.wood or a.finish)
 local handle = a.finish == "black" and kit.CHROME or kit.BLACK * 2
 
 local m = model.new()

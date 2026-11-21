@@ -13,8 +13,7 @@ local a = params{
   finish  = { "white", "steel", "black" },
 }
 local W, H, D, FZ = a.width, a.height, a.depth, a.freezer
-local col = ({ white = kit.WHITE, steel = V(0.62, 0.64, 0.66), black = kit.BLACK * 1.8 })[a.finish]
-local part = a.finish == "steel" and "metal" or "paint"
+local col, part = kit.finish(a.finish)
 local LINER = V(0.93, 0.94, 0.95)
 
 local m = model.new()

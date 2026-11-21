@@ -14,7 +14,7 @@ local a = params{
   finish  = { "black", "white", "steel" },
 }
 local N, DW, H, S = math.floor(a.doors + 0.5), a.door, a.height, math.floor(a.shelves + 0.5)
-local col = ({ black = kit.BLACK * 1.6, white = kit.WHITE, steel = V(0.62, 0.64, 0.66) })[a.finish]
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(40)
 local W, D, T, FOOT, TOP = N * DW, 0.7, 0.04, 0.12, 0.16

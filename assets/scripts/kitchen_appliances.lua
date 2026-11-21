@@ -14,8 +14,7 @@ local a = params{
   kind   = { "oven", "dishwasher", "toaster", "stand_mixer", "rice_cooker" },
   finish = { "white", "steel", "black", "red" },
 }
-local col = ({ white = kit.WHITE, steel = V(0.68, 0.7, 0.72), black = kit.BLACK * 1.6, red = kit.paint.red })[a.finish]
-local part = a.finish == "steel" and "metal" or "paint"
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(25)
 local c = kit.maker()

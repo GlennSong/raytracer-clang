@@ -17,7 +17,8 @@ local a = params{
   fabric = kit.fabric_names,                      -- the seat's and the back's cloth
   arms   = { "arms", "none" },                    -- arm rests, or none
 }
-local fabric = kit.fabric(a.fabric) * 0.75
+local fabric, cloth = kit.upholstery(a.fabric)
+fabric = fabric * 0.75
 local BLACK, CHROME = kit.BLACK, kit.CHROME
 
 local m = model.new()
@@ -50,7 +51,7 @@ kit.put(m, lift, col)
 local swivel = lift:node("swivel", { pos = { 0, SEAT, 0 }, motion = { turn = { 0, 1, 0 } } })
 local seat = kit.maker()
 seat.box("hard", V(0, 0.005, 0), V(0.30, 0.03, 0.30), 0.01, BLACK, 1)                 -- the mechanism
-seat.cushion("fabric", V(0, 0.05, 0.02), V(0.50, 0.08, 0.48), fabric,
+seat.cushion(cloth, V(0, 0.05, 0.02), V(0.50, 0.08, 0.48), fabric,
              { r = 0.08, roll = 0.03, crown = 0.012,
                warp = function(u, v, w)                                               -- dished, the front rolled down
                  return 0, -0.012 * math.max(0, 1 - u * u) * math.max(0, 1 - w * w) * (v > 0 and 1 or 0)
@@ -66,7 +67,7 @@ if a.arms == "arms" then
   end
 end
 kit.put(m, swivel, seat)
-kit.far_box(m, swivel, "fabric", { 0.5, 0.1, 0.48 }, { 0, 0.05, 0.02 }, fabric, far)
+kit.far_box(m, swivel, cloth, { 0.5, 0.1, 0.48 }, { 0, 0.05, 0.02 }, fabric, far)
 swivel:shape("seat", { box = { 0.5, 0.1, 0.48 }, pos = { 0, 0.05, 0.02 }, friction = 0.9 })
 swivel:marker("seat", { pos = { 0, 0.09, 0.02 }, role = "seat", size = 0.48 })
 swivel:marker("lever", { pos = { 0.30, -0.01, 0.05 }, role = "hold" })
@@ -76,10 +77,10 @@ local HINGE = V(0, 0.03, -0.12)
 local recline = swivel:node("recline", { pos = { HINGE[1], HINGE[2], HINGE[3] }, motion = { turn = { -1, 0, 0 }, min = 0, max = 20 } })
 local back = kit.maker()
 back.bent("hard", { V(0, -0.02, 0.02), V(0, 0.0, -0.10), V(0, 0.15, -0.13) }, 0.05, 0.016, BLACK, { count = 8 })    -- the spine
-back.cushion("fabric", V(0, 0.33, -0.09), V(0.46, 0.54, 0.07), fabric,
+back.cushion(cloth, V(0, 0.33, -0.09), V(0.46, 0.54, 0.07), fabric,
              { face = "z", r = 0.09, roll = 0.025, crown = 0.01, bow = 0.045, tilt = -0.18,
                warp = function(u, v, w) return 0, 0.02 * math.exp(-((w - 0.45) / 0.3) ^ 2), 0 end })   -- the lumbar swell
 kit.put(m, recline, back)
-kit.far_box(m, recline, "fabric", { 0.46, 0.54, 0.07 }, { 0, 0.33, -0.09 }, fabric, far)
+kit.far_box(m, recline, cloth, { 0.46, 0.54, 0.07 }, { 0, 0.33, -0.09 }, fabric, far)
 recline:shape("back", { box = { 0.46, 0.54, 0.08 }, pos = { 0, 0.33, -0.09 }, turn = { -10, 0, 0 } })
 return m

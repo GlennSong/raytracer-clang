@@ -16,7 +16,7 @@ local a = params{
   kind = { "flap_gate", "departure_board", "baggage_scanner", "turnstile_full" },
   rows = { 5, min = 2, max = 10, step = 1 },
 }
-local STEEL, DARK = V(0.72, 0.73, 0.75), kit.BLACK * 1.5
+local STEEL, DARK = kit.metal.steel, kit.paint.black
 local m = model.new()
 local far = m:level(50)
 local c = kit.maker()

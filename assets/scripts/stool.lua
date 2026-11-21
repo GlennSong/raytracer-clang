@@ -13,7 +13,7 @@ local a = params{
   kind   = { "bar", "diner", "lab" },
   fabric = kit.fabric_names,
 }
-local fabric = kit.fabric(a.fabric)
+local fabric, cloth = kit.upholstery(a.fabric)
 local m = model.new()
 local far = m:level(25)
 local SEAT = ({ bar = 0.76, diner = 0.62, lab = 0.56 })[a.kind]
@@ -46,13 +46,13 @@ kit.put(m, lift, l)
 local swivel = lift:node("swivel", { pos = { 0, SEAT - 0.06, 0 }, motion = { turn = { 0, 1, 0 } } })
 local s = kit.maker()
 s.turned("hard", V(0, 0, 0), { { 0, 0 }, { 0.15, 0 }, { 0.17, 0.02 }, { 0, 0.02 } }, kit.BLACK, 1, 20)
-s.turned("fabric", V(0, 0.02, 0), { { 0, 0 }, { 0.175, 0 }, { 0.185, 0.02 }, { 0.17, 0.045 }, { 0.1, 0.055 }, { 0, 0.058 } }, fabric, 1, 24)
+s.turned(cloth, V(0, 0.02, 0), { { 0, 0 }, { 0.175, 0 }, { 0.185, 0.02 }, { 0.17, 0.045 }, { 0.1, 0.055 }, { 0, 0.058 } }, fabric, 1, 24)
 if a.kind ~= "diner" then
   s.bent("hard", { V(0, 0.0, -0.14), V(0, 0.08, -0.2), V(0, 0.2, -0.2) }, 0.04, 0.014, kit.BLACK, { count = 6 })
-  s.cushion("fabric", V(0, 0.26, -0.19), V(0.3, 0.14, 0.04), fabric, { face = "z", r = 0.04, bow = 0.03 })
+  s.cushion(cloth, V(0, 0.26, -0.19), V(0.3, 0.14, 0.04), fabric, { face = "z", r = 0.04, bow = 0.03 })
 end
 kit.put(m, swivel, s)
-kit.far_box(m, swivel, "fabric", { 0.34, 0.07, 0.34 }, { 0, 0.035, 0 }, fabric, far)
+kit.far_box(m, swivel, cloth, { 0.34, 0.07, 0.34 }, { 0, 0.035, 0 }, fabric, far)
 swivel:shape("seat", { box = { 0.34, 0.07, 0.34 }, pos = { 0, 0.035, 0 }, friction = 0.9 })
 swivel:marker("seat", { pos = { 0, 0.078, 0 }, role = "seat", size = 0.34 })
 return m

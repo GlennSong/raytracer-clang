@@ -13,7 +13,7 @@ local a = params{
   finish   = { "steel", "white", "green", "blue" },
 }
 local W, H, N = a.width, a.height, math.floor(a.sections + 0.5)
-local col = ({ steel = V(0.62, 0.64, 0.66), white = kit.WHITE, green = kit.paint.green, blue = kit.paint.blue })[a.finish]
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(80)
 local each = H / N

@@ -14,7 +14,7 @@ local a = params{
   finish = { "black", "white", "red", "green", "steel" },
 }
 local L = a.arm
-local col = ({ black = kit.BLACK * 1.5, white = kit.WHITE, steel = kit.STEEL, red = kit.paint.red, green = kit.paint.green })[a.finish]
+local col, part = kit.finish(a.finish)
 
 local m = model.new()
 local far = m:level(20)

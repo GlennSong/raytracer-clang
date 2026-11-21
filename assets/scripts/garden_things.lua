@@ -21,7 +21,7 @@ local wood, paint = kit.wood(a.wood), kit.paint[a.paint]
 local m = model.new()
 local far = m:level(50)
 local c = kit.maker()
-local IRON = kit.BLACK * 1.6
+local IRON = kit.metal.iron
 
 if a.kind == "gate" then
   local W, H = 1.0, 1.0

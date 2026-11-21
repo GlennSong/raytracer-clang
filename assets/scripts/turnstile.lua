@@ -10,8 +10,7 @@ local a = params{
   way    = { 0.55, min = 0.45, max = 0.8 },       -- an arm's reach across the way through (metres)
 }
 local L = a.way
-local col = ({ steel = V(0.62, 0.64, 0.66), black = kit.BLACK * 1.8, blue = kit.paint.blue })[a.finish]
-local part = a.finish == "steel" and "metal" or "paint"
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(40)
 local c = kit.maker()

@@ -15,7 +15,7 @@ local a = params{
   fabric = kit.fabric_names,
 }
 local cloth = kit.fabric(a.fabric)
-local GREY, CREAM = V(0.62, 0.64, 0.66), V(0.9, 0.89, 0.84)
+local GREY, CREAM = kit.metal.steel, kit.paint.cream
 local m = model.new()
 local far = m:level(40)
 local c = kit.maker()

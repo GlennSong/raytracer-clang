@@ -11,7 +11,10 @@
 --   kit.WOOD, kit.FABRIC, kit.WHITE, kit.BLACK, kit.STEEL, kit.CHROME, kit.PORCELAIN     the kit's colours
 --   kit.wood_names, kit.fabric_names     the names of those woods and fabrics, in order, for a recipe's `params`
 --   kit.wood(name), kit.fabric(name)     a colour by its name
---   kit.paint[name], kit.paints          the painted-metal colours (the playground's; playground_kit.lua)
+--   kit.paint[name], kit.paints          the twelve paints; kit.metal[name], kit.metals the six metals
+--   kit.finish(name)                     any paint, metal or wood by name: its colour and the finish to build it in
+--   kit.upholstery(name)                 a cloth or a leather by name: its colour and "fabric" or "leather"
+--   (the palette itself is in furniture_models.lua, "THE PALETTE": a recipe never writes such a colour itself)
 --
 --   local k = kit.maker()         something to build on: k.box, k.rod, k.turned, k.cushion, k.front, k.bent ...
 --                                 (furniture_models.lua, "THE MAKER"), and k.pipe(part, points, r, col, o) for a
@@ -32,23 +35,36 @@ local playground = require "playground_kit"
 local F = furniture_kit
 
 local M = { V = F.V, grey = F.grey, WOOD = F.WOOD, FABRIC = F.FABRIC, WHITE = F.WHITE, BLACK = F.BLACK, STEEL = F.STEEL,
-            CHROME = F.CHROME, PORCELAIN = F.PORCELAIN, LINEN = F.LINEN, paint = {}, paints = playground.paints }
--- the playground's paints, as colours that scale (col * 0.8)
-for name, c in pairs(playground.paint) do M.paint[name] = F.V(c[1], c[2], c[3]) end
+            CHROME = F.CHROME, PORCELAIN = F.PORCELAIN, LINEN = F.LINEN }
 
-M.wood_names = { "oak", "walnut", "birch", "ebonised" }
-M.fabric_names = { "grey", "navy", "sage", "rust", "oat", "charcoal", "mustard", "teal" }
+-- THE PALETTE, by name (furniture_models.lua keeps it: 8 woods, 12 upholsteries, 12 paints, 6 metals)
+M.wood_names, M.fabric_names = F.WOOD_NAMES, F.FABRIC_NAMES
+M.paint, M.paints = F.PAINT, F.PAINT_NAMES
+M.metal, M.metals = F.METAL, F.METAL_NAMES
 local function by_name(names, list, name)
   for i, n in ipairs(names) do if n == name then return list[i] end end
   return list[1]
 end
 function M.wood(name) return by_name(M.wood_names, F.WOOD, name) end
 function M.fabric(name) return by_name(M.fabric_names, F.FABRIC, name) end
+-- an upholstery by name: its colour, and the finish to build it in ("fabric", or "leather" for the four leathers)
+function M.upholstery(name)
+  return M.fabric(name), (name or ""):sub(1, 8) == "leather_" and "leather" or "fabric"
+end
+-- any hard finish by name, from the paints, the metals or the woods: its colour, and the finish to build it in
+-- ("paint", "metal" or "wood"). A name in none of them is the recipe's mistake.
+function M.finish(name)
+  if F.PAINT[name] then return F.PAINT[name], "paint" end
+  if F.METAL[name] then return F.METAL[name], "metal" end
+  for i, n in ipairs(M.wood_names) do if n == name then return F.WOOD[i], "wood" end end
+  error("model_kit: no finish named '" .. tostring(name) .. "' in the palette", 2)
+end
 
 -- THE FINISHES: a maker's part name, the material's name on the model, and the material
 M.finishes = {
   wood    = { "furniture_wood", { surface = "woodgrain", roughness = 0.55 } },
   fabric  = { "furniture_fabric", { surface = "fabric", roughness = 0.95 } },
+  leather = { "furniture_leather", { roughness = 0.45 } },
   hard    = { "furniture", { roughness = 0.55 } },
   metal   = { "furniture_metal", { roughness = 0.3, metallic = 0.9 } },
   ceramic = { "furniture_ceramic", { roughness = 0.15 } },

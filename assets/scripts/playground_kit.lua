@@ -12,14 +12,10 @@
 --   kit.far(m, metres)               the model's far level, and kit.pipe's `sides` for it (4)
 local M = {}
 
-M.paints = { "red", "blue", "yellow", "green", "orange" }
-M.paint = {
-  red    = { 0.78, 0.13, 0.1 },
-  blue   = { 0.1, 0.32, 0.7 },
-  yellow = { 0.92, 0.72, 0.08 },
-  green  = { 0.16, 0.55, 0.24 },
-  orange = { 0.92, 0.42, 0.06 },
-}
+-- the paints are the palette's (furniture_models.lua, "THE PALETTE"): twelve, by name
+require "furniture_models"
+M.paints = furniture_kit.PAINT_NAMES
+M.paint = furniture_kit.PAINT
 M.zinc = { 0.66, 0.68, 0.7 }
 M.black = { 0.06, 0.06, 0.065 }
 M.timber = { 0.56, 0.38, 0.2 }

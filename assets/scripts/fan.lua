@@ -12,7 +12,7 @@ local a = params{
   finish = { "white", "black", "steel", "walnut" },
 }
 local count, R = math.floor(a.blades + 0.5), a.size
-local col = ({ white = kit.WHITE, black = kit.BLACK * 1.6, steel = kit.STEEL, walnut = kit.WOOD[2] })[a.finish]
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(30)
 
@@ -36,7 +36,7 @@ if a.kind == "ceiling" then
     local one = kit.maker()
     blade(one, "x", R, R * 0.24, col)
     one.box("x", V(0.06, 0, 0), V(0.1, 0.006, 0.03), 0.0, col, 1)
-    k.put(a.finish == "walnut" and "wood" or "paint", mesh.rotate_y(mesh.merge(one.lists.x), 2 * math.pi * i / count))
+    k.put(part, mesh.rotate_y(mesh.merge(one.lists.x), 2 * math.pi * i / count))
   end
   kit.put(m, blades, k)
   kit.far_box(m, blades, "paint", { 2 * R, 0.01, 2 * R }, { 0, 0, 0 }, col, far)

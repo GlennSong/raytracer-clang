@@ -16,7 +16,7 @@ local a = params{
   paint = { "red", "blue", "yellow", "green", "orange" },
 }
 local paint = kit.paint[a.paint]
-local DARK, GREY = kit.BLACK * 1.5, V(0.62, 0.64, 0.66)
+local DARK, GREY = kit.paint.black, kit.metal.steel
 local m = model.new()
 local far = m:level(40)
 local c = kit.maker()

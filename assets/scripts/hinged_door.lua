@@ -16,8 +16,7 @@ local a = params{
   wood   = kit.wood_names,
 }
 local leaves, W, H = math.floor(a.leaves + 0.5), a.width, a.height
-local part = a.finish == "wood" and "wood" or "paint"
-local col = ({ wood = kit.wood(a.wood), white = kit.WHITE, grey = V(0.5, 0.52, 0.55), green = kit.paint.green, blue = kit.paint.blue, red = kit.paint.red })[a.finish]
+local col, part = kit.finish(a.finish == "wood" and a.wood or a.finish)
 local GLASS, FRAME = V(0.8, 0.9, 0.92), kit.WHITE * 0.92
 local m = model.new()
 local far = m:level(50)

@@ -9,7 +9,7 @@ local a = params{
   finish = { "white", "blue", "red" },
 }
 local W = a.width
-local col = a.finish == "white" and kit.WHITE or kit.paint[a.finish]
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(40)
 local D, H, T = 0.75, 0.85, 0.05

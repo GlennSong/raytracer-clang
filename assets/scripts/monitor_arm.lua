@@ -17,7 +17,7 @@ local a = params{
   finish = { "black", "white", "steel" },
 }
 local SW, SH, L, P = a.screen, a.screen * 9 / 16, a.reach, a.post
-local col = ({ black = kit.BLACK * 1.5, white = kit.WHITE, steel = kit.STEEL })[a.finish]
+local col, part = kit.finish(a.finish)
 
 local m = model.new()
 local far = m:level(25)

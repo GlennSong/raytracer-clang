@@ -25,10 +25,28 @@ end
 local function grey(k) return V(k, k, k) end
 local PI = math.pi
 
--- THE SWATCH BOOKS. Wood: oak, walnut, birch, ebonised. Fabric: grey, navy, sage, rust, oat, charcoal, mustard, teal.
-local WOOD = { V(0.66, 0.50, 0.33), V(0.40, 0.27, 0.18), V(0.82, 0.72, 0.56), V(0.24, 0.18, 0.15) }
+-- THE PALETTE (#191; Glenn, 2026-11-21: "a palette of a dozen colors or materials so we can have a variety but not
+-- an infinite variety"): every finish a model may be given is a NAME from one of four lists, kept here and nowhere
+-- else. model_kit.lua and playground_kit.lua read them (`furniture_kit`, below); a recipe never writes a colour of
+-- its own for a wood, a cloth, a paint or a metal.
+--   woods (8), upholstery (12: eight cloths, four leathers), paints (12), metals (6)
+-- A kit piece's variant bits pick among the FIRST four woods and the FIRST eight cloths only (woodOf, fabricOf), so
+-- adding to the ends of these lists does not change any piece the city already builds.
+local WOOD = { V(0.66, 0.50, 0.33), V(0.40, 0.27, 0.18), V(0.82, 0.72, 0.56), V(0.24, 0.18, 0.15),
+               V(0.80, 0.66, 0.46), V(0.55, 0.30, 0.20), V(0.85, 0.70, 0.45), V(0.52, 0.36, 0.22) }
+local WOOD_NAMES = { "oak", "walnut", "birch", "ebonised", "maple", "cherry", "pine", "teak" }
 local FABRIC = { V(0.48, 0.50, 0.53), V(0.20, 0.26, 0.40), V(0.45, 0.53, 0.42), V(0.62, 0.34, 0.24),
-                 V(0.74, 0.68, 0.58), V(0.22, 0.22, 0.24), V(0.72, 0.56, 0.22), V(0.20, 0.42, 0.44) }
+                 V(0.74, 0.68, 0.58), V(0.22, 0.22, 0.24), V(0.72, 0.56, 0.22), V(0.20, 0.42, 0.44),
+                 V(0.08, 0.08, 0.09), V(0.60, 0.40, 0.24), V(0.36, 0.10, 0.10), V(0.86, 0.82, 0.72) }
+local FABRIC_NAMES = { "grey", "navy", "sage", "rust", "oat", "charcoal", "mustard", "teal",
+                       "leather_black", "leather_tan", "leather_oxblood", "leather_cream" }   -- the last four are leather
+local PAINT_NAMES = { "red", "blue", "yellow", "green", "orange", "white", "black", "grey", "navy", "teal", "pink", "cream" }
+local PAINT = { red = V(0.78, 0.13, 0.10), blue = V(0.10, 0.32, 0.70), yellow = V(0.92, 0.72, 0.08), green = V(0.16, 0.55, 0.24),
+                orange = V(0.92, 0.42, 0.06), white = V(0.90, 0.90, 0.88), black = V(0.11, 0.11, 0.12), grey = V(0.50, 0.52, 0.55),
+                navy = V(0.10, 0.15, 0.32), teal = V(0.10, 0.48, 0.50), pink = V(0.88, 0.50, 0.60), cream = V(0.90, 0.89, 0.84) }
+local METAL_NAMES = { "steel", "chrome", "brass", "iron", "copper", "bronze" }
+local METAL = { steel = V(0.62, 0.64, 0.67), chrome = V(0.85, 0.86, 0.88), brass = V(0.80, 0.62, 0.25), iron = V(0.11, 0.11, 0.12),
+                copper = V(0.72, 0.45, 0.20), bronze = V(0.45, 0.33, 0.20) }
 local WHITE, BLACK, STEEL, CHROME = V(0.90, 0.90, 0.88), V(0.07, 0.07, 0.08), V(0.62, 0.64, 0.67), V(0.85, 0.86, 0.88)
 local PORCELAIN, LINEN = V(0.95, 0.95, 0.93), V(0.93, 0.92, 0.88)
 -- the beach's cloths (a lounger's pad, an umbrella, a towel): red, blue, yellow, teal, orange, navy, pink, green
@@ -245,7 +263,9 @@ furniture_models = M
 -- the maker, the vectors and the swatch books, for a recipe that builds a MODEL with moving parts out of the same
 -- shape words (model_kit.lua; #191). Not a piece: the engine asks `furniture_models` for pieces by name.
 furniture_kit = { maker = maker, V = V, grey = grey, WOOD = WOOD, FABRIC = FABRIC, WHITE = WHITE, BLACK = BLACK,
-                  STEEL = STEEL, CHROME = CHROME, PORCELAIN = PORCELAIN, LINEN = LINEN, BEACH = BEACH }
+                  STEEL = STEEL, CHROME = CHROME, PORCELAIN = PORCELAIN, LINEN = LINEN, BEACH = BEACH,
+                  WOOD_NAMES = WOOD_NAMES, FABRIC_NAMES = FABRIC_NAMES, PAINT = PAINT, PAINT_NAMES = PAINT_NAMES,
+                  METAL = METAL, METAL_NAMES = METAL_NAMES }
 
 -- the swivel chair's five-star base and the stacking pedestal (DeskPod, Cubicle, MeetingTable)
 local SWIVEL_BASE = { { 0.26, 0.0 }, { 0.26, 0.03 }, { 0.03, 0.06 }, { 0.025, 0.44 }, { 0.0, 0.45 } }

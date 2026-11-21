@@ -11,7 +11,7 @@ local a = params{
   finish = { "steel", "brass", "black" },
 }
 local W, H = a.width, a.height
-local col = ({ steel = V(0.7, 0.71, 0.73), brass = V(0.72, 0.58, 0.3), black = kit.BLACK * 2 })[a.finish]
+local col, part = kit.finish(a.finish)
 local m = model.new()
 local far = m:level(60)
 local F = 0.09                                 -- the frame's width

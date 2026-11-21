@@ -7,7 +7,7 @@ local V = kit.V
 
 local a = params{ wood = { "walnut", "oak", "birch", "ebonised" } }
 local wood = kit.wood(a.wood)
-local BRASS = V(0.8, 0.62, 0.25)
+local BRASS = kit.metal.brass
 local W, D, FOOT, HOOD = 0.46, 0.26, 0.5, 1.52          -- the hood begins at HOOD and holds the dial
 local m = model.new()
 local far = m:level(40)

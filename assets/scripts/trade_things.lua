@@ -21,7 +21,7 @@ local a = params{
   height = { 2.2, min = 1.8, max = 3.2 },         -- and its height
 }
 local wood = kit.wood(a.wood)
-local STEEL, DARK, BRASS, CREAM = V(0.72, 0.73, 0.75), kit.BLACK * 1.5, V(0.8, 0.62, 0.25), V(0.9, 0.89, 0.84)
+local STEEL, DARK, BRASS, CREAM = kit.metal.steel, kit.paint.black, kit.metal.brass, kit.paint.cream
 local m = model.new()
 local far = m:level(40)
 local c = kit.maker()
