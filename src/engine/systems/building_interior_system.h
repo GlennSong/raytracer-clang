@@ -13,6 +13,9 @@
 #include <utility>
 #include <vector>
 
+#include <map>
+#include <memory>
+#include <string>
 namespace engine {
 
 class PhysicsSystem;
@@ -69,6 +72,7 @@ public:
 private:
     struct Resident {
         std::vector<Entity> entities;
+        std::vector<Entity> prefabs;     // kit pieces stood as prefabs (a level's prefabSwaps): unstamped on release
         std::vector<MeshHandle> meshes;
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
         int k0 = 0, k1 = -1;   // the storey window grown
@@ -92,6 +96,18 @@ private:
     std::unordered_map<int, std::array<TextureHandle, 4>> surfTex_;
     // The FURNITURE KIT's meshes on the GPU (buildings M4b): one per (piece, variant, finish), uploaded on first
     // use and kept -- every resident building's instance groups draw from them.
+    // PREFABS IN PLACE OF KIT PIECES (CityBuildings::prefabSwaps): the list read (kit piece -> the prefab that stands
+    // in its place, and how far from the wall its middle stands; < 0: half the kit piece's depth), and what
+    // dresses a stamped prefab's meshes.
+    struct Swap {
+        std::string prefab;
+        Real back = -1;
+        std::string surface;   // the prefab's marker that what stood on the kit piece now rides ("": nothing rides)
+    };
+    void readSwaps(const std::string& file);
+    std::string swapsFile_;
+    std::map<std::string, Swap> swaps_;
+    std::shared_ptr<class ModelDresser> dresser_;   // (shared: its type is whole only in the .cpp)
     FurnitureDrawCache drawCache_;   // the kit's meshes + surface maps, shared by every resident
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;

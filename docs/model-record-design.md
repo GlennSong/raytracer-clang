@@ -1579,6 +1579,72 @@ the engine how many voices play, not by ear. Whether a kind sounds right is for 
 Owed: sounds of their own for the things that borrow badly (a drawer on runners, a cupboard's soft click, water
 in a washing machine, a toaster's pop, a clock's tick, a creak for a swing); and kinds for `sway`.
 
+### Prefabs in real buildings: prefab_street and the swap (2026-11-21)
+
+Glenn: "make a street of actual buildings ... and then allow me to enter into them and see the prefabs populating
+apartments, houses, offices, restaurants, schools."
+
+**The street.** `assets/levels/prefab_street.json` is four hand-drawn blocks either side of a street and a cross
+street, one quarter of each kind (commercial, old town, residential, financial). It is grown by the city's own
+machinery, not a stand-in: a level may list `citysim.blocks` (the lab levels `tower_core_lab`, `stairs_lab` and
+`toolkit_lab` already did) and the same parceller, architect, building records, stairs, lifts and streamed
+interiors run on them as on a city's blocks. 22 lots, 17 buildings, 16 enterable, 8 shop units (a konbini, a
+cafe, a bookshop, two bars, three restaurants). It loads in seconds and bakes nothing the city uses.
+
+**The swap.** A level may say `"citysim": { "prefabSwaps": "prefab_swaps.lua" }`. That list names, for a kit
+piece, the prefab to stand in its place. When `BuildingInteriorSystem` builds an interior, each placed piece the
+list names is stood as one copy of its prefab where the floor planner put it, back to the same wall, and is left
+out of the kit's instance groups and seats; every other piece is the kit's as before. When the interior is
+released the copies are unstamped with it. A level that does not ask gets nothing new.
+
+- The hook is the planner's own list (`BuildingMesh::furniture`), as "One catalog" said it would be: about
+  thirty lines in `building_interior_system.cpp`, and one line in the loader to carry the level's choice.
+- Eleven swaps today: the office chair, desk, filing cabinet, whiteboard, desk lamp and copier; the wardrobe, the
+  tall kitchen unit (a fridge), the wall cupboard and the toilet; the bar stool.
+
+Seen in play: walking up to the old-town cafe building built its interior in 13 ms, with 9 pieces stood as
+prefabs and 20 the kit's; upstairs, two standing desks and two adjustable chairs at the windows, the broker
+offering "raise the seat". Three storeys of the office tower: 354 prefabs, 951 kit pieces.
+
+What this shows is wrong or missing, in the order it matters:
+
+- **354 prefabs is thousands of entities.** Each copy is a full entity with a body for every shape. This is the
+  measurement "many copies" was waiting for, on a real floor. Frame time on that floor has not been measured.
+- **A swap is by name.** It should be by tag: the room program asks for "office, seating" and a prefab answers.
+- **No home, shop or school piece that is new** (an oven, a drinks fridge, a school desk) appears, because the
+  room programs do not ask for one yet. Adding them to `furniture_rooms.lua` is city data, which the parent
+  branch is changing.
+- The doors and windows are the building grammar's own.
+
+### What stands on a thing goes with it (2026-11-21)
+
+Glenn: "objects placed on the desk surface should move relative to it", and, when the first try took the monitor
+out of its batch: "A monitor on an uplift desk is a change in position but still belongs on the batch of monitor
+objects?" Yes. That is how it is built.
+
+- **A copy can be tied to a marker of a prefab copy.** `rideMarkerInBatch(world, owner, marker, group, index)`
+  ties ONE transform of an instance group; `rideMarker(world, rider, owner, marker)` ties an entity (a prefab
+  standing on a prefab: a desk lamp on a desk). Each keeps its place in the marker's own frame.
+- **One place moves them:** `poseModelPieces`, which every change of a copy's pose passes through. After putting
+  the copy's own pieces, it rewrites each tied batch transform and puts each tied entity (and poses it in turn, so
+  a thing on a thing on a thing follows). Nothing runs for a copy that is not moving.
+- **A copy in a batch stays in its batch.** The batch is a list of world matrices the renderer reads each frame;
+  moving one copy is writing one matrix. No entity is made for a monitor.
+- **Who is on what** is worked out when an interior is built: a kit piece whose foot is over a swapped piece's
+  footprint, above the floor, stands on it. `prefab_swaps.lua` names the prefab's marker (`surface`), and
+  `spawnFurnitureGroups` now says where each placed piece went in its batches (`FurnitureDrawn`).
+
+Seen in `prefab_street`, upstairs in the old-town cafe building: two desks raised, and on each the monitor, the
+keyboard, the plant and the mug risen with it. Test:
+`what_stands_on_a_desk_rises_with_it_whether_a_copy_in_a_batch_or_a_thing_of_its_own`.
+
+Not done: SLOTS. Glenn asked how much a desk can hold; the answer agreed is named slots with a size and what they
+accept (the kit's anchors), a count set by the piece's maker, not free packing. Today a thing is tied to the
+surface wherever the planner stood it. Slots as markers, putting a carried thing down on a free one, and a thing
+becoming a loose body when knocked or picked up are the next pieces. The desk's own "raise" could not be reached
+from the chair's side in that room (its control is under the front edge), so the desks were raised through the
+control socket; the use itself is tested.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

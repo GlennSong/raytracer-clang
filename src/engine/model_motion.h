@@ -36,6 +36,17 @@ bool advanceModelMotion(World& world, Entity instance, Real dt);
 // stamp calls; call it after moving the entity or changing its pose by hand.
 void poseModelPieces(World& world, Entity instance);
 
+// TIE `rider` (any entity with a Transform; a stamped prefab's pieces follow it) to `marker` of the instance `owner`,
+// at the place it has there now. From then on, whenever the owner's pieces are put somewhere new (a node moved, the
+// owner itself moved and posed) the rider is put where the marker now carries it. A rider may itself be ridden (a
+// pen in a tray in a drawer). False when the owner has no such marker. `unrideMarker` lets it go where it is.
+bool rideMarker(World& world, Entity rider, Entity owner, const std::string& marker);
+void unrideMarker(World& world, Entity rider);
+// The same for ONE COPY IN A BATCH: transform `index` of the instance group on `group` (a kit monitor among every
+// monitor in the building). It stays in its batch; when the owner's pieces are put somewhere new that one transform
+// is rewritten. False when the owner has no such marker or the group no such transform.
+bool rideMarkerInBatch(World& world, Entity owner, const std::string& marker, Entity group, uint32_t index);
+
 // Where one of an instance's collision bodies (an entity with a ModelShape) belongs now: its shape's place on its
 // node, in the pose, in the world. False when the entity is not such a body.
 bool modelBodyPlace(World& world, Entity body, Vec3& position, Quat& rotation);

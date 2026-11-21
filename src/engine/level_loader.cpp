@@ -7526,6 +7526,8 @@ bool LevelLoader::load(const std::string& path,
                                   hp[2], hp[3], hp[4], hp[5], hp[6], hp[7]);
                     LOG_INFO << fin;
                 }
+                if (root.contains("citysim") && root["citysim"].is_object())
+                    cityB.prefabSwaps = root["citysim"].value("prefabSwaps", std::string());
                 world.add<engine::CityBuildings>(world.create(),
                                                 std::move(cityB));
             }

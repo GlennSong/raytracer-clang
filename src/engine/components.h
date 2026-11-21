@@ -203,8 +203,29 @@ struct ModelInstance {
     // place up on the next step and clears it; without that the renderer, which draws between the previous place and
     // this one, goes on drawing a part between where it was long ago and where it is.
     bool settle = false;
+    // WHAT STANDS ON IT (engine/model_motion.h rideMarker): the copies tied to one of this copy's markers (each has
+    // a RidesMarker). Whenever this copy's pieces are put somewhere new, so are they: a mug on a desk that rises.
+    std::vector<Entity> riders;
+    // ...and the copies IN A BATCH that stand on it (rideMarkerInBatch): one transform of an instance group each,
+    // rewritten where its marker now carries it. The copy stays in its batch; only where it is drawn changes.
+    struct BatchRider {
+        Entity group;          // an entity with an InstanceGroup
+        uint32_t index = 0;    // which of its transforms
+        std::string marker;
+        Mat4 local;            // the copy's matrix in the marker's own frame
+    };
+    std::vector<BatchRider> batchRiders;
     std::vector<Entity> pieces;              // the entities that draw it (each has a ModelPiece)
     std::vector<Entity> bodies;              // the entities that hold its collision bodies
+};
+
+// A copy that stands ON another copy: tied to one of its markers, at the place it had there when it was tied
+// (engine/model_motion.h rideMarker). The marker is on a node; when that node moves the rider goes with it.
+struct RidesMarker {
+    Entity owner;
+    std::string marker;
+    Vec3 localPosition;   // in the marker's own frame
+    Quat localRotation;
 };
 
 // One collision body of a model instance that stands for ONE of the model's shapes (a box, sphere or capsule):

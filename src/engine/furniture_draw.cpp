@@ -10,11 +10,16 @@ namespace engine {
 
 std::size_t spawnFurnitureGroups(World& world, AssetManager& assets, Renderer* renderer, FurnitureDrawCache& cache,
                                  const std::vector<PlacedPiece>& pieces, const Vec3& tint, double drawDistance,
-                                 std::vector<Entity>& out) {
+                                 std::vector<Entity>& out, std::vector<std::vector<FurnitureDrawn>>* where) {
     std::size_t tris = 0;
     std::map<uint64_t, std::vector<Mat4>> byPiece;
-    for (const PlacedPiece& pp : pieces)
-        byPiece[(static_cast<uint64_t>(pp.piece) << 32) | pp.variant].push_back(pp.xform);
+    std::vector<uint32_t> slot(pieces.size(), 0);                 // each piece's place among its own kind
+    std::map<uint64_t, std::vector<Entity>> groupsOf;            // the groups made for a kind
+    for (std::size_t i = 0; i < pieces.size(); ++i) {
+        std::vector<Mat4>& list = byPiece[(static_cast<uint64_t>(pieces[i].piece) << 32) | pieces[i].variant];
+        slot[i] = static_cast<uint32_t>(list.size());
+        list.push_back(pieces[i].xform);
+    }
     static const PartId kFinishPart[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric,
                                                       PartId::Furniture, PartId::FurnitureMetal,
                                                       PartId::FurnitureCeramic, PartId::Furniture};
@@ -67,8 +72,15 @@ std::size_t spawnFurnitureGroups(World& world, AssetManager& assets, Renderer* r
             Entity ge = world.create();
             world.add<InstanceGroup>(ge, std::move(g));
             out.push_back(ge);
+            groupsOf[key].push_back(ge);
             tris += pm.indices.size() / 3 * xforms.size();
         }
+    }
+    if (where != nullptr) {
+        where->assign(pieces.size(), {});
+        for (std::size_t i = 0; i < pieces.size(); ++i)
+            for (Entity ge : groupsOf[(static_cast<uint64_t>(pieces[i].piece) << 32) | pieces[i].variant])
+                (*where)[i].push_back(FurnitureDrawn{ge, slot[i]});
     }
     return tris;
 }

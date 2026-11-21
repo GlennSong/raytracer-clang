@@ -1,6 +1,7 @@
 // What a person can do to a stamped prefab (#191, step 9): a line's `uses`, and doing them on a copy.
 #include "test_framework.h"
 
+#include "../src/engine/components.h"
 #include "../src/engine/model_motion.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/prefab_use.h"
@@ -333,4 +334,57 @@ TEST_CASE(a_desk_can_be_stopped_part_way_and_sent_back) {
     run(3.0);
     CHECK_APPROX(modelValue(world, e, "top"), 0.0, 1e-9);
     CHECK(word() == "raise");
+}
+
+TEST_CASE(what_stands_on_a_desk_rises_with_it_whether_a_copy_in_a_batch_or_a_thing_of_its_own) {
+    World world;
+    ModelStore store;
+    Prefab desk;
+    CHECK(findPrefab("standing_desk", desk));
+    Transform place;
+    place.position = Vec3(10, 0, -4);
+    const Entity e = stampPrefab(world, nullptr, desk, place, std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    Vec3 top;
+    Quat turn;
+    CHECK(modelMarkerWorld(world, e, "surface", top, turn));
+
+    // A COPY IN A BATCH: one of three transforms of an instance group, a hand's width in from the surface's middle.
+    const Entity batch = world.create();
+    InstanceGroup group;
+    Transform onDesk;
+    onDesk.position = top + Vec3(0.2, 0, 0.1);
+    Transform elsewhere;
+    elsewhere.position = Vec3(-50, 0, 0);
+    group.transforms = {elsewhere.matrix(), onDesk.matrix(), elsewhere.matrix()};
+    world.add<InstanceGroup>(batch, group);
+    CHECK(rideMarkerInBatch(world, e, "surface", batch, 1));
+    CHECK(!rideMarkerInBatch(world, e, "surface", batch, 9));
+    CHECK(!rideMarkerInBatch(world, e, "no_such_marker", batch, 1));
+
+    // A THING OF ITS OWN: an entity with a place.
+    const Entity mug = world.create();
+    Transform mugAt;
+    mugAt.position = top + Vec3(-0.3, 0, 0);
+    world.add<Transform>(mug, mugAt);
+    CHECK(rideMarker(world, mug, e, "surface"));
+
+    // The desk rises 0.3 m (its stage and its top, 0.3 each... the top's own travel is what the surface is on).
+    CHECK(setModelTarget(world, e, "stage", 0.3, 0));
+    CHECK(setModelTarget(world, e, "top", 0.3, 0));
+    Vec3 raised;
+    CHECK(modelMarkerWorld(world, e, "surface", raised, turn));
+    const Real rise = raised.y - top.y;
+    CHECK(rise > 0.29);
+    const InstanceGroup* g = world.get<InstanceGroup>(batch);
+    CHECK((g->transforms[1].transformPoint(Vec3(0, 0, 0)) - (onDesk.position + Vec3(0, rise, 0))).length() < 1e-9);
+    CHECK((g->transforms[0].transformPoint(Vec3(0, 0, 0)) - elsewhere.position).length() < 1e-12);   // the others stay
+    CHECK((world.get<Transform>(mug)->position - (mugAt.position + Vec3(0, rise, 0))).length() < 1e-9);
+
+    // Let go, the mug stays where it is when the desk goes down again.
+    unrideMarker(world, mug);
+    CHECK(setModelTarget(world, e, "top", 0.0, 0));
+    CHECK((world.get<Transform>(mug)->position - (mugAt.position + Vec3(0, rise, 0))).length() < 1e-9);
+    CHECK(g->transforms[1].transformPoint(Vec3(0, 0, 0)).y < onDesk.position.y + rise - 0.1);          // the copy went down
 }

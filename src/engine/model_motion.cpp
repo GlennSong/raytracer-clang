@@ -9,6 +9,10 @@
 namespace engine {
 
 namespace {
+Mat4 frameOf(const Vec3& at, const Quat& turn);   // a place and a turn as one matrix (below)
+}  // namespace
+
+namespace {
 
 // The instance's own place: its entity's position and orientation (a scale is not carried).
 ProcFrame placeOf(const Transform& t) { return ProcFrame{t.position, t.orientation}; }
@@ -94,6 +98,86 @@ void poseModelPieces(World& world, Entity instance) {
             r->lodAnchorReach = (t->position - at->position).length();
         }
     }
+    for (const ModelInstance::BatchRider& ride : mi->batchRiders) {   // the copies in a batch: one transform each
+        InstanceGroup* g = world.alive(ride.group) ? world.get<InstanceGroup>(ride.group) : nullptr;
+        Vec3 markerAt;
+        Quat markerTurn;
+        if (g == nullptr || ride.index >= g->transforms.size() || !modelMarkerWorld(world, instance, ride.marker, markerAt, markerTurn)) continue;
+        g->transforms[ride.index] = frameOf(markerAt, markerTurn) * ride.local;
+    }
+    // WHAT STANDS ON IT goes with it (rideMarker). (A copy of the list: placing a rider poses it, and a rider that
+    // has gone is dropped from the list.)
+    if (!mi->riders.empty()) {
+        const std::vector<Entity> riders = mi->riders;
+        bool gone = false;
+        for (Entity rider : riders) {
+            const RidesMarker* ride = world.alive(rider) ? world.get<RidesMarker>(rider) : nullptr;
+            Transform* rt = ride != nullptr ? world.get<Transform>(rider) : nullptr;
+            if (rt == nullptr) { gone = true; continue; }
+            Vec3 markerAt;
+            Quat markerTurn;
+            if (!modelMarkerWorld(world, instance, ride->marker, markerAt, markerTurn)) continue;
+            rt->position = markerAt + markerTurn.rotate(ride->localPosition);
+            rt->orientation = markerTurn * ride->localRotation;
+            if (world.has<ModelInstance>(rider)) poseModelPieces(world, rider);
+        }
+        if (gone) {
+            ModelInstance* mine = world.get<ModelInstance>(instance);
+            mine->riders.erase(std::remove_if(mine->riders.begin(), mine->riders.end(),
+                                              [&](Entity r) { return !world.alive(r) || !world.has<RidesMarker>(r); }),
+                               mine->riders.end());
+        }
+    }
+}
+
+bool rideMarker(World& world, Entity rider, Entity owner, const std::string& marker) {
+    Vec3 at;
+    Quat turn;
+    Transform* t = world.get<Transform>(rider);
+    ModelInstance* mi = world.get<ModelInstance>(owner);
+    if (t == nullptr || mi == nullptr || rider == owner || !modelMarkerWorld(world, owner, marker, at, turn)) return false;
+    unrideMarker(world, rider);
+    const Quat back = turn.inverse();
+    RidesMarker ride;
+    ride.owner = owner;
+    ride.marker = marker;
+    ride.localPosition = back.rotate(t->position - at);
+    ride.localRotation = back * t->orientation;
+    world.add<RidesMarker>(rider, ride);
+    world.get<ModelInstance>(owner)->riders.push_back(rider);
+    return true;
+}
+
+namespace {
+Mat4 frameOf(const Vec3& at, const Quat& turn) {
+    Transform t;
+    t.position = at;
+    t.orientation = turn;
+    return t.matrix();
+}
+}  // namespace
+
+bool rideMarkerInBatch(World& world, Entity owner, const std::string& marker, Entity group, uint32_t index) {
+    Vec3 at;
+    Quat turn;
+    ModelInstance* mi = world.get<ModelInstance>(owner);
+    const InstanceGroup* g = world.get<InstanceGroup>(group);
+    if (mi == nullptr || g == nullptr || index >= g->transforms.size() || !modelMarkerWorld(world, owner, marker, at, turn)) return false;
+    ModelInstance::BatchRider ride;
+    ride.group = group;
+    ride.index = index;
+    ride.marker = marker;
+    ride.local = frameOf(at, turn).inverse() * g->transforms[index];
+    world.get<ModelInstance>(owner)->batchRiders.push_back(ride);
+    return true;
+}
+
+void unrideMarker(World& world, Entity rider) {
+    const RidesMarker* ride = world.get<RidesMarker>(rider);
+    if (ride == nullptr) return;
+    if (ModelInstance* mi = world.alive(ride->owner) ? world.get<ModelInstance>(ride->owner) : nullptr)
+        mi->riders.erase(std::remove(mi->riders.begin(), mi->riders.end(), rider), mi->riders.end());
+    world.remove<RidesMarker>(rider);
 }
 
 bool modelBodyPlace(World& world, Entity body, Vec3& position, Quat& rotation) {

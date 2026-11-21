@@ -180,6 +180,11 @@ the older lists and paths retire as each system is ported, and nothing is descri
 prefab among others is the test level `prefab_town` (its table is `tools/prefab_town.py`; run it to rewrite the
 level). `_in_use` prefabs are test rigs and belong only in `prefab_town_busy` and the model studio.
 
+To see prefabs in REAL grown buildings use the level `prefab_street` (four hand-drawn city blocks; the city's own
+lots, architect and streamed interiors) and its list `prefab_swaps.lua` (kit piece -> prefab, stood where the floor
+planner placed the piece; a level opts in with `citysim.prefabSwaps`). Read "Prefabs in real buildings" in the design
+page for what it showed.
+
 What a person can do to a prefab is its line's `uses` (open, switch on, sit), offered by `PrefabUseSystem` through
 the engine's one interaction broker; read "Step 9, read before building" and "Step 9, first part, built" before
 adding any interaction. Finishes are names from the one palette in `furniture_models.lua` ("THE PALETTE"), reached

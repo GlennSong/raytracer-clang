@@ -16,6 +16,13 @@
 #include "../procgen/furniture_library.h"   // which pieces are interactive
 #include "../interaction.h"
 #include "../furniture_draw.h"   // the furniture kit, instanced (buildings M4b)
+#include "../model_spawn.h"      // ModelDresser
+#include "../prefab_stamp.h"     // a kit piece stood as a prefab (CityBuildings::prefabSwaps)
+#include "../model_motion.h"     // rideMarker: what stood on a swapped piece rides the prefab
+#ifdef RT_ENABLE_SCRIPTING
+#include "../scripting/model_recipes.h"   // readScriptList
+#endif
+#include <nlohmann/json.hpp>
 #include <map>
 #include <algorithm>
 #include <chrono>
@@ -140,6 +147,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     const CityBuildings* cb = nullptr;
     world.each<CityBuildings>(
         [&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+    if (cb != nullptr && cb->prefabSwaps != swapsFile_) readSwaps(cb->prefabSwaps);
     if (!cb || cb->records.empty()) {
         // No city: nothing may stay resident (a level change or a city
         // rebuild would strand bodies); still drain the free queue so onStop
@@ -324,6 +332,34 @@ void BuildingInteriorSystem::residentWindow(std::size_t key, int& k0, int& k1) c
     k1 = it->second.k1;
 }
 
+// The list a level named (prefab_swaps.lua): kit piece = { prefab = "...", back = metres }.
+void BuildingInteriorSystem::readSwaps(const std::string& file) {
+    swapsFile_ = file;
+    swaps_.clear();
+    if (file.empty()) return;
+#ifdef RT_ENABLE_SCRIPTING
+    nlohmann::json list;
+    std::string why;
+    if (!readScriptList(file, std::string(), list, &why)) {
+        LOG_WARN << "[interior] prefab swaps '" << file << "': " << why << " (every piece stays the kit's)";
+        return;
+    }
+    for (nlohmann::json::const_iterator it = list.begin(); it != list.end(); ++it) {
+        Piece piece;
+        if (!it.value().is_object() || !furniturePieceByName(it.key(), piece)) {
+            LOG_WARN << "[interior] prefab swaps: '" << it.key() << "' is not a kit piece";
+            continue;
+        }
+        Swap s;
+        s.prefab = it.value().value("prefab", std::string());
+        s.back = it.value().value("back", -1.0);
+        s.surface = it.value().value("surface", std::string());
+        if (!s.prefab.empty()) swaps_[it.key()] = s;
+    }
+    LOG_INFO << "[interior] prefab swaps '" << file << "': " << swaps_.size() << " kit pieces stand as prefabs";
+#endif
+}
+
 void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                                    AssetManager& assets, Renderer* renderer,
                                    const BuildingRecord& r, std::size_t key,
@@ -416,11 +452,87 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         res.meshes.push_back(mh);
     }
 
+    // PREFABS IN PLACE OF KIT PIECES (#191, "One catalog"; a level's citysim.prefabSwaps). The floor planner placed
+    // a kit piece; where the level's list names a prefab for that piece, one copy of the prefab is stood there
+    // and the kit piece is left out of everything below (its instance group, its seat). The prefab stands with its
+    // back where the kit piece's was. One entity a copy, until many copies are drawn as a group (step 10).
+    struct OnTop {
+        std::size_t piece;     // an index into bm.furniture as it is after the swap
+        Entity owner;
+        std::string surface;
+    };
+    std::vector<OnTop> onTop;
+    if (!swaps_.empty() && !bm.furniture.empty()) {
+        if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
+        // where a kit piece's prefab stands: its back where the piece's was, turned as the piece was
+        auto placeOf = [](const PlacedPiece& pp, Real back) {
+            Transform at;
+            at.position = pp.xform.transformPoint(Vec3(0, 0, back));
+            const Vec3 out = pp.xform.transformPoint(Vec3(0, 0, back + 1)) - at.position;
+            at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(out.x, out.z));
+            return at;
+        };
+        struct Stood {
+            Entity e;
+            Mat4 toPiece;        // world -> the kit piece's own space
+            Vec3 size;           // the kit piece's
+            std::string surface;
+        };
+        std::vector<Stood> owners;
+        std::vector<PlacedPiece> kept, rest;
+        std::size_t stood = 0, riding = 0;
+        for (const PlacedPiece& pp : bm.furniture) {
+            const std::map<std::string, Swap>::const_iterator swap = swaps_.find(furniturePieceName(static_cast<Piece>(pp.piece)));
+            if (swap == swaps_.end()) { rest.push_back(pp); continue; }
+            const Vec3 size = furniturePiece(static_cast<Piece>(pp.piece), pp.variant).size;
+            std::string why;
+            const Entity e = stampPrefab(world, dresser_.get(), swap->second.prefab, placeOf(pp, swap->second.back >= 0 ? swap->second.back : size.z * Real(0.5)),
+                                         std::string(), &why);
+            if (!e.valid()) {
+                LOG_WARN << "[interior] prefab swap for '" << swap->first << "': " << why << " (the kit piece stays)";
+                rest.push_back(pp);
+                continue;
+            }
+            res.prefabs.push_back(e);
+            ++stood;
+            if (!swap->second.surface.empty()) owners.push_back(Stood{e, pp.xform.inverse(), size, swap->second.surface});
+        }
+        // WHAT STOOD ON A SWAPPED PIECE. A swapped piece that itself stood on another (a desk lamp on a desk) is
+        // tied to the prefab's surface marker here. A kit piece that stood on one (a monitor, a mug) stays the
+        // kit's and stays in its batch: it is tied below, once the batches are made and its place in one is known.
+        auto ownerUnder = [&](const Vec3& at) -> const Stood* {
+            for (const Stood& o : owners) {
+                const Vec3 p = o.toPiece.transformPoint(at);
+                if (std::fabs(p.x) <= o.size.x * Real(0.5) + Real(0.03) && p.z >= Real(-0.03) && p.z <= o.size.z + Real(0.03) &&
+                    p.y > Real(0.3) && p.y < o.size.y + Real(0.6))
+                    return &o;
+            }
+            return nullptr;
+        };
+        for (const Entity e : std::vector<Entity>(res.prefabs)) {
+            const Transform* t = world.get<Transform>(e);
+            const Stood* under = t != nullptr ? ownerUnder(t->position) : nullptr;
+            if (under != nullptr && under->e != e && rideMarker(world, e, under->e, under->surface)) ++riding;
+        }
+        kept = rest;
+        for (std::size_t i = 0; i < kept.size(); ++i)
+            if (const Stood* under = owners.empty() ? nullptr : ownerUnder(kept[i].xform.transformPoint(Vec3(0, 0, 0))))
+                onTop.push_back(OnTop{i, under->e, under->surface});
+        if (stood > 0) LOG_INFO << "[interior] " << stood << " kit pieces stand as prefabs (" << riding << " of them on another), "
+                                << onTop.size() << " kit pieces stand on one, " << kept.size() << " stay the kit's";
+        bm.furniture.swap(kept);
+    }
+
     // FURNITURE (buildings M4b): the placed pieces, one INSTANCE GROUP per (piece, variant, finish) -- the kit's
     // mesh uploaded once for every building, this building's placements as its transforms.
-    if (!bm.furniture.empty())
+    if (!bm.furniture.empty()) {
+        std::vector<std::vector<FurnitureDrawn>> where;
         tris += spawnFurnitureGroups(world, assets, renderer, drawCache_, bm.furniture, r.params.wallColor, 80.0,
-                                     res.entities);
+                                     res.entities, onTop.empty() ? nullptr : &where);
+        // a kit piece that stands on a prefab: its one transform in each of its batches follows the prefab's surface
+        for (const OnTop& t : onTop)
+            for (const FurnitureDrawn& d : where[t.piece]) rideMarkerInBatch(world, t.owner, t.surface, d.group, d.index);
+    }
 
     // INTERACTIONS (the furniture library, M1): the pieces someone can sit or lie on, as ONE set entity with the
     // building -- InteractionSystem asks it what is in reach; released with the rest of the resident.
@@ -479,6 +591,8 @@ void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
         phys->removeBody(it->second.body);
     for (Entity e : it->second.entities)
         if (world.alive(e)) world.destroy(e);
+    for (Entity e : it->second.prefabs)
+        if (world.alive(e)) unstampPrefab(world, e, [&](PhysicsBodyId id) { if (phys) phys->removeBody(id); });
     for (MeshHandle mh : it->second.meshes) freeQueue_.push_back(mh);
     resident_.erase(it);
     LOG_INFO << "[interior] released record " << key
