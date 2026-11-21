@@ -2292,6 +2292,42 @@ int l_furniture_piece(lua_State* L) {
     lua_setfield(L, -2, "size");
     return 1;
 }
+// furniture.uses{ name = "sofa", variant = 0 } -> { { verb = "sit", label = "", eye = {x, y, z}, look = {x, y, z},
+// exit = {x, y, z} }, ... }: how a body uses a kit piece, as the furniture library describes it
+// (assets/scripts/furniture_library.lua: its verbs, those this build of the piece has), in PIECE space. Empty for a
+// piece with no description. What prop_models.lua turns into a model's seat markers, so a kit piece stamped as a
+// prefab is sat on from the one description (#191, "One catalog").
+int l_furniture_uses(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.uses: unknown piece '%s'", name.c_str());
+    const uint32_t variant = static_cast<uint32_t>(optField(L, 1, "variant", 0.0));
+    ensureFurnitureLibraryLoaded();
+    lua_newtable(L);
+    const FurnitureAsset* asset = FurnitureLibrary::global().find(pc);
+    if (asset == nullptr) return 1;
+    auto pushVec = [&](const Vec3& v, const char* key) {
+        lua_newtable(L);
+        lua_pushnumber(L, v.x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, v.y); lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, v.z); lua_rawseti(L, -2, 3);
+        lua_setfield(L, -2, key);
+    };
+    int n = 0;
+    for (const FurnVerb& v : asset->verbs) {
+        if (!verbOnPiece(*asset, v, variant)) continue;
+        lua_newtable(L);
+        lua_pushstring(L, verbName(v.verb)); lua_setfield(L, -2, "verb");
+        lua_pushstring(L, v.label.c_str()); lua_setfield(L, -2, "label");
+        pushVec(v.eye, "eye");
+        pushVec(v.look, "look");
+        pushVec(v.exit, "exit");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_furniture_pieces(lua_State* L) {
     lua_newtable(L);
     for (int i = 0; i < kPieceCount; ++i) {
@@ -5936,6 +5972,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     static const luaL_Reg kInteriorFurnitureFns[] = {
         {"piece", l_furniture_piece},
         {"pieces", l_furniture_pieces},
+        {"uses", l_furniture_uses},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kInteriorFurnitureFns);

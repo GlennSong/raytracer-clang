@@ -12,15 +12,52 @@
 // draw it (the whole model changing level of detail at once) and its collision bodies, read from the model's shapes.
 // A new kind of thing is a new line in the list. No C++ changes.
 //
-// What a line may say today: `model`, `physics`, `draw`, `script`. Sounds, lights and offers at markers, and bodies
+// What a line may say today: `model`, `physics`, `draw`, `script`, `uses`. Sounds and lights at markers, and bodies
 // that fall or are thrown, are the later steps of docs/model-record-design.md; a line that names one is refused, not
 // ignored.
 
 #include "../../rt_math.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace engine {
+
+// A USE (#191, step 9): one thing a person standing at a copy can do to it, offered through the interaction broker
+// (engine/interact_broker.h) at a marker of the model. In prefabs.lua:
+//
+//     uses = {
+//       { at = "fridge_door_handle", say = "open", back = "close", move = { fridge_door = 105 }, speed = 110 },
+//       { at = "buttons", say = "switch on", back = "switch off", run = { drum = 300 }, seconds = 40 },
+//       { at = "seat", say = "sit", sit = true },
+//     }
+//
+//   at       a marker on the model: where the offer is shown, and how near a person must stand
+//   say      the word offered ("open"); back: the word offered once it has been done ("close"). No `back`: the
+//            use can only be done again (a bell's button)
+//   move     moving nodes and where each goes when the use is done (degrees for a turn, metres for a slide), at
+//            `speed` a second (0: at once). Done again (`back`), each returns to 0
+//   run      moving nodes that turn or slide on and on while the use is on, each at that many degrees (metres) a
+//            second; `seconds`: it turns itself off after that long (0: until used again)
+//   sit      the person sits at the marker (the furniture's Seated: engine/interaction.h), facing the way the
+//            marker faces, and is carried with it if its node moves
+//   lie      the same lying down: the eye low over the marker, looking up and along the way it faces
+//
+// A marker whose role is "seat" or "lie" offers sitting or lying WITHOUT a line saying so, unless a use of the line
+// already names that marker: a seat is a seat on every model that has one.
+//
+// A use whose marker or nodes the model does not have is left out when the copy is stamped, with a warning: one
+// line serves a model built with more or fewer of a thing.
+struct PrefabUse {
+    std::string at, say, back;
+    std::vector<std::pair<std::string, Real>> move;   // node, value (degrees or metres, as the line says)
+    Real speed = 0;
+    std::vector<std::pair<std::string, Real>> run;    // node, rate (degrees or metres a second)
+    Real seconds = 0;
+    bool sit = false;
+    bool lie = false;
+};
 
 struct Prefab {
     std::string name;
@@ -43,6 +80,8 @@ struct Prefab {
     // recipe is (the level's own folder first, then assets/scripts). It moves its copy's nodes with
     // entity.model_set(e, "boom", 40).
     std::string script;
+    // uses = { ... }: what a person can do to a copy (PrefabUse, above).
+    std::vector<PrefabUse> uses;
 };
 
 }  // namespace engine

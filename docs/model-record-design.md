@@ -1300,6 +1300,13 @@ The last row is a duplication found while checking: about a dozen of the new rec
 "steel" and "white". The work is to bring all four lists to about a dozen entries each IN ONE PLACE (the kit's
 swatch books, which `model_kit.lua` already reads), and have every recipe's `finish` choose from it by name.
 
+**Built (2026-11-21), the palette half.** The lists are in `furniture_models.lua` under "THE PALETTE": 8 woods, 12
+upholsteries (8 cloths and 4 leathers, the leathers a material of their own, `furniture_leather`), 12 paints and 6
+metals. `model_kit.lua` gives them by name (`kit.finish`, `kit.upholstery`, `kit.paint`, `kit.metal`), the playground
+kit reads the same paints, and the 16 recipes that wrote their own steel, white or black now ask the palette. A
+kit piece's variant still picks among the first four woods and first eight cloths only, so nothing the city
+already builds has changed. Every one of the 187 models was rebuilt against it.
+
 **A style** is then a few names (this flat: walnut, sage, brass) applied as arguments to every piece placed in
 that flat or on that floor. That is how homes and offices differ without a second system, and it keeps the
 number of distinct models small: a piece in four woods is four models, however many flats use them.
@@ -1352,6 +1359,120 @@ the eye goes and where the person stands up), and the player uses them with E. T
 furniture, in data, in use. Step 9's "offers at markers" must be that system extended, with a marker as a spot and
 new verbs beside sit and lie (pull, press, open, push), and not a second one. The `seat`, `handle_N`, `lever`,
 `control` markers on the pieces above are the hooks for it; none is wired to it yet.
+
+### Step 9, read before building: four things the engine already has (found 2026-11-21)
+
+Read in the code before writing any of step 9. Each of these is the system to extend; none is to be built again.
+
+1. **One owner of the E key: the interaction broker** (`engine/interact_broker.h`). Every usable thing OFFERS what
+   it can do from where the player stands (`offerInteraction`), the broker picks the one in focus and hands a
+   command back to the provider that offered it (`takeInteractCommand`). Providers today: furniture, elevator,
+   train, vehicle, ladder, carry, playground. Prefab interactions are ONE MORE PROVIDER ("prefab"). Nothing else may
+   read E.
+2. **Sitting and lying** (`engine/interaction.h`, `systems/interaction_system.cpp`). The `Seated` component on the
+   player holds the eye, the way they face and where they stand up; the player system does the rest. A prefab's
+   seat marker should put the same `Seated` on the player. `Seated` names a furniture set today, so it needs to be
+   able to name a prefab copy instead; that is the one change to it.
+3. **The furniture sets are already "many copies"** (`Interactables`): one entity for a whole interior's pieces,
+   each piece a transform and a record of which spots are taken, "so thousands of chairs cost nothing until
+   someone stands next to one". That is the "ready" state of the many-copies design, built. Step 10 extends it to
+   prefabs; it does not invent it.
+4. **A swing the player rides, and carrying** (`engine/playground.h`: `PlaySwing`, `MonkeyBars`;
+   `systems/carry_system.h`). The player can already sit on a swing that swings by its own weight and die down,
+   and pick up, carry and put down loose things. The playground prefab's seats should BE `PlaySwing`s (its seat
+   node following the swing's angle), and a thing a person can pick up should be the carry system's `Carryable`.
+
+Also already data: the furniture library has, per piece, a family, tags, spots, verbs, ANCHORS (a surface that
+takes small things: a nightstand's top takes a lamp) and CLEARANCE (the floor kept free in front), and room
+programs (`furniture_rooms.lua`) choose pieces by family and tags. All of it is keyed by the kit's C++ list of
+pieces (`Piece`). "One catalog" means that key becomes a prefab's name; the rest of that system stays.
+
+**The shape step 9 takes from this:**
+
+- A prefab line gains `uses`: each names a marker on the model, the word shown ("open", "sit", "switch on") and
+  what it does: move a node between two values (a door, a drawer, a desk's height), seat the player (`Seated`), or
+  put the prefab in a named STATE for a time (a washing machine running: the list of what its parts do in that
+  state is the `model_moves.lua` list its test rig has now).
+- One system, the "prefab" provider, offers the uses of prefab copies within reach and acts on the broker's
+  commands. It moves parts through `engine/model_motion.h`, as a behaviour script does.
+- A use is offered only for a marker the model has, so prefabs with arguments (more or fewer seats) need no
+  special case.
+
+### Step 9, first part, built: uses on a prefab (2026-11-21)
+
+Glenn: "make all those prefabs interactive (at least the ones that ought to be: sit on chairs, exercise bikes,
+raise desk, open cupboards, laundry machine)."
+
+A prefab line may now say `uses`: what a person standing at a copy can do with E.
+
+```lua
+washing_machine = { model = "washing_machine", physics = { body = "static" },
+  uses = { { at = "handle", say = "open", back = "close", move = { door = 130 }, speed = 110 },
+           { at = "controls", say = "switch on", back = "switch off", run = { drum = 300 }, seconds = 40 } } },
+```
+
+| Word | What it means |
+|---|---|
+| `at` | a marker on the model: where the offer shows and how near a person must stand |
+| `say`, `back` | the word offered, and the word offered once it is done. No `back`: it can only be done again (a button) |
+| `move`, `speed` | parts and where each goes (degrees or metres); done again, each returns to 0 |
+| `run`, `seconds` | parts that keep turning while it is on; with `seconds` it stops by itself. This is a STATE with a time: a wash that runs and ends |
+| `sit` | the person sits at the marker, and is carried with it if its part moves |
+
+How it is built, all on what was there:
+
+- **One more provider on the broker.** `PrefabUseSystem` (`systems/prefab_use_system.h`) offers each use whose
+  marker is within reach and acts on the broker's command. The on-screen prompt, Tab between offers and the E key
+  are the broker's, unchanged.
+- **Sitting is the furniture's `Seated`**, naming the prefab copy as its set. The furniture's own system leaves
+  such a seat alone. While seated the eye follows the marker, so a rocking chair carries its sitter.
+- **Parts move through `model_motion.h`**, the same calls a behaviour script makes.
+- **What a copy keeps** is one small component (`PrefabUses`: which uses are on, and time left). A use whose
+  marker or part the model does not have is left out when the copy is stamped, so a line serves a model built
+  with more or fewer of a thing.
+- `doPrefabUse(world, copy, index)` (`engine/prefab_use.h`) is the one call. The player makes it through the
+  broker; a city person or a script can make the same call.
+
+123 prefabs have uses. They were proposed by rule from each model's parts and markers (a part with a handle
+marker opens; a part with no limits is switched on; a seat marker is sat on), then about 40 were written by hand
+(the desk, the chair, the wall bed, the gym, the bathroom, the laundry, doors that open themselves and shut).
+
+Seen in `prefab_town` in play, through the control socket's `interact`: the fridge's door opened and its prompt
+moved to the freezer; the laptop opened; the rocking chair seated the player (the eye went to the seat and the
+offer became "stand up"); the washing machine switched on and offered "switch off". Tests:
+`tests/test_prefab_use.cpp` (a line read and written back; uses done on a stamped copy; a timed use ending).
+
+**The kit's chairs, sofas and beds, the same day.** Glenn: "make the kit chairs, sofas and beds sittable next."
+Two rules did it, and no line in `prefabs.lua` changed:
+
+- **A seat is a seat.** A marker whose role is "seat" or "lie" offers sitting or lying on every prefab whose model
+  has one, unless the line's own uses name that marker. `lie = true` is the lying use: the eye low over the
+  marker, looking up and along it.
+- **The furniture library's description becomes markers.** `furniture.uses{ name, variant }` gives a recipe the
+  library's verbs for a kit piece, and `prop_models.lua` writes each as a seat or lie marker placed so the eye
+  comes out where the library says. So `sofa` has three seats and one place to lie, `bed` a place to lie and two
+  edges to sit on, from the ONE description the city's interiors already use. This is the first piece of "One
+  catalog" in code: a spot is a marker.
+
+Seen in `prefab_town`: sat on the sofa (eye 1.25 m, the offer became "stand up"); lay on the bed from its side
+(eye 0.87 m, "get up"). A seat is offered without the broker's sight test, because a kit piece's collision shape
+is its whole footprint box and the seat is inside it.
+
+Not carried over from the library: a spot being TAKEN (two people cannot yet be refused the same seat, and lying
+on a sofa does not need its three seats free), and "stand" verbs (a lectern). Both matter when city people use
+prefabs. The view direction when lying was not checked by eye.
+
+Not done, in the order I would do them:
+
+- **Riding.** Sitting on the exercise bike does not pedal it; "pedal" is a second press. A use that runs while
+  someone sits is a small addition (`while_seated`).
+- **The swing, the seesaw and the roundabout are not physical.** Sitting works; the swing should become the
+  engine's own `PlaySwing` (see "four things the engine already has").
+- **Only the player.** City people do not use prefabs yet.
+- **Many of the rule-made uses have not been tried one by one.** Words like "pull" on a part that should say
+  "press" are likely; each is a one-word fix in `prefabs.lua`.
+- **The editor does not show or edit uses** (its rewrite of a line keeps them).
+- Lockers, the departure board and other things with many like parts have no uses: one marker per part is needed.
 
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 

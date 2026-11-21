@@ -5,6 +5,7 @@
 #include "asset_manager.h"
 #include "model_motion.h"
 #include "model_spawn.h"
+#include "prefab_use.h"
 #include "script_assets.h"
 #include "scripting/model_recipes.h"
 #include "scripting/script_behaviour.h"
@@ -108,6 +109,11 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
         else world.add<ScriptBehaviour>(entity, behaviour);
     }
 #endif
+    {
+        std::vector<std::string> skipped;
+        addPrefabUses(world, entity, prefab, &skipped);
+        for (const std::string& why : skipped) LOG_WARN << "prefab '" << prefab.name << "': use " << why << " (left out)";
+    }
     poseModelPieces(world, entity);
     // A piece has not moved since the step before: its previous place is its place.
     if (const ModelInstance* mi = world.get<ModelInstance>(entity))

@@ -67,12 +67,12 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
     if (!line.is_object()) return fail(where + " is a table: { model = \"...\" }");
 
     std::string stray;
-    if (!onlyKeys(line, {"model", "physics", "draw", "script"}, stray)) {
+    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses"}, stray)) {
         // What the design note gives a prefab that is not built yet: say so, so a line is never half obeyed.
         const std::vector<std::string> later = {"sounds", "lights", "offers", "particles"};
         if (std::find(later.begin(), later.end(), stray) != later.end())
             return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, step 9)");
-        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script)");
+        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses)");
     }
 
     Prefab p;
@@ -115,6 +115,50 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         if (!line["script"].is_string() || line["script"].get<std::string>().empty()) return fail(where + ": `script` is a script's file name");
         p.script = line["script"].get<std::string>();
         if (loadScriptCode(p.script, levelDir).empty()) return fail(where + ": the script '" + p.script + "' cannot be read");
+    }
+    if (line.contains("uses")) {
+        const nlohmann::json& uses = line["uses"];
+        // (an empty Lua table reads as an empty object)
+        if (!uses.is_array() && !(uses.is_object() && uses.empty())) return fail(where + ": `uses` is a list: { { at = \"handle\", say = \"open\", ... }, ... }");
+        std::size_t number = 0;
+        for (const nlohmann::json& u : uses) {
+            const std::string which = where + ": use " + std::to_string(++number);
+            if (!u.is_object()) return fail(which + " is a table: { at = \"handle\", say = \"open\", ... }");
+            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "sit", "lie"}, stray))
+                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, sit, lie)");
+            PrefabUse use;
+            if (!u.contains("at") || !u["at"].is_string() || u["at"].get<std::string>().empty()) return fail(which + " needs `at`, a marker on the model");
+            if (!u.contains("say") || !u["say"].is_string() || u["say"].get<std::string>().empty()) return fail(which + " needs `say`, the word offered (\"open\")");
+            use.at = u["at"].get<std::string>();
+            use.say = u["say"].get<std::string>();
+            if (u.contains("back")) {
+                if (!u["back"].is_string()) return fail(which + ": `back` is the word offered once it is done (\"close\")");
+                use.back = u["back"].get<std::string>();
+            }
+            for (const char* key : {"move", "run"}) {
+                if (!u.contains(key)) continue;
+                if (!u[key].is_object()) return fail(which + ": `" + key + "` is a table of nodes and numbers: { door = 105 }");
+                for (nlohmann::json::const_iterator it = u[key].begin(); it != u[key].end(); ++it) {
+                    if (!it.value().is_number()) return fail(which + ": " + key + "." + it.key() + " is a number");
+                    (std::string(key) == "move" ? use.move : use.run).emplace_back(it.key(), it.value().get<double>());
+                }
+            }
+            for (const char* key : {"speed", "seconds"}) {
+                if (!u.contains(key)) continue;
+                if (!u[key].is_number() || u[key].get<double>() < 0) return fail(which + ": `" + key + "` is a number, 0 or more");
+                (std::string(key) == "speed" ? use.speed : use.seconds) = u[key].get<double>();
+            }
+            if (u.contains("sit")) {
+                if (!u["sit"].is_boolean()) return fail(which + ": `sit` is true or false");
+                use.sit = u["sit"].get<bool>();
+            }
+            if (u.contains("lie")) {
+                if (!u["lie"].is_boolean()) return fail(which + ": `lie` is true or false");
+                use.lie = u["lie"].get<bool>();
+            }
+            if (use.move.empty() && use.run.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sit` or `lie`");
+            p.uses.push_back(use);
+        }
     }
     out = p;
     return true;
@@ -196,6 +240,26 @@ std::string prefabLine(const Prefab& p) {
         out += " }";
     }
     if (!p.script.empty()) out += ", script = " + luaQuoted(p.script);
+    if (!p.uses.empty()) {
+        out += ", uses = { ";
+        for (const PrefabUse& u : p.uses) {
+            out += "{ at = " + luaQuoted(u.at) + ", say = " + luaQuoted(u.say);
+            if (!u.back.empty()) out += ", back = " + luaQuoted(u.back);
+            for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run}) {
+                if (list->empty()) continue;
+                out += std::string(list == &u.move ? ", move = { " : ", run = { ");
+                for (std::size_t i = 0; i < list->size(); ++i)
+                    out += std::string(i > 0 ? ", " : "") + (*list)[i].first + " = " + plainNumber((*list)[i].second);
+                out += " }";
+            }
+            if (u.speed > 0) out += ", speed = " + plainNumber(u.speed);
+            if (u.seconds > 0) out += ", seconds = " + plainNumber(u.seconds);
+            if (u.sit) out += ", sit = true";
+            if (u.lie) out += ", lie = true";
+            out += " }, ";
+        }
+        out += "}";
+    }
     return out + " },";
 }
 

@@ -295,6 +295,8 @@ add_library(engine_core STATIC
     src/engine/systems/model_motion_system.cpp   # moves model instances and their kinematic bodies (#191)
     src/engine/systems/model_overlay_system.cpp  # draws them when asked (#191)
     src/engine/systems/interaction_system.cpp
+    src/engine/systems/prefab_use_system.cpp     # stamped prefabs offer their uses to the broker (#191 step 9)
+    src/engine/prefab_use.cpp                    # what a person can do to a stamped prefab
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
@@ -1109,6 +1111,7 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_model_file.cpp       # a model written to a glTF file and read back (#191)
         tests/test_model_store.cpp      # the model store and the list of named models (#191)
         tests/test_prefab.cpp           # the prefab list, a model's draws by distance, stamping one entity (#191)
+        tests/test_prefab_use.cpp       # what a person can do to a stamped prefab: uses read, written and done (#191)
         tests/test_openings.cpp         # openings.lua: a hole through a wall with a frame and a pane (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp

@@ -178,7 +178,12 @@ place), "The fifth" (a home, by room) and "The sixth" (gym, clinic, office, stat
 Before placing prefabs anywhere, read "One catalog" in `docs/model-record-design.md`: everything placed is a prefab,
 the older lists and paths retire as each system is ported, and nothing is described twice. The place to try a
 prefab among others is the test level `prefab_town` (its table is `tools/prefab_town.py`; run it to rewrite the
-level). `_in_use` prefabs are test rigs and belong only in `prefab_town_busy` and the model studio. Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
+level). `_in_use` prefabs are test rigs and belong only in `prefab_town_busy` and the model studio.
+
+What a person can do to a prefab is its line's `uses` (open, switch on, sit), offered by `PrefabUseSystem` through
+the engine's one interaction broker; read "Step 9, read before building" and "Step 9, first part, built" before
+adding any interaction. Finishes are names from the one palette in `furniture_models.lua` ("THE PALETTE"), reached
+through `kit.finish`, `kit.upholstery`, `kit.paint`, `kit.metal`: a recipe never writes such a colour itself. Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
 (`furniture_library.lua`), and interactions on prefabs must extend that, not sit beside it.
 
 

@@ -40,6 +40,25 @@ function builders.furniture()
   end
   m:shape("footprint", { box = { w, h, d }, pos = { 0, h / 2, 0 } })
   m:marker("front", { pos = { 0, 0, d / 2 }, role = "point" })
+  -- WHERE A BODY USES IT: the furniture library's own description of the piece (furniture_library.lua: its verbs),
+  -- each as a marker whose role is "seat" or "lie". A stamped prefab offers sitting or lying at every such marker
+  -- (engine/prefab_use.h), so the kit's chairs, sofas and beds are used as prefabs from the one description.
+  -- The marker is put where the library's eye comes out: a sitter's eye is 0.72 m over the marker and 0.06 m back,
+  -- a lier's 0.25 m over it (systems/prefab_use_system.cpp).
+  local count = { sit = 0, lie = 0 }
+  for _, u in ipairs(furniture.uses{ name = a.name ~= "" and a.name or "office_chair", variant = a.variant }) do
+    if count[u.verb] then
+      count[u.verb] = count[u.verb] + 1
+      local fx, fz = u.look[1], u.look[3]
+      local len = math.sqrt(fx * fx + fz * fz)
+      if len < 1e-6 then fx, fz, len = 0, 1, 1 end
+      fx, fz = fx / len, fz / len
+      local at = u.verb == "sit" and { u.eye[1] + fx * 0.06, u.eye[2] - 0.72, u.eye[3] + fz * 0.06 }
+                 or { u.eye[1], u.eye[2] - 0.25, u.eye[3] }
+      m:marker(u.verb .. "_" .. count[u.verb], { pos = { at[1], at[2], at[3] - d / 2 }, turn = { 0, math.deg(math.atan(fx, fz)), 0 },
+                                                   role = u.verb == "sit" and "seat" or "lie", size = 0.4 })
+    end
+  end
 end
 
 -- A KERB PROP: its mesh and its box, as street_props.lua says them.

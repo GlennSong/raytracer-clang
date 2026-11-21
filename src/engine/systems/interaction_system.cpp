@@ -1,6 +1,7 @@
 #include "interaction_system.h"
 #include "../components.h"
 #include "../interact_broker.h"
+#include "../prefab_use.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "../scripting/furniture_library_lua.h"
 #endif
@@ -42,6 +43,8 @@ void InteractionSystem::update(FrameContext& ctx) {
 
     // SEATED: stand up on the command, on any move key, or when the furniture streamed away under them.
     if (const Seated* s = ctx.world.get<Seated>(player)) {
+        // (seated on a stamped prefab: PrefabUseSystem's, not ours)
+        if (s->set.valid() && ctx.world.alive(s->set) && ctx.world.has<PrefabUses>(s->set)) return;
         const bool gone = !s->set.valid() || !ctx.world.alive(s->set) || !ctx.world.has<Interactables>(s->set);
         const bool move = std::fabs(ctx.actions.axis("cam_forward")) > 0.5 || std::fabs(ctx.actions.axis("cam_right")) > 0.5;
         if (gone || move || commanded) { standUp(ctx, player); return; }
