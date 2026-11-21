@@ -198,6 +198,11 @@ struct ModelInstance {
     // each fixed step, stopping at the model's limits, and the pieces and bodies follow.
     ProcPose target;
     std::map<std::string, Real> speed;
+    // The pieces have been put somewhere new since the last fixed step (poseModelPieces sets it, whoever moved
+    // them: a target being approached, or a value set at once by a script). ModelMotionSystem brings their previous
+    // place up on the next step and clears it; without that the renderer, which draws between the previous place and
+    // this one, goes on drawing a part between where it was long ago and where it is.
+    bool settle = false;
     std::vector<Entity> pieces;              // the entities that draw it (each has a ModelPiece)
     std::vector<Entity> bodies;              // the entities that hold its collision bodies
 };

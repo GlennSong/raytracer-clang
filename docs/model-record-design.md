@@ -1537,6 +1537,23 @@ Not done:
 Seen after: the drinks upright; a desk lamp lighting its desk at night; a clock at half past three with the game's
 hour set to 15.5; in tests, a desk stopped part way and a part drawn still once arrived.
 
+**A second look, the same day.** Glenn: "the rocking chair rocks the wrong way ... Clock is still spinning like
+crazy ... The books on the mobile book rack could have more detail."
+
+- **The clock, properly.** The shake fix covered a part that approaches a target. A clock's hands are SET AT ONCE
+  by their script every frame, and that road never brought the pieces' previous place up at all: it stayed where
+  the hand was when the clock was made (twelve), and the renderer drew every hand between twelve and the time,
+  differently each frame. Now `poseModelPieces` marks the copy (`ModelInstance::settle`) whoever moved it, and
+  `ModelMotionSystem` brings every marked copy's pieces up at the start of the next step. One rule for every road.
+  Seen: three pictures a moment apart at half past three, the hands steady.
+- **Rockers roll.** The rocking chair and the rocking horse turned about the middle of their rockers' circle, a
+  point above them, which is a swing: the seat went forward as the back went back. A rocker tips over the part of
+  it that is on the floor. They now turn about the floor under their middle, which is that to within 2 cm.
+- **Books.** A book on the truck is a block of pages, a board each side a little larger than the pages, and a
+  spine with a title band, so the pages show along the top and the fore edge.
+
+The clocks show the GAME's time of day. Whether Glenn meant the computer's time is asked, not assumed.
+
 **Sounds are not built.** Glenn: "are you going to make an audio component pass on all of these? Like a motor
 whirr for the standing desk? Cabinet open and close sounds?" Yes, as the next piece of step 9, and in the shape
 `light` has: a use names a sound for starting, one that lasts while parts move or run, and one for arriving

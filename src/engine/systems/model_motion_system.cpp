@@ -11,35 +11,30 @@ namespace engine {
 
 int ModelMotionSystem::step(World& world, Real dt) {
     // (collected first: advancing an instance writes its pieces' components)
-    std::vector<Entity> moving;
+    std::vector<Entity> moving, settling;
     world.each<ModelInstance>([&](Entity e, ModelInstance& mi) {
+        if (mi.settle) settling.push_back(e);
         if (!mi.target.values.empty()) moving.push_back(e);
     });
-    // An instance that moved last step and has now arrived: its pieces drew a step behind for the last time. Without
-    // this their previous place stays one step short of where they stopped, and the renderer, which draws between
-    // the two, shows the part trembling by one step's travel for as long as it stands there.
-    for (Entity e : settle_) {
-        const ModelInstance* mi = world.alive(e) ? world.get<ModelInstance>(e) : nullptr;
+    // THE PIECES' PREVIOUS PLACE. The renderer draws a piece between its previous place and its place. Every copy
+    // whose pieces were put somewhere new since the last step (by a target approached, or by a value a script set
+    // at once) has them brought up here, before this step moves anything: a part still moving is then drawn a step
+    // behind, as it should be, and one that has stopped is drawn still. (Left undone, a clock's hands, set at once
+    // every frame, were drawn between twelve and the time for good; and a door that had arrived trembled.)
+    for (Entity e : settling) {
+        ModelInstance* mi = world.get<ModelInstance>(e);
         if (mi == nullptr) continue;
+        mi->settle = false;
         for (Entity pe : mi->pieces) {
             PrevTransform* prev = world.get<PrevTransform>(pe);
             const Transform* t = world.get<Transform>(pe);
             if (prev != nullptr && t != nullptr) prev->value = *t;
         }
     }
-    settle_.clear();
     int moved = 0;
     for (Entity e : moving) {
-        // The pieces drew at their old place last step: remember it, so the renderer moves them smoothly.
-        const std::vector<Entity> pieces = world.get<ModelInstance>(e)->pieces;
-        for (Entity pe : pieces) {
-            PrevTransform* prev = world.get<PrevTransform>(pe);
-            const Transform* t = world.get<Transform>(pe);
-            if (prev != nullptr && t != nullptr) prev->value = *t;
-        }
         if (!advanceModelMotion(world, e, dt)) continue;
         ++moved;
-        settle_.push_back(e);
         const std::vector<Entity> bodies = world.get<ModelInstance>(e)->bodies;
         for (Entity be : bodies) {
             Vec3 position;

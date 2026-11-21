@@ -49,12 +49,12 @@ if a.kind == "cradle" then
   rock:marker("push", { pos = { W / 2, Y1, 0 }, role = "hold" })
 elseif a.kind == "rocking_horse" then
   local RR = 1.0
-  local rock = m:node("rock", { pos = { 0, RR, 0 }, motion = { turn = { 1, 0, 0 }, min = -16, max = 16 } })
+  local rock = m:node("rock", { pos = { 0, 0, 0 }, motion = { turn = { 1, 0, 0 }, min = -16, max = 16 } })
   local k = kit.maker()
-  local function at(x, y, z) return V(x, y - RR, z) end
+  local function at(x, y, z) return V(x, y, z) end
   for _, x in ipairs{ -0.16, 0.16 } do
     local pts = {}
-    for i = -4, 4 do local t = math.rad(i * 8); pts[#pts + 1] = V(x, -RR * math.cos(t) + 0.02, RR * math.sin(t)) end
+    for i = -4, 4 do local t = math.rad(i * 8); pts[#pts + 1] = V(x, RR - RR * math.cos(t) + 0.02, RR * math.sin(t)) end
     k.bent("wood", pts, 0.03, 0.04, paint, { count = 16 })
     k.post("wood", at(x, 0.05, 0.32), at(x * 0.6, 0.5, 0.24), 0.05, 0.035, wood)        -- the legs, splayed
     k.post("wood", at(x, 0.05, -0.32), at(x * 0.6, 0.5, -0.24), 0.05, 0.035, wood)
@@ -68,10 +68,10 @@ elseif a.kind == "rocking_horse" then
   k.cushion("fabric", at(0, 0.69, -0.03), V(0.2, 0.03, 0.26), paint, { r = 0.06 })                        -- the saddle
   k.bent("wood", { at(0, 0.66, -0.3), at(0, 0.6, -0.4), at(0, 0.42, -0.42) }, 0.04, 0.04, kit.BLACK * 2, { count = 8, scale = { 1, 0.4 } })   -- the tail
   kit.put(m, rock, k)
-  kit.far_box(m, rock, "wood", { 0.36, 0.7, 0.8 }, { 0, 0.4 - RR, 0 }, wood, far)
-  rock:shape("body", { box = { 0.36, 0.7, 0.8 }, pos = { 0, 0.35 - RR, 0 }, friction = 0.8 })
-  rock:marker("seat", { pos = { 0, 0.71 - RR, -0.03 }, role = "seat", size = 0.25 })
-  rock:marker("hold", { pos = { 0, 0.9 - RR, 0.36 }, role = "hold" })
+  kit.far_box(m, rock, "wood", { 0.36, 0.7, 0.8 }, { 0, 0.4, 0 }, wood, far)
+  rock:shape("body", { box = { 0.36, 0.7, 0.8 }, pos = { 0, 0.35, 0 }, friction = 0.8 })
+  rock:marker("seat", { pos = { 0, 0.71, -0.03 }, role = "seat", size = 0.25 })
+  rock:marker("hold", { pos = { 0, 0.9, 0.36 }, role = "hold" })
 elseif a.kind == "mobile" then
   local arms = m:node("arms", { pos = { 0, 0, 0 }, motion = { turn = { 0, 1, 0 } } })
   local k = kit.maker()

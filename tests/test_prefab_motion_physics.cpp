@@ -115,4 +115,11 @@ TEST_CASE(a_part_that_has_arrived_is_drawn_still) {
     for (int i = 0; i < 120; ++i) motion.step(world, step);
     CHECK_APPROX(modelValue(world, e, "boom"), 30 * deg, 1e-9);
     CHECK_APPROX(apart(), 0.0, 1e-12);                      // arrived, and still
+
+    // A value SET AT ONCE (what a clock's script does to its hands every frame) is brought up the same way: the
+    // hand is not drawn between where it was when it was made and where it is.
+    CHECK(setModelTarget(world, e, "cabin", 90 * deg, 0));
+    CHECK(apart() > 1e-4);
+    motion.step(world, step);
+    CHECK_APPROX(apart(), 0.0, 1e-12);
 }

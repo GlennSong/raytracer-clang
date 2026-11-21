@@ -65,6 +65,22 @@ elseif a.kind == "baskets" then
   c.pipe("hard", { { -0.2, 0.72, 0 }, { -0.2, 0.78, 0 }, { 0.2, 0.78, 0 }, { 0.2, 0.72, 0 } }, 0.008, kit.BLACK, { bend = 0.03, sides = 6 })
   m:marker("take", { pos = { 0, 0.78, 0 }, role = "hold" })
 elseif a.kind == "books" then
+  -- A BOOK, about its own middle, standing on its foot with its spine toward `side` (z): the block of pages, a
+  -- board each side and a spine, the boards a little larger than the pages, so the pages show cream along the top
+  -- and the fore edge. The spine has a band of another shade where a title would be.
+  local PAGE = V(0.93, 0.9, 0.8)
+  local function book(w, h, d, shade, side)
+    local B, LIP = 0.003, 0.004                                  -- a board's thickness; how far the boards stand proud
+    local parts = {
+      mesh.paint(mesh.translate(mesh.box{ w - 2 * B, h - 2 * LIP, d - B - LIP }, { 0, 0, side * (B - LIP) / 2 }), PAGE),
+      mesh.paint(mesh.translate(mesh.box{ w, h, B }, { 0, 0, side * (d - B) / 2 }), shade),                              -- the spine
+      mesh.paint(mesh.translate(mesh.box{ w + 0.0006, h * 0.12, B + 0.0006 }, { 0, h * 0.22, side * (d - B) / 2 }), shade * 0.55 + V(0.4, 0.36, 0.2)),   -- its title band
+    }
+    for _, x in ipairs{ -w / 2 + B / 2, w / 2 - B / 2 } do
+      parts[#parts + 1] = mesh.paint(mesh.translate(mesh.box{ B, h, d }, { x, 0, 0 }), shade)                            -- a board
+    end
+    return mesh.merge(parts)
+  end
   W, H, D = 0.9, 1.05, 0.45
   casters({ -0.38, 0.38 }, { -0.17, 0.17 }, 0.05)
   for _, x in ipairs{ -0.44, 0.44 } do c.box("paint", V(x, 0.58, 0), V(0.02, 0.9, D), 0.008, col, 1) end
@@ -77,7 +93,9 @@ elseif a.kind == "books" then
       local i = 0
       while x < 0.36 do
         local w = 0.025 + 0.012 * ((i * 5 + row * 3) % 4)
-        c.tilted("hard", V(x + w / 2, y + 0.115, s * 0.1), V(w - 0.002, 0.2 + 0.02 * (i % 3), 0.16), 0.002, -s * 0.25, shades[(i + row * 2 + (s > 0 and 3 or 0)) % #shades + 1])
+        local tall, deep = 0.2 + 0.02 * (i % 3), 0.15 + 0.01 * ((i * 3) % 3)
+        local shade = shades[(i + row * 2 + (s > 0 and 3 or 0)) % #shades + 1]
+        c.mesh("hard", mesh.translate(mesh.rotate_x(book(w - 0.002, tall, deep, shade, s), -s * 0.25), { x + w / 2, y + 0.008 + tall / 2, s * 0.1 }))
         x, i = x + w, i + 1
       end
     end

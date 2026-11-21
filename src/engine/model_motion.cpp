@@ -65,9 +65,10 @@ bool advanceModelMotion(World& world, Entity instance, Real dt) {
 }
 
 void poseModelPieces(World& world, Entity instance) {
-    const ModelInstance* mi = world.get<ModelInstance>(instance);
+    ModelInstance* mi = world.get<ModelInstance>(instance);
     const Transform* at = world.get<Transform>(instance);
     if (mi == nullptr || at == nullptr || mi->model == nullptr) return;
+    mi->settle = true;   // (ModelMotionSystem: the pieces' previous place follows on the next step)
     const Mat4 owner = placeOf(*at).matrix();
     // The draws come in the same order in any pose (ProcModelDraw), so piece i is draw i. A model whose draws
     // merge differently when posed (two uses that coincide only at rest) keeps its pieces where they were.
