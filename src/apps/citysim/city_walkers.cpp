@@ -762,10 +762,11 @@ void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
             const driving::Driving* d = city_.sim().drivingV2();
             return "ok " + (d ? oneLine(d->describeWaiting(d->waitReport())) : std::string(kDrivingV2Off));
         });
-        // `lanegraph?`: the road the new model drives on -- the load's own line: what it holds, and whether it came from
-        // the cache or was built (and how long that took)
+        // `lanegraph?`: the level's road model the sim holds (its people walk and its cars drive on its lane level) -- the
+        // load's own line: what it holds, and whether it came from the cache or was built (and how long that took). Every
+        // lanes level has one, whether or not it drives (ADR-0480).
         answerLaneGraph_ = ctx.commands->bind("lanegraph?", "CityWalkerSystem", [this](const engine::ControlCommand&) -> std::string {
-            return "ok " + (city_.sim().drivingV2() ? city_.sim().drivingRoadsReport() : std::string(kDrivingV2Off));
+            return "ok " + city_.sim().roadsReport();
         });
         // `driving?`: the new model's cars at a glance -- placed, moving, standing, trips, cars put down again, routes
         // not found, mean speed, tick cost (city_driving.h)

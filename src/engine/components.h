@@ -927,6 +927,10 @@ struct LevelRoadModel {
         return c >= 0 && static_cast<std::size_t>(c) < cities.size() ? cities[static_cast<std::size_t>(c)].get() : nullptr;
     }
     const ModelJunction* junctionAt(int c, int junction) const;
+    // THE BUILT MODEL (its lanes and lane level, the walks among them): the first city's, when it was built; null when
+    // the level has no lane-built city or its first city is only the planned layer. The one the city sim's people walk
+    // by and its driving drives on (CitySim::setRoads), whether or not the level drives (ADR-0480).
+    std::shared_ptr<RoadModel> builtCity() const;
     // What making the first city's lane level found, in one line (the load's log line and the `lanegraph?` answer):
     // its counts and where it came from, or why there is none.
     std::string laneLevelReport;

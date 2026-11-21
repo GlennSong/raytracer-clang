@@ -23620,3 +23620,58 @@ Words:
 - **The see-through re-pin holds** (system_interchange 8, freeway_cross_relief 0).
 - **Unchanged by .5:** the near crowd (hits on other things 3, off its lane 4.3 s, walkers 2, hash 0x79168141d1414b43; still failing on the walker touch, not re-pinned); traffic_lab 10/11 (its two known); brain_lab 12/12; brain_crowd (its known line 275).
 - **Suites, all with RT_TEST_FILTER:** lanes_tests 155/155, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513; level_river_town 2/2; level_walk_join 1/1.
+
+## ADR-0480 — People will walk by the road model's walks: the sim holds the level's road model on every lanes level, a walk has a height, and a place keeps where its door fronts (#306 task 4, piece 6, sitting W1)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: gets the city sim ready to walk its people by the road model instead of the old street map. Nobody walks differently yet. Three things the switch needs are put in place: (1) the sim is handed the level's road model on every level with a lane-built city, not only on the levels that drive; (2) a walk can be asked how high it is at a point along it, so a person on a bridge's sidewalk can stand on the bridge; (3) a place in the sim keeps where its door fronts the road, as the lot pass recorded it, so a walk can start and end at the door's own sidewalk. It also finds that 8 of the 13 lanes levels have no walks to walk yet, because their road files do not state what the lane level needs (below).
+
+Words:
+- **Road model:** the one description of a level's roads (ADR-0420). Its **built** form holds the **lane level**: the paths cars drive and the **walks** people walk (ADR-0466). Its **planned layer** is what the road file says, without the lane level.
+- **Walk:** one piece of path a person on foot can take: a sidewalk's stretch, a corner, a crossing, a turn-round, a footway's stretch or a walkway's (ADR-0466, ADR-0475).
+- **Frontage:** where a place's door faces the road: a street, a **station** (metres along the street's centre line) and a **kerb** (which side); or a walkway and the metres along it (ADR-0474).
+- **Street map:** the old graph the sim's people walk on today (`NavGraph`), deleted by the end of #306 piece 6.
+- **Lanes level:** a level with a city whose roads the lanes builder builds (a `lanelab` entity, or a road with `"builder": "lanes"`).
+- **Tier:** how fully a person is simulated: near (everything), far (a coarse tick) or dormant (rebuilt from their day when needed).
+
+**The plan this starts** (Glenn's answers to the piece 6a report, 2026-11-20): piece 6 moves every tier of walker onto routes over the walks from the one router (ADR-0467), with no second walking step left at its end. W1 (this) prepares the sim; W2 ports the ~100 tests that run on a hand-made street map onto road-model scenes, keeping the behaviour each checks; W3 switches the walking and deletes the old step; W4 makes the trips that go to no place go to a real spot.
+
+**What changed:**
+- **The sim holds the level's road model** (`CitySim::setRoads(model, report)`, `CitySim::roads()`, `roadsReport()`; was `setDrivingRoads`, which did nothing on a level that does not drive). The city host (`CityRenderSystem::build`) hands it `LevelRoadModel::builtCity()` (new: the first city's built model, or null) on every level, and only then, where the level drives, checks its vehicle classes against it and remakes the driving on it, as before. A lanes level whose first city is only the planned layer logs why.
+- **Behaviour held where nothing should change:** the walkers' crosswalk rules (`CitySim::crossingAhead`) read the model only where the level drives, as before: a level with no driving has no cars to judge a gap against. W3 replaces them with the crossings on each walker's own route. `lanegraph?` now answers the model's line on every lanes level (it said the driving was off on a level that does not drive).
+- **A walk's height:** `LaneGraph::heightAt(WalkId, along)`, read along the walk's own curve as the lane level laid it, beside `pointAt(WalkId, along)`. The walks already carried their heights; nothing asked.
+- **A place keeps its door's frontage:** `citysim::Place::frontage` (`engine::StatedFrontage`, the type the lot pass, the door and `AuthoredPlace` already share), copied from `AuthoredPlace::frontage` when the host makes the place (`PlaceMap::setFrontage`). It says nothing for a place that states nothing (an authored marker, a shop front, a door with no street a building may front). Nothing reads it until W3.
+
+**Lanes levels and their models** (`level_every_lanes_level_hands_the_sim_its_road_model`, level_tests: every level in assets/levels with a lane-built city and a city sim; Glenn's three untracked levels in progress left out):
+
+| Level | The sim holds | Walks |
+|---|---|---|
+| agent_lab, river_town | its built model | 1759 |
+| brain_crowd, brain_lab, traffic_lab | its built model | 1627 |
+| island_8_nature, light_rail_lab, metro_mountain, metro_planned, metro_v2_test, piedmont | nothing: the road file states no lane rules, and its junctions' arms are not listed in ring order | 0 |
+| wheel_lab | nothing: the road file states no lane rules | 0 |
+| rail_lab | nothing: as island_8_nature, and not every junction's control is stated | 0 |
+
+- **Found: 8 of the 13 lanes levels have no walks.** Their road files lack the facts the lane level is built from, so the loader publishes only the planned layer, and there is nothing for their people to walk by. The test prints each with the tool run that states the missing facts (`lanes_tool layout <road file> --lane-rules 20 --arm-order --write`; for rail_lab also `city_plan controls <road file> rules/lab.lua --layout --write --controls-only`). Running those writes the road files and re-bakes the levels (island_8_nature among them), which this sitting was told not to do. **It must be done, or decided, before W3:** after W3 a level with no walks has nowhere for its people to walk. It is Glenn's to schedule. The test pins the list, so a level that gains its lane level shows.
+
+**Tolerances (test 48):** the pavement may stand up to `kKerbAtMost` 0.5 m above the deck it is on (a kerb, with room), and its height above the deck may vary along one walk by up to `kSameRise` 2 cm (the lane level samples heights at its own points). Measured: 0.000 m above and 0.000 m of variation (the walks are laid at the deck's own heights).
+
+**Tests:**
+- `road_model_48_a_walk_is_as_high_as_the_pavement_it_runs_on` (lanes_tests): two roads crossing on a deck over flat ground, one climbing from 6 m to 12 m, the other level at 9 m. The four sidewalk walks along the climbing road read 6.00 to 12.00 m along their length, following the deck point by point; a walk the lane level does not hold reads 0. Checked to bite: with `heightAt(WalkId)` answering the walk's first point everywhere, 6 checks fail; put back, it passes.
+- `city_places_carry_where_their_doors_front` (run_tests): three places made by the city host, one stating a street, station and kerb, one a walkway and metres, one nothing; each place in the sim states the same. A hand world with no lane-built city: the sim holds no road model.
+- `level_every_lanes_level_hands_the_sim_its_road_model` (level_tests): the table above, by the same two calls the host makes.
+
+**Hashes and pins: none moved.** river_town crowd: arrivals 730, no way 0, walks blocked 0, hash 0xa15a1ec8afaff85d. brain_crowd: arrivals 426, hash 0xb67879f5b6ec7210. The near crowd: hash 0x79168141d1414b43, as at ADR-0479, still failing as recorded there (the walker touch by car 220, #314; not re-pinned). brain_lab 12/12, level_walk_join 1/1.
+
+**Suites, all with RT_TEST_FILTER:** full build; lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; run_tests 1514/1514; level_tests: level_every_lanes_level 1/1, level_brain_lab 12/12, level_river_town 2/2, level_walk_join 1/1, level_brain_crowd 0/1 (its known line 275 only: the share of walkers waiting away from a kerb end); physics_tests near_tier_in_the_crowd 0/1 (its known state, above).
+
+**Format and caches:** no format, bake key, lots tag or road model format moved; no road or lot geometry touched; no level baked.
+
+**One model:**
+- Concepts touched: roads (a walk's height; which model the sim holds), places (a place's frontage).
+- The sim holds the level's one road model, the same object the loader published and the driving drives on: no copy, no second model. A walk's height is read from the lane level's own curve. The frontage is the record the lot pass wrote (`StatedFrontage`), carried, not worked out again.
+- The street map is still what the sim's people walk on until W3. No new reader of it was added.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** W2 and W3 land (this ADR's plan); when the 8 levels' road files state their lane facts (then the level test's list shrinks); or when a level has several lane-built cities whose people walk in a city other than the first.

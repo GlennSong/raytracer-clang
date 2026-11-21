@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace citysim {
@@ -105,6 +106,12 @@ struct Place {
     uint32_t dwellingCount = 0;
     // Floor area, m2 (AuthoredPlace::floorArea): the weight of this place in the draw of homes and jobs. 0 = unknown.
     Real floorArea = 0;
+    // WHERE ITS DOOR FRONTS (ADR-0474; AuthoredPlace::frontage): the street, station and kerb, or the walkway and metres
+    // along it, the lot pass recorded for the door it was entered by; says nothing for an authored marker, a shop front
+    // or a door the lot pass found no street for. Carried from the level (ADR-0480) so a walk to or from the place starts
+    // and ends where its door states (RoadModel::walkJoinOn), not where a search by position lands. Read by #306 piece 6's
+    // switch (W3); nothing reads it yet.
+    engine::StatedFrontage frontage;
 
     // Is this place open at in-world hour `clock` (0..24)? Handles a window that
     // wraps midnight (openHour > closeHour, e.g. a 20→4 late shop).
@@ -162,6 +169,9 @@ public:
     const std::vector<Dwelling>& dwellings() const { return dwellings_; }
     void setFloorArea(PlaceId id, Real m2) {
         if (id < places_.size()) places_[id].floorArea = m2;
+    }
+    void setFrontage(PlaceId id, engine::StatedFrontage f) {
+        if (id < places_.size()) places_[id].frontage = std::move(f);
     }
 
     // All place ids of a given type, in insertion order. Empty if none.

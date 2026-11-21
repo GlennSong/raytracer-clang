@@ -1048,12 +1048,14 @@ public:
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
-    // ...and the road it drives on: the level's road model (road_model_cache.h; its lane level is where the cars are),
-    // held here for as long as the driving reads it, with the one line that says what it holds and where it came from
-    // (the load's log, `lanegraph?`). The driving is made again on the new road, keeping its vehicle classes; it has no
-    // cars yet, so nothing else is lost. No-op under v1.
-    void setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report);
-    const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
+    // THE LEVEL'S ROAD MODEL (ADR-0480): its built model (engine::LevelRoadModel::builtCity; its lane level holds the
+    // walks people walk by and the lanes the cars drive), handed over on EVERY level with a lane-built city, whether or not
+    // the level drives, and held here for as long as the sim and the driving read it, with the one line that says what it
+    // holds and where it came from (the load's log, `lanegraph?`). Where the level drives, the driving is made again on
+    // it, keeping its vehicle classes; it has no cars yet, so nothing else is lost. Null: the level has no built model.
+    void setRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report);
+    const engine::RoadModel* roads() const { return roads_.get(); }
+    const std::string& roadsReport() const { return roadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
     // ...and to place, send and carry cars of its own in (the near tier, city_near.h; ADR-0447). Null under v1.
@@ -1701,9 +1703,10 @@ private:
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     bool daySchedule_ = true;   // false: everyone at home, held for a director (setDaySchedule)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
-    // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
-    std::shared_ptr<const engine::RoadModel> drivingRoads_;
-    std::string drivingRoadsReport_ = "no lane graph yet";
+    // The level's road model (setRoads), the driving's road too: shared, so its address stays put while the driving
+    // holds a pointer to it.
+    std::shared_ptr<const engine::RoadModel> roads_;
+    std::string roadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
     CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving

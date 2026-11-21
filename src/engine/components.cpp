@@ -148,6 +148,10 @@ const ModelJunction* LevelRoadModel::junctionAt(int c, int junction) const {
                ? &m->junctions[static_cast<std::size_t>(junction)] : nullptr;
 }
 
+std::shared_ptr<RoadModel> LevelRoadModel::builtCity() const {
+    return !cities.empty() && cities.front() && cities.front()->built ? cities.front() : nullptr;
+}
+
 uint64_t LevelRoadModel::runKey(const Place& s) const {
     if (s.street < 0 || !city(s.city)) return 0;
     const RoadModel& m = *city(s.city);
@@ -189,6 +193,7 @@ void LevelRoadModel::stateSignals(NavGraph& nav, int* untied, bool* stated) cons
 }
 #else
 const ModelJunction* LevelRoadModel::junctionAt(int, int) const { return nullptr; }
+std::shared_ptr<RoadModel> LevelRoadModel::builtCity() const { return nullptr; }
 std::vector<Vec2> LevelRoadModel::junctionPoints() const { return {}; }
 uint64_t LevelRoadModel::runKey(const Place&) const { return 0; }
 bool LevelRoadModel::controlsStated() const { return false; }

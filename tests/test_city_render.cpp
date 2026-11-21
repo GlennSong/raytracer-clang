@@ -309,6 +309,49 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     CHECK(groupCount(world, city.pedGroup()) == 1u);
 }
 
+TEST_CASE(city_places_carry_where_their_doors_front) {
+    // ADR-0480: the street, station and kerb (or the walkway and metres along it) the lot pass recorded for a place's
+    // door (AuthoredPlace::frontage, ADR-0474) reach the sim's place unchanged, so a walk can start and end where the door
+    // states. A place that states nothing says nothing. (This hand world has no lane-built city: the sim holds no road
+    // model.)
+    World world;
+    testmap::addRoads(world, crossRoads());
+    CitySimConfig cfg;
+    cfg.pedestrians = 1;
+    cfg.seed = 7;
+    AuthoredPlace home;
+    home.type = "home";
+    home.x = 20;
+    home.z = 12;
+    home.frontage.street = "s3";
+    home.frontage.station = 41.25;
+    home.frontage.dir = -1;
+    AuthoredPlace shop;
+    shop.type = "shop";
+    shop.x = -20;
+    shop.z = -12;
+    shop.openHour = 9;
+    shop.closeHour = 17;
+    shop.frontage.walkway = "lot4.p2";
+    shop.frontage.along = 7.5;
+    AuthoredPlace office;
+    office.type = "office";
+    office.x = 12;
+    office.z = -20;
+    cfg.places = {home, shop, office};
+    world.add<CitySimConfig>(world.create(), cfg);
+    CityRenderSystem city(cityParams());
+    CHECK(city.build(world, nullptr));
+    const std::vector<Place>& places = city.places().places();
+    CHECK(places.size() == 3u);
+    if (places.size() != 3u) return;
+    CHECK(places[0].frontage.street == "s3" && places[0].frontage.station == 41.25 && places[0].frontage.dir == -1);
+    CHECK(!places[0].frontage.onWalkway());
+    CHECK(places[1].frontage.walkway == "lot4.p2" && places[1].frontage.along == 7.5 && !places[1].frontage.onStreet());
+    CHECK(!places[2].frontage.onStreet() && !places[2].frontage.onWalkway());
+    CHECK(city.sim().roads() == nullptr);
+}
+
 TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     // The agent-lab level (assets/levels/agent_lab.json) is a theta circuit: a
     // 120x80 ring with a middle bar, meeting at two 3-way junctions. Mirror its

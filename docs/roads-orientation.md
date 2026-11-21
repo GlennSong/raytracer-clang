@@ -104,7 +104,7 @@ move the loop into it; never a private loop in the reader.
 | Paths for people on foot beside no street (ADR-0475): a park's path, a plaza's, a cut-through. Each states its kind (a path users' row: `footway`, `park_path`), width, line with heights, and where each end lands: a street's sidewalk (street id, station, kerb: a `StatedFrontage`), another walkway (id, metres along), or a stated dead end. Laid in the lane level as walks (`Walk::modelWalkway`), the sidewalk or walkway landed on cut there and joined; an end that does not land is a fault with why | `RoadModel::walkways` (`ModelWalkway`, `WalkwayEnd`), supplied ONLY by `stateWalkways(model, walkways)` on a built model (returns `WalkwayProblem`s: `WalkwayFault` and why), which calls `layWalkways` (`lanes/lane_level.h`). The types live in `roads/walkway.h`. The lot pass states its paths as them (ADR-0476: `city_lots.h stateLotPaths`, handed over by `lots_producer.h stateLotWalkways`); the street map reads them (`street_map.h appendWalkways`) |
 | The kind of a lane path or walk; every lane path and walk a mover may use (the one mover filter); the parts of the walks a person can get round | `RoadModel::pathKind(path)`, `walkKind(walk)`, `openTo(mover, users)` (`OpenPaths`: per path, per walk); `reachableWalks(g, open)` (`lane_graph.h`) |
 | Who may use which kind of path; how a dead end is joined; the wait a mover adds for stepping onto a kind (a crossing's) | `pathUsers()` (`PathUsers::usersOf`, `mayUse`, `mover`, `deadEndJoin`; `PathMover::waitOn`), from `assets/data/path_users.json`; read by `RoadModel::openTo` and the router's `bindWalker` |
-| A route between two places on the lane level (the one route-finder, ADR-0467): a car's over the lane paths (legs, turns, which lanes lead on); a walker's over the walks (the walks taken with their direction, metres, seconds, the crosswalks crossed and from which kerb end) | `route.h`: `findRoute(model, studyRoads(model), RouteClass, PathPoint, PathPoint)`; `findWalkRoute(model, bindWalker(model, mover, pace), WalkPoint, WalkPoint)` (`WalkRoute`, `WalkStep`, `WalkCrossing`). A place: `PathPoint` / `WalkPoint` (`lane_graph.h`); a walk's point: `LaneGraph::pointAt(WalkId, along)` |
+| A route between two places on the lane level (the one route-finder, ADR-0467): a car's over the lane paths (legs, turns, which lanes lead on); a walker's over the walks (the walks taken with their direction, metres, seconds, the crosswalks crossed and from which kerb end) | `route.h`: `findRoute(model, studyRoads(model), RouteClass, PathPoint, PathPoint)`; `findWalkRoute(model, bindWalker(model, mover, pace), WalkPoint, WalkPoint)` (`WalkRoute`, `WalkStep`, `WalkCrossing`). A place: `PathPoint` / `WalkPoint` (`lane_graph.h`); a walk's point: `LaneGraph::pointAt(WalkId, along)`, and its height (the pavement it runs on, a bridge's sidewalk too: ADR-0480) `LaneGraph::heightAt(WalkId, along)` |
 | The nearest of several centre lines to a point (the one search) | `nearestLine` (`city/polyline.h`) |
 | May a building front a road of this class | `buildingMayFront` (`city/road_network.h`) |
 
@@ -146,7 +146,8 @@ nothing.
 
 **From a place to the walks** (ADR-0468). `walkJoinOn` answers from a stated frontage (the brain's markers state
 street, station and kerb; since ADR-0474 so do a lot's buildings and doors, carried to the sim as
-`AuthoredPlace::frontage`, read by nobody until piece 6); `walkJoinNear` is the only fallback by position. Only walks along a
+`AuthoredPlace::frontage` and, since ADR-0480, onto the sim's own place as `citysim::Place::frontage`, read by nobody
+until piece 6's switch, W3); `walkJoinNear` is the only fallback by position. Only walks along a
 street (`Walk::street` set: sidewalk and footway stretches) are joined, never a corner, crossing or turn-round, never a
 walk closed to the mover; `cutOff` says when the walk is outside the largest part on foot. The street map's three
 look-ups it replaces in piece 6 are named for the comparison (`CitySim::walkStartNode`, `kerbLinkNear`, `kerbSideLink`;
@@ -238,8 +239,11 @@ Tests:
   parking, walkers, the trip planner, furniture, the day/night system and the light probes.
 - **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429). The
   host makes nothing: it hands the driving the lane level of the built model the loader published in `LevelRoadModel`
-  (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only traffic_lab drives v2
-  (`"driving": "v2"` in its level file); river_town and agent_lab get their built model too, since the loader makes it.
+  (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only the levels naming
+  `citysim.drivingRules` drive (traffic_lab, brain_lab, brain_crowd, river_town).
+- **The city sim holds the model on every lanes level** (ADR-0480), whether or not it drives: `CitySim::setRoads`, given
+  `LevelRoadModel::builtCity()` (the first city's built model), and `CitySim::roads()`. Its people walk the lane level's
+  walks from #306 piece 6's switch (W3); until then the crosswalk rules read it only where the level drives.
 - **The driving holds the road model** (ADR-0436): `Driving(const RoadModel*)`. It reaches the lane level through it
   and asks the model for a junction's control, a path's posted limit and road class, a connector's turn and a stated
   merge (the table in section 1). The lane table's copies of those five are deleted, and since ADR-0437 its
@@ -450,6 +454,12 @@ data rows.
 
 ## 8. Known faults and open work
 
+- **8 of the 13 lanes levels have no lane level, so no walks** (ADR-0480): island_8_nature, light_rail_lab,
+  metro_mountain, metro_planned, metro_v2_test, piedmont, rail_lab, wheel_lab. Their road files state no lane rules
+  (all but wheel_lab also no ring order of their junctions' arms; rail_lab also not every control), so the loader
+  publishes the planned layer only. `level_every_lanes_level_hands_the_sim_its_road_model` names the tool run for each.
+  Stating them writes the road files and re-bakes those levels; it is needed before #306 piece 6 walks people by the
+  walks (W3).
 - **Step 9a's stop lines** (ADR-0428) sit 1–2 m further out than the paint's at most junctions. The old box was
   sampled every 2 m, so it usually ended a metre inside the crossing road. Corners are still drawn without a stated
   radius (step 9b). Since ADR-0471 the stop lines at sharp-angled junctions stand back further, which costs river_town

@@ -337,6 +337,12 @@ Real LaneGraph::heightAt(PathId path, Real distanceAlong) const {
     return valueAtStation(along.data() + r.first, heights.data() + r.first, r.count, distanceAlong);
 }
 
+Real LaneGraph::heightAt(WalkId walk, Real distanceAlong) const {
+    const Range r = curveOf(*this, walk);
+    if (r.count == 0) return 0;
+    return valueAtStation(along.data() + r.first, heights.data() + r.first, r.count, distanceAlong);
+}
+
 Vec2 LaneGraph::directionAt(PathId path, Real distanceAlong) const {
     const Vec2 kNoHeading(1, 0);
     const Range r = curveOf(*this, path);

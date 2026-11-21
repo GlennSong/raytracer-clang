@@ -494,6 +494,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             }
         }
         if (ap.floorArea > 0) places_.setFloorArea(pid, ap.floorArea);
+        places_.setFrontage(pid, ap.frontage);   // where its door fronts, as the lot pass recorded it (ADR-0480)
     }
     if (homeDwellings > 0)
         LOG_INFO << "[citysim] homes: " << places_.countOfType(PlaceType::Home) << " places, " << homeDwellings
@@ -723,32 +724,38 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] driving v2: the new driving library is on";
     }
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE ROAD THE DRIVING DRIVES ON (a level with no rule set does none of this): the level's one road model, whole
-    // (ADR-0436: its lane level is where the cars are, and what the road is there is asked of the model), as the loader
-    // published it (engine::LevelRoadModel, ADR-0435). Nothing is made here: the model was read from
-    // its cache or built by the one function that makes it (road_model_cache.h obtainLevelRoadModel), its turns checked
-    // against the level's own fleet, which that function reads from the same vehicle script this host read above.
-    if (const driving::Driving* d2 = sim_.drivingV2()) {
+    // THE LEVEL'S ROAD MODEL, handed to the sim on every level with a lane-built city (ADR-0480): its lane level holds the
+    // walks its people walk by and, where the level names a rule set, the lanes the driving drives (ADR-0436), and what
+    // the road is there is asked of the model. As the loader published it (engine::LevelRoadModel, ADR-0435): nothing is
+    // made here; the model was read from its cache or built by the one function that makes it (road_model_cache.h
+    // obtainLevelRoadModel), its turns checked against the level's own fleet, which that function reads from the same
+    // vehicle script this host read above.
+    {
         std::shared_ptr<engine::RoadModel> model;
         std::string line = "no lane graph: the level published no road model";
+        bool lanesCity = false;
         world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
-            if (model || m.cities.empty()) return;
+            if (lanesCity || m.cities.empty()) return;
+            lanesCity = true;
             line = m.laneLevelReport;
-            if (m.cities.front() && m.cities.front()->built) model = m.cities.front();
+            model = m.builtCity();
         });
-        if (model) {
-            LOG_INFO << "[citysim] driving v2 lane graph: " << line;
-            // a class carrying a tag the road was not checked for can use no turn open to that tag: say so
-            const std::vector<std::string>& roadTags = model->laneLevel.vehicleTagNames;
-            for (const driving::VehicleClass& c : d2->vehicleClasses().all())
-                for (const std::string& tag : c.tags)
-                    if (std::find(roadTags.begin(), roadTags.end(), tag) == roadTags.end())
-                        LOG_WARN << "[citysim] driving v2: vehicle class " << c.name << " carries the tag \"" << tag
-                                 << "\", which the level's roads were not checked for";
-        } else {
-            LOG_WARN << "[citysim] driving v2: " << line;
+        if (model) LOG_INFO << "[citysim] the level's road model, lane level: " << line;
+        else if (lanesCity) LOG_WARN << "[citysim] the level's road model is not built: " << line;
+        if (const driving::Driving* d2 = sim_.drivingV2()) {
+            if (model) {
+                // a class carrying a tag the road was not checked for can use no turn open to that tag: say so
+                const std::vector<std::string>& roadTags = model->laneLevel.vehicleTagNames;
+                for (const driving::VehicleClass& c : d2->vehicleClasses().all())
+                    for (const std::string& tag : c.tags)
+                        if (std::find(roadTags.begin(), roadTags.end(), tag) == roadTags.end())
+                            LOG_WARN << "[citysim] driving v2: vehicle class " << c.name << " carries the tag \"" << tag
+                                     << "\", which the level's roads were not checked for";
+            } else {
+                LOG_WARN << "[citysim] driving v2: " << line;
+            }
         }
-        sim_.setDrivingRoads(model, line);
+        sim_.setRoads(model, line);
     }
     // (The fire stations' engines, parked in their bays as rows of the old sim's vehicle list, went with the old driving:
     // ADR-0461. A fire engine comes back as a parked car entity. The garages' stalls, the old driving's bays, went with

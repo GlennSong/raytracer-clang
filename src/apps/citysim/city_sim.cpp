@@ -150,12 +150,12 @@ driving::VehicleClasses builtInDrivingClasses() {
     return out;
 }
 
-void CitySim::setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report) {
+void CitySim::setRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report) {
+    roads_ = std::move(roads);
+    roadsReport_ = std::move(report);
     if (!drivingV2_) return;
     driving::VehicleClasses classes = drivingV2_->vehicleClasses();
-    drivingRoads_ = std::move(roads);
-    drivingRoadsReport_ = std::move(report);
-    drivingV2_.emplace(drivingRoads_.get());
+    drivingV2_.emplace(roads_.get());
     drivingV2_->setVehicleClasses(std::move(classes));
 }
 
@@ -3101,8 +3101,8 @@ void CitySim::refreshPose(Agent& a) const {
     // A WALKER STANDING AT A CROSSWALK'S KERB (ADR-0452) stands at its kerb end, on the pavement, a step back: the
     // model's place (ModelCrosswalk::kerbWait), not wherever its route line runs (inside a spread junction that line can
     // lie in the carriageway).
-    if (a.crosswalkAt >= 0 && !a.onCrosswalk && a.speed < kCrossingStanding && drivingRoads_)
-        if (const engine::ModelCrosswalk* cw = drivingRoads_->crosswalk(static_cast<uint32_t>(a.crosswalkAt))) {
+    if (a.crosswalkAt >= 0 && !a.onCrosswalk && a.speed < kCrossingStanding && roads_)
+        if (const engine::ModelCrosswalk* cw = roads_->crosswalk(static_cast<uint32_t>(a.crosswalkAt))) {
             const Vec2 kerb = cw->kerbWait(a.crossFromEnd, kCrossingKerbStep);
             if ((kerb - a.pos).length() <= kCrossingStepAside) a.pos = kerb;
         }
@@ -3187,7 +3187,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
         if (gate.crossing.governed) {
             gate.cap = target;
             if (!gate.crossing.found || gate.crossing.toHold < 0) return gate;
-            const engine::ModelCrosswalk* c = drivingRoads_->crosswalk(gate.crossing.crosswalk);
+            const engine::ModelCrosswalk* c = roads_->crosswalk(gate.crossing.crosswalk);
             const driving::WalkSignal ws = drivingV2_ && drivingV2_->lightsRun()
                                                ? driving::walkAtCrosswalk(drivingV2_->rightOfWay(), gate.crossing.crosswalk,
                                                                           drivingV2_->clockSeconds())
@@ -3770,7 +3770,9 @@ const char* CitySim::crossingKindWord(CrossingKind k) {
 
 CitySim::CrossingAhead CitySim::crossingAhead(const Agent& a) const {
     CrossingAhead out;
-    const engine::RoadModel* m = drivingRoads_.get();
+    // (only where the level drives, as before ADR-0480 handed every lanes level's model to the sim: the crosswalks rule
+    // the walkers where the driving's cars are; #306 piece 6's W3 takes the crossings from the walker's own route)
+    const engine::RoadModel* m = drivingV2_ ? roads_.get() : nullptr;
     if (!m || m->crosswalks.empty() || !nav_) return out;
     const int legs = static_cast<int>(a.route.links.size());
     if (a.leg < 0 || a.leg >= legs) return out;
@@ -3867,7 +3869,7 @@ CitySim::CrossingAhead CitySim::crossingAhead(const Agent& a) const {
 }
 
 bool CitySim::gapToCross(const Agent& a, uint32_t crosswalk, Real waited, bool bigger, std::string* why) const {
-    const engine::RoadModel* m = drivingRoads_.get();
+    const engine::RoadModel* m = roads_.get();
     const engine::ModelCrosswalk* c = m ? m->crosswalk(crosswalk) : nullptr;
     if (!c || !drivingV2_ || !drivingV2_->roads()) return true;
     const CrossingTuning& t = people_.crossing;

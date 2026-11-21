@@ -5372,3 +5372,57 @@ TEST_CASE(road_model_47_the_layers_hold_no_part_without_a_body) {
         CHECK(needles == 0u);
     }
 }
+
+// ---- 48. how high a walk is: the pavement it runs on, read along it (ADR-0480) --------------------------------------------
+
+TEST_CASE(road_model_48_a_walk_is_as_high_as_the_pavement_it_runs_on) {
+    // TWO ROADS CROSSING ON A DECK over flat ground: `ew` climbs steadily from 6 m at its west end to 12 m at its east end
+    // (3 cm a metre), `ns` runs level at 9 m, where `ew` meets it at the junction. A person on `ew`'s sidewalk is up on
+    // the deck: the walk's height, read along it, follows the deck's rise point by point, a kerb's height above it.
+    nlohmann::json f;
+    f["name"] = "walk_heights";
+    constexpr double kWest = 6.0, kRise = 0.03, kLevel = 9.0;   // the deck: metres, metres a metre, metres
+    auto road = [](const std::string& id, const Vec2& a, const Vec2& b, const std::vector<double>& z) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}},
+                              {"profile", {{"step", 1.0}, {"z", z}}}};
+    };
+    std::vector<double> climb(201), level(201, kLevel);
+    for (std::size_t i = 0; i < climb.size(); ++i) climb[i] = kWest + kRise * static_cast<double>(i);
+    f["edges"] = nlohmann::json::array({road("ew", Vec2(-100, 0), Vec2(100, 0), climb), road("ns", Vec2(0, -100), Vec2(0, 100), level)});
+    writeLayout(f, deriveLayout(RoadLabGraph::fromJson(f), LayoutSource::Inferred));
+    BuiltScene s = builtScene(f);
+    CHECK(s.report.error.empty());
+    const LaneGraph& G = s.m.laneLevel;
+    // the deck's height level with plan point x on `ew` (its spine runs west to east from x = -100)
+    auto deck = [&](Real x) { return kWest + kRise * (x + 100.0); };
+    // How far the pavement may stand above the deck it is on: a kerb, with room (m); and how much that may vary along one
+    // walk, where the deck is a plane (m): the lane level samples the pavement's heights at its own points.
+    constexpr Real kKerbAtMost = 0.5, kSameRise = 0.02;
+    uint32_t walksOnEw = 0;
+    Real lowest = 1e9, highest = -1e9, rise0 = 0, worstSpread = 0;
+    for (uint32_t w = 0; w < G.walks.size(); ++w) {
+        const Walk& k = G.walks[w];
+        if (k.street == kNoIndex || s.m.streets[k.street].road != "ew") continue;
+        ++walksOnEw;
+        Real lo = 1e9, hi = -1e9;
+        for (int i = 0; i <= 10; ++i) {
+            const Real along = k.length * static_cast<Real>(i) / 10.0;
+            const Real h = G.heightAt(WalkId(w), along);
+            const Real above = h - deck(G.pointAt(WalkId(w), along).x);
+            lo = std::min(lo, above);
+            hi = std::max(hi, above);
+            lowest = std::min(lowest, h);
+            highest = std::max(highest, h);
+            if (walksOnEw == 1u && i == 0) rise0 = above;
+        }
+        worstSpread = std::max(worstSpread, hi - lo);
+        CHECK(lo >= -kSameRise && hi <= kKerbAtMost);
+    }
+    std::printf("      ew's sidewalks on the deck: %u walks, %.2f to %.2f m high; above the deck by %.3f m, varying by at most %.3f m\n",
+                walksOnEw, lowest, highest, rise0, worstSpread);
+    CHECK(walksOnEw == 4u);                     // two kerbs, each cut at the junction
+    CHECK(worstSpread <= kSameRise);            // the walk climbs with the deck, point by point
+    CHECK(lowest > kWest - kSameRise && highest > kLevel + 2.0);   // up on the deck, well above the ground, at both ends
+    // a walk the lane level does not hold reads 0, as an unknown path does
+    CHECK(G.heightAt(WalkId(static_cast<uint32_t>(G.walks.size())), 1.0) == 0.0);
+}
