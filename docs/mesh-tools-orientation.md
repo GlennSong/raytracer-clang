@@ -77,7 +77,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 759a9e4f | the model and the studio on the control channel: `models?`, `model?`, `model_set` (engine), `studio?`, `studio_open`, `studio_args`, `studio_pick` (editor); `engine/model_inspect.{h,cpp}`, the one description of a stamped model's tree; `web/engine/commands.json` refreshed |
 | 517f8c0b | the studio views a model OR a prefab: `savePrefab` and the entry rewrite in `scripting/prefab_list`, the prefab form in the Inspector dock, `--prefab <name>`, play keeping the player's place on a rebuild, `engine/model_overlay` (shapes, markers, joints as lines); commands `prefabs?`, `prefab?`, `model_overlay`, `studio_prefab`, `studio_prefab_set`, `play`, `stop` |
 | 2ad5f8ad | the park sculpture, the first model made in the studio: `park_sculpture.lua`, `park_sculpture_turn.lua`, two models and two prefabs |
-| (next commit) | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
+| afc9ee0b | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
