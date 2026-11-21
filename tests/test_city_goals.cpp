@@ -805,9 +805,9 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
         sim.step(0.1, 0.0005);
         for (std::size_t k = 0; k < sim.agents().size(); ++k) {
             const Agent& a = sim.agents()[k];
-            if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (!nav.links[static_cast<std::size_t>(li)].footpath) { stuck[k] = 0; continue; }
+            if (!CitySim::onRoute(a)) continue;
+            const engine::WalkId w = a.route.steps[static_cast<std::size_t>(a.leg)].walk;   // on the walkway's walk (W3)
+            if (model->laneLevel.walks[w.index].modelWalkway == engine::kNoIndex) { stuck[k] = 0; continue; }
             ++onWalk;
             if (std::fabs(a.distOnLeg - lastD[k]) < 1e-6) ++stuck[k]; else stuck[k] = 0;
             lastD[k] = a.distOnLeg;

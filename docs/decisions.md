@@ -23678,6 +23678,8 @@ Words:
 
 ### W1b — island_8_nature's road file was given its lane facts once; its lane level builds but fails its own check at j396, so it is never saved and the bake runs out of memory. PARKED: the road file is back as it was
 
+**Superseded (2026-11-21) by "W1b, j396" below:** the filled-in file is back in place, with j396 fixed. What follows is the record as it was.
+
 **Parked** (the coordinator, 2026-11-20): Glenn's island must keep loading from its existing bundle, so the road file was put back (`git checkout` of that one file). The filled-in file is kept at `out/w1b_island/island_8_nature_lanelab.filled.json` until Glenn decides on j396. island_8_nature is back on the level test's list of levels with no walks (8). The findings below stand.
 
 **Glenn's decision** (2026-11-20): of the 8 levels with no walks, only island_8_nature's road file is given the missing facts now. The other 7 stay without walks, pinned by name; metro_planned is his work in progress and is not touched.
@@ -23705,6 +23707,87 @@ Words:
 **The level test** (`level_every_lanes_level_hands_the_sim_its_road_model`): while the filled-in file was in place, 6 levels handed over a model and island_8_nature had 14,563 walks. Parked, it is back to 5 handed and 8 named with no lane level (island_8_nature's comment says it is blocked by the j396 fault). It now also prints each level's walks by kind, its parts on foot and the model's notes.
 
 **Suites, all with RT_TEST_FILTER:** lanes_tests 156/156, driving_tests 200/200, brain_tests 23/23, run_tests 1514/1514 (none reads island_8_nature). The island's in-suite level tests were not run (they would build the island's city).
+
+### W1b, j396 — one avenue the road file broke into two spurs is stated as it is: a crossroads at j396 and a T at P (j1373); the island's lane level passes its check and is cached
+
+What it does: W1b's fill-in is back in island_8_nature's road file (Glenn's go, 2026-11-21: "fix the junction"). The one junction that failed the lane level's check, j396, is fixed in the road file. The check now passes, so the built road model is saved, and every reader loads it from the cache instead of building it again.
+
+Words:
+- **Outline:** the junction's area as the lane level draws it (its box). Every lane arriving at a junction must end within 1.50 m of its outline, and every lane leaving must begin within 1.50 m of it (`kJunctionEndReach`, lane_graph.cpp `validate`): the **lane-table check**.
+- **Spur:** a stretch of road that runs off its street's line to reach a junction somewhere else.
+- **P:** the point (4849.84, -255.41), where Lake Boulevard meets the cross street.
+
+**What was wrong** (picture `out/j396/j396_before.png`):
+- Lake Boulevard (p1_s142, from j395) and Granary Boulevard (p1_s144, to j399) are one straight avenue through P. Their points march along one line exactly 15 m apart.
+- The road file broke the avenue at P. s142 stopped one step short of it and ran its last 40.5 m down to j396. s144 started at j396 with a 40.3 m spur up to P. The two spurs left j396 21 degrees apart, so j396 counted 5 arms where the grid has 4.
+- j396's outline swallowed both spurs. s142's lanes bent about 100 degrees inside it, so they ended 1.6-3.2 m off the outline: the 6 failed checks. The same spurs gave ADR-0471's two "too close" arms (21.0 and 27.1 m short) and two crosswalk kerb ends in another road's carriageway.
+- The missing fact was a junction at P. It is a planner fault; the lasting fix is #313's.
+
+**Why by hand.** The layout tool has no option that moves a road's point, adds a junction at a new point, or adds an edge. `--split-junction` needs a junction spread over several points, and all five roads met j396 at exactly one point. `--state-arm` had no missing arm to add. So the road file was edited by hand, on a copy first. The tool then checked every layout fact that was written by hand (below).
+
+**The fix** (`assets/lanelab/planned/island_8_nature_lanelab.json`):
+- **p1_s142** ends at P, which is s144's existing point, instead of at j396. Its profile goes from 75 samples to 50: samples 0-33 are kept, and 34-49 run in a straight line to the height at P, 10.953 m (a 4.3% fall over the last 15 m).
+- **p1_s144** is cut at P and keeps [j396, P]. Its profile keeps its first 40 samples, plus the height at P.
+- **A new edge, `p1_s144_1`** (arterial), holds the rest, [P ... j399], unchanged. It is written at the end of the edge list, so no edge id or order moves. Its 47 profile samples are read off the old profile along the same stretch: it starts at the height at P and ends at j399 as before (10.312 m).
+  - **Why a new edge:** a first try kept s144 whole, bending 80 degrees at P with the new junction on the bend. It moved the fault to that junction: two of its leaving lanes began 1.56 m and 2.00 m from its outline. With the road cut, no road bends at a junction's point.
+- **j396** drops its s142 arm. It is now a 4-arm crossroads, through pairs (0,2) and (1,3), still "signal".
+- **j1373**, new, at the end of the junction list, at P:
+  - arms: p1_s142 in (48.89), p1_s144 in (40.27), p1_s144_1 out (0);
+  - through: s142 with s144_1, the avenue;
+  - control "unmarked": the island's own rule, every 3-arm junction on place 1 unmarked and every one of 4 arms or more signalled.
+- **j399**'s arm is now p1_s144_1, at 46.11.
+- **Streets:**
+  - p1_s142 runs j395 to j1373 (48.89 m);
+  - p1_s144 runs j396 to j1373 (40.27 m);
+  - a new street, p1_s144_1, "Granary Boulevard", runs j1373 to j399 (46.11 m), at the end of the street list.
+
+**Checked:**
+- `lanes_tool layout <file> --arm-order`: 0 of 1374 junctions' rings differ from the measure.
+- `lanes_tool layout <copy> --write`: the same JSON as the hand-written file, field for field and in the same order (stations, headings, through pairs, streets).
+- Field by field against W1b's file:
+  - edges 2519 to 2520, the old ids in the same order; only p1_s142 and p1_s144 change, plus p1_s144_1;
+  - junctions 1373 to 1374, the same order; only j396 and j399 change, plus j1373;
+  - streets 2555 to 2556; only p1_s142 and p1_s144 change, plus p1_s144_1;
+  - every other member (classes, crossings, rules, terrain, lane rules) the same.
+- `lanes_tool junctions --top 100000` (the grouping's own view; its printed ids are its own and shift): leaving its ids aside, 3 lines differ. j396 has 4 arms, the T at P is new, and j399 names p1_s144_1.
+- problems.txt: with everything within 150 m of j396 left out and the lane, connector and crossing-point numbers set aside, the same as W1b's. No fault moved anywhere else.
+- The level's signs file has no sign within 60 m of j396.
+
+**Before and after** (`lanes_tool lanegraph`, the tool's two vehicles; "before" is W1b's file and gives W1b's numbers again):
+
+| | before (W1b) | after |
+|---|---|---|
+| Lane-table check failures | 6 (all at j396) | **0** |
+| Problems in all | 5,761 | 5,712 |
+| Stated turns; fit no vehicle | 17,023; 149 | 17,024; 146 |
+| Corner faults, all vehicles | 4,393 | 4,388 |
+| Paths meeting outside a junction | 24 | 2 |
+| Lane folds tidied; kinks in lanes | 98; 5,309 | 92; 5,297 |
+| The road model's own problems | 233 | 230 |
+| Junctions with every stated turn built | 1,285 of 1,373 | 1,287 of 1,374 |
+| Car: largest part / with lane changes / without | 50.2% / 33.8% / 24.6% | the same |
+| Walks (the level's own fleet) | 14,563 | 14,573 |
+| ... sidewalks, corners, crossings, turn-rounds, footways | 4,918, 4,771, 4,817, 36, 21 | 4,920, 4,775, 4,821, 36, 21 |
+| Parts on foot; sidewalks in the largest | 51; 972 (19.8%) | 51; 972 of 4,920 (19.8%) |
+
+- **Planner faults left at j1373 (#313):** arm 1 (p1_s144, the 40 m stretch from j396) is too close to j396 for the angle its roads meet at; its box edge stops 1.4 m short of where its kerbs clear the crossing road. j1373 has no corner faults and no crosswalk kerb end in a carriageway.
+
+**Picture:** `out/j396/j396_after.png`: j396 a crossroads, j1373 a T on the avenue, no lane off its outline. The drawing script is `out/j396/draw_j396.py`.
+
+**The cache:** `RT_TEST_FILTER=level_every_lanes_level_hands_the_sim_its_road_model ./build-viewer/level_tests` built the island's model (15.5 min, 4.6 GB) and saved it, with no "not saved" note: `cache/roadmodel/241597b0593ad586.roadmodel`, 167 MB. A second run read it: "from the cache". The test now pins 6 levels handed and island_8_nature's 14,573 walks, and the 7 levels left with none.
+
+**The bake** (`rt_bake island_8_nature` under `ulimit -v 30000000`): **still fails**, "rt_bake: lots: std::bad_alloc", and **no bundle is written**.
+- Run 1, the model cached: 40:12, peak 22.8 GB resident.
+- Run 2, the same with `MALLOC_ARENA_MAX=4` (glibc's per-thread heaps capped, to test whether reserved address space was what `ulimit -v` ran out of): 39:16, peak 22.7 GB.
+- Both die after the same last lots log line as W1b's bake, which had no cached model, at the same peak. So the cached model changed nothing, and neither did capping the arenas. The memory goes in growing the lots themselves (`growCity` in lots_producer.cpp runs before the producer asks for the road model), or in something the log does not show. It is not the lane level built again on top of the lots, as W1b supposed (#317).
+- Nothing in the sources sets `MALLOC_ARENA_MAX` or calls `mallopt`.
+- The island's last good bundle (9f5c95b6) is out of date for the new road file, so a load in this work tree grows the city cold.
+
+**Format and caches:** no format, no tag. The road file's edges changed, so the city's bake key changes and the island re-bakes.
+
+**For players:** at Lake Boulevard and Granary Boulevard the avenue runs straight on through a T, and the cross street meets it there. Before, both roads bent down into the five-way lights at j396. j396 is now a plain crossroads.
+
+**Revisit when** #313 states junctions as the planner plans them (no road ending away from where its street meets another); or when #317 is settled.
 
 ### W2, first half — the sim's tests run on road-model scenes, not hand-made street maps
 
@@ -23756,3 +23839,49 @@ What it does: the last city-sim tests on hand-made street maps move onto road-mo
 **Left:** test_trip_plan's hand-made maps price trips, which is piece 6c's. `sim_scale_100k_island_prints` (RT_SIM_SCALE only) now builds an 8 km grid town through the road builder; not run here.
 
 **Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (1514 less the two deleted), 1601 s and 3.8 GB at its peak (1141 s after the first half: each scene is built once a run, the 800 m towns of test_city_goals for several seeds among them); driving_tests 200/200; brain_tests 23/23; lanes_tests 156/156; physics_tests `city_map_tool_draws_you_facing_the_way_you_look` 1/1 and `every_fleet_car_is_put_down_on_its_own_springs` 1/1. No pinned value moved; one test condition did (the snapshot test's rate, above).
+
+### W3 — the switch: every walker, in every tier, walks a route from the one router over the road model's walks; the street map's walking step is deleted
+
+What it does: a person on foot in the city sim now walks the walks of the level's road model: the sidewalks, the corner walks round each junction, the crossings over its crosswalks and the walkways. Each walk is planned by the one route-finder for people on foot (`findWalkRoute`, ADR-0467), from where the person stands to where they are going. The sim's old way of walking, along the street map's links, is deleted. There is one walking step, and every tier uses it: the near people (K), the people in view (V) and the people asleep in the far city (D).
+
+Words:
+- **Walk:** one stretch of path for people on foot in the lane level (`Walk`): a sidewalk along one kerb of one street, a corner walk round a junction, a crossing over a crosswalk, a turn-round at a dead end, or a walkway.
+- **Route, step:** what the router hands back (`WalkRoute`): the walks to take in order, each with its direction and its metres (`WalkStep`), and the crosswalks it crosses with the kerb end it crosses from (`WalkCrossing`).
+- **File:** how far across a sidewalk a person walks, their own lane in a crowd (ADR-0451's walker verge), kept as before.
+- **Road side, kerb room:** which side of the person the road is (`Agent::roadSide`), and how far they can step towards the kerb before they are in the road (`Agent::kerbRoom`). Read by the lean (#314).
+- **Frontage:** where a place's door fronts its street: the street, the station along it and the kerb (`StatedFrontage`; `citysim::Place::frontage`, W1).
+
+**How a walker walks now** (`src/apps/citysim/city_sim.cpp`):
+- **A trip** (`startTrip`) joins both of its ends to the walks from the places' stated frontage when they have one (`placeFrontageAt`, through `RoadModel::walkJoinOn`), and from their position otherwise (`walkJoinNear`). It asks the router for the route between them (`walkRouteBetween`). With no route the person stays where they are (`idlePose`) and the trip counts as blocked.
+- **A walk sent from outside** (`sendAgentTo`: the brain's walks and a possessed person's `walk_to`) gives only a position, so both ends join by position. A person already under way starts from the point of the walk they are on.
+- **Along the route** (`advance`, `glideAlong`): the person moves along the current step's walk (`LaneGraph::pointAt`), at its height (`heightAt`, so a bridge's sidewalk too). Their file is set out across the sidewalk, on sidewalk stretches only, eased in and out over 4 m (`kFileEase`) at each stretch's ends so nobody jumps sideways at a corner.
+- **Crossings:** the crosswalks ahead are read off the route (`nextCrossing`, looking 40 m ahead; `crossingGate`). A person stands at the crosswalk's kerb end and crosses on WALK, or in a gap where no lights rule it (`gapToCross`, `jaywalks`), as ADR-0452 set out.
+- **The other tiers:** a V person takes the same route, adding the junction wait for each crossing step (`vAdvance`). A D person's route is laid out in time (`dormantGlide`) and picked up where it is when the person wakes (`wakeDormant`). The far crowd is drawn on the GPU along the walks' segments (`city_render.cpp`).
+- **Why a walk was refused:** `RT_WALK_REFUSED=1` prints each walk the sim could not route, with why: "where it stands joins no walk", "where it is going joins no walk", or "no route", naming the walk and street at each end.
+
+**Deleted** (no second walking step):
+- the street-map walking step, with `Agent::arrivedLink` and `stopAtDist`;
+- the street map's look-ups a walk started and ended by (`walkStartNode`, `kerbSideLink`, `kerbLinkNear`), `kErrandOffLink`, `kWalkStartNodes`;
+- the twin links and U-turn pricing a wander used (`twinOf_`, `departScale_`, `wanderPriced_`);
+- the junction gate and look-ahead along links (`JunctionGate`, `junctionAhead`, `stopLineBack`, `crossingAhead`), and `kWalkerKerbStep`;
+- the room by the road the lean assumed (`kPedRoadsideRoom`): the lean now asks the walk's own width (`kerbRoom`, #314);
+- test_walk_join_levels' comparison of the street map's look-ups with the one answer (`level_walk_join_the_street_maps_lookups_beside_the_one_query`): what it compared is gone. The file keeps `level_every_lanes_level_hands_the_sim_its_road_model`.
+
+**Tried and taken back:** the brain's walks joining by its markers' stated frontage (a marker states street, station and kerb). With it the near crowd's cars touched walkers 27 times (and other things 30); without it, once. brain_crowd did worse with it too: arrivals 448 against 450, 23 plans with no way and 24 walks blocked against 0 and 0. So the brain hands the sim positions, and a comment in `LabWalk::walk` says why. Why stated ends do worse there was not dug into.
+
+**Moved, with why (old -> new):**
+- **brain_crowd** (`test_brain_crowd.cpp`), re-pinned: the most cars on the road 88 at minute 11 -> 80 at minute 10; minutes with 50 or more 12 -> 8; trips 233 -> 263; parked 179 -> 217; walks blocked 1 -> 0; arrivals 426 -> 455; hash 0xb67879f5b6ec7210 -> 0xcb6bf4524e6ee584. Rings, no plan, another place, errors, refused: still 0. People wait at a kerb end now: walkers waiting away from a kerb end 62.68% -> **4.38%**, so its check (under 5%) passes for the first time. Not pinned, looked at: the longest stand 563 s -> 166 s.
+- **The near crowd** (`test_near_tier.cpp near_tier_in_the_crowd_follows_the_player`), re-pinned: the most near 13 at minute 12 -> 11 at minute 8; in 83 -> 81; out 63 -> 71; hash 0x59168988decd4c99 -> 0xb182a398296f4017. **Still failing, not loosened:** one touch on a walker and one on another thing. Car 220 stands 1.47 m off its lane on s20, 9.63 m from the centre line: the car is off its carriageway when it meets the walker. The driving's to answer.
+- **trip-lab's walker step** (`test_city_parking.cpp kStepWithFile`): the most a walker moves in one step, 2.25 m (measured 2.14 m), was the street map's. A file eased in over 4 m adds up to 0.15 m a step at a corner.
+- Tests that read the old steps now read the route: test_tier_v (the road side and the steps), test_city_flow (the file measured against the walk's own line, sidewalk stretches only), test_city_goals (a walkway is told by `Walk::modelWalkway`), test_brain_crowd and test_river_town_crowd (`nextCrossing`).
+
+**river_town: PENDING the walks' fix.** Its crowd test fails. On the street map nobody was cut off, because every link of it could be walked. On the road model's walks, people whose place is in a part of the walks cut off from the rest stand there: no route leaves it. Measured with `RT_WALK_REFUSED=1`:
+- People stand on s10 (walk 15, from (-282.2, 489.4): 166 refusals), s172 (walk 297, near (143-146, 436): about 10 people), s143 (walk 240, from (107.7, 494.0)) and s174 (walk 300, from (129.3, 535.1)). Several points at (146.6-147.7, 435.8-436.0) join no walk: a stretch inside a junction.
+- With the brain's stated ends (taken back, above): s13 (walk 18, 167 refusals) and s169 (walk 290, 70), which have no corner walks.
+- The places most refused as goals: s52 (walk 78), s311 (walk 538), s314 (walk 545), s135 (walk 224).
+- Walks blocked: sidewalks that stop 25-36 m short of their junction, by j7 and j8.
+The fix is at the cause, in the roads (the coordinator's option (a)): not a re-pin of the worse numbers, and not a straight step to bridge the gap. W3 is committed once river_town recovers.
+
+river_town's crowd at W3, against its pins (not re-pinned): the most cars on the road 139 at minute 11 -> 113 at minute 10; trips 318 -> 342; parked 209 -> 263; walks blocked 0 -> 2; another place chosen 0 -> 192; plans with no way 0 -> 241; arrivals 730 -> 643; hash 0xa15a1ec8afaff85d -> 0x4fb696326045a7ef. Rings, errors, refused and touching spells still 0. 9 checks fail.
+
+**Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (25 min 18 s, 3.8 GB at its peak); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; level_tests `level_every_lanes_level_hands_the_sim_its_road_model` 1/1; `level_brain_crowd` passes; `near_tier_in_the_crowd_follows_the_player` fails its one walker touch (above); `level_river_town_crowd` fails 9 checks (pending, above).

@@ -241,7 +241,6 @@ void CityPossessSystem::possessWalker(engine::FrameContext& ctx,
 
 void CityPossessSystem::walkTo(engine::Real x, engine::Real z) {
     if (!city_.sim().graph()) { error_ = "no nav graph"; return; }
-    const engine::NavGraph& nav = *city_.sim().graph();
     // One line per director errand. It prints where the agent STOOD and where
     // it was placed, because those differing is the whole bug this path had:
     // sendAgentTo used to put the planner ghost on its new route's first leg,
@@ -257,32 +256,12 @@ void CityPossessSystem::walkTo(engine::Real x, engine::Real z) {
     }
     {
         const Agent& a = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)];
-        // Why an errand ends where it does: the last link it walks, how far the
-        // destination sits OFF that link, and the stop-short it derived.
-        double off = -1, tpar = -1, footX = 0, footY = 0;
-        if (a.route.valid()) {
-            const engine::NavLink& last =
-                nav.links[static_cast<std::size_t>(a.route.links.back())];
-            const Vec2 A = nav.nodes[static_cast<std::size_t>(last.from)];
-            const Vec2 B = nav.nodes[static_cast<std::size_t>(last.to)];
-            const Vec2 AB(B.x - A.x, B.y - A.y);
-            const double len2 = AB.x * AB.x + AB.y * AB.y;
-            if (len2 > 1e-6) {
-                double t = ((x - A.x) * AB.x + (z - A.y) * AB.y) / len2;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                tpar = t;
-                footX = A.x + AB.x * t;
-                footY = A.y + AB.y * t;
-                off = std::sqrt((x - footX) * (x - footX) + (z - footY) * (z - footY));
-            }
-        }
+        // Why an errand ends where it does: its walk route (#306 piece 6 W3) ends where the destination joins the walks
         LOG_INFO << "walk_to: agent " << walkerAgent_ << " -> " << x << "," << z
                  << " | stood at " << was.x << "," << was.y << ", placed at "
-                 << a.pos.x << "," << a.pos.y << " on leg " << a.leg << "/"
-                 << a.route.links.size() << " | dest sits " << off
-                 << " m off the last link at t=" << tpar
-                 << ", stopAtDist=" << a.stopAtDist << ", foot=" << footX << ","
-                 << footY;
+                 << a.pos.x << "," << a.pos.y << " on step " << a.leg << "/"
+                 << a.route.steps.size() << ", " << a.route.metres << " m of walks, " << a.route.crossings.size()
+                 << " crossings";
     }
     dest_ = Vec2(x, z);
     hasDest_ = true;
@@ -457,21 +436,16 @@ void CityPossessSystem::publishLook() {
 
     // WHERE ITS OWN PLAN GOES NEXT, so a director can see what it is
     // interrupting before it interrupts it.
-    if (const engine::NavGraph* nav = sim.graph()) {
-        if (me.route.valid() &&
-            me.leg < static_cast<int>(me.route.links.size())) {
-            const Vec2 wp = nav->nodes[static_cast<std::size_t>(
-                nav->links[static_cast<std::size_t>(
-                               me.route.links[static_cast<std::size_t>(me.leg)])]
-                    .to)];
-            std::snprintf(buf, sizeof(buf),
-                          " | next d=%.0f b=%.0f at=%.1f,%.1f legs=%d",
-                          static_cast<double>(dist(wp)),
-                          static_cast<double>(bearing(wp)),
-                          static_cast<double>(wp.x), static_cast<double>(wp.y),
-                          static_cast<int>(me.route.links.size()) - me.leg);
-            out += buf;
-        }
+    if (CitySim::onRoute(me)) {
+        // the end of the step it is on (W3: its walk route's steps)
+        const Vec2 wp = sim.routePoint(me, me.leg, sim.legLength(me, me.leg));
+        std::snprintf(buf, sizeof(buf),
+                      " | next d=%.0f b=%.0f at=%.1f,%.1f legs=%d",
+                      static_cast<double>(dist(wp)),
+                      static_cast<double>(bearing(wp)),
+                      static_cast<double>(wp.x), static_cast<double>(wp.y),
+                      static_cast<int>(me.route.steps.size()) - me.leg);
+        out += buf;
     }
 
     // ONE PLACE OF EACH KIND, the nearest. A menu of seven is a menu a model
@@ -604,8 +578,8 @@ void CityPossessSystem::publishStatus() {
                 tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
                 static_cast<double>(a.restDwell), static_cast<double>(a.speed),
                 static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),
-                a.leg, static_cast<int>(a.route.links.size()),
-                a.route.valid() ? 1 : 0, a.tripGoal, a.home, a.work,
+                a.leg, static_cast<int>(a.route.steps.size()),
+                a.route.found ? 1 : 0, a.tripGoal, a.home, a.work,
                 // what is carrying it: a train (past the street on a rail journey), or a household's car
                 sim.onTrainJourney(walkerAgent_) ? 1 : 0, a.inCar,
                 sim.steppedLastTick(walkerAgent_) ? 1 : 0,

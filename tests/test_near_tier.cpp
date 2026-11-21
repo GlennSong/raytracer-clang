@@ -1133,12 +1133,18 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // without it (with that sweep put back, and nothing else changed, the run gives 0x032b5fd2c2071980 again). And again
     // (ADR-0456) from 12 at minute 7, 0xdf46fdec96641d00, in and out the same: the old signal clock went, so a walker at a
     // junction the model's crosswalks do not rule judges the gap instead of waiting for that clock's WALK.
-    CHECK(mostNear == 13);
-    CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 83u);
-    CHECK(c.intoLane == 63u);
+    // RE-PINNED (#306 piece 6 W3, ADR-0480) from 13 at minute 12, in 83, out 63, 0x59168988decd4c99 to 11 at minute 8,
+    // in 81, out 71, 0xb182a398296f4017: the people walk the road model's walks by the one router (their own file across
+    // the sidewalk, crossing where their routes cross, waiting at the crosswalk's kerb end), so every walker's line, and
+    // every driver's stops for them, moved. STILL FAILING, not loosened: one touch on a walker (and one on another
+    // thing) -- car 220 stands 1.47 m off its lane on s20, 9.63 m from the centre line, so the car is off its
+    // carriageway when it meets the walker on the pavement.
+    CHECK(mostNear == 11);
+    CHECK(mostNearAt == 8);
+    CHECK(c.intoPhysics == 81u);
+    CHECK(c.intoLane == 71u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x59168988decd4c99ull);
+    CHECK(hash == 0xb182a398296f4017ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

@@ -161,20 +161,27 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     for (const Agent& a : sim.agents()) narrow = std::max(narrow, sim.walkerFile(a));
     CHECK(narrow == 1);
 
-    // where they walk: their own file's distance in from the kerb (W3: measured here against the street map's link the
-    // old step walks; W3 measures it against the walk's own line)
+    // where they walk: their own file across the street's walk (W3: measured against the walk's own line, the sidewalk's
+    // middle; a file is its distance in from the kerb, walkerVerge, held within the walk)
+    (void)nav;
     sim.setJunctionPad(5.0);
     for (int t = 0; t < 200; ++t) sim.step(0.05, 0.0);
     int checked = 0, onFile = 0;
     for (const Agent& a : sim.agents()) {
-        if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
-        if (L.length < 30 || a.distOnLeg < 12 || a.distOnLeg > L.length - 12) continue;   // clear of the corners
-        const Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)], d = nav.direction(li);
-        const Real side = (a.pos.x - A.x) * d.y - (a.pos.y - A.y) * d.x;   // rightOf(d)
+        if (!CitySim::onRoute(a) || a.roadSide == 0) continue;
+        const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(a.leg)];
+        if (sim.roads()->laneLevel.walks[s.walk.index].street == engine::kNoIndex) continue;   // on a street's stretch
+        const Real along = std::fabs(s.to - s.from);
+        if (along < 30 || a.distOnLeg < 12 || a.distOnLeg > along - 12) continue;   // clear of the corners
+        Vec2 dir(1, 0);
+        const Vec2 P = sim.routePoint(a, a.leg, a.distOnLeg, &dir);
+        const Vec2 right(dir.y, -dir.x);
+        const Vec2 away = a.roadSide > 0 ? right * -1.0 : right;
+        const Real half = s.walk.index < sim.roads()->laneLevel.walks.size() ? sim.roads()->laneLevel.walks[s.walk.index].width * 0.5 : 0;
+        const Real room = std::max(Real(0), half - CitySim::kWalkerHalfAcross);
+        const Real file = std::clamp(sim.walkerVerge(a) - half, -room, room);
         ++checked;
-        onFile += std::fabs(side - (L.width * 0.5 + sim.walkerVerge(a))) < 1.7;   // (less the lean)
+        onFile += std::fabs(dot(a.pos - P, away) - file) < 1.7;   // (less the lean)
     }
     std::printf("    [files] %d of %d walkers mid-link on their file\n", onFile, checked);
     CHECK(checked > 30);

@@ -67,10 +67,16 @@ TEST_CASE(trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way) {
     CHECK(line.size() > 10);
     if (line.empty()) return;
     CHECK((line.front() - a.pos).length() < 1e-6);
+    // NO JUMP: each 2 m of walk is at most kStepWithFile from the last pose (W3: 2.0 -> 2.25 m: a walker takes up its file
+    // across the walk over its step's first 4 m, so a 2 m step along can carry it up to half a metre sideways too)
+    constexpr Real kStepWithFile = 2.25;
+    Real longest = 0;
     for (std::size_t i = 1; i < line.size(); ++i) {
-        CHECK((line[i] - line[i - 1]).length() <= 2.0 + 1e-6);   // no jump
+        longest = std::max(longest, (line[i] - line[i - 1]).length());
+        CHECK((line[i] - line[i - 1]).length() <= kStepWithFile);   // no jump
         CHECK(line[i].y >= line[i - 1].y - 1e-6);                 // never back the way it came
     }
+    std::printf("[trip lab] the longest pose to pose %.2f m (2 m steps)\n", longest);
     CHECK(std::fabs(line.back().y - 85.0) < 1.0);   // ...to beside the point it is for
     // and walking it, the person keeps to that line
     Real worst = 0;

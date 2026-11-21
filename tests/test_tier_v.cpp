@@ -40,7 +40,7 @@ int agentMismatches(const CitySim& A, const CitySim& B) {
             x.uid == y.uid && x.state == y.state &&
             x.tier == y.tier && x.activity == y.activity && x.goal == y.goal &&
             x.goalHours == y.goalHours && x.restNode == y.restNode &&
-            x.arrivedLink == y.arrivedLink && x.leg == y.leg &&
+            x.roadSide == y.roadSide && x.leg == y.leg &&
             x.distOnLeg == y.distOnLeg && x.speed == y.speed &&
             x.elevation == y.elevation && x.grade == y.grade &&
             x.deckY == y.deckY && x.trips == y.trips &&
@@ -50,7 +50,7 @@ int agentMismatches(const CitySim& A, const CitySim& B) {
             x.pos.y == y.pos.y && x.heading.x == y.heading.x &&
             x.heading.y == y.heading.y && x.moving == y.moving &&
             x.vHold == y.vHold && x.vLastTick == y.vLastTick &&
-            x.route.links == y.route.links;
+            x.route.steps == y.route.steps;   // (W3: the walk route's steps)
         if (!same) ++bad;
     }
     return bad;

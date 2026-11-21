@@ -6,6 +6,7 @@
 #include "../../engine/clock.h"   // kDefaultFixedStep
 #include "../../engine/bundle/bundle.h"   // the population cache key
 #include "../../engine/bundle/cache_use.h"
+#include "../../engine/procgen/city/roads/lanes/walk_lanes.h"   // kWalkFromKerb: a corner walk's line from its kerb
 #include "../../job_system.h"   // assignPlaces decides the population in parallel
 
 #include <algorithm>
@@ -29,7 +30,6 @@ using engine::NavGraph;
 
 namespace {
 constexpr int kTrainSeatsPerCar = 72;   // a coach's seats (train_mesh's coach reports 72)
-constexpr Real kWalkerKerbStep = 0.6;   // a walker's wait at a junction: this far back from the box's edge
 // (kWalkSpeed, a walker's speed, is in city_sim.h: the agent brain's walk skill sets a pace against it, ADR-0441)
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
@@ -62,7 +62,8 @@ constexpr Real kPedDecel = 3.0;
 constexpr Real kPedVisionRange = 4.5;      // how far ahead a walker perceives (m)
 constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide peripheral)
 constexpr Real kPedMaxLateral = 1.6;       // furthest a walker leans off its path (m)
-constexpr Real kPedRoadsideRoom = 0.7;     // ...toward the road: the 1 m verge to the kerb, less a body's 0.3
+// (...toward the road, only as far as the walk's own kerb allows: Agent::kerbRoom, #314. kPedRoadsideRoom, a 0.7 m
+// limit for every pavement from an assumed 1 m verge, went with it.)
 constexpr Real kPedLateralRate = 1.6;      // how fast that lean changes (m/s) — smooth, not a pop
 constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
 constexpr Real kPoleClearance = 0.7;       // a walker keeps its centre this far from a pole
@@ -153,10 +154,214 @@ driving::VehicleClasses builtInDrivingClasses() {
 void CitySim::setRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report) {
     roads_ = std::move(roads);
     roadsReport_ = std::move(report);
+    // THE WALKER on these walks (W3): its open walks and waits; and, for each walk beside a road -- a street's sidewalk
+    // or footway stretch, or a corner walk round a junction's kerb (by the model's ids: Walk::street, Walk::modelWalk) --
+    // which side of it the road is and how far its line is from that kerb (a stretch's line is the sidewalk's middle,
+    // half its width; a corner's is kWalkFromKerb in, walk_lanes.h)
+    walker_ = engine::roads::RouteWalker{};
+    walkRoadSide_.clear();
+    walkKerbOff_.clear();
+    if (roads_ && roads_->built) {
+        const engine::LaneGraph& G = roads_->laneLevel;
+        walker_ = engine::roads::bindWalker(*roads_, "walker", kWalkSpeed);
+        walkRoadSide_.assign(G.walks.size(), 0);
+        walkKerbOff_.assign(G.walks.size(), 0.0f);
+        for (uint32_t w = 0; w < G.walks.size(); ++w) {
+            const engine::Walk& k = G.walks[w];
+            const bool stretch = k.street != engine::kNoIndex && k.street < roads_->streets.size();
+            const bool corner = !stretch && k.modelWalk != engine::kNoIndex;
+            if ((!stretch && !corner) || k.length <= 0) continue;
+            const Real mid = k.length * 0.5;
+            const Vec2 p = G.pointAt(engine::WalkId(w), mid);
+            const Vec2 d = G.pointAt(engine::WalkId(w), std::min(k.length, mid + 0.5)) - G.pointAt(engine::WalkId(w), std::max(Real(0), mid - 0.5));
+            const engine::RoadFrontage f = stretch ? roads_->frontageOn(engine::ModelStreetId(k.street), (k.stationFrom + k.stationTo) * 0.5, 1)
+                                                   : roads_->frontageAt(p);
+            if (!f.valid()) continue;
+            const Vec2 toRoad = f.on - p;
+            const Real c = d.x * toRoad.y - d.y * toRoad.x;   // > 0: the road on its left, walked forward
+            walkRoadSide_[w] = c > 0 ? int8_t(-1) : int8_t(1);
+            walkKerbOff_[w] = static_cast<float>(stretch ? k.width * 0.5 : engine::roads::lanes::kWalkFromKerb);
+        }
+    }
     if (!drivingV2_) return;
     driving::VehicleClasses classes = drivingV2_->vehicleClasses();
     drivingV2_.emplace(roads_.get());
     drivingV2_->setVehicleClasses(std::move(classes));
+}
+
+// ---- THE WALK ROUTE (#306 piece 6, W3): where a walker on its route is, and how a route begins --------------------
+
+bool CitySim::walkJoin(Vec2 p, engine::WalkPoint& out) const {
+    if (!roads_ || !roads_->built || walker_.open.empty()) return false;
+    const engine::WalkJoin j = roads_->walkJoinNear(p, walker_.open);   // the one fallback, by position
+    if (!j.valid()) return false;
+    out = j.at;
+    return true;
+}
+
+engine::roads::WalkRoute CitySim::walkRouteBetween(Vec2 from, Vec2 to, const engine::StatedFrontage* fromAt,
+                                                  const engine::StatedFrontage* toAt) const {
+    engine::roads::WalkRoute r;
+    if (!roads_ || !roads_->built || walker_.open.empty()) return r;
+    // each end: what its place states (a door's frontage: the one answer, walkJoinOn), else its point (walkJoinNear)
+    const auto join = [&](Vec2 p, const engine::StatedFrontage* stated, engine::WalkPoint& out) {
+        if (stated && (stated->onStreet() || stated->onWalkway())) {
+            const engine::WalkJoin j = roads_->walkJoinOn(*stated, walker_.open);
+            if (j.valid()) {
+                out = j.at;
+                return true;
+            }
+        }
+        return walkJoin(p, out);
+    };
+    engine::WalkPoint a, b;
+    if (!join(from, fromAt, a) || !join(to, toAt, b)) return r;
+    return engine::roads::findWalkRoute(*roads_, walker_, a, b);
+}
+
+const engine::StatedFrontage* CitySim::placeFrontageAt(const Agent& a, int node) const {
+    PlaceId p = kNoPlace;
+    if (node == a.home) p = a.homePlace;
+    else if (node == a.work) p = a.workPlace;
+    else if (node == a.shop) p = a.shopPlace;
+    if (p == kNoPlace || p >= placeFrontage_.size()) return nullptr;
+    const engine::StatedFrontage& f = placeFrontage_[p];
+    return f.onStreet() || f.onWalkway() ? &f : nullptr;
+}
+
+Real CitySim::legLength(const Agent& a, int leg) const {
+    if (!roads_ || leg < 0 || leg >= static_cast<int>(a.route.steps.size())) return 0;
+    const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(leg)];
+    Real L = std::fabs(s.to - s.from);
+    if (leg + 1 < static_cast<int>(a.route.steps.size())) {
+        const engine::roads::WalkStep& n = a.route.steps[static_cast<std::size_t>(leg + 1)];
+        const engine::LaneGraph& G = roads_->laneLevel;
+        L += (G.pointAt(n.walk, n.from) - G.pointAt(s.walk, s.to)).length();
+    }
+    return L;
+}
+
+Real CitySim::routeLeft(const Agent& a) const {
+    if (!onRoute(a)) return 0;
+    Real left = -a.distOnLeg;
+    for (int k = a.leg; k < static_cast<int>(a.route.steps.size()); ++k) left += legLength(a, k);
+    return std::max(Real(0), left);
+}
+
+Vec2 CitySim::routePoint(const Agent& a, int leg, Real d, Vec2* dir) const {
+    const engine::LaneGraph& G = roads_->laneLevel;
+    const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(leg)];
+    const Real along = std::fabs(s.to - s.from);
+    const Real sgn = s.forward ? 1.0 : -1.0;
+    if (d <= along || leg + 1 >= static_cast<int>(a.route.steps.size())) {
+        const Real at = s.from + sgn * std::clamp(d, Real(0), along);
+        const Vec2 p = G.pointAt(s.walk, at);
+        if (dir) {
+            const Real w = G.walks[s.walk.index].length;
+            const Vec2 q0 = G.pointAt(s.walk, std::clamp(at - 0.75, Real(0), w)), q1 = G.pointAt(s.walk, std::clamp(at + 0.75, Real(0), w));
+            const Vec2 t = (q1 - q0) * sgn;
+            const Real l = t.length();
+            *dir = l > 1e-6 ? t * (1.0 / l) : (dir->length() > 0.5 ? *dir : Vec2(1, 0));
+        }
+        return p;
+    }
+    // across the gap to the next step's start
+    const engine::roads::WalkStep& n = a.route.steps[static_cast<std::size_t>(leg + 1)];
+    const Vec2 e = G.pointAt(s.walk, s.to), b = G.pointAt(n.walk, n.from);
+    const Real gap = (b - e).length();
+    const Real u = gap > 1e-6 ? std::clamp((d - along) / gap, Real(0), Real(1)) : 1.0;
+    if (dir && gap > 1e-6) *dir = (b - e) * (1.0 / gap);
+    return e + (b - e) * u;
+}
+
+void CitySim::beginRoute(Agent& a, engine::roads::WalkRoute route) {
+    a.route = std::move(route);
+    a.leg = 0;
+    a.distOnLeg = 0;
+    a.speed = 0;
+    a.crosswalkAt = -1;
+    a.onCrosswalk = false;
+    a.aboutToCross = false;
+    a.crossWaited = 0;
+    ++a.trips;   // a new route
+    a.moving = true;
+    a.indoors = false;   // out of the door
+    a.restDwell = 0;
+    refreshPose(a);
+    a.tickFromPos = a.pos;          // a placement, not a motion (see tickFromPos)
+    a.tickFromHeading = a.heading;
+}
+
+bool CitySim::sendAgentTo(int agentIndex, Vec2 dest) {
+    if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()) || !roads_) return false;
+    Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+    engine::WalkPoint from, to;
+    if (onRoute(a)) {
+        // UNDER WAY: from where it stands on its route (on a step's walk; in a gap, the next step's start), so the
+        // errand changes the plan and never the pose (a drawn walker's ghost is leashed to its body, ADR-0062)
+        const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(a.leg)];
+        const Real along = std::fabs(s.to - s.from);
+        if (a.distOnLeg <= along || a.leg + 1 >= static_cast<int>(a.route.steps.size())) {
+            from.walk = s.walk;
+            from.along = s.from + (s.forward ? 1.0 : -1.0) * std::min(a.distOnLeg, along);
+        } else {
+            const engine::roads::WalkStep& n = a.route.steps[static_cast<std::size_t>(a.leg + 1)];
+            from.walk = n.walk;
+            from.along = n.from;
+        }
+    }
+    // RT_WALK_REFUSED: each errand refused, and why (where it is from or to joins no walk; the router's reason)
+    static const bool sayWhy = std::getenv("RT_WALK_REFUSED") != nullptr;
+    const auto refuse = [&](const std::string& why) {
+        if (sayWhy)
+            std::fprintf(stderr, "[walk refused] agent %d from %.1f %.1f to %.1f %.1f: %s\n", agentIndex, a.pos.x, a.pos.y, dest.x,
+                         dest.y, why.c_str());
+        return false;
+    };
+    if (!onRoute(a) && !walkJoin(a.pos, from)) return refuse("where it stands joins no walk");
+    if (!walkJoin(dest, to)) return refuse("where it is going joins no walk");
+    engine::roads::WalkRoute r = engine::roads::findWalkRoute(*roads_, walker_, from, to);
+    // NOTHING has been changed yet, so a refusal leaves the agent its day.
+    if (!r.found || r.steps.empty()) {
+        const auto streetOf = [&](engine::WalkId w) {
+            const engine::Walk& k = roads_->laneLevel.walks[w.index];
+            return k.street < roads_->streets.size() ? roads_->streets[k.street].id : roads_->walkKind(w);
+        };
+        return refuse("no route: " + r.whyWords + " (walk " + std::to_string(from.walk.index) + " on " + streetOf(from.walk) +
+                      " to walk " + std::to_string(to.walk.index) + " on " + streetOf(to.walk) + ")");
+    }
+    // WAKE THEM. A sleeping agent is not in the active list at all, so the stepper never reaches it: a director's
+    // errand overrides the day, and that includes the lie-in.
+    a.wakeAt = -1;
+    a.tripGoal = nav_ ? nav_->nearestNode(dest) : -1;
+    const bool underWay = a.moving;
+    const Vec2 was = a.pos;
+    beginRoute(a, std::move(r));
+    if (underWay) a.tickFromPos = was;   // (a re-plan, not a placement: drawn on from where it was)
+    // A DIRECTOR'S ERRAND OVERRIDES THE DAY: the reactive state and the day's label move with it (left Resting or AtHome,
+    // the goal layer parked it again on its own schedule).
+    a.state = Agent::State::Walking;
+    a.activity = Activity::Outing;
+    return true;
+}
+
+bool CitySim::glideAlong(Agent& a, Real metres, Real stopShort) const {
+    const int n = static_cast<int>(a.route.steps.size());
+    if (!a.route.found || a.leg >= n) return true;
+    if (stopShort >= 0) metres = std::min(metres, std::max(Real(0), routeLeft(a) - stopShort));
+    while (metres > 0 && a.leg < n) {
+        const Real room = legLength(a, a.leg) - a.distOnLeg;
+        if (metres < room || (stopShort >= 0 && a.leg + 1 >= n)) {   // (held short: never past the last step's end)
+            a.distOnLeg = std::min(a.distOnLeg + metres, legLength(a, a.leg));
+            metres = 0;
+            break;
+        }
+        metres -= room;
+        if (a.leg + 1 >= n) { a.distOnLeg = legLength(a, a.leg); ++a.leg; break; }
+        ++a.leg;
+        a.distOnLeg = 0;
+    }
+    return a.leg >= n;
 }
 
 uint32_t CitySim::nextCarNumber(engine::World& world) const {
@@ -252,57 +457,37 @@ Real CitySim::laneSpacingFor(int li) const {
 
 std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     std::vector<Vec2> out;
-    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
-        return out;
-    const Agent& a = agents_[agentIndex];
-    if (step < 0.5) step = 0.5;
-    for (int li : a.route.links) {
-        const engine::NavLink& L = nav_->links[li];
-        int n = std::max(1, static_cast<int>(std::ceil(L.length / step)));
-        for (int k = 0; k <= n; ++k) {
-            Real t = static_cast<Real>(k) / n;
-            Vec2 p = nav_->sidewalkPoint(li, t, walkerVerge(a));
-            if (out.empty() || (p - out.back()).length() > 1e-6) out.push_back(p);
+    if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return out;
+    Agent c = agents_[static_cast<std::size_t>(agentIndex)];
+    if (!c.route.found || c.route.steps.empty() || !roads_) return out;
+    c.leg = 0;
+    c.distOnLeg = 0;
+    c.moving = true;
+    step = std::max(step, Real(0.5));
+    for (int guard = 0; guard < 100000; ++guard) {
+        refreshPose(c);
+        if (out.empty() || (c.pos - out.back()).length() > 1e-6) out.push_back(c.pos);
+        if (glideAlong(c, step, 0.0) || routeLeft(c) <= 1e-6) {
+            refreshPose(c);
+            if ((c.pos - out.back()).length() > 1e-6) out.push_back(c.pos);
+            break;
         }
     }
     return out;
 }
 
-void CitySim::walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit,
-                        const engine::Route* route) const {
-    if (!nav_ || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+void CitySim::walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit) const {
+    if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
     Agent c = agents_[static_cast<std::size_t>(agentIndex)];
-    if (route) {
-        c.route = *route;
-        c.leg = 0;
-        c.distOnLeg = 0;
-        c.stopAtDist = -1;
-        c.arrivedLink = -1;
-    } else if (!c.moving) {
-        return;
-    }
-    const int n = static_cast<int>(c.route.links.size());
-    if (n == 0 || c.leg >= n) return;
-    c.moving = true;
+    if (!onRoute(c) || !roads_) return;
     c.speed = 0;
-    // where the route ends: its stop-short, or the link's end
-    const int lastLink = c.route.links.back();
-    Real end = nav_->links[static_cast<std::size_t>(lastLink)].length;
-    if (c.stopAtDist >= 0) end = std::min(end, c.stopAtDist);
     step = std::max(step, Real(0.25));
     for (int guard = 0; guard < 100000; ++guard) {
-        const bool last = c.leg == n - 1 && c.distOnLeg >= end - 1e-6;
-        if (last) c.distOnLeg = end;
         refreshPose(c);
         c.tickFromPos = c.pos;      // a pose, not a motion: drawn where it is
         visit(c);
-        if (last) return;
-        c.distOnLeg += step;
-        while (c.leg + 1 < n && c.distOnLeg > nav_->links[static_cast<std::size_t>(c.route.links[static_cast<std::size_t>(c.leg)])].length) {
-            c.distOnLeg -= nav_->links[static_cast<std::size_t>(c.route.links[static_cast<std::size_t>(c.leg)])].length;
-            ++c.leg;
-        }
-        if (c.leg == n - 1 && c.distOnLeg > end) c.distOnLeg = end;
+        if (routeLeft(c) <= 1e-6) return;
+        glideAlong(c, step, 0.0);   // (held at the end: the last pose is where it stops)
     }
 }
 
@@ -359,11 +544,6 @@ void CitySim::build(const NavGraph& graph, int pedCount, uint32_t seed) {
     junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
-    twinOf_.assign(graph.linkCount(), -1);
-    departScale_.assign(graph.linkCount(), 1.0);
-    for (int li = 0; li < graph.linkCount(); ++li)
-        for (int ol : graph.outLinks[graph.links[li].to])
-            if (graph.links[ol].to == graph.links[li].from) { twinOf_[li] = ol; break; }
     // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
     // (persistent) wander flag; a host with custom tables re-installs after.
     goalPed_ = wanderGoals(false);
@@ -573,6 +753,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; a.household = -1; a.age = 0; a.stage = -1; }
     households_ = HouseholdPlan{};
     unhoused_ = 0;
+    // WHERE EACH PLACE'S DOOR FRONTS THE ROAD (ADR-0474, carried onto the place by ADR-0480): a trip to or from an
+    // agent's home, work or shop starts and ends there (startTrip)
+    placeFrontage_.clear();
+    for (const Place& p : places.places()) placeFrontage_.push_back(p.frontage);
     if (places.empty() || graph.nodeCount() == 0) return;
 
     // A hall with BEDS (the university's residence hall) is the STUDENTS' home (below), not one more house in the pool.
@@ -1668,7 +1852,7 @@ void CitySim::placeFromSchedule(int idx) {
             a.restNode = node;
             a.moving = false;
             a.speed = 0;
-            a.route.links.clear();
+            a.route = engine::roads::WalkRoute{};
             a.leg = 0;
             a.distOnLeg = 0;
             a.elevation = 0;
@@ -1755,11 +1939,9 @@ void CitySim::scheduleDormantEvent(int i) {
     dormantEventAt_[static_cast<std::size_t>(i)] = -1.0;
     if (a.tier != Agent::Tier::D || hoursPerSecond_ <= 0 || !nav_) return;
     double at = -1;
-    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+    if (onRoute(a)) {
         // mid-trip: when it gets there, at its modelled pace
-        Real left = -a.distOnLeg;
-        for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j)
-            left += nav_->links[static_cast<std::size_t>(a.route.links[j])].length;
+        const Real left = routeLeft(a);
         const Real pace = kWalkSpeed * a.speedFactor;
         at = clockTotalHours_ + std::max(Real(0), left) / std::max(pace, Real(0.3)) * hoursPerSecond_;
         // THROUGH TRAFFIC (the empty streets): a sleeper under way kept the pose it set off from until it arrived, so
@@ -1828,21 +2010,10 @@ void CitySim::runDormantEvents() {
 void CitySim::dormantGlide(Agent& a, Real seconds) {
     // Along its route at one pace -- the pace scheduleDormantEvent timed the arrival by and the GPU crowd draws it at
     // (no junction holds: those are the far tier's) -- never onto the last metre: arriving is the arrival event's job.
-    if (!nav_ || seconds <= 0 || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) return;
+    if (seconds <= 0 || !onRoute(a)) return;
     const Real pace = kWalkSpeed * a.speedFactor;
-    Real m = seconds * std::max(pace, Real(0.3));
-    const int legs = static_cast<int>(a.route.links.size());
-    while (m > 0 && a.leg < legs) {
-        const Real len = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].length;
-        const Real room = len - a.distOnLeg;
-        if (m < room || a.leg == legs - 1) { a.distOnLeg = std::min(len - Real(0.5), a.distOnLeg + m); break; }
-        m -= room;
-        ++a.leg;
-        a.distOnLeg = 0;
-    }
-    if (a.distOnLeg < 0) a.distOnLeg = 0;
+    glideAlong(a, seconds * std::max(pace, Real(0.3)), /*stopShort=*/0.5);
     refreshPose(a);
-    a.heading = nav_->direction(a.route.links[static_cast<std::size_t>(a.leg)]);
 }
 
 Ride CitySim::rideOf(int i) const {
@@ -2000,11 +2171,8 @@ void CitySim::wakeDormant(int idx) {
     // A TRAVELLER resumes its trip where the clock says it is -- where the GPU crowd has been drawing it all along --
     // rather than being rebuilt from its schedule, when it can still be on that trip (the time since it went under is
     // less than what was left of it, at its modelled pace). Otherwise, as before: rebuilt.
-    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) && nav_) {
-        Real left = 0;
-        for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j)
-            left += nav_->links[static_cast<std::size_t>(a.route.links[j])].length;
-        left -= a.distOnLeg;
+    if (onRoute(a)) {
+        const Real left = routeLeft(a);
         const Real pace = kWalkSpeed * a.speedFactor;
         const Real since = simSeconds_ - a.vLastTick;
         if (pace > 0.1 && since >= 0 && since * pace < left) {
@@ -2070,117 +2238,20 @@ Vec2 CitySim::idlePose(int node, uint32_t brain) const {
     return nav_->nodes[node] + dir * back + right * off;
 }
 
-// Pick a random routable wander goal from `from` and start the trip. Prefers a
-// goal that doesn't begin by U-TURNING back up the link just arrived on (a
-// standstill 180 flips the lane offset to the other side of the road — a
-// visible pop); falls back to a U-turn when nothing else routes (dead ends).
+// Pick a random wander goal (a street node) from `from` and start the trip there: the first, from a random start, that
+// a walk route reaches (startTrip). Bounded: at most kWanderTries goals are tried. (The old step's U-turn pricing on the
+// street map's links went with it in W3: a walk is walked either way, and a route back the way it came is a walk.)
 bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
+    constexpr int kWanderTries = 24;
     a.tripGoal = -1;   // a wander has no destination door
-    const int n = nav_ ? nav_->nodeCount() : 0;
-    if (n <= 1 || from < 0 || from >= n) return false;
-    auto reversesArrival = [&](const engine::Route& r) {
-        if (a.arrivedLink < 0 || r.links.empty()) return false;
-        const engine::NavLink& in = nav_->links[a.arrivedLink];
-        const engine::NavLink& out = nav_->links[r.links.front()];
-        return out.from == in.to && out.to == in.from;
-    };
-    // A DEAD END: the only way out is back along the link it arrived on, so every route reverses
-    // it and the scan below would search the WHOLE graph (thousands of A* runs, a second of one
-    // step in the morning rush) only to take its fallback -- the first valid goal. Take that
-    // goal at once: the same trip, without the search.
-    bool forcedUTurn = false;
-    if (a.arrivedLink >= 0 && static_cast<std::size_t>(from) < nav_->outLinks.size()) {
-        const engine::NavLink& in = nav_->links[static_cast<std::size_t>(a.arrivedLink)];
-        forcedUTurn = true;
-        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
-            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-            if (L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp || !L.walkable)
-                continue;
-            if (!(L.from == in.to && L.to == in.from)) { forcedUTurn = false; break; }
-        }
-    }
-    // Scan EVERY node from a random start, so a non-reversing goal is found
-    // whenever one exists — dice rolls occasionally picked only U-turn goals,
-    // and each of those flipped the car to the other side of the road in place.
-    // (A cap on the scan was tried: it brought those flips back.) The searches
-    // price the U-turn link like startTrip's bay exit does, so a route takes
-    // the way round the block whenever there is one and the first reachable
-    // goal nearly always serves: one search, not thousands.
-    int uturn = -1;
-    if (a.arrivedLink >= 0 && static_cast<std::size_t>(a.arrivedLink) < twinOf_.size())
-        uturn = twinOf_[static_cast<std::size_t>(a.arrivedLink)];
-    if (uturn >= 0 && static_cast<std::size_t>(uturn) < departScale_.size()) departScale_[static_cast<std::size_t>(uturn)] = 50.0;
-    else uturn = -1;
-    struct RestoreScale {   // however the scan ends
-        std::vector<Real>& s; int li; bool& priced;
-        ~RestoreScale() { if (li >= 0) s[static_cast<std::size_t>(li)] = 1.0; priced = false; }
-    } restore{departScale_, uturn, wanderPriced_};
-    wanderPriced_ = uturn >= 0;
-    int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(std::max(1, nav_->streetNodeCount())));   // a street node
-    int fallback = -1;
-    // After the first unreachable goal, flood what IS reachable once and skip the rest without
-    // searching: a failed A* explores everything reachable before it gives up, the costliest
-    // search there is, and an agent on a scrap of network met dozens of them per trip.
-    std::vector<char> reach;
-    // ...and after a run of goals that are reachable only by turning back, flood once what lies AHEAD
-    // (from `from` by any exit but the one it arrived on, never through `from` again) and search only
-    // that: an agent whose other exit is a dead-end stub routed all 2313 nodes of island_8_saltwood
-    // in one step (357 ms, the hitch Glenn felt driving the pass) to take its fallback.
-    std::vector<char> ahead;
-    int reversing = 0;
-    auto floodAhead = [&] {
-        std::vector<char> seen(static_cast<std::size_t>(n), 0);
-        std::vector<int> stack;
-        auto usable = [&](const engine::NavLink& L) {
-            return L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp && L.walkable;
-        };
-        const engine::NavLink* in = a.arrivedLink >= 0 ? &nav_->links[static_cast<std::size_t>(a.arrivedLink)] : nullptr;
-        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
-            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-            if (!usable(L) || (in && L.from == in->to && L.to == in->from)) continue;
-            if (!seen[static_cast<std::size_t>(L.to)]) { seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to); }
-        }
-        seen[static_cast<std::size_t>(from)] = 1;   // never back through the start
-        while (!stack.empty()) {
-            const int v = stack.back(); stack.pop_back();
-            for (int li : nav_->outLinks[static_cast<std::size_t>(v)]) {
-                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
-                if (!usable(L) || seen[static_cast<std::size_t>(L.to)]) continue;
-                seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to);
-            }
-        }
-        seen[static_cast<std::size_t>(from)] = 0;
-        return seen;
-    };
-    const int nGoal = std::max(1, nav_->streetNodeCount());   // wander to street nodes, never onto a walk
-    for (int k = 0; k < nGoal; ++k) {
-        int goal = (start + k) % nGoal;
+    const int n = nav_ ? nav_->streetNodeCount() : 0;
+    if (n <= 1 || from < 0 || from >= nav_->nodeCount()) return false;
+    const int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(n));   // a street node
+    for (int k = 0; k < n && k < kWanderTries; ++k) {
+        const int goal = (start + k) % n;
         if (goal == from) continue;
-        if (!reach.empty() && !reach[static_cast<std::size_t>(goal)]) continue;
-        if (!ahead.empty() && !ahead[static_cast<std::size_t>(goal)]) continue;
-        engine::Route r = engine::findRoute(*nav_, from, goal, true, uturn >= 0 ? &departScale_ : nullptr);
-        if (!r.valid()) {
-            if (reach.empty()) reach = engine::reachableFrom(*nav_, from, true);
-            continue;
-        }
-        if (reversesArrival(r) && !forcedUTurn) {
-            if (fallback < 0) fallback = goal;
-            if (++reversing == 16 && ahead.empty()) {
-                ahead = floodAhead();
-                if (std::find(ahead.begin(), ahead.end(), 1) == ahead.end()) break;   // nothing ahead: the fallback it is
-                // every goal ahead HAS a way on without turning back, but a long one: at 50x the U-turn
-                // still won A* each time (1176 searches in one step). Price it out; the next goal goes on.
-                if (uturn >= 0) departScale_[static_cast<std::size_t>(uturn)] = 1e6;
-            }
-            if (reversing >= 64) break;   // bounded, whatever the graph: take the fallback
-            continue;
-        }
         startTrip(a, from, goal, fromRest);
-        return a.moving;
-    }
-    if (fallback >= 0) {
-        startTrip(a, from, fallback, fromRest);
-        return a.moving;
+        if (a.moving) return true;
     }
     return false;
 }
@@ -2983,271 +3054,154 @@ void CitySim::setWander(bool on) {
 void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     (void)fromRest;   // (a rest departure differed only for the old driving's cars: ADR-0463)
     a.tripGoal = goal;
-    a.stopAtDist = -1;   // an ordinary trip ends at its node
-    a.route = engine::findRoute(*nav_, origin, goal, true, wanderPriced_ ? &departScale_ : nullptr);
     a.leg = 0;
     a.distOnLeg = 0;
     a.speed = 0;
-    if (!a.route.valid()) {
+    // A WALK ROUTE from the origin's place to the goal's (W3: the day still names street-map nodes). An end that is the
+    // agent's home, work or shop starts or ends where that place's door states it fronts the road (Place::frontage,
+    // walkJoinOn); any other end is the node's point, joined where the model joins it (walkJoinNear; W4 gives the trips
+    // that go to no place a real spot instead).
+    engine::roads::WalkRoute r;
+    if (nav_ && origin >= 0 && goal >= 0 && origin < nav_->nodeCount() && goal < nav_->nodeCount())
+        r = walkRouteBetween(nav_->nodes[static_cast<std::size_t>(origin)], nav_->nodes[static_cast<std::size_t>(goal)],
+                             placeFrontageAt(a, origin), placeFrontageAt(a, goal));
+    if (!r.found || r.steps.empty()) {
         // No path: do NOT teleport to the goal (that was the "disappear/reappear"
         // bug). Stay at the ORIGIN so the agent simply doesn't take this
         // trip; the goal layer's NoRoute row decides where its day falls back to.
+        a.route = engine::roads::WalkRoute{};
         a.moving = false;
         a.elevation = 0;
         a.pos = idlePose(origin, a.brain);
         return;
     }
-    ++a.trips;   // a new route
-    a.moving = true;
-    a.indoors = false;   // out of the door
-    a.restDwell = 0;
-    refreshPose(a);
-    a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
-    a.tickFromPos = a.pos;          // a placement, not a motion (see tickFromPos)
-    a.tickFromHeading = a.heading;
+    beginRoute(a, std::move(r));
 }
 
+// WHERE A WALKER ON ITS ROUTE STANDS (W3): on its step's walk at the metres walked (LaneGraph::pointAt), at the walk's
+// own height (heightAt), facing the way it walks; on a street's walk, in its own file across the walk -- its distance in
+// from the kerb as before, walkerVerge, measured from the walk's middle (the sidewalk's), eased in over the first and last
+// metres of the step so the file is taken up and given back without a jump; between two steps, across the short gap
+// from one walk's end to the next walk's start. (The old step's links, its corner curves and its stop lines are gone.)
 void CitySim::refreshPose(Agent& a) const {
-    if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) return;
-    int li = a.route.links[a.leg];
-    Real L = nav_->links[li].length;
-    Real s = a.distOnLeg;
-    if (s < 0) s = 0; else if (s > L) s = L;
-
-    // Sample this agent's own guide line (its sidewalk) on a link.
-    auto sample = [&](int link, Real t) {
-        if (t < 0) t = 0; else if (t > 1) t = 1;
-        return nav_->sidewalkPoint(link, t, walkerVerge(a));
-    };
-    a.pos = sample(li, L > 1e-9 ? s / L : 0.0);
-    {   // continuous carriageway height: corridor decks/ramps lerp their
-        // node elevations along the link; layer keeps legacy bridges lifted
-        const engine::NavLink& EL = nav_->links[li];
-        const Real et = L > 1e-9 ? s / L : 0.0;
-        // one convention for the same-level tests: height ABOVE THE GROUND on every link (NavLink::aboveA/B,
-        // resolved at load); the absolute Y only draws the car on a deck
-        a.elevation = EL.aboveA + (EL.aboveB - EL.aboveA) * et;
-        a.deckY = EL.elevAbsolute ? EL.elevA + (EL.elevB - EL.elevA) * et : Real(-1e30);
-        a.grade = (EL.elevB - EL.elevA) / std::max(Real(1), EL.length);
-    }
-
-    // Corner-cut blending (device fix): the lane/sidewalk offset direction
-    // rotates with each leg, so sampling only the CURRENT leg makes the pose
-    // JUMP sideways the tick a node is crossed — on a wide arterial several
-    // metres in one frame, a car visibly blinking across the turn. Near an
-    // interior node, trace a quadratic Bezier from the incoming guide line to
-    // the outgoing one instead: continuous through the corner (u = 0.5 exactly
-    // at the leg change, both halves sampling the same curve), and it reads as
-    // the arc the rate-limited heading was already pretending to drive.
-    auto blendSpan = [&](int la, int lb) {
-        Real B = std::max(nav_->links[la].width, nav_->links[lb].width) * 0.5 + 1.0;
-        B = std::min(B, nav_->links[la].length * 0.45);
-        B = std::min(B, nav_->links[lb].length * 0.45);
-        return B;
-    };
-    auto corner = [&](int la, int lb, Real B, Real u) {   // u in [0,1] across the node
-        Real La = nav_->links[la].length, Lb = nav_->links[lb].length;
-        engine::Vec2 p0 = sample(la, La > 1e-9 ? (La - B) / La : 0.0);
-        engine::Vec2 c = (sample(la, 1.0) + sample(lb, 0.0)) * 0.5;
-        {
-            // MITER the walker's corner (roads-v2 S8): averaging the two
-            // guide endpoints CHORDS the offset envelope's arc, so on the
-            // inside of a bend the blended path dipped ~1.5 m into the
-            // carriageway — measured by the road-walk gate as 738 asphalt
-            // ticks, all at degree-2 bends. Push the control point out to
-            // the miter (offset / cos(halfAngle), clamped 2x — the same rule
-            // the mesher's rings use).
-            const engine::Vec2 nodeP = nav_->nodes[nav_->links[la].to];
-            const engine::Vec2 m = c - nodeP;
-            const Real m2 = m.lengthSquared();
-            const Real off = std::max((sample(la, 1.0) - nodeP).length(),
-                                      (sample(lb, 0.0) - nodeP).length());
-            if (m2 > 1e-9) {
-                Real f = std::min((off * off) / m2, Real(4.0));
-                c = nodeP + m * f;
-            }
+    if (!onRoute(a) || !roads_) return;
+    constexpr Real kFileEase = 4.0;   // m: over this much of a step's start and end a walker moves into its file (a
+                                      // metre across at most: a quarter of a metre sideways for each metre on)
+    const engine::LaneGraph& G = roads_->laneLevel;
+    const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(a.leg)];
+    const Real along = std::fabs(s.to - s.from);
+    const Real d = std::clamp(a.distOnLeg, Real(0), legLength(a, a.leg));
+    Vec2 dir = a.heading.length() > 0.5 ? a.heading : Vec2(1, 0);
+    Vec2 p = routePoint(a, a.leg, d, &dir);
+    int8_t side = 0;
+    Real height = 0, kerbRoom = 0;
+    if (d <= along) {
+        const Real at = s.from + (s.forward ? 1.0 : -1.0) * d;
+        height = G.heightAt(s.walk, at);
+        const int8_t ws = s.walk.index < walkRoadSide_.size() ? walkRoadSide_[s.walk.index] : int8_t(0);
+        side = static_cast<int8_t>(s.forward ? ws : -ws);
+        if (side != 0) {
+            // its line's distance from its kerb, and on a street's stretch the walker's own file across it (a corner walk
+            // is walked on its line)
+            const Real half = walkKerbOff_[s.walk.index];
+            const Real room = std::max(Real(0), half - kWalkerHalfAcross);
+            const bool stretch = G.walks[s.walk.index].street != engine::kNoIndex;
+            const Real file = stretch ? std::clamp(walkerVerge(a) - half, -room, room) : Real(0);   // + away from the road
+            const Real ease = std::clamp(std::min(d, along - d) / kFileEase, Real(0), Real(1));
+            const Vec2 right(dir.y, -dir.x);
+            const Vec2 away = side > 0 ? right * -1.0 : right;
+            p = p + away * (file * ease);
+            // ...and how far it may lean toward the road: to the walk's kerb edge, less half a body
+            kerbRoom = std::max(Real(0), half + file * ease - kWalkerHalfAcross);
         }
-        engine::Vec2 p2 = sample(lb, Lb > 1e-9 ? B / Lb : 1.0);
-        Real v = 1.0 - u;
-        return p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
-    };
-    const int legCount = static_cast<int>(a.route.links.size());
-    auto cornerAt = [&](int la, int lb, Real B, Real u) { return corner(la, lb, B, u); };
-    if (a.leg + 1 < legCount) {              // exit half: approaching the node
-        int nli = a.route.links[a.leg + 1];
-        Real B = blendSpan(li, nli);
-        if (B > 1e-6 && L - s < B)
-            a.pos = cornerAt(li, nli, B, (B - (L - s)) / (2.0 * B));
+    } else if (a.leg + 1 < static_cast<int>(a.route.steps.size())) {
+        const engine::roads::WalkStep& n = a.route.steps[static_cast<std::size_t>(a.leg + 1)];
+        const Real gap = std::max(Real(1e-6), legLength(a, a.leg) - along);
+        const Real u = std::clamp((d - along) / gap, Real(0), Real(1));
+        height = G.heightAt(s.walk, s.to) * (1.0 - u) + G.heightAt(n.walk, n.from) * u;
     }
-    if (a.leg > 0) {                         // entry half: just past the node
-        int pli = a.route.links[a.leg - 1];
-        Real B = blendSpan(pli, li);
-        if (B > 1e-6 && s < B)
-            a.pos = cornerAt(pli, li, B, 0.5 + s / (2.0 * B));
-    } else if (roams(a) && a.arrivedLink >= 0 &&
-               nav_->links[a.arrivedLink].to == nav_->links[li].from) {
-        // A CHAINED wander trip (arrival rolled straight into the next route):
-        // blend leg 0 from the link the agent arrived along, exactly like an
-        // interior corner — without this the restart popped onto the new lane
-        // line, stacking simultaneous chainers on the node point.
-        Real B = blendSpan(a.arrivedLink, li);
-        if (B > 1e-6 && s < B)
-            a.pos = cornerAt(a.arrivedLink, li, B, 0.5 + s / (2.0 * B));
-    }
-    // KNOWN BUG, LEFT AS IT IS FOR TASK 4 (found in ADR-0461; deleting it here would move every walker and every
-    // pinned hash): the step below never runs, because every walker returns here first. It was reached only past the
-    // old driving's car branch, which went with ADR-0463.
-    if (legCount >= 0) return;
-    // A WALKER STANDING AT A CROSSWALK'S KERB (ADR-0452) stands at its kerb end, on the pavement, a step back: the
-    // model's place (ModelCrosswalk::kerbWait), not wherever its route line runs (inside a spread junction that line can
-    // lie in the carriageway).
-    if (a.crosswalkAt >= 0 && !a.onCrosswalk && a.speed < kCrossingStanding && roads_)
-        if (const engine::ModelCrosswalk* cw = roads_->crosswalk(static_cast<uint32_t>(a.crosswalkAt))) {
-            const Vec2 kerb = cw->kerbWait(a.crossFromEnd, kCrossingKerbStep);
-            if ((kerb - a.pos).length() <= kCrossingStepAside) a.pos = kerb;
-        }
+    a.pos = p;
+    a.heading = dir;
+    a.roadSide = side;
+    a.kerbRoom = static_cast<float>(kerbRoom);
+    // the height: the walk's own (absolute: the drawing stands the body on the surface nearest it, a bridge's sidewalk
+    // or the ground: city_poses deckSurfaceNear); above-the-ground heights the walks do not state
+    a.deckY = static_cast<float>(height);
+    a.elevation = 0;
+    a.grade = 0;
 }
 
-// Turn the heading toward the current leg's direction: a walker pivots freely.
-void CitySim::steer(Agent& a) const {
-    if (a.leg >= static_cast<int>(a.route.links.size())) return;
-    a.heading = nav_->direction(a.route.links[a.leg]);
+// THE NEXT CROSSING ON THE ROUTE (W3): read off the route (WalkRoute::crossings, the steps it crosses a crosswalk on),
+// the first not yet crossed within kCrossingLookAhead route metres. Before it: how far to where the walker waits, a
+// step back from the crossing step's start (the kerb end it steps off from); on it: toHold negative.
+CitySim::CrossingAhead CitySim::nextCrossing(const Agent& a) const {
+    CrossingAhead out;
+    if (!onRoute(a) || !roads_) return out;
+    for (const engine::roads::WalkCrossing& c : a.route.crossings) {
+        const int step = static_cast<int>(c.step);
+        if (step < a.leg) continue;
+        const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(step)];
+        const Real across = std::fabs(s.to - s.from);
+        Real toStart = -a.distOnLeg;
+        for (int k = a.leg; k < step; ++k) toStart += legLength(a, k);
+        if (toStart > kCrossingLookAhead) break;
+        if (step == a.leg && a.distOnLeg >= across) continue;   // across it, on the gap after it
+        out.found = true;
+        out.crosswalk = c.crosswalk;
+        out.fromEnd = c.fromEnd;
+        out.toHold = step == a.leg ? -(a.distOnLeg + 1e-3) : std::max(Real(0), toStart - kCrossingKerbStep);
+        out.toFar = toStart + across;
+        return out;
+    }
+    return out;
 }
 
-// THE NEXT JUNCTION IS NOT ALWAYS AT THE END OF THIS LINK. The junction rules
-// used to look only at the current link's end node -- fine when a link runs
-// junction to junction, but metro's streets are chains of ~4 m links (the
-// road polyline's own vertices). A 4 m link cannot hold a 9 m stop setback, so
-// the line was clamped to 40% of the link: 2.4 m short of the node, INSIDE the
-// box. And the car one link back saw no junction at all (Glenn, 2026-09-19:
-// "they should not stop in the middle of the intersection ... They should
-// stop before the cross walk"). So the rules now look ahead along the route to
-// the next real junction and measure the line in route metres.
-CitySim::JunctionAhead CitySim::junctionAhead(const Agent& a, Real horizon) const {
-    JunctionAhead j;
-    const int legN = static_cast<int>(a.route.links.size());
-    if (a.leg >= legN) return j;
-    Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;
-    for (int k = a.leg; k < legN; ++k) {
-        const engine::NavLink& lk = nav_->links[a.route.links[k]];
-        if (k > a.leg) ahead += lk.length;
-        if (nav_->isJunction(lk.to)) {
-            j.leg = k;
-            j.node = lk.to;
-            j.toNode = ahead;
-            // The approach runs back to the previous junction (or the route's
-            // start); a line never sits behind it. 60 m is past any setback's
-            // reach (the clamp below stops growing at setback / 0.6).
-            Real app = lk.length;
-            for (int b = k; b > 0 && app < 60.0 &&
-                            !nav_->isJunction(nav_->links[a.route.links[b]].from);
-                 --b)
-                app += nav_->links[a.route.links[b - 1]].length;
-            j.approach = app;
-            return j;
-        }
-        if (ahead >= horizon) break;
-    }
-    return j;
-}
-
-// Where this agent's STOP LINE sits, in metres back from the junction node. A
-// walker holds at the corner; a car holds with its front bumper short of the
-// painted zebra band on its approach: junction box radius (the mouth) + the
-// band + a margin + half its own body. Stopping at the node itself parked a
-// legally-waiting car in the middle of the intersection (device round 3).
-//
-// The ONE effective stop line every junction rule agrees on: the setback short
-// of the node, but never behind the start of the APPROACH — an approach shorter
-// than the setback (junctions a few metres apart) gets a line partway down it,
-// and the smooth brake, the yield scan, and the hard clamp all use THIS.
-// (Gating the rules on the raw setback used to disable box occupancy + turn
-// yield entirely on short approaches — exactly where junctions are densest.)
-Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
-    // A WALKER waits at the corner, ON THE PAVEMENT: the junction box's edge (it spans the widest street meeting
-    // there) and a step. 0.5 m short of the node stood every walker held at a light inside the street it was about to
-    // cross (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic").
-    (void)a;
-    const Real stopSetback = junctionRadius(ja.node) + kWalkerKerbStep;
-    return std::min(stopSetback, std::max(Real(0.5), ja.approach * 0.6));
-}
-
-// The junction rules of advance(): the stop-line geometry, the walkers at the model's crosswalks, and the
-// box-occupancy / turn-yield / exit-room scan. Returns the speed target after those caps plus the stop line the hard
-// clamp in advance() holds at. Pure query: no rng draws, no agent mutation.
-CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
-                                                Real target) const {
-    JunctionGate gate;
-    // A WALKER AT THE ROAD MODEL'S CROSSWALKS (ADR-0452): where the junction ahead has them, they rule its walkers, not
-    // the old signals or kerb gaps. Before the kerb end they step off from, a person goes on WALK where lights run it (a
-    // rare jaywalker on any phase, given a jaywalker's gap), elsewhere when the gap they accept is there; else they wait
-    // a step back from that kerb end. Past it they are crossing, and carry on.
-    {
-        gate.crossing = crossingAhead(a);
-        if (gate.crossing.governed) {
-            gate.cap = target;
-            if (!gate.crossing.found || gate.crossing.toHold < 0) return gate;
-            const engine::ModelCrosswalk* c = roads_->crosswalk(gate.crossing.crosswalk);
-            const driving::WalkSignal ws = drivingV2_ && drivingV2_->lightsRun()
-                                               ? driving::walkAtCrosswalk(drivingV2_->rightOfWay(), gate.crossing.crosswalk,
-                                                                          drivingV2_->clockSeconds())
-                                               : driving::WalkSignal::None;
-            bool go = false;
-            if (c && c->control == engine::CrosswalkControl::Lights && ws != driving::WalkSignal::None) {
-                gate.kind = CrossingKind::Lights;
-                go = ws == driving::WalkSignal::Walk;
-                if (!go && jaywalks(a) && gapToCross(a, gate.crossing.crosswalk, a.crossWaited, true)) {
-                    go = true;
-                    gate.kind = CrossingKind::AgainstTheLights;
-                }
-            } else {
-                gate.kind = !c ? CrossingKind::Unmarked
-                            : c->control == engine::CrosswalkControl::Signs ? CrossingKind::Signs
-                            : c->marked ? CrossingKind::Marked : CrossingKind::Unmarked;
-                go = gapToCross(a, gate.crossing.crosswalk, a.crossWaited, false);
-            }
-            if (!go) {
-                gate.walkHold = true;
-                gate.distToLine = gate.crossing.toHold;
-                gate.node = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].to;
-                gate.approachLink = a.route.links[static_cast<std::size_t>(a.leg)];
-                gate.cap = std::min(target, approachStop(gate.crossing.toHold, kPedDecel, target));
-            }
-            return gate;
-        }
-    }
-    // A walker keeps the current link: its kerb rules are written per link.
-    const JunctionAhead ja = junctionAhead(a, 0.0);
-    if (ja.leg < 0) {
-        gate.cap = target;
-        return gate;
-    }
-    li = a.route.links[static_cast<std::size_t>(ja.leg)];   // the APPROACH link
-    const int toNode = ja.node;
-    JunctionAhead jw = ja;
-    jw.approach = nav_->links[li].length;   // walkers: their link
-    const Real lineBack = stopLineBack(a, jw);
-    // (NO STOPLIGHT HERE, ADR-0456: a walker at a lit junction of the driving's roads is ruled by the model's
-    // crosswalks above. The old driving's cars' holds at the line went with ADR-0463.)
-    gate.distToLine = ja.toNode - lineBack;
+// advance()'s crossing rule (ADR-0452, from the route since W3): before the kerb end it steps off from, a person goes
+// on WALK where lights run it (a rare jaywalker on any phase, given a jaywalker's gap), elsewhere when the gap they
+// accept is there (where the level does not drive there are no cars, and the gap always is); else they wait a step
+// back from that kerb end. On the crossing they carry on. Pure query: no rng draws, no agent mutation.
+CitySim::CrossingGate CitySim::crossingGate(const Agent& a, Real target) const {
+    CrossingGate gate;
     gate.cap = target;
-    gate.node = toNode;
-    gate.approachLink = li;
-    gate.distToNode = ja.toNode;
+    gate.crossing = nextCrossing(a);
+    if (!gate.crossing.found || gate.crossing.toHold < 0) return gate;
+    const engine::ModelCrosswalk* c = roads_->crosswalk(gate.crossing.crosswalk);
+    const driving::WalkSignal ws = drivingV2_ && drivingV2_->lightsRun()
+                                       ? driving::walkAtCrosswalk(drivingV2_->rightOfWay(), gate.crossing.crosswalk,
+                                                                  drivingV2_->clockSeconds())
+                                       : driving::WalkSignal::None;
+    bool go = false;
+    if (c && c->control == engine::CrosswalkControl::Lights && ws != driving::WalkSignal::None) {
+        gate.kind = CrossingKind::Lights;
+        go = ws == driving::WalkSignal::Walk;
+        if (!go && jaywalks(a) && gapToCross(a, gate.crossing.crosswalk, a.crossWaited, true)) {
+            go = true;
+            gate.kind = CrossingKind::AgainstTheLights;
+        }
+    } else {
+        gate.kind = !c ? CrossingKind::Unmarked
+                    : c->control == engine::CrosswalkControl::Signs ? CrossingKind::Signs
+                    : c->marked ? CrossingKind::Marked : CrossingKind::Unmarked;
+        go = gapToCross(a, gate.crossing.crosswalk, a.crossWaited, false);
+    }
+    if (!go) {
+        gate.walkHold = true;
+        gate.cap = std::min(target, approachStop(gate.crossing.toHold, kPedDecel, target));
+    }
     return gate;
 }
 
-
 void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (!a.moving) return;
-    int li = a.route.links[a.leg];
+    if (!onRoute(a)) {   // (no steps left: arrived)
+        arriveOrChain(a, a.speed);
+        return;
+    }
     // Nominal pace scaled by personality (ADR-0062): each walker holds its OWN pace, so the crowd doesn't move in
-    // lockstep. Junction caps are shared rules and stay unscaled.
+    // lockstep. The crossing's hold is a shared rule and stays unscaled.
     Real target = kWalkSpeed * ridePace(a) * a.speedFactor;   // (a walker on a board rides at its pace: activities.lua `ride`)
     const Real accel = kPedAccel;
-    // Junction rules (stop line, signal brake, box occupancy / turn yield) cap
-    // the target; the gate carries the line the hard clamp below holds at.
-    JunctionGate gate = junctionSpeedCap(a, li, target);
+    CrossingGate gate = crossingGate(a, target);
     target = gate.cap;
     // WHERE THIS WALKER STANDS AGAINST A CROSSWALK (ADR-0452), for the drivers (thingsForDriving) and the counts
     {
@@ -3276,63 +3230,24 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         if (a.speed < 0.3 && gap < 1e8) holdWhy(a, 4);
     }
 
-    // Hard stop line for a walker held at a crosswalk's kerb end (ADR-0452's walkHold): the smooth cap above slows it
-    // but never to exactly zero, so without this the leftover motion would carry it THROUGH the line.
-    //
-    // The line is in ROUTE metres and may lie beyond this link: then the motion
-    // below runs the normal leg-chaining loop, capped at the line (lineRoom).
-    Real lineRoom = std::numeric_limits<Real>::infinity();
-    if (gate.node >= 0) {
-        const bool holds = gate.walkHold;
-        if (holds && gate.distToLine >= -1e-6 && gate.distToLine > nav_->links[li].length - a.distOnLeg) {
-            lineRoom = std::max(Real(0), gate.distToLine);
-            a.state = Agent::State::Waiting;
-            if (a.speed < 0.3) holdWhy(a, 2);
-        } else if (holds) {
-            // The hold applies only BEFORE the line: past it, the walker is crossing and carries on.
-            if (gate.distToLine >= -1e-6) {
-                Real room = std::max(Real(0), gate.distToLine);
-                Real motion = std::min(a.speed * dt, room);
-                if (motion < a.speed * dt) { a.speed = 0; holdWhy(a, 2); }   // held at the line
-                a.distOnLeg += motion;
-                a.state = Agent::State::Waiting;   // a pedestrian held at the kerb is Waiting
-                refreshPose(a);
-                steer(a);
-                return;
-            }
-        }
-    }
-
-    // (S8 KERB DISCIPLINE, where the model's crosswalks do not rule the junction ahead: a walker waited at the kerb for
-    // a gap in the old driving's cars. Those cars are gone, so it never waited; the wait went with them, ADR-0463.
-    // A crossing there judged by the road model is task 4's.)
-
+    // Hard hold for a walker held at a crosswalk's kerb end (ADR-0452's walkHold): the smooth cap above slows it but
+    // never to exactly zero, so without this the leftover motion would carry it THROUGH the kerb end.
     Real motion = a.speed * dt;
-    if (motion > lineRoom) { motion = lineRoom; a.speed = 0; }   // held at a line further on
-
-    int legCount = static_cast<int>(a.route.links.size());
-    while (motion > 0 && a.leg < legCount) {
-        Real L = nav_->links[a.route.links[a.leg]].length;
-        Real remain = L - a.distOnLeg;
-        if (motion < remain) { a.distOnLeg += motion; motion = 0; }
-        else {
-            motion -= remain;
-            ++a.leg;
-            a.distOnLeg = 0;
-        }
+    if (gate.walkHold) {
+        const Real room = std::max(Real(0), gate.crossing.toHold);
+        if (motion >= room) { motion = room; a.speed = 0; holdWhy(a, 2); }   // held at the kerb end
+        if (room < kCrossingAtKerb) a.state = Agent::State::Waiting;        // a pedestrian held at the kerb is Waiting
     }
-
-    // A DIRECTOR'S ERRAND ENDS WHERE IT WAS SENT (ADR-0091), part-way down the
-    // last link rather than at its node — the difference between arriving at
-    // the car and arriving twenty metres from it.
-    if (a.stopAtDist >= 0 && a.leg == legCount - 1 && a.distOnLeg >= a.stopAtDist)
-        a.leg = legCount;
-
-    if (a.leg >= legCount) {
+    // ON ALONG THE ROUTE: its steps and the gaps between them (glideAlong), to its end, where it arrives
+    if (glideAlong(a, motion)) {
+        const int n = static_cast<int>(a.route.steps.size());   // at its route's end first: arriving is where it walked to
+        a.leg = n - 1;
+        a.distOnLeg = legLength(a, a.leg);
+        refreshPose(a);
+        a.leg = n;
         arriveOrChain(a, a.speed);   // pass the still-rolling speed: a chain keeps it
     } else {
         refreshPose(a);
-        steer(a);
     }
 }
 
@@ -3351,7 +3266,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         {
             // AT THE STATION: in along its way in (city_rail_riders.h)
             if (const RailTrip* rt = rail_.tripOf(self); rt && rt->phase == RailTrip::Phase::ToStation) {
-                const int at = !a.route.links.empty() ? nav_->links[static_cast<std::size_t>(a.route.links.back())].to : -1;
+                const int at = a.tripGoal;
                 if (at >= 0 && at == rail_.stations()[static_cast<std::size_t>(rt->from)].accessNode) {
                     a.restNode = at;
                     enterStation(a, self);
@@ -3360,30 +3275,27 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             }
         }
     }
-    int lastLink = a.route.links.back();
-    // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
-    // arrivals at ground level, under their own road.
-    a.elevation = nav_->links[lastLink].aboveB;
+    // WHERE IT ARRIVED: the end of its route, where the stepper last placed it (the walk's height kept: deckY), facing
+    // the way it walked. The node the trip was for is the next departure's start (the day still names nodes).
+    const Vec2 along = a.heading;
+    const int arrivedAt = a.tripGoal >= 0 ? a.tripGoal : (nav_ ? nav_->nearestNode(a.pos) : -1);
+    a.elevation = 0;
     // A DIRECTED AGENT ARRIVES AND WAITS (ADR-0091). Its plan belongs to the
     // director, so the goal table does not get to chain the next trip — it
     // stands where it was sent until told otherwise. restNode still moves, so
     // `direct off` hands the schedule an agent standing somewhere real.
     if (a.directed) {
-        a.restNode = nav_->links[static_cast<std::size_t>(lastLink)].to;
-        a.arrivedLink = lastLink;
+        a.restNode = arrivedAt;
         a.state = Agent::State::Resting;
         return;
     }
     const GoalTable& t = tableFor(a);
     const int next = t.onEvent(a.goal, GoalEvent::Arrived);
-    // A walker rests at the end of its sidewalk (continuous with the final
-    // motion — not snapped across the node, which was the old visible jump).
-    a.pos = nav_->sidewalkPoint(lastLink, 1.0);
     // Living City: an arrival AT one of its own places rests at THAT DOOR — the
     // agent is semantically indoors.
     {
         // The node the trip was FOR.
-        const int node = a.tripGoal >= 0 ? a.tripGoal : nav_->links[lastLink].to;
+        const int node = arrivedAt;
         const bool atHome = a.homePlace != kNoPlace && node == a.home;
         const bool atWork =
             node == a.work &&
@@ -3460,7 +3372,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // Outside: a spot of its own, not the sidewalk point everyone arriving
         // along this street ends on.
         if (!a.indoors && a.seatPhase == 0)
-            a.pos = freeStandingSpot(a, a.pos, nav_->direction(lastLink));
+            a.pos = freeStandingSpot(a, a.pos, along);
         if (a.seatPhase == 1) a.seatBack = a.pos;
     }
     if (next >= 0) {
@@ -3474,9 +3386,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                          ? Agent::Activity::AtWork
                          : Agent::Activity::AtHome;
     }
-    a.restNode = nav_->links[lastLink].to;   // the next departure starts here
-    a.arrivedLink = lastLink;                // ...and avoids U-turning back up this
-    a.route.links.clear();
+    a.restNode = arrivedAt;   // the next departure starts here
+    a.route = engine::roads::WalkRoute{};
+    a.leg = 0;
+    a.distOnLeg = 0;
     a.tickFromPos = a.pos;          // parked / at the door: placed, not slid there
     a.tickFromHeading = a.heading;
 }
@@ -3496,22 +3409,27 @@ void CitySim::computeGaps() {
             leaderSpeeds_[static_cast<std::size_t>(k)] = 0.0;     // valid only where gaps_ < INF
         }
     }
-    auto laneKeyOf = [this](const Agent& a, int li) {
-        const int laneKey = 1024 + (nav_->links[li].footpath ? 0 : walkerFile(a));   // each file follows its own
-        return static_cast<long long>(li) * 4096 + laneKey;
+    // FOLLOWING ON A WALK (W3): walkers on one walk, the same way, in the same file follow one another, by how far
+    // along the walk the way they walk each is (a step's gap past its walk's end counts on from that end).
+    if (!roads_) return;
+    const engine::LaneGraph& G = roads_->laneLevel;
+    auto keyOf = [this](const Agent& a, int leg) {
+        const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(leg)];
+        return static_cast<long long>(s.walk.index) * 8 + (s.forward ? 4 : 0) + walkerFile(a);   // each file its own
+    };
+    auto wayAlong = [&](const engine::roads::WalkStep& s, Real metresOnStep) {   // metres along the walk, its way
+        const Real W = G.walks[s.walk.index].length;
+        const Real entry = s.forward ? s.from : W - s.from;
+        return entry + metresOnStep;
     };
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
     for (int i : kIdx_) {
         const Agent& a = agents_[i];
         if (a.far()) continue;   // far tier: not on the road
-        if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        const int li = a.route.links[a.leg];
-        const long long key = laneKeyOf(a, li);
-        lanes[key].push_back({a.distOnLeg, i});
+        if (!onRoute(a)) continue;
+        lanes[keyOf(a, a.leg)].push_back({wayAlong(a.route.steps[static_cast<std::size_t>(a.leg)], a.distOnLeg), i});
     }
-    // (link,lane) -> the car nearest the entry {distOnLeg, agentIndex}, so a
-    // follower crossing a node can pick up the leader on its next link AND that
-    // leader's length (for a length-aware gap).
+    // (walk, way, file) -> the walker nearest its start, so a follower coming onto that walk picks it up as its leader
     std::unordered_map<long long, std::pair<Real, int>> minEntry;
     for (auto& kv : lanes) {
         std::vector<std::pair<Real, int>>& v = kv.second;
@@ -3520,14 +3438,12 @@ void CitySim::computeGaps() {
             return a.first != b.first ? a.first < b.first : a.second < b.second;
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
-        const bool walkers = (kv.first % 4096) >= 1024;
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
             // WALKERS go side by side, not in file: one LEVEL with me (within a body's depth along the way) is not in
             // front of me -- the lean takes us past each other. Counted as a leader, a crowd that set off from one
             // door together (a class change) stood at the same distance, each held behind the next, for ever.
             std::size_t j = k + 1;
-            if (walkers)
-                while (j < v.size() && v[j].first - v[k].first < kPedSideBySide) ++j;
+            while (j < v.size() && v[j].first - v[k].first < kPedSideBySide) ++j;
             if (j >= v.size()) continue;
             const Real g = std::max(Real(0), v[j].first - v[k].first);
             if (g >= gaps_[v[k].second]) continue;
@@ -3536,34 +3452,28 @@ void CitySim::computeGaps() {
             leaderSpeeds_[v[k].second] = agents_[v[j].second].speed;
         }
     }
-    // Car-following ACROSS a node: the front car on a link (no leader ahead on its
-    // own link) keeps its gap to the car just ahead on its NEXT link — the one it's
-    // chasing through the intersection or around the bend. Without this, followers
-    // overlap the leader as they cross a node (same-lane keys don't span it). We
-    // chain across up to a couple of short links so a leader that has already moved
-    // onto the link-after-next is still seen.
+    // FOLLOWING ACROSS A JOIN: the front walker on a walk (no leader ahead on its own) keeps its gap to whoever is
+    // ahead on the next steps of its route, the same way and file, within kFollowSight route metres.
+    constexpr Real kFollowSight = 20.0;
     for (int i : kIdx_) {
         const Agent& a = agents_[i];
-        if (gaps_[i] != INF) continue;                 // has a same-link leader already
+        if (gaps_[i] != INF) continue;                 // has a leader on its own walk already
         if (a.far()) continue;        // far tier: no following
-        if (!a.moving) continue;
-        int legN = static_cast<int>(a.route.links.size());
-        Real ahead = nav_->links[a.route.links[a.leg]].length - a.distOnLeg;  // to end of this link
-        // Chain by DISTANCE, not by link count: metro's streets are ~4 m links,
-        // so "two links" was ~8 m of sight -- a car at 15 m/s met a stopped
-        // queue with a third of its braking distance (measured: the fast
-        // rear-enders that seeded the junction pile-ups). 60 m covers IDM's
-        // comfortable stop from the fastest street class.
-        for (int step = 1; a.leg + step < legN && ahead < 60.0; ++step) {
-            int nextLi = a.route.links[a.leg + step];
-            auto it = minEntry.find(laneKeyOf(a, nextLi));
-            if (it != minEntry.end()) {
-                gaps_[i] = std::max(Real(0), ahead + it->second.first);
+        if (!onRoute(a)) continue;
+        const int legN = static_cast<int>(a.route.steps.size());
+        Real ahead = legLength(a, a.leg) - a.distOnLeg;  // to the next step's start
+        for (int step = 1; a.leg + step < legN && ahead < kFollowSight; ++step) {
+            const int next = a.leg + step;
+            const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(next)];
+            auto it = minEntry.find(keyOf(a, next));
+            const Real entry = wayAlong(s, 0);
+            if (it != minEntry.end() && it->second.first >= entry - kPedSideBySide) {
+                gaps_[i] = std::max(Real(0), ahead + it->second.first - entry);
                 minGaps_[i] = pairMinGap(i, it->second.second);
                 leaderSpeeds_[i] = agents_[it->second.second].speed;
                 break;
             }
-            ahead += nav_->links[nextLi].length;       // no car on this link; look one further
+            ahead += legLength(a, next);       // nobody on that step ahead of us; look one further
         }
     }
 }
@@ -3739,16 +3649,6 @@ CitySim::Census CitySim::census(engine::World* world) const {
 
 // ---- CROSSWALKS (ADR-0452) ----------------------------------------------------------------------------------------------
 namespace {
-// How far along its route a walker looks for the next junction's crosswalks (m): past the longest street link into a
-// spread junction's points.
-constexpr Real kCrossingLookAhead = 80.0;
-// Two places along a route this close (m) project a kerb end equally well: the earlier counts for where a person steps
-// off, the later for where they are across (on a walk back across their own street both lie level).
-constexpr Real kSameProjection = 0.5;
-// A crosswalk's kerb end no further than this (m) beyond the arriving street's half width from a walker's route lies on
-// their way (they walk the route's kerb-side line, a verge out from the carriageway: the side street's crosswalk sits a
-// few metres beyond the arriving street's edge); farther, they do not pass it.
-constexpr Real kCrossingReach = 6.0;
 // A car braking harder than this (m/s2) is slowing; one slower than this (m/s) stands: either means go to a person at
 // the kerb (people.lua crossing: "a car slowing or standing means go").
 constexpr Real kCarSlowing = 0.5;
@@ -3766,106 +3666,6 @@ const char* CitySim::crossingKindWord(CrossingKind k) {
     case CrossingKind::AgainstTheLights: return "against the lights";
     }
     return "?";
-}
-
-CitySim::CrossingAhead CitySim::crossingAhead(const Agent& a) const {
-    CrossingAhead out;
-    // (only where the level drives, as before ADR-0480 handed every lanes level's model to the sim: the crosswalks rule
-    // the walkers where the driving's cars are; #306 piece 6's W3 takes the crossings from the walker's own route)
-    const engine::RoadModel* m = drivingV2_ ? roads_.get() : nullptr;
-    if (!m || m->crosswalks.empty() || !nav_) return out;
-    const int legs = static_cast<int>(a.route.links.size());
-    if (a.leg < 0 || a.leg >= legs) return out;
-    // route metres from the walker to the start of each leg, from two legs back (the crossing may still be under them)
-    const int first = std::max(0, a.leg - 2);
-    std::vector<Real> startOf(static_cast<std::size_t>(legs + 1), 0);
-    {
-        Real back = -a.distOnLeg;
-        for (int k = a.leg - 1; k >= first; --k) back -= nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
-        Real at = back;
-        for (int k = first; k < legs; ++k) {
-            startOf[static_cast<std::size_t>(k)] = at;
-            at += nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])].length;
-        }
-        startOf[static_cast<std::size_t>(legs)] = at;
-    }
-    const auto link = [&](int k) -> const engine::NavLink& { return nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(k)])]; };
-    for (int inLeg = first; inLeg < legs && startOf[static_cast<std::size_t>(inLeg)] < kCrossingLookAhead; ++inLeg) {
-        // the street link arriving at a junction of the driving's roads (city 0), and the first street link leaving it
-        const engine::NavLink& in = link(inLeg);
-        if (in.street < 0 || in.city != 0 || in.footpath) continue;
-        const int J = nav_->junctionOf(in.to);
-        if (J < 0 || static_cast<std::size_t>(J) >= m->junctions.size()) continue;
-        int outLeg = -1;
-        for (int k = inLeg + 1; k < legs; ++k) {
-            const engine::NavLink& L = link(k);
-            if (L.street >= 0) {
-                if (nav_->junctionOf(L.from) == J) outLeg = k;
-                break;
-            }
-            if (L.junction != J) break;
-        }
-        const engine::ModelJunctionId jid(static_cast<uint32_t>(J));
-        bool any = false;
-        for (const engine::ModelCrosswalk& c : m->crosswalks) any = any || (c.junction == jid && c.pavements);
-        if (!any) continue;
-        out.governed = true;
-        if (outLeg < 0) return out;   // the walk ends at this junction: nothing to cross
-        const engine::NavLink& outL = link(outLeg);
-        const int armIn = m->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(in.street)), in.stationTo);
-        const int armOut = m->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(outL.street)), outL.stationFrom);
-        // where along the route a kerb end comes level: its nearest point on the links from the arriving one to the
-        // leaving one (earliest of equals, or latest for the far end)
-        const auto levelWith = [&](const Vec2& p, bool latest, Real* awayOut = nullptr) {
-            Real best = 0, bestAway = std::numeric_limits<Real>::infinity();
-            for (int k = inLeg; k <= outLeg; ++k) {
-                const engine::NavLink& L = link(k);
-                const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
-                const Vec2 ab = B - A;
-                const Real l2 = ab.lengthSquared();
-                const Real t = l2 > 0 ? std::clamp(dot(p - A, ab) / l2, Real(0), Real(1)) : Real(0);
-                const Real away = (p - (A + ab * t)).length();
-                const bool better = latest ? away <= bestAway + kSameProjection : away + kSameProjection < bestAway;
-                if (!better) continue;
-                bestAway = std::min(bestAway, away);
-                best = startOf[static_cast<std::size_t>(k)] + t * L.length;
-            }
-            if (awayOut) *awayOut = bestAway;
-            return best;
-        };
-        for (const engine::WalkCrossing& w : m->crosswalksOnWalk(jid, armIn, armOut)) {
-            const engine::ModelCrosswalk* c = m->crosswalk(w.crosswalk);
-            if (!c) continue;
-            // (the street map's walkers cut through a junction on its links, not round its corners: at a junction spread
-            // over several points, a crosswalk the walk round the corners would cross can lie far from where they walk,
-            // and they do not pass it)
-            Real away = 0;
-            levelWith(c->ends[static_cast<std::size_t>(w.fromEnd)], false, &away);
-            if (away > in.width * Real(0.5) + kCrossingReach) continue;
-            const Real toFar = levelWith(c->ends[static_cast<std::size_t>(1 - w.fromEnd)], true);
-            if (toFar < 0) continue;   // across it already
-            out.found = true;
-            out.crosswalk = w.crosswalk;
-            out.fromEnd = w.fromEnd;
-            out.toHold = levelWith(c->ends[static_cast<std::size_t>(w.fromEnd)], false) - kCrossingKerbStep;
-            // ...and never inside the junction's box: at most up to the arriving arm's stated box edge, on their own
-            // street's pavement (a spread junction's point can lie well inside its box, and a route line ending there
-            // stood a waiting walker in the carriageway)
-            if (armIn >= 0 && static_cast<std::size_t>(armIn) < m->junctions[jid.index].arms.size()) {
-                const Real boxEdge = m->junctions[jid.index].arms[static_cast<std::size_t>(armIn)].boxEdge;
-                const Real span = in.stationTo - in.stationFrom;
-                if (engine::stated(boxEdge) && std::fabs(span) > 0) {
-                    const Real t = std::clamp((boxEdge - in.stationFrom) / span, Real(0), Real(1));
-                    out.toHold = std::min(out.toHold, startOf[static_cast<std::size_t>(inLeg)] + t * in.length - kCrossingKerbStep);
-                }
-            }
-            out.toFar = toFar;
-            return out;
-        }
-        // (everything at this junction crossed: on to the next)
-        out.governed = false;
-    }
-    return out;
 }
 
 bool CitySim::gapToCross(const Agent& a, uint32_t crosswalk, Real waited, bool bigger, std::string* why) const {
@@ -3956,14 +3756,11 @@ std::string CitySim::describeAgent(int i) const {
     static const char* kStates[] = {"resting", "walking", "avoiding", "waiting", "cruising", "following", "yielding", "turning"};
     const int st = static_cast<int>(a.state);
     auto actName = [&](int d) { return d >= 0 && d < static_cast<int>(catalog_.defs.size()) ? catalog_.defs[static_cast<std::size_t>(d)].name.c_str() : "-"; };
-    int link = -1;
-    const char* linkKind = "";   // " (footpath)", " (freeway)", " (ramp)": what the link under them is, when not a street
-    if (a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
-        link = a.route.links[static_cast<std::size_t>(a.leg)];
-        if (nav_ && link >= 0 && link < nav_->linkCount()) {
-            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(link)];
-            linkKind = L.footpath ? " (footpath)" : L.klass == engine::RoadClass::Freeway ? " (freeway)" : L.klass == engine::RoadClass::Ramp ? " (ramp)" : "";
-        }
+    int walk = -1;
+    std::string walkKind;   // what the walk under them is (the model's word: sidewalk, corner, crossing, ...)
+    if (onRoute(a) && roads_) {
+        walk = static_cast<int>(a.route.steps[static_cast<std::size_t>(a.leg)].walk.index);
+        walkKind = " (" + roads_->walkKind(engine::WalkId(static_cast<uint32_t>(walk))) + ")";
     }
     const char* sess = "-";
     if (a.session >= 0 && a.session < static_cast<int>(sessions_.size())) {
@@ -3975,13 +3772,13 @@ std::string CitySim::describeAgent(int i) const {
     char b[800];
     std::snprintf(b, sizeof b,
                   "agent %d %s age %d %s household %d height %.2f ride %s tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
-                  "seat %d phase %d activity %s (at %s) session %d %s role %d | route leg %d/%zu link %d%s dist %.1f | rest %.3f h "
+                  "seat %d phase %d activity %s (at %s) session %d %s role %d | route leg %d/%zu walk %d%s dist %.1f | rest %.3f h "
                   "goal %.3f h | tethered %d player %d | lean %.2f -> %.2f",
                   i, "walker", a.age, stageName, a.household,
                   static_cast<double>(bodyScale(i)), rideName(rideOf(i)), "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
                   a.speed, a.heading.x, a.heading.y, a.moving ? 1 : 0, st >= 0 && st < 8 ? kStates[st] : "?", a.indoors ? 1 : 0,
                   pedVisible(i) ? 1 : 0, a.tripVenue, a.tripSeat, a.seatPhase, actName(a.tripActivity), actName(a.atActivity),
-                  a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, linkKind, a.distOnLeg,
+                  a.session, sess, a.sessionRole, a.leg, a.route.steps.size(), walk, walkKind.c_str(), a.distOnLeg,
                   a.restDwell, a.goalHours, a.tethered ? 1 : 0, a.playerControlled ? 1 : 0, a.lateralOffset, a.leanTarget);
     return b;
 }
@@ -3993,11 +3790,19 @@ bool CitySim::farDrawPose(int i, Vec2& pos, Vec2& heading) const {
     if (!a.moving && a.indoors) return false;
     pos = a.pos;
     heading = a.heading;
-    if (!a.moving || a.speed <= 0 || a.vHold > 0 || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) return true;
+    if (!onRoute(a) || a.speed <= 0 || a.vHold > 0) return true;
     const Real dt = std::clamp(simSeconds_ - a.vLastTick, Real(0), vRefreshSeconds * 1.5);
-    const engine::NavLink& L = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
-    const Real step = std::min(a.speed * dt, std::max(Real(0), L.length - a.distOnLeg));
-    pos = a.pos + a.heading * step;
+    // on along its route since its last coarse tick, as its next tick will put it (the walk's line: no file offset)
+    const int n = static_cast<int>(a.route.steps.size());
+    int leg = a.leg;
+    Real d = a.distOnLeg + a.speed * dt;
+    while (leg + 1 < n && d > legLength(a, leg)) {
+        d -= legLength(a, leg);
+        ++leg;
+    }
+    Vec2 dir = a.heading;
+    pos = routePoint(a, leg, std::min(d, legLength(a, leg)), &dir);
+    heading = dir;
     return true;
 }
 
@@ -4779,12 +4584,14 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // herd a walker like a boid.
         Real prev = a.lateralOffset;
         Real maxDelta = kPedLateralRate * dt;
-        // TOWARD THE ROAD (maths left of travel, the walker's own right: walkers keep left) only as far as the verge
-        // allows -- a full 1.6 m lean put a walker stepping round someone 0.6 m into the carriageway (walkersInRoad:
-        // "avoiding, in the street it walks along"); toward the buildings, the whole lean
-        // -- and where the road side has not the room for the step, it goes round on the buildings' side instead
-        const Real leanGoal = onStreet(a) && a.leanTarget < -kPedRoadsideRoom ? std::min(-a.leanTarget, kPedMaxLateral)
-                                                                                : a.leanTarget;
+        // TOWARD THE ROAD (its side of the walk: Agent::roadSide, + its right) only as far as its walk's kerb allows
+        // (Agent::kerbRoom, #314) -- a full 1.6 m lean put a walker stepping round someone 0.6 m into the carriageway
+        // (walkersInRoad: "avoiding, in the street it walks along"); toward the buildings, the whole lean -- and where the
+        // road side has not the room for the step, it goes round on the buildings' side instead
+        const Real towardRoad = a.leanTarget * static_cast<Real>(a.roadSide);
+        const Real leanGoal = onStreet(a) && towardRoad > a.kerbRoom
+                                  ? -static_cast<Real>(a.roadSide) * std::min(std::fabs(a.leanTarget), kPedMaxLateral)
+                                  : a.leanTarget;
         Real delta = std::max(-maxDelta, std::min(maxDelta, leanGoal - prev));
         a.lateralOffset = prev + delta;
 
@@ -4943,8 +4750,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         const Vec2 rightv(a.heading.y, -a.heading.x);
         const Real side = dot(off, rightv);
         Real room = std::max(Real(0), kPedMaxLateral - std::fabs(a.lateralOffset));
-        if (side < 0 && onStreet(a))   // toward the road: what the verge leaves after the lean
-            room = std::max(Real(0), kPedRoadsideRoom - std::max(Real(0), -a.lateralOffset));
+        if (side * static_cast<Real>(a.roadSide) > 0 && onStreet(a))   // toward the road: what its kerb leaves after the lean
+            room = std::max(Real(0), static_cast<Real>(a.kerbRoom) - std::max(Real(0), a.lateralOffset * static_cast<Real>(a.roadSide)));
         if (std::fabs(side) > room) off = off - rightv * (side - std::copysign(room, side));
         Real L = off.length();
         if (L > 1.5) { off = off * (1.5 / L); L = 1.5; }
@@ -5160,50 +4967,50 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
     crowdChanged(i);         // its pose and clock moved on: the crowd's record for it too
 }
 
-// Advance a V agent along its REAL A* route at the modelled pace: link class
-// speed scaled by its personality, shaped by fixed average junction dwells
-// (vHold). No sensing, no FSM, no live signal state — hasSignal() is static
-// topology. Arrival runs the same arriveOrChain K uses (bays, goal table,
-// wander chains), so a far agent's day stays the same day.
+// Advance a V agent along its REAL walk route at the modelled pace (its personality's), a fixed dwell at each crossing
+// it steps onto (vHold: the near tier waits there for a gap or WALK). No sensing, no FSM, no live signal state. Arrival
+// runs the same arriveOrChain K uses (goal table, wander chains), so a far agent's day stays the same day.
 void CitySim::vAdvance(Agent& a, Real dt) {
-    const int legCount = static_cast<int>(a.route.links.size());
-    if (a.leg >= legCount) { a.moving = false; return; }
+    const int legCount = static_cast<int>(a.route.steps.size());
+    if (!a.route.found || a.leg >= legCount) { a.moving = false; return; }
+    auto crossesOn = [&](int leg) {
+        for (const engine::roads::WalkCrossing& c : a.route.crossings)
+            if (static_cast<int>(c.step) == leg) return true;
+        return false;
+    };
     Real t = dt;
     while (t > 1e-9 && a.leg < legCount) {
-        if (a.vHold > 0) {   // waiting out a modelled junction dwell
+        if (a.vHold > 0) {   // waiting out a modelled crossing dwell
             const Real h = std::min(a.vHold, t);
             a.vHold -= h;
             t -= h;
             continue;
         }
-        const int li = a.route.links[a.leg];
-        const engine::NavLink& L = nav_->links[li];
         const Real v = kWalkSpeed * a.speedFactor;
         a.speed = v;
-        const Real remain = L.length - a.distOnLeg;
+        const Real remain = legLength(a, a.leg) - a.distOnLeg;
         if (remain > v * t) {
             a.distOnLeg += v * t;
             t = 0;
             break;
         }
         t -= v > 1e-9 ? remain / v : 0.0;
-        const int toNode = L.to;
         ++a.leg;
         a.distOnLeg = 0;
-        if (a.leg < legCount) {
-            if (nav_->isJunction(toNode)) a.vHold += kVJunctionDelay;   // (no old signal clock to wait out: ADR-0456)
-        }
+        if (a.leg < legCount && crossesOn(a.leg)) a.vHold += kVJunctionDelay;
     }
     if (a.leg >= legCount) {
-        // Arrived: park/rest/chain exactly like a K arrival. The tick's
-        // leftover seconds (sub-tick) are dropped — modelled travel, not
-        // integrated motion.
+        // Arrived: rest/chain exactly like a K arrival. The tick's leftover seconds (sub-tick) are dropped — modelled
+        // travel, not integrated motion.
         a.vHold = 0;
+        a.leg = legCount - 1;            // (placed at its route's end first: arriving is where it walked to)
+        a.distOnLeg = legLength(a, a.leg);
+        refreshPose(a);
+        a.leg = legCount;
         arriveOrChain(a, a.speed);
         return;
     }
     refreshPose(a);
-    a.heading = nav_->direction(a.route.links[a.leg]);
 }
 
 }  // namespace citysim

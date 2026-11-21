@@ -2867,17 +2867,33 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         if (!pg) return;
         kinds.push_back({pg->mesh, pg->material, 0.9f, static_cast<float>(farPedDistance), 60.0f});
         ctx.renderer.setCrowdKinds(kinds);
-        // every link's ends with their heights (the ground, plus a deck's layer)
-        std::vector<float> L(static_cast<std::size_t>(nav_.linkCount()) * 6);
-        crowdLinkLen_.assign(static_cast<std::size_t>(nav_.linkCount()), 0.0f);
-        for (int li = 0; li < nav_.linkCount(); ++li) {
-            const engine::NavLink& k = nav_.links[static_cast<std::size_t>(li)];
-            const Vec2 a = nav_.nodes[static_cast<std::size_t>(k.from)], b = nav_.nodes[static_cast<std::size_t>(k.to)];
-            const Real lift = k.layer * kLayerClearance;
-            float* o = &L[static_cast<std::size_t>(li) * 6];
-            o[0] = static_cast<float>(a.x); o[1] = static_cast<float>(groundAt(a.x, a.y) + lift); o[2] = static_cast<float>(a.y);
-            o[3] = static_cast<float>(b.x); o[4] = static_cast<float>(groundAt(b.x, b.y) + lift); o[5] = static_cast<float>(b.y);
-            crowdLinkLen_[static_cast<std::size_t>(li)] = static_cast<float>((b - a).length());
+        // every walk's segments, each way, with their heights (the walks' own: a bridge's sidewalk is up on the bridge)
+        const engine::RoadModel* model = sim_.roads();
+        if (!model || !model->built) return;   // (no walks: the CPU band draws the far travellers)
+        const engine::LaneGraph& G = model->laneLevel;
+        crowdWalkSeg_.assign(G.walks.size(), 0);
+        uint32_t segs = 0;
+        for (std::size_t w = 0; w < G.walks.size(); ++w) {
+            crowdWalkSeg_[w] = segs;
+            segs += G.walks[w].curve.count > 1 ? G.walks[w].curve.count - 1 : 0;
+        }
+        crowdRevBase_ = segs;
+        std::vector<float> L(static_cast<std::size_t>(segs) * 2 * 6);
+        crowdLinkLen_.assign(static_cast<std::size_t>(segs) * 2, 0.0f);
+        for (std::size_t w = 0; w < G.walks.size(); ++w) {
+            const engine::Range c = G.walks[w].curve;
+            for (uint32_t j = 0; j + 1 < c.count; ++j) {
+                const Vec2 a = G.points[c.first + j], b = G.points[c.first + j + 1];
+                const float ha = static_cast<float>(G.heights[c.first + j]), hb = static_cast<float>(G.heights[c.first + j + 1]);
+                const uint32_t f = crowdWalkSeg_[w] + j, r = crowdRevBase_ + f;
+                float* o = &L[static_cast<std::size_t>(f) * 6];
+                o[0] = static_cast<float>(a.x); o[1] = ha; o[2] = static_cast<float>(a.y);
+                o[3] = static_cast<float>(b.x); o[4] = hb; o[5] = static_cast<float>(b.y);
+                float* q = &L[static_cast<std::size_t>(r) * 6];
+                q[0] = o[3]; q[1] = o[4]; q[2] = o[5];
+                q[3] = o[0]; q[4] = o[1]; q[5] = o[2];
+                crowdLinkLen_[f] = crowdLinkLen_[r] = static_cast<float>((b - a).length());
+            }
         }
         ctx.renderer.setCrowdLinks(L);
         gpuCrowd_ = true;
@@ -2887,7 +2903,7 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         // freeway for the whole session, drawn by the ordinary instanced path, no collider (Glenn: "a black small
         // cube on top of a gray bigger rectilinear block. I could pass through them").
         if (InstanceGroup* g = world.get<InstanceGroup>(farPedGroup_)) g->transforms.clear();
-        LOG_INFO << "[citysim] GPU crowd on: " << kinds.size() << " kinds, " << nav_.linkCount() << " links";
+        LOG_INFO << "[citysim] GPU crowd on: " << kinds.size() << " kinds, " << segs << " walk segments each way";
     }
     if (!gpuCrowd_) return;
     const std::vector<Agent>& agents = sim_.agents();
@@ -2899,14 +2915,14 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
     constexpr uint32_t kPedKind = 0;   // (the one kind: the box person)
     auto refresh = [&](int i) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
-        const bool live = a.tier != Agent::Tier::K && a.moving && !a.released && !a.playerControlled && a.leg >= 0 &&
-                          a.leg < static_cast<int>(a.route.links.size());
+        const engine::RoadModel* model = sim_.roads();
+        const bool live = model && a.tier != Agent::Tier::K && a.moving && !a.released && !a.playerControlled &&
+                          CitySim::onRoute(a);
         int& slot = crowdSlot_[static_cast<std::size_t>(i)];
         if (!live) {
             if (slot >= 0) {
                 crowdGarbage_ += crowdRec_[static_cast<std::size_t>(slot)].routeLen;
                 crowdRec_[static_cast<std::size_t>(slot)] = engine::Renderer::CrowdAgent{};
-                crowdSpan_[static_cast<std::size_t>(slot)] = CrowdSpan{};
                 crowdOwner_[static_cast<std::size_t>(slot)] = -1;
                 crowdFree_.push_back(slot);
                 crowdDirtySlots_.push_back(static_cast<uint32_t>(slot));
@@ -2917,41 +2933,67 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         }
         if (slot < 0) {
             if (!crowdFree_.empty()) { slot = crowdFree_.back(); crowdFree_.pop_back(); }
-            else { slot = static_cast<int>(crowdRec_.size()); crowdRec_.emplace_back(); crowdOwner_.push_back(-1); crowdSpan_.emplace_back(); }
+            else { slot = static_cast<int>(crowdRec_.size()); crowdRec_.emplace_back(); crowdOwner_.push_back(-1); }
             crowdOwner_[static_cast<std::size_t>(slot)] = i;
             ++crowdLive_;
         }
         engine::Renderer::CrowdAgent r = crowdRec_[static_cast<std::size_t>(slot)];
-        CrowdSpan& sp = crowdSpan_[static_cast<std::size_t>(slot)];
-        const bool same = r.live && sp.size == a.route.links.size() && sp.first == a.route.links.front() &&
-                          sp.last == a.route.links.back() && a.leg >= sp.baseLeg;
-        if (!same) {   // a new route (or a new traveller): lay its span from the leg it is on
-            if (r.live) crowdGarbage_ += r.routeLen;
-            r.routeOff = static_cast<uint32_t>(crowdArena_.size() / 2);
-            float cum = 0;
-            for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j) {
-                const int li = a.route.links[j];
+        // ITS SPAN, laid from where it is (W3): the segments of the steps it has left, the first from the segment it
+        // stands on; dist0 is how far into that first segment it is
+        const engine::LaneGraph& G = model->laneLevel;
+        if (r.live) crowdGarbage_ += r.routeLen;
+        r.routeOff = static_cast<uint32_t>(crowdArena_.size() / 2);
+        const auto segOf = [&](const engine::Range& c, Real at) {   // the segment of a walk's curve holding `at`
+            const Real* s0 = G.along.data() + c.first;
+            const Real* s1 = s0 + c.count;
+            const std::ptrdiff_t k = std::upper_bound(s0, s1, at) - s0 - 1;
+            return static_cast<uint32_t>(std::clamp<std::ptrdiff_t>(k, 0, static_cast<std::ptrdiff_t>(c.count) - 2));
+        };
+        float cum = 0;
+        uint32_t laid = 0;
+        Real cur = 0;
+        Vec2 curDir(1, 0);
+        for (std::size_t k = static_cast<std::size_t>(a.leg); k < a.route.steps.size(); ++k) {
+            const engine::roads::WalkStep& s = a.route.steps[k];
+            const engine::Range c = G.walks[s.walk.index].curve;
+            if (c.count < 2) continue;
+            Real from = s.from;
+            if (k == static_cast<std::size_t>(a.leg)) {   // from where it stands
+                const Real along = std::fabs(s.to - s.from);
+                from = s.from + (s.forward ? 1.0 : -1.0) * std::min(a.distOnLeg, along);
+                cur = from;
+            }
+            const uint32_t jf = segOf(c, from), jt = segOf(c, s.to);
+            const uint32_t base = crowdWalkSeg_[s.walk.index];
+            auto push = [&](uint32_t seg) {
                 uint32_t bits;
                 std::memcpy(&bits, &cum, sizeof bits);
-                crowdArena_.push_back(static_cast<uint32_t>(li));
+                crowdArena_.push_back(seg);
                 crowdArena_.push_back(bits);
-                cum += crowdLinkLen_[static_cast<std::size_t>(li)];
+                cum += crowdLinkLen_[seg];
+                ++laid;
+            };
+            if (s.forward) {
+                if (k == static_cast<std::size_t>(a.leg)) {
+                    r.dist0 = static_cast<float>(cur - G.along[c.first + jf]);
+                    curDir = G.points[c.first + jf + 1] - G.points[c.first + jf];
+                }
+                for (uint32_t j = jf; j <= jt; ++j) push(base + j);
+            } else {
+                if (k == static_cast<std::size_t>(a.leg)) {
+                    r.dist0 = static_cast<float>(G.along[c.first + jf + 1] - cur);
+                    curDir = G.points[c.first + jf] - G.points[c.first + jf + 1];
+                }
+                for (uint32_t j = jf + 1; j-- > jt;) push(crowdRevBase_ + base + j);
             }
-            r.routeLen = static_cast<uint32_t>(a.route.links.size() - static_cast<std::size_t>(a.leg));
-            sp = CrowdSpan{static_cast<uint32_t>(a.route.links.size()), a.route.links.front(), a.route.links.back(), a.leg};
         }
-        // where the current leg starts within the span (its running distance)
-        float legStart = 0;
-        std::memcpy(&legStart, &crowdArena_[(r.routeOff + static_cast<uint32_t>(a.leg - sp.baseLeg)) * 2 + 1], sizeof legStart);
-        const engine::NavLink& L0 = nav_.links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
-        const float xzLen = crowdLinkLen_[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
-        const Real along = L0.length > 1e-6 ? a.distOnLeg * xzLen / L0.length : 0;
-        r.dist0 = legStart + static_cast<float>(along);
+        r.routeLen = laid;
         r.t0 = static_cast<float>(a.vLastTick);
         r.speed = static_cast<float>(a.speed > 0.3 ? a.speed : 1.3 * a.speedFactor);
-        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L0.from)], B = nav_.nodes[static_cast<std::size_t>(L0.to)];
-        const Vec2 dir = xzLen > 1e-6 ? (B - A) * (1.0 / xzLen) : Vec2(1, 0);
-        r.side = static_cast<float>(dot(a.pos - (A + dir * along), Vec2(dir.y, -dir.x)));
+        const Real dl = curDir.length();
+        const Vec2 dir = dl > 1e-6 ? curDir * (1.0 / dl) : Vec2(1, 0);
+        const engine::roads::WalkStep& s0 = a.route.steps[static_cast<std::size_t>(a.leg)];
+        r.side = static_cast<float>(dot(a.pos - G.pointAt(s0.walk, cur), Vec2(dir.y, -dir.x)));
         r.kind = kPedKind;
         r.live = 1;
         crowdRec_[static_cast<std::size_t>(slot)] = r;
@@ -3308,14 +3350,14 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                         for (std::size_t q = 0; q < worst->size() && q < 6; ++q) {
                             const int i = (*worst)[q];
                             const Agent& a = ag[static_cast<std::size_t>(i)];
-                            const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+                            const bool on = CitySim::onRoute(a);
+                            const int walk = on ? static_cast<int>(a.route.steps[static_cast<std::size_t>(a.leg)].walk.index) : -1;
+                            const int next = on && a.leg + 1 < static_cast<int>(a.route.steps.size())
+                                                 ? static_cast<int>(a.route.steps[static_cast<std::size_t>(a.leg + 1)].walk.index) : -1;
                             char qb[260];
-                            const engine::NavLink* Lq = li >= 0 ? &nav_.links[static_cast<std::size_t>(li)] : nullptr;
-                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
-                                          i, static_cast<int>(a.state), a.speed, a.leg, a.route.links.size(), li, Lq ? Lq->length : -1.0, Lq ? Lq->width : -1.0,
-                                          a.distOnLeg, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
-                                          Lq ? static_cast<int>(nav_.signalControlled(Lq->to)) : -1,
-                                          a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg + 1)] : -1,
+                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f step %d/%zu walk %d len %.1f d %.1f next walk %d why %d gap %.2f/%.2f}",
+                                          i, static_cast<int>(a.state), a.speed, a.leg, a.route.steps.size(), walk,
+                                          on ? sim_.legLength(a, a.leg) : -1.0, a.distOnLeg, next,
                                           sim_.holdWhyOf(i), std::min(sim_.gapOf(i), Real(99)), sim_.minGapOf(i));
                             pileWho += qb;
                         }

@@ -263,7 +263,7 @@ void CityBrainSystem::draw(engine::FrameContext& ctx) {
     for (const BrainPlanLeg& leg : legs) {
         if (leg.done) continue;
         std::vector<Vec3> pts;
-        if (leg.underWay && onFoot && a.moving && a.route.valid()) {
+        if (leg.underWay && onFoot && a.moving && a.route.found) {
             // on foot: the pavements they will take, then straight to where the walk ends
             pts.push_back(on(a.pos));
             sim.walkPoses(who, kLineStep, [&](const Agent& c) { pts.push_back(on(c.pos)); });

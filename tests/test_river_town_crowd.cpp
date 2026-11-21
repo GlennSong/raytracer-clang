@@ -181,12 +181,12 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             for (std::size_t i = 0; i < sim.agents().size() && agent < 0; ++i)
                 if (sim.agents()[i].uid == th.id) agent = static_cast<int>(i);
             const citysim::CitySim::CrossingAhead x =
-                agent >= 0 ? sim.crossingAhead(sim.agents()[static_cast<std::size_t>(agent)]) : citysim::CitySim::CrossingAhead();
-            std::printf("    [river]   in its way: thing %u at %.1f %.1f (%.1f m from its front, crosswalk %d; hold why %d; crossing "
-                        "ahead governed %d found %d crosswalk %u to hold %.2f; resident %d): %s\n",
+                agent >= 0 ? sim.nextCrossing(sim.agents()[static_cast<std::size_t>(agent)]) : citysim::CitySim::CrossingAhead();
+            std::printf("    [river]   in its way: thing %u at %.1f %.1f (%.1f m from its front, crosswalk %d; hold why %d; next "
+                        "crossing found %d crosswalk %u to hold %.2f; resident %d): %s\n",
                         th.id, th.at.x, th.at.y, (th.at - front).length(),
                         th.crosswalk == engine::kNoIndex ? -1 : static_cast<int>(th.crosswalk),
-                        agent >= 0 ? sim.holdWhyOf(agent) : -1, x.governed ? 1 : 0, x.found ? 1 : 0, x.crosswalk, x.toHold,
+                        agent >= 0 ? sim.holdWhyOf(agent) : -1, x.found ? 1 : 0, x.crosswalk, x.toHold,
                         agent >= 0 && agent < b.residentCount() ? 1 : 0,
                         agent >= 0 ? sim.describeAgent(agent).substr(260, 300).c_str() : "(not a walker of the sim)");
         }

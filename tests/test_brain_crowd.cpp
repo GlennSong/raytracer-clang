@@ -160,7 +160,7 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 if (off > farthestFromKerb) {
                     farthestFromKerb = off;
                     farthestFromKerbWho = static_cast<int>(&a - sim.agents().data());
-                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+                    const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
                     char line[200];
                     std::snprintf(line, sizeof line, "minute %d: hold why %d, crosswalk %d, to hold %.2f m, to far %.2f m", minute,
                                   sim.holdWhyOf(farthestFromKerbWho), a.crosswalkAt, x.toHold, x.toFar);
@@ -260,7 +260,7 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 static_cast<unsigned long long>(kerbWaitSamples), farthestFromKerb, farthestFromKerbWho);
     if (farthestFromKerb > kAtTheKerbEnd && farthestFromKerbWho >= 0) {
         const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(farthestFromKerbWho)];
-        const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+        const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
         std::printf("    [crowd]   then: %s\n", farthestFromKerbWhy.c_str());
         std::printf("    [crowd]   it: %s | crossing ahead: found %d crosswalk %u from end %d, to hold %.2f, to far %.2f; at %d on %d; hold why %d\n",
                     sim.describeAgent(farthestFromKerbWho).substr(0, 200).c_str(), x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold,
@@ -303,24 +303,31 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // -> 426, hash 0xf0003605a4cb6ba2 -> 0xb67879f5b6ec7210; rings still 0. Walkers waiting away from a kerb end 75.45%
     // -> 62.68% (still failing, above). Not pinned, looked at: the longest stand 341 s (car 123) -> 563 s (car 159,
     // junction 93, from minute 15).
+    // AND AGAIN at the switch to the one router (#306 piece 6 W3, ADR-0480): people walk the road model's walks by
+    // findWalkRoute, from and to their places' frontage, and wait at a crosswalk's kerb end where their route crosses, so
+    // every walker's day and every driver's stops for them moved. The most on the road 88 at minute 11 -> 80 at minute
+    // 10, busy minutes 12 -> 8, trips 233 -> 263, parked 179 -> 217, walks blocked 1 -> 0, arrivals 426 -> 455, hash
+    // 0xb67879f5b6ec7210 -> 0xcb6bf4524e6ee584; rings, no plan, another place, errors, refused still 0. Walkers waiting
+    // away from a kerb end 62.68% -> 4.38%, so the under-5% check above passes for the first time. Not pinned, looked
+    // at: the longest stand 563 s -> 166 s (car 169).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 229u);
         CHECK(withCar == 246);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 88);
-        CHECK(mostOnRoadAt == 11);
-        CHECK(busyMinutes == 12);
-        CHECK(b.counts().tripsBegun == 233u);
-        CHECK(b.counts().parkedReports == 179u);
-        CHECK(b.counts().walksBlocked == 1u);
+        CHECK(mostOnRoad == 80);
+        CHECK(mostOnRoadAt == 10);
+        CHECK(busyMinutes == 8);
+        CHECK(b.counts().tripsBegun == 263u);
+        CHECK(b.counts().parkedReports == 217u);
+        CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 426u);
+        CHECK(b.machine()->counts().arrivals == 455u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xb67879f5b6ec7210ull);
+        CHECK(hash == 0xcb6bf4524e6ee584ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full
@@ -372,15 +379,14 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 if (sim.agents()[i].uid == t->id) {
                     const citysim::Agent& a = sim.agents()[i];
                     std::printf("    [crowd]   agent %zu: %s\n", i, sim.describeAgent(static_cast<int>(i)).c_str());
-                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
-                    std::printf("    [crowd]   its crossing ahead: governed %d found %d crosswalk %u from end %d, to hold %.2f m, to far %.2f m; "
-                                "hold why %d\n", x.governed ? 1 : 0, x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold, x.toFar,
+                    const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
+                    std::printf("    [crowd]   its next crossing: found %d crosswalk %u from end %d, to hold %.2f m, to far %.2f m; "
+                                "hold why %d\n", x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold, x.toFar,
                                 sim.holdWhyOf(static_cast<int>(i)));
-                    for (std::size_t k = 0; k < a.route.links.size(); ++k) {
-                        const engine::NavLink& L = sim.graph()->links[static_cast<std::size_t>(a.route.links[k])];
-                        std::printf("    [crowd]     leg %zu: link %d, street %d, junction %d, %.1f m, from node %d (junction %d) to %d "
-                                    "(junction %d)\n", k, a.route.links[k], L.street, L.junction, L.length, L.from,
-                                    sim.graph()->junctionOf(L.from), L.to, sim.graph()->junctionOf(L.to));
+                    for (std::size_t k = 0; k < a.route.steps.size(); ++k) {
+                        const engine::roads::WalkStep& s = a.route.steps[k];
+                        std::printf("    [crowd]     step %zu: walk %u (%s), %.1f to %.1f m%s\n", k, s.walk.index,
+                                    sim.roads()->walkKind(s.walk).c_str(), s.from, s.to, s.forward ? "" : ", walked back");
                     }
                 }
         }

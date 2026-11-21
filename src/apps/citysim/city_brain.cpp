@@ -635,6 +635,10 @@ struct CityBrain::Impl::LabWalk : brain::WalkSkill {
         p.way = way;
         p.target = target;
         p.steps.clear();
+        // (each end joins the walks from its point: where the person stands, and the place's stand, itself put on its
+        // sidewalk from the marker's stated frontage, sidewalkBeside. Joined from the marker's frontage instead (W3, tried
+        // and measured), a walk could end on the far kerb or past where its sidewalk stops, and the last steps, walked
+        // straight, crossed the carriageway: the near crowd's cars hit walkers 27 times, against 1.)
         if (engine::atOrBefore((target - a.pos).length(), kBoardReach, engine::kSamePoint)) {
             p.walk = WalkPhase::Straight;   // a few steps: off the pavements and straight, as the trip lab's
         } else if (im.sim.sendAgentTo(p.agent, target)) {
@@ -669,10 +673,9 @@ void CityBrain::Impl::haltWalker(AgentId who) {
     a.directedRide = Ride::None;
     a.moving = false;
     a.speed = 0;
-    a.route = engine::Route{};
+    a.route = engine::roads::WalkRoute{};
     a.leg = 0;
     a.distOnLeg = 0;
-    a.stopAtDist = -1;
     a.state = Agent::State::Resting;
 }
 
@@ -832,7 +835,7 @@ void CityBrain::Impl::seat(int agent, Car c) {
     a.indoors = false;
     a.moving = false;
     a.speed = 0;
-    a.route = engine::Route{};
+    a.route = engine::roads::WalkRoute{};
     a.leg = 0;
     a.distOnLeg = 0;
     a.directedPace = 0;
@@ -851,7 +854,7 @@ void CityBrain::Impl::unseat(int agent, Car c, Vec2 out) {
     a.tickFromHeading = a.heading;
     a.moving = false;
     a.speed = 0;
-    a.route = engine::Route{};
+    a.route = engine::roads::WalkRoute{};
     a.leg = 0;
     a.distOnLeg = 0;
     a.state = Agent::State::Resting;
@@ -1355,7 +1358,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             a.indoors = false;
             a.moving = false;
             a.speed = 0;
-            a.route = engine::Route{};
+            a.route = engine::roads::WalkRoute{};
             a.wakeAt = -1;
             a.state = Agent::State::Resting;
             sim.grid_.place(person.agent, a.pos);

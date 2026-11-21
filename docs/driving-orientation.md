@@ -138,7 +138,7 @@ wishes with.
 | `citysim/city_near.h/.cpp` | The near tier (ADR-0447..0450): the cars nearest the player as Jolt cars carrying out their drivers' intent, switched on one entity; physics sweeps answer "what is in my way" for them (ADR-0451). |
 | `citysim/city_crowd.h/.cpp` | A crowd of residents made from the road model and `crowd.lua` (ADR-0446): places beside streets, households, cars, days. |
 | `citysim/city_brain.h/.cpp` | The residents with the agent brain: what they want, their trips, carried out with the sim's walking and the new driving. |
-| `citysim/city_sim.h/.cpp` (parts) | The old sim, which still walks every person on foot on the street map: `thingsForDriving` writes them into the driving's things each tick; `crossingAhead`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
+| `citysim/city_sim.h/.cpp` (parts) | The sim, which walks every person on foot over the road model's walks by the one router (`findWalkRoute`; ADR-0480 W3): `thingsForDriving` writes them into the driving's things each tick; `nextCrossing` (the crossings their routes hold), `crossingGate`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
 | `citysim/city_render.h/.cpp` (parts) | The signal heads (ADR-0456): one `SignalHead` per post the loader placed (`StreetFurniture::Signal`, which carries the model arm the head is attached to), tied to the new driving's lane junction there (`tieSignalHeads`, by `RoadModel::laneJunctionOf`), lit each bake from `headAt` (the face as the post instance's number, `headFaceNumber`; the arrow as a lens beside it). |
 
 ## 4. Who reads what

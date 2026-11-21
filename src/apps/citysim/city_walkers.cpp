@@ -808,7 +808,6 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
         const CitySim& sm = city_.sim();
         const std::size_t n = sm.agents().size();
         const ActivityCatalog& cat = sm.activityCatalog();
-        const engine::NavGraph& ng = sm.nav();
         PopScan& S = scan_;
         if (S.at.size() != cat.defs.size()) {
             S.at.assign(cat.defs.size(), 0); S.going.assign(cat.defs.size(), 0);
@@ -835,28 +834,14 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 const Real dd = (a.pos - sm.tierCenter()).lengthSquared();
                 if (dd < S.nearD[d]) { S.nearD[d] = dd; S.nearAt[d] = a.pos; }
             }
-            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
-            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
+            // ON A WALKWAY (a park's, the quad's, a paseo's: a walk of the road model's walkways, ADR-0475)
+            if (!CitySim::onRoute(a) || !sm.roads()) continue;
+            const engine::WalkId w = a.route.steps[static_cast<std::size_t>(a.leg)].walk;
+            if (w.index >= sm.roads()->laneLevel.walks.size() ||
+                sm.roads()->laneLevel.walks[w.index].modelWalkway == engine::kNoIndex)
+                continue;
             ++S.onWalks;
             S.studentsOnWalks += sm.isStudent(a) ? 1 : 0;
-            if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
-                const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
-                const int ai = static_cast<int>(i);
-                std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
-                             ai, a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
-                             L0.length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
-                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.tethered ? 1 : 0);
-                std::fprintf(stderr, "[walk debug]   state %d on a train journey %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
-                             static_cast<int>(a.state),
-                             sm.onTrainJourney(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
-                             li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
-                for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
-                    const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
-                    std::fprintf(stderr, " [%s %.1f %.1f]", Lq.footpath ? "walk" : "street", Lq.footB.x, Lq.footB.y);
-                }
-                std::fprintf(stderr, "\n");
-            }
         }
         S.next = end;
         if (S.next >= n) {   // the pass is done: it becomes what the telemetry reads, and the next one starts

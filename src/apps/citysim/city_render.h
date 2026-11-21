@@ -537,13 +537,15 @@ private:
     bool crowdInit_ = false, gpuCrowd_ = false;
     std::vector<engine::Renderer::CrowdAgent> crowdRec_;
     std::vector<int> crowdSlot_, crowdOwner_, crowdFree_, crowdChanges_;
-    // per slot: the route its arena span was laid for (size, first and last link) and the leg the span starts at --
-    // the same route next tick reuses the span (only its distance and clock change)
-    struct CrowdSpan { uint32_t size = 0; int first = -1, last = -1, baseLeg = 0; };
-    std::vector<CrowdSpan> crowdSpan_;
     std::vector<uint32_t> crowdArena_, crowdDirtySlots_;
     std::size_t crowdGarbage_ = 0;
-    std::vector<float> crowdLinkLen_;   // per link: its length as the shader measures it (xz, end to end)
+    // THE SEGMENTS THE GPU CROWD WALKS (#306 piece 6 W3): every walk of the road model's lane level, point to point, each
+    // way -- a walk's first forward segment is crowdWalkSeg_[walk], its reverse crowdRevBase_ on from it -- and each
+    // one's length as the shader measures it (xz, end to end). A traveller's span is laid from where it is, at each
+    // refresh, over the segments of the steps it has left.
+    std::vector<uint32_t> crowdWalkSeg_;
+    uint32_t crowdRevBase_ = 0;
+    std::vector<float> crowdLinkLen_;
     Real farPedDistance = 1500.0;
     int crowdLive_ = 0, crowdDrawnSeen_ = 0;
     long lastDormantEvents_ = 0;      // the stats line's sleepers' events since the last line
