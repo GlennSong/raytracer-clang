@@ -23675,3 +23675,84 @@ Words:
 **For players:** nothing changes on any level.
 
 **Revisit when** W2 and W3 land (this ADR's plan); when the 8 levels' road files state their lane facts (then the level test's list shrinks); or when a level has several lane-built cities whose people walk in a city other than the first.
+
+### W1b — island_8_nature's road file was given its lane facts once; its lane level builds but fails its own check at j396, so it is never saved and the bake runs out of memory. PARKED: the road file is back as it was
+
+**Parked** (the coordinator, 2026-11-20): Glenn's island must keep loading from its existing bundle, so the road file was put back (`git checkout` of that one file). The filled-in file is kept at `out/w1b_island/island_8_nature_lanelab.filled.json` until Glenn decides on j396. island_8_nature is back on the level test's list of levels with no walks (8). The findings below stand.
+
+**Glenn's decision** (2026-11-20): of the 8 levels with no walks, only island_8_nature's road file is given the missing facts now. The other 7 stay without walks, pinned by name; metro_planned is his work in progress and is not touched.
+
+**What was written** (`assets/lanelab/planned/island_8_nature_lanelab.json`, by the tool, two runs: `lanes_tool layout <file> --arm-order --write`, then `--lane-rules 20 --write`; one flag a run, since `--arm-order` returns before `--lane-rules` is read):
+- Added: `"arms_in_ring": true` and `"lane_rules": {"solid_before_stop_line": 20.0}`.
+- Four junctions' arms put in ring order: j371, j372, j588 and j668. Each holds the same arms, only in another order, and its `through` pairs were renumbered to name the same arms (checked arm by arm). Their `control` is a word ("signal", "unmarked") and names no arm, and the level's signs file places by position, so nothing else refers to an arm by its number.
+- Unchanged: every junction, street and edge id and their order, every name, every point and profile (1373 junctions, 2555 streets, 2519 edges, compared field by field on a copy first). The same bytes on a second copy (deterministic).
+- `lanes_tool layout <file> --write` on a copy prints "the file is CHANGED", but the file it writes holds the same JSON, field for field: only the spacing differs. The file at HEAD does the same. So the stated facts are stable; the tool's "changed" is about formatting.
+
+**The lane level** (`lanes_tool lanegraph`, the tool's two test vehicles; 13 min, 4.6 GB):
+- 16,327 lanes and 16,869 connectors, of 17,023 stated turns: 149 fit no vehicle (corner faults), 5 have no lane path; 1,373 junctions, 88 with only some of their turns built; 4,878 crosswalks.
+- **The largest part a car can get round: 50.2% of the lane paths.** 7,665 lanes cannot get back because they lead into a junction whose turns fit no vehicle; 247 into a road that just ends; 119 round a loop with no way out. A car gets round 33.8% with lane changes, 24.6% without.
+- Problems: 5,761 in all. Kinks in lanes 5,309; lane folds tidied 98; fits no vehicle 149; carry-ons joined across a gap 49, into another slot 17, with no way on 3; street ends with nothing stated 11; lane stretches with no lane path 8; leave/merge across a gap 7; no room between stop lines 2; turns with no lane path 5; paths meeting outside a junction 24; **lane table check 6**. The road model's own: 233 (164 turns taken as far turns; 29 crosswalk kerb ends in another road's carriageway; 24 junctions too close for the angle their roads meet at, ADR-0471's planning fault; 16 ramp lanes with no turn).
+- **The 6 failed checks are all at j396**, a five-arm signalled junction at (4827.9, -289.2) whose arms reach 37 m out: arriving lanes 4423, 4424, 4431 end 1.86-2.27 m from its outline and leaving lanes 4414, 4434 begin 1.61-3.18 m from it (the check allows 1.50 m). j396 is also one of ADR-0471's "too close" junctions (arms 0 and 1 stop 21.0 m and 27.1 m short of where their kerbs clear the crossing road), and two of its crosswalks have their kerb ends in another road's carriageway. A planning fault in the road file; not fixed here.
+
+**The walks** (`level_every_lanes_level_...`, the level's own fleet): 14,563 walks: 4,918 sidewalks, 4,771 corners, 4,817 crossings, 36 turn-rounds, 21 footways. **51 parts on foot; the largest holds 972 of the 4,918 sidewalks (19.8%).** Not traced. A likely cause, not checked: the island's towns are joined by roads with no sidewalk (freeway, rural roads), so each town is a part of its own. If so, it is what the road file says, and whether people walk between towns is a question for W3/W4.
+
+**Stopped: the bake fails, and so would every load's road model cache.**
+- The road model cache refuses to save a lane level that fails its own check (`obtainLevelRoadModel`: "the lane graph built fails its check ... it is not saved"). Because of j396, island_8_nature's built model is never saved, and every reader builds it again: 13-15 min and 4.6 GB each time (the loader, the bake's lots producer, the level test).
+- `rt_bake assets/levels/island_8_nature.json` under `ulimit -v 30000000`: **failed after 38 min, "rt_bake: lots: std::bad_alloc"** (22.8 GB resident at the peak). The lots producer grows every lot first, then asks `obtainLevelRoadModel` for the built model to state the lots' walkways on (ADR-0476). With no saved model it builds the whole lane level again, on top of the grown lots. Before W1b the island had no lane level, so that call returned the planned layer at once. **No bundle was written**; the island's last good bundle stays, but its key no longer matches the road file, so a load in this work tree grows the city again.
+- **Two engine weaknesses this showed** (the coordinator files them as one issue; not fixed here): (i) a lane level that fails its own check stops the built model being cached, so every reader builds it again; (ii) a cold bake's lots producer builds the lane level on top of the grown lots and runs out of memory.
+- Ways on: (a) fix j396 in the road file (the planner's), so the lane level passes its check and is cached once; (b) the issue above; (c), taken: the road file put back until (a) is decided.
+
+**The level test** (`level_every_lanes_level_hands_the_sim_its_road_model`): while the filled-in file was in place, 6 levels handed over a model and island_8_nature had 14,563 walks. Parked, it is back to 5 handed and 8 named with no lane level (island_8_nature's comment says it is blocked by the j396 fault). It now also prints each level's walks by kind, its parts on foot and the model's notes.
+
+**Suites, all with RT_TEST_FILTER:** lanes_tests 156/156, driving_tests 200/200, brain_tests 23/23, run_tests 1514/1514 (none reads island_8_nature). The island's in-suite level tests were not run (they would build the island's city).
+
+### W2, first half — the sim's tests run on road-model scenes, not hand-made street maps
+
+What it does: the city sim's unit tests used to build their towns as hand-made street maps (`buildNavGraph` over a few nodes and edges). Now nine of the test files build each town as a level builds its roads: a small road file, built by the one road builder into a road model with its lane level and walks, and the street map made from that model by the loader's own function. The old walking step still runs (W3 replaces it), but it now runs on a street map that came from a road model, and the sim holds that model, so W3 can switch the walking without changing the scenes again.
+
+Words:
+- **Scene:** one test town. **Road file:** the roads stated as data (each road a line with its class), the form a level's roads take.
+- **Hand-made street map:** a `NavGraph` built straight from nodes and edges (`buildNavGraph`), with no road model behind it.
+
+**The helper** (`tests/model_scene.h`, new): `ModelScene` holds the built model and the street map made from it (`appendStreetMap`, ADR-0425); `build(sim, walkers, seed)` builds a sim on the map and hands it the model (`CitySim::setRoads`); `sidewalkBeside(p)` asks the model for the sidewalk point beside a place (`frontageAt`, `sidewalkBeside`). A drawing becomes a road file by `roadFileOf` (each edge one straight road of its class) and the layout, controls and lane rules the tools would write (`withLaneLevelFacts`). Each scene is built once a run and kept by name (`sceneNamed`). The shapes the tests used are there as road files: `crossScene`, `teeScene`, `straightScene`, `gridScene` (city_test_util.h's grid town, draw for draw), and `graphScene` for a test's own drawing.
+- `straightScene` has a T at its far end: the hand-made map was one road with no junction, and a road file with no junction gets no lane level.
+- Every junction is stated `unmarked` (no lights), as `withLaneLevelFacts` states a scene's junctions.
+- Building a scene takes a moment (the 360 m grid town 2.8 s); the 1.2 km and 3.2 km towns more. Each is built once a run.
+
+**Ported** (the behaviour each test checks kept, the scene a road file): test_city_perception (2), test_city_parking (the trip-lab walker; 1 of 2, the other draws no map), test_city_drive (5 of 6; `approach_stop` draws no map), test_city_flow (4), test_relationships (5 of 8 that build a sim), test_places (5 that read a map), test_rail_riders (2 that build a map), test_sim_scale (3), test_tier_v (10).
+- `agents_never_teleport_even_with_unroutable_pairs`: its two components were two 40 m squares, whose bends make no junction; now two crosses of 40 m arms, 400 m apart.
+- `trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way`: was a cross whose streets stated a parking band, the places written at x = 9; now the cross scene, the places asked of the model (`sidewalkBeside`).
+- `walkers_keep_files_across_a_wide_pavement`: still measures a walker's file against the street map's link the old step walks; W3 measures it against the walk's own line.
+- `place_entrance_lands_on_sidewalk`, `place_entrance_hint_wins_over_the_site_snap`: test `PlaceMap::add`'s snap to the street map, which W3 replaces with `walkJoinOn`; kept until then, on the model-made map.
+- tier_v's `agentMismatches` compares the old step's route fields (links, leg, distance on leg) for its determinism checks; W3 compares the walk route's instead.
+
+**Deleted:** one check, no test: `trip_plan_walker_...`'s `a.route.links.size() == 1` (the old step's route was one street-map link; an internal of the step, not what the walker does).
+
+**Numbers:** no pinned value moved; every ported test passed on its first run on the new scenes. What they print (none pinned): walkers' nearest to a pole 0.700 m (the clearance); nearest to the player 1.362 m; files 110 / 89 / 101 of 300, 226 of 226 on their file; travel truth K 138.6 s, V 139.0 s; promotion flips 17, none far or off the lane; dormancy 259 of 300 asleep, 23 wakes after crossing; by train 24 sent, 24 arrived.
+
+### W2, second half — the rest of the sim's tests, the test worlds, and the hand-made maps deleted
+
+What it does: the last city-sim tests on hand-made street maps move onto road-model scenes, and so do the test worlds the city host is built on. After it, no test builds a street map by hand for the sim: the hand-made map makers are deleted.
+
+**Every scene is checked to have built cleanly, wherever it is asked for** (`model_scene.h sceneNamed`): no error from the lane level, no fault from its own check (`validate`), no street-map error, a street map with links and a lane level with walks. A scene that fails says so in the asking test, with its name and what was found. So every ported test, the first half's too, checks its scene.
+
+**The test worlds** (`tests/street_map_test_util.h`, `testmap::addRoads` / `publishStreetMap`): a world drawn as `RoadEntity` components is turned into one road file (each drawn edge one road), built into a road model, and published as a level publishes its roads: `LevelRoadModel::cities` holds the built model and `streetMap` the street map made from it. The city host then hands the sim the model, as on a level (ADR-0480). Was: a hand-made street map (`buildNavGraph` over the entities' graphs), no model. Its unused `ground` argument went with it (no caller passed one). Users: test_city_render, test_sim_rate_ab, test_fleet_springs, test_city_map (physics_tests).
+
+**Ported:** test_city_sim (16), test_city_goals (every test that builds a sim or a map; one deleted, one rewritten, below), test_city_render (every world-building test, through `addRoads`), test_sim_rate_ab (1), test_fleet_springs (1), test_city_map (1).
+- **Drawings with no junction** were given the least junction that gives a lane level (a road file with none gets none): test_city_render's `squareLoop` (a T at its east side's middle, a 40 m stub east) and its 1.6 km square (a T and a 100 m stub).
+- **test_sim_rate_ab's town:** was the planner's default 3 km city copied as local roads, one plan segment each. As a road file that is thousands of 15-20 m roads, the freeway's and expressways' carriageways among them side by side as locals, and the road builder refuses it ("partner chain too deep"). Now the grid town (gridCity, 1.5 km half-size, 120 m blocks, seed 7, every road local, as before). Its numbers: 71 active, 1729 far, 32 moving at all three rates; the split drifts +0% at half rate.
+- **`a_crowd_walks_a_footpath_to_work`:** the walk is now a walkway of the road model (ADR-0475, ADR-0476): stated on a copy of the town's model, its ends on the two streets either side of the block at the station and kerb the model answers there, put on the street map by `appendWalkways` as the loader does. It was a diagonal the test joined to the hand-made map's links itself (`NavGraph::appendFootpaths`); its ends 8 m from the corners lie past where the sidewalks start, so the walk now runs across the block between the two streets' middles.
+- **`city_places_carry_where_their_doors_front`** (W1): its last check was that a hand-made test world gives the sim no model; the world now gives it one, and the check is that the sim holds it with walks.
+
+**Moved, with why:**
+- `schedule_snapshot_agrees_with_a_stepped_day`: its rate 0.05 -> 0.02 h/s. At 0.05 a walk of minutes is most of a day in-world. The hand-made town's median commute was 171.5 s (8.6 in-world hours); the same town from its road file draws other home and work nodes (82 nodes, not 81) and a median of 219.6 s (11 hours), so at 14:00 the snapshot had nobody at work. The same pairs route the same metres on both maps (95 pairs measured: 295.5 m mean each), so the town is the same; the draw is not. At 0.02 h/s: commute 4.4 hours; stepped 194 at work / 51 home / 155 moving, snapshot 266 / 51 / 83; passes.
+
+**Deleted, with why:**
+- `footpaths_are_walked_across_a_block_and_never_driven` (test_city_goals): joined a diagonal to the hand-made street map with `NavGraph::appendFootpaths` and routed it with the street map's `findRoute`: the street map's own footpath links, which piece 10 deletes. What it showed is shown on the one model: a walkway is walked and never driven, joined where its ends are stated (road_model_43, road_model_45), and a crowd walks one to work in the sim (above).
+- `metro_v2_density_target_prints` (test_sim_scale, RT_SIM_SCALE only): priced metro_v2_test's density on a hand-made map of the planner's streets. As a road file those streets do not build (the same "partner chain too deep"), and metro_v2_test's own road file states no lane level (one of the 8 lanes levels with no walks). To be taken again from that level's built model once its road file states its lane facts.
+
+**The hand-made map makers deleted** (de-duplication): `citytest::cross4`, `tee`, `straightRoad` and `cityNav` (city_test_util.h; `gridCity`, a road drawing, stays: the scenes are drawn from it), and street_map_test_util.h's `buildNavGraph` of the drawn entities. No test uses them. (test_street_furniture.cpp and test_nav_graph.cpp keep small hand-made maps of their own: they test the furniture planner and the street map itself, not the sim, and go with the street map in piece 10.)
+
+**Left:** test_trip_plan's hand-made maps price trips, which is piece 6c's. `sim_scale_100k_island_prints` (RT_SIM_SCALE only) now builds an 8 km grid town through the road builder; not run here.
+
+**Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (1514 less the two deleted), 1601 s and 3.8 GB at its peak (1141 s after the first half: each scene is built once a run, the 800 m towns of test_city_goals for several seeds among them); driving_tests 200/200; brain_tests 23/23; lanes_tests 156/156; physics_tests `city_map_tool_draws_you_facing_the_way_you_look` 1/1 and `every_fleet_car_is_put_down_on_its_own_springs` 1/1. No pinned value moved; one test condition did (the snapshot test's rate, above).

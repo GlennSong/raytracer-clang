@@ -8,7 +8,7 @@
 // they travel with the run.
 #include "test_framework.h"
 
-#include "city_test_util.h"
+#include "model_scene.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/plan/city_plan.h"
 #include <fstream>
@@ -29,9 +29,9 @@ struct Row {
     int k = 0, v = 0, d = 0, sleeping = 0;
 };
 
-Row run(const NavGraph& nav, int agents, bool tiered, int ticks) {
+Row run(const citytest::ModelScene& s, int agents, bool tiered, int ticks) {
     CitySim sim;
-    sim.build(nav, agents, 7);
+    s.build(sim, agents, 7);
     if (tiered) {
         sim.tieringEnabled = true;
         sim.dormancyEnabled = true;
@@ -79,8 +79,10 @@ Row run(const NavGraph& nav, int agents, bool tiered, int ticks) {
 }  // namespace
 
 TEST_CASE(sim_scale_census_prints) {
-    // A 1.2 km grid on 120 m blocks: a small city, not a test stub.
-    const NavGraph nav = citytest::cityNav(1200, 120, 11);
+    // A 1.2 km grid on 120 m blocks: a small city, not a test stub. (A road file built as a level's roads are, its street
+    // map made from the model: model_scene.h, #306 piece 6 W2.)
+    const citytest::ModelScene& s = citytest::gridScene(1200, 120, 11);
+    const NavGraph& nav = s.nav;
     std::printf("    [scale] nav: %zu nodes, %zu links\n", nav.nodes.size(), nav.links.size());
     std::printf("    [scale] %-7s %-7s %9s %7s %7s %7s %9s\n",
                 "agents", "mode", "ms/tick", "K", "V", "D", "sleeping");
@@ -91,7 +93,7 @@ TEST_CASE(sim_scale_census_prints) {
     for (int n : {500, 1000, 2000, 4000, 10000, 25000, 50000}) {
         for (int tiered = 0; tiered < 2; ++tiered) {
             if (n > 4000 && tiered == 0) continue;
-            const Row r = run(nav, n, tiered == 1, 120);
+            const Row r = run(s, n, tiered == 1, 120);
             std::printf("    [scale] %-7d %-7s %9.3f %7d %7d %7d %9d\n",
                         r.agents, tiered ? "tiered" : "flat", r.msPerTick, r.k, r.v, r.d, r.sleeping);
             CHECK(r.agents > 0);
@@ -100,72 +102,11 @@ TEST_CASE(sim_scale_census_prints) {
 }
 
 
-// METRO V2'S OWN NETWORK (Glenn, 2026-09-16: "enough to make metro v2 feel
-// like a bustling urban environment"). The synthetic grid above answers how
-// the sim scales; this answers what THIS city asks for: metro_v2_test's own
-// plan (assets/city_plans/metro_v2_test.json, ADR-0266), and the density rule
-// is city_render.cpp's: lane-km x carsPerLaneKm and sidewalk-km x pedsPerKm,
-// each currently clamped to 400.
-//
-// Heavy (it plans a 2 km city on its terrain), so it runs only under RT_SIM_SCALE=1.
-TEST_CASE(metro_v2_density_target_prints) {
-    if (!std::getenv("RT_SIM_SCALE")) return;
-    std::ifstream in("assets/city_plans/metro_v2_test.json");
-    const plan::Brief brief = plan::briefFromJson(nlohmann::json::parse(in));
-
-    const auto tb = std::chrono::steady_clock::now();
-    const RoadGraph g = plan::generatePlan(brief).streets;   // its freeway is the lanes builder's, not built headlessly
-    const NavGraph nav = buildNavGraph(g);
-    const double buildMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count();
-
-    // city_render.cpp's own formula, including the halving for directed links.
-    Real laneKm = 0, walkKm = 0;
-    for (std::size_t li = 0; li < nav.links.size(); ++li) {
-        const NavLink& L = nav.links[li];
-        laneKm += L.length * std::max(1, L.lanes) * 1e-3;
-        if (L.klass != RoadClass::Freeway && L.klass != RoadClass::Ramp)
-            walkKm += L.length * 2.0 * 1e-3;
-    }
-    laneKm *= 0.5;
-    walkKm *= 0.5;
-    const int wantCars = static_cast<int>(laneKm * 10.0);   // carsPerLaneKm
-    const int wantPeds = static_cast<int>(walkKm * 6.0);    // pedsPerKm
-
-    std::printf("    [metro] built in %.0f ms: %zu nodes, %zu links\n", buildMs,
-                nav.nodes.size(), nav.links.size());
-    std::printf("    [metro] %.1f lane-km, %.1f sidewalk-km\n", laneKm, walkKm);
-    std::printf("    [metro] density asks for %d cars + %d walkers = %d agents\n",
-                wantCars, wantPeds, wantCars + wantPeds);
-    std::printf("    [metro] today's clamp gives %d + %d = %d agents\n",
-                std::min(wantCars, 400), std::min(wantPeds, 400),
-                std::min(wantCars, 400) + std::min(wantPeds, 400));
-
-    // What that population costs on this network, flat and tiered.
-    for (int tiered = 0; tiered < 2; ++tiered) {
-        CitySim sim;
-        sim.build(nav, wantPeds, 9);   // (the cars are the driving's car entities, not the sim's: ADR-0461)
-        if (tiered) {
-            sim.tieringEnabled = true;
-            sim.dormancyEnabled = true;
-            sim.setTierCenter(Vec2(0, 0));
-        }
-        for (int i = 0; i < 30; ++i) sim.step(1.0 / 60.0, 0.05);
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < 60; ++i) sim.step(1.0 / 60.0, 0.05);
-        const double ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 60.0;
-        int k = 0, v = 0, d = 0;
-        for (const auto& a : sim.agents()) {
-            if (a.tier == citysim::Agent::Tier::K) ++k;
-            else if (a.tier == citysim::Agent::Tier::V) ++v;
-            else ++d;
-        }
-        std::printf("    [metro] %-6s %d agents: %.3f ms/tick  K %d  V %d  D %d\n",
-                    tiered ? "tiered" : "flat", static_cast<int>(sim.agents().size()), ms, k, v, d);
-        CHECK(sim.agents().size() > 0);
-    }
-}
+// (DELETED in #306 piece 6 W2: `metro_v2_density_target_prints`, RT_SIM_SCALE only. It priced metro_v2_test's density
+// on a hand-made street map of the planner's streets. As a road file those streets do not build (the road builder
+// refuses them: "partner chain too deep"), and metro_v2_test's own road file states no lane level (ADR-0480: one of the
+// eight lanes levels with no walks; ADR-0478: its spread junctions state no points). Take it again from that level's
+// built road model once its road file states its lane facts.)
 
 // 100,000 ON AN ISLAND-SIZED CITY (the 100k plan's stage 0, rewritten 2026-10-05; Glenn: "rewrite the plan and
 // start measuring"). An 8 km grid -- the island's scale, not the 2.4 km bench above, where 100k would be denser
@@ -175,14 +116,15 @@ TEST_CASE(metro_v2_density_target_prints) {
 // Heavy: only under RT_SIM_SCALE=1.
 TEST_CASE(sim_scale_100k_island_prints) {
     if (!std::getenv("RT_SIM_SCALE")) return;
-    const NavGraph nav = citytest::cityNav(4000, 120, 11);
+    const citytest::ModelScene& s = citytest::gridScene(4000, 120, 11);   // (model_scene.h, W2)
+    const NavGraph& nav = s.nav;
     std::printf("    [100k] nav: %zu nodes, %zu links (8 km grid); sizeof(Agent) %zu bytes\n", nav.nodes.size(),
                 nav.links.size(), sizeof(citysim::Agent));
     for (int n : {25000, 50000, 100000}) {
         for (int moving = 0; moving < 2; ++moving) {
             const auto b0 = std::chrono::steady_clock::now();
             CitySim sim;
-            sim.build(nav, n, 7);
+            s.build(sim, n, 7);
             sim.tieringEnabled = true;
             sim.dormancyEnabled = true;
             Vec2 player(0, 0);

@@ -26,17 +26,22 @@ using namespace citysim;
 namespace {
 
 // A square loop of road: every node routes to every other (degree-2 corners, so
-// no junction signals — good for the plain car/ped bake tests).
+// no junction signals — good for the plain car/ped bake tests). (#306 piece 6 W2: the world's roads are built into a
+// road model as a level's are, and a road file with no junction gets no lane level, so the loop's east side has a T at
+// its middle with a 40 m stub east; it was the bare loop.)
 RoadEntity squareLoop() {
     RoadEntity net;
     net.look.defaultWidth = 10.0;
     net.look.sidewalk = 2.5;
     net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(40, 0)},
-                        RoadNode{Vec2(40, 40)}, RoadNode{Vec2(0, 40)} };
+                        RoadNode{Vec2(40, 40)}, RoadNode{Vec2(0, 40)},
+                        RoadNode{Vec2(40, 20)}, RoadNode{Vec2(80, 20)} };
     net.graph.addEdge(0, 1, net.look.defaultWidth);
-    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    net.graph.addEdge(1, 4, net.look.defaultWidth);
+    net.graph.addEdge(4, 2, net.look.defaultWidth);
     net.graph.addEdge(2, 3, net.look.defaultWidth);
     net.graph.addEdge(3, 0, net.look.defaultWidth);
+    net.graph.addEdge(4, 5, net.look.defaultWidth);
     return net;
 }
 
@@ -312,8 +317,8 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
 TEST_CASE(city_places_carry_where_their_doors_front) {
     // ADR-0480: the street, station and kerb (or the walkway and metres along it) the lot pass recorded for a place's
     // door (AuthoredPlace::frontage, ADR-0474) reach the sim's place unchanged, so a walk can start and end where the door
-    // states. A place that states nothing says nothing. (This hand world has no lane-built city: the sim holds no road
-    // model.)
+    // states. A place that states nothing says nothing. (W2: the test world's roads are built into a road model as a
+    // level's are, and the sim holds it; this checked it held none while test worlds were hand-made street maps.)
     World world;
     testmap::addRoads(world, crossRoads());
     CitySimConfig cfg;
@@ -349,7 +354,7 @@ TEST_CASE(city_places_carry_where_their_doors_front) {
     CHECK(!places[0].frontage.onWalkway());
     CHECK(places[1].frontage.walkway == "lot4.p2" && places[1].frontage.along == 7.5 && !places[1].frontage.onStreet());
     CHECK(!places[2].frontage.onStreet() && !places[2].frontage.onWalkway());
-    CHECK(city.sim().roads() == nullptr);
+    CHECK(city.sim().roads() != nullptr && !city.sim().roads()->laneLevel.walks.empty());
 }
 
 TEST_CASE(agent_lab_theta_circuit_is_navigable) {
@@ -762,12 +767,17 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         RoadEntity big;
         big.look.defaultWidth = 10.0;
         big.look.sidewalk = 2.5;
+        // (#306 piece 6 W2: a T at the east side's middle with a 100 m stub, so the road file has a junction and a lane
+        // level; it was the bare square)
         big.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(1600, 0)},
-                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)} };
+                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)},
+                            RoadNode{Vec2(1600, 800)}, RoadNode{Vec2(1700, 800)} };
         big.graph.addEdge(0, 1, big.look.defaultWidth);
-        big.graph.addEdge(1, 2, big.look.defaultWidth);
+        big.graph.addEdge(1, 4, big.look.defaultWidth);
+        big.graph.addEdge(4, 2, big.look.defaultWidth);
         big.graph.addEdge(2, 3, big.look.defaultWidth);
         big.graph.addEdge(3, 0, big.look.defaultWidth);
+        big.graph.addEdge(4, 5, big.look.defaultWidth);
         testmap::addRoads(world, big);
         CityRenderParams p = cityParams();
         p.cars = 0; p.pedestrians = 60; p.seed = 5;

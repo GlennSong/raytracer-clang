@@ -12,7 +12,7 @@
 // Plus a deterministic 1000-agent stress case (no wall-clock asserts).
 #include "test_framework.h"
 
-#include "city_test_util.h"
+#include "model_scene.h"   // the towns: road files built as a level's roads are (#306 piece 6 W2)
 #include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
@@ -70,7 +70,7 @@ Real distToPolyline(const std::vector<Vec2>& path, Vec2 p) {
 
 // A straight run with two degree-3 (unsignalled) tee junctions on the way —
 // the travel-truth route: long enough to measure, junctions to model.
-NavGraph lineWithTees() {
+const citytest::ModelScene& lineWithTees() {
     RoadGraph g;
     g.nodes = { {Vec2(0, 0)},     {Vec2(150, 0)},  {Vec2(300, 0)},
                 {Vec2(450, 0)},   {Vec2(150, -70)}, {Vec2(300, 70)} };
@@ -81,7 +81,7 @@ NavGraph lineWithTees() {
         RoadEdge{1, 4, 8, RoadClass::Local, 0},
         RoadEdge{2, 5, 8, RoadClass::Local, 0},
     };
-    return buildNavGraph(g);
+    return citytest::graphScene("line_with_tees", g);
 }
 
 }  // namespace
@@ -91,10 +91,10 @@ NavGraph lineWithTees() {
 // fixed steps while promotions AND demotions churn, and the population is
 // conserved throughout.
 TEST_CASE(tier_v_determinism_and_conservation) {
-    const NavGraph nav = citytest::cityNav(700, 130, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(700, 130, 5);
     CitySim simA, simB;
     for (CitySim* s : {&simA, &simB}) {
-        s->build(nav, 80, 42);
+        scene.build(*s, 80, 42);
         s->setWander(true);
         s->tieringEnabled = true;
     }
@@ -134,10 +134,10 @@ TEST_CASE(tier_v_determinism_and_conservation) {
 // in lockstep — this is the guard that keeps every pre-P4 ratchet baseline
 // (test_city_generated.cpp et al) meaningful.
 TEST_CASE(tier_v_off_matches_legacy) {
-    const NavGraph nav = citytest::cityNav(400, 110, 7);
+    const citytest::ModelScene& scene = citytest::gridScene(400, 110, 7);
     CitySim plain, switchOnNoCentre, centreNoSwitch;
     for (CitySim* s : {&plain, &switchOnNoCentre, &centreNoSwitch}) {
-        s->build(nav, 50, 9);
+        scene.build(*s, 50, 9);
         s->setWander(true);
     }
     switchOnNoCentre.tieringEnabled = true;   // no centre fed: must stay all K
@@ -161,11 +161,11 @@ TEST_CASE(tier_v_off_matches_legacy) {
 // integrated one. The V arrival is quantized to its ~1 s coarse tick, hence
 // the small absolute allowance on top.
 TEST_CASE(tier_v_travel_truth) {
-    const NavGraph nav = lineWithTees();
+    const citytest::ModelScene& scene = lineWithTees();
     Real duration[2] = {0, 0};
     for (int run = 0; run < 2; ++run) {
         CitySim sim;
-        sim.build(nav, 1, 21);
+        scene.build(sim, 1, 21);
         if (run == 1) {
             sim.tieringEnabled = true;
             sim.setTierCenter(Vec2(1e5, 1e5));   // far: the driver demotes at once
@@ -198,9 +198,9 @@ TEST_CASE(tier_v_travel_truth) {
 // promotee must sit ON its own lane polyline — never snapped to a node, a
 // park pose, or its destination.
 TEST_CASE(tier_v_no_teleport_on_promotion) {
-    const NavGraph nav = citytest::cityNav(500, 120, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(500, 120, 3);
     CitySim sim;
-    sim.build(nav, 60, 4);
+    scene.build(sim, 60, 4);
     sim.setWander(true);
     sim.tieringEnabled = true;
     const Real dt = 1.0 / 60.0;
@@ -247,11 +247,11 @@ TEST_CASE(tier_v_no_teleport_on_promotion) {
 // fixed-step run completes headlessly. Deliberately NO wall-clock assert
 // (ADR-0002 — timing is reported, never gated).
 TEST_CASE(tier_v_stress_deterministic) {
-    const NavGraph nav = citytest::cityNav(900, 150, 9);
+    const citytest::ModelScene& scene = citytest::gridScene(900, 150, 9);
     const auto wall0 = std::chrono::steady_clock::now();
     CitySim simA, simB;
     for (CitySim* s : {&simA, &simB}) {
-        s->build(nav, 1000, 77);
+        scene.build(*s, 1000, 77);
         s->setWander(true);
         s->tieringEnabled = true;
         s->setTierCenter(Vec2(0, 0));
@@ -280,10 +280,10 @@ TEST_CASE(tier_v_stress_deterministic) {
 // switch off, or with no player centre fed, dormancy must not exist — no agent
 // reaches Tier::D and the sim marches exactly as the V/K sim does.
 TEST_CASE(dormancy_off_matches_tier_v) {
-    const NavGraph nav = citytest::cityNav(400, 110, 7);
+    const citytest::ModelScene& scene = citytest::gridScene(400, 110, 7);
     CitySim plain, switchOnNoCentre, centreNoSwitch;
     for (CitySim* s : {&plain, &switchOnNoCentre, &centreNoSwitch}) {
-        s->build(nav, 50, 9);
+        scene.build(*s, 50, 9);
         s->setWander(true);
         s->tieringEnabled = true;
     }
@@ -306,9 +306,9 @@ TEST_CASE(dormancy_off_matches_tier_v) {
 // Agents beyond the dormant radius stop being simulated, and come back when the
 // player returns — rebuilt from their schedule, not resumed from a stale pose.
 TEST_CASE(dormancy_sleeps_the_far_field_and_wakes_it_back) {
-    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 300, 11);
+    scene.build(sim, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;         // tight, so the fixture actually reaches it
@@ -342,9 +342,9 @@ TEST_CASE(dormancy_sleeps_the_far_field_and_wakes_it_back) {
 // trip for rememberSeconds after you go -- not dormant, not rebuilt from a schedule -- and then may sleep; someone
 // you follow (pinAgent) stays in the full sim however far you go.
 TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
-    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 300, 11);
+    scene.build(sim, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;
@@ -387,9 +387,9 @@ TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
 // someone who went dormant mid-trip and is woken before that trip could be over resumes it, advanced by the time it
 // slept, instead of being rebuilt from its schedule.
 TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
-    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 300, 11);
+    scene.build(sim, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;
@@ -411,9 +411,9 @@ TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
 // pose it set off from until it arrived, so someone passing the player from across the island never woke. (On foot
 // since ADR-0462: 20 s at a walk is about 25 m, so "moved on" is past 15 m; it was 30 m for the old driving's cars.)
 TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
-    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(1600, 120, 3);
     CitySim sim;
-    sim.build(nav, 300, 11);
+    scene.build(sim, 300, 11);
     sim.tieringEnabled = true;
     sim.dormancyEnabled = true;
     sim.dormantRadius = 600.0;

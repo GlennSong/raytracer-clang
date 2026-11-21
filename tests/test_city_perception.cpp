@@ -1,20 +1,29 @@
 #include "test_framework.h"
 
-#include "city_test_util.h"
+#include "model_scene.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/ai/perception.h"
-#include "../src/engine/procgen/city/road_network.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 using namespace engine;
 using namespace citysim;
 
 namespace {
-// This file's grid town (city_test_util.h cityNav, historical dimensions/seed).
-NavGraph cityNav() { return citytest::cityNav(180, 45, 4); }
+// This file's town: the grid town (city_test_util.h gridCity, its historical size and seed) as a road file, built as a
+// level's roads are and walked on the street map made from its road model (model_scene.h, #306 piece 6 W2).
+const citytest::ModelScene& town() {
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    const citytest::ModelScene& s = citytest::gridScene(180, 45, 4);
+    std::printf("    [scene] grid town 180/45/4: %d nodes, %d links, %zu walks; %.2f s%s%s\n", s.nav.nodeCount(), s.nav.linkCount(),
+                s.model->laneLevel.walks.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
+                s.problems.empty() ? "" : "; ", s.problems.c_str());
+    return s;
+}
 }  // namespace
 
 TEST_CASE(pedestrians_walk_around_static_poles) {
@@ -24,12 +33,13 @@ TEST_CASE(pedestrians_walk_around_static_poles) {
     // centre ever comes closer than the pole clearance — and that at least one got
     // pushed right up against a pole (so the avoidance was actually exercised).
     constexpr Real kPoleClearance = 0.7;   // mirror of the sim constant
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& s = town();
+    CHECK(s.problems.empty());
     CitySim sim;
-    sim.build(nav, 30, 11);
+    s.build(sim, 30, 11);
 
     std::vector<Vec2> poles;
-    for (int li = 0; li < nav.linkCount(); ++li) poles.push_back(nav.sidewalkPoint(li, 0.5));
+    for (int li = 0; li < s.nav.linkCount(); ++li) poles.push_back(s.nav.sidewalkPoint(li, 0.5));
     sim.setStaticObstacles(poles);
 
     Real minDist = 1e9;
@@ -43,17 +53,18 @@ TEST_CASE(pedestrians_walk_around_static_poles) {
             }
         }
     }
+    std::printf("    [poles] %zu poles; the nearest a walker came %.3f m\n", poles.size(), minDist);
     CHECK(minDist >= kPoleClearance - 1e-3);   // never standing inside a pole
     CHECK(minDist <= kPoleClearance + 0.6);    // a ped really did brush past one
 }
 
 TEST_CASE(static_obstacle_avoidance_is_deterministic) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& s = town();
     CitySim a, b;
-    a.build(nav, 24, 77);
-    b.build(nav, 24, 77);
+    s.build(a, 24, 77);
+    s.build(b, 24, 77);
     std::vector<Vec2> poles;
-    for (int li = 0; li < nav.linkCount(); ++li) poles.push_back(nav.sidewalkPoint(li, 0.4));
+    for (int li = 0; li < s.nav.linkCount(); ++li) poles.push_back(s.nav.sidewalkPoint(li, 0.4));
     a.setStaticObstacles(poles);
     b.setStaticObstacles(poles);
     for (int i = 0; i < 2500; ++i) { a.step(0.1, 0.4); b.step(0.1, 0.4); }

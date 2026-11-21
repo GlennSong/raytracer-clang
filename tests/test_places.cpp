@@ -3,7 +3,7 @@
 #include "../src/apps/citysim/agent_id.h"
 #include "../src/apps/citysim/places.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "city_test_util.h"
+#include "model_scene.h"
 
 #include <set>
 
@@ -32,8 +32,10 @@ TEST_CASE(place_type_name_roundtrip) {
 // ----- entrance snapping -----------------------------------------------------
 
 TEST_CASE(place_entrance_lands_on_sidewalk) {
-    // A real grid town: every door must snap onto a walkable edge, off the road.
-    NavGraph nav = citytest::cityNav(200, 90, 7);
+    // A real grid town: every door must snap onto a walkable edge, off the road. (The town a road file built as a level's
+    // roads are, its street map made from the model: model_scene.h, #306 piece 6 W2. PlaceMap::add snaps by the street
+    // map; W3 joins a place to the walks by RoadModel::walkJoinOn instead, and this test with it.)
+    const NavGraph& nav = citytest::gridScene(200, 90, 7).nav;
     CHECK(nav.linkCount() > 0);
 
     PlaceMap places;
@@ -72,7 +74,7 @@ TEST_CASE(place_entrance_empty_graph_falls_back) {
 // ----- indexing + nearest ----------------------------------------------------
 
 TEST_CASE(placemap_indexes_by_type) {
-    NavGraph nav = citytest::straightRoad(120, 8);
+    const NavGraph& nav = citytest::straightScene(120).nav;
     PlaceMap places;
     places.add(PlaceType::Home,  {10, 5}, nav);
     places.add(PlaceType::Shop,  {30, 5}, nav);
@@ -89,7 +91,7 @@ TEST_CASE(placemap_indexes_by_type) {
 }
 
 TEST_CASE(placemap_nearest_of_type) {
-    NavGraph nav = citytest::straightRoad(200, 8);
+    const NavGraph& nav = citytest::straightScene(200).nav;
     PlaceMap places;
     PlaceId a = places.add(PlaceType::Shop, {20, 6}, nav);   // near x=20
     PlaceId b = places.add(PlaceType::Shop, {150, 6}, nav);  // near x=150
@@ -137,9 +139,9 @@ TEST_CASE(agent_id_allocator_is_monotonic) {
 }
 
 TEST_CASE(agent_uids_stable_and_unique) {
-    NavGraph nav = citytest::cross4(40);
+    const citytest::ModelScene& s = citytest::crossScene(40);
     CitySim sim;
-    sim.build(nav, /*peds*/ 7, /*seed*/ 99);
+    s.build(sim, /*peds*/ 7, /*seed*/ 99);
 
     // Every agent has a distinct, dense UID in [0, count).
     std::set<AgentId> seen;
@@ -152,7 +154,7 @@ TEST_CASE(agent_uids_stable_and_unique) {
 
     // Determinism (ADR-0002): the same seed reproduces the same UID sequence.
     CitySim sim2;
-    sim2.build(nav, 7, 99);
+    s.build(sim2, 7, 99);
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         CHECK(sim.agents()[i].uid == sim2.agents()[i].uid);
 }
@@ -162,7 +164,7 @@ TEST_CASE(place_entrance_hint_wins_over_the_site_snap) {
     // ADR-0080: a building knows its real door; the sidewalk snap must run
     // from the door, not the footprint centroid (which can be around a
     // corner from it).
-    NavGraph nav = citytest::straightRoad(120, 8);
+    const NavGraph& nav = citytest::straightScene(120).nav;
     PlaceMap places;
     const Vec2 site(60, 20);
     const Vec2 door(20, 12);
