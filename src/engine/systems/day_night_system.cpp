@@ -418,6 +418,11 @@ void DayNightSystem::applyRequests(FrameContext&) {
 }
 
 void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
+    {   // the hour, for whoever reads the game's clock (GameClock)
+        Entity holder;
+        ctx.world.each<GameClock>([&](Entity e, GameClock& c) { holder = e; c.hour = cycle.timeOfDay * 24.0; });
+        if (!holder.valid()) ctx.world.add<GameClock>(ctx.world.create(), GameClock{cycle.timeOfDay * 24.0});
+    }
     char buf[384];
     const DayNightState st = cycle.evaluate();
     std::snprintf(buf, sizeof(buf),

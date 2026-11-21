@@ -15,6 +15,19 @@ int ModelMotionSystem::step(World& world, Real dt) {
     world.each<ModelInstance>([&](Entity e, ModelInstance& mi) {
         if (!mi.target.values.empty()) moving.push_back(e);
     });
+    // An instance that moved last step and has now arrived: its pieces drew a step behind for the last time. Without
+    // this their previous place stays one step short of where they stopped, and the renderer, which draws between
+    // the two, shows the part trembling by one step's travel for as long as it stands there.
+    for (Entity e : settle_) {
+        const ModelInstance* mi = world.alive(e) ? world.get<ModelInstance>(e) : nullptr;
+        if (mi == nullptr) continue;
+        for (Entity pe : mi->pieces) {
+            PrevTransform* prev = world.get<PrevTransform>(pe);
+            const Transform* t = world.get<Transform>(pe);
+            if (prev != nullptr && t != nullptr) prev->value = *t;
+        }
+    }
+    settle_.clear();
     int moved = 0;
     for (Entity e : moving) {
         // The pieces drew at their old place last step: remember it, so the renderer moves them smoothly.
@@ -26,6 +39,7 @@ int ModelMotionSystem::step(World& world, Real dt) {
         }
         if (!advanceModelMotion(world, e, dt)) continue;
         ++moved;
+        settle_.push_back(e);
         const std::vector<Entity> bodies = world.get<ModelInstance>(e)->bodies;
         for (Entity be : bodies) {
             Vec3 position;

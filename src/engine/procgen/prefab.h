@@ -40,10 +40,15 @@ namespace engine {
 //            `speed` a second (0: at once). Done again (`back`), each returns to 0
 //   run      moving nodes that turn or slide on and on while the use is on, each at that many degrees (metres) a
 //            second; `seconds`: it turns itself off after that long (0: until used again)
+//   stop     with `move`: using it again while the parts are still moving stops them where they are (a desk raised
+//            to the height wanted). The word offered meanwhile is "stop"; used after that, it goes the other way
 //   coast    with `run`: when it is turned off (or its time is up) the parts do not stop dead but slow to a stop
 //            over this many seconds (a roundabout that has been pushed)
 //   sway     moving nodes that rock either side of 0 while the use is on, each by that many degrees (metres),
 //            once there and back every `period` seconds (a rocking chair while someone sits in it)
+//   light    a light of this kind (assets/scripts/lights.lua) is lit while the use is on, at the marker `light_at`
+//            (the use's own marker when none is given), aimed the way that marker faces (a lamp switched on; the
+//            light inside a fridge whose door is open)
 //   sit      the person sits at the marker (the furniture's Seated: engine/interaction.h), facing the way the
 //            marker faces, and is carried with it if its node moves
 //   lie      the same lying down: the eye low over the marker, looking up and along the way it faces
@@ -75,9 +80,11 @@ struct PrefabUse {
     Real speed = 0;
     std::vector<std::pair<std::string, Real>> run;    // node, rate (degrees or metres a second)
     Real seconds = 0;
+    bool stop = false;
     Real coast = 0;
     std::vector<std::pair<std::string, Real>> sway;   // node, how far each way (degrees or metres)
     Real period = 2;
+    std::string light, lightAt;
     bool sit = false;
     bool lie = false;
 };

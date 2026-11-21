@@ -111,7 +111,7 @@ ROOMS = [
     ]),
     dict(name="flat: child's room", w=6, yaw=180, door=1.02, floor="carpet", things=[
         P("door", 0, F), P("single_bed", -2.2, B + 1.05), P("cradle", 0.2, -2.6), P("baby_mobile", 0.2, -2.6, 0, 2.0),
-        P("toy_chest", 2.2, B + 0.3), P("rocking_horse", 1.4, 0.6, 210), P("flip_desk", -2.0, 2.0, 90),
+        P("toy_chest", 2.2, B + 0.3), P("rocking_horse", 1.4, 0.6, 210), P("flip_desk", -2.0, 2.0, 90), P("school_chair", -1.45, 2.0, 270),
         P("desk_pedestal", 2.6, 2.2, 270), P("roller_blind", 0.2, B + 0.1, 0, 2.6), P("globe", 2.6, 2.2, 270, 0.62),
     ]),
     dict(name="clinic", w=9, yaw=180, door=1.02, floor="tile", things=[
@@ -123,6 +123,7 @@ ROOMS = [
     ]),
     dict(name="schoolroom and library", w=10, yaw=180, door=1.02, floor="wood", things=[
         P("door", 0, F), *row("flip_desk", [-4.0, -2.8, -1.6], -0.6), *row("flip_desk", [-4.0, -2.8, -1.6], 1.0),
+        *row("school_chair", [-4.0, -2.8, -1.6], -0.05, 180), *row("school_chair", [-4.0, -2.8, -1.6], 1.55, 180),
         P("lecture_blackboards", -2.8, B + 0.1), P("school_bell", -4.85, 3.0, 90, 1.5), P("projector_screen", -2.8, B + 0.4, 0, 2.95),
         *row("bookcase", [1.4, 2.6, 3.8], B + 0.25), P("library_ladder", 2.6, B + 0.45), P("book_truck", 2.0, -0.6, 30),
         P("reading_table", 2.8, 1.8), P("globe", 2.8, 1.8, 0, 0.75), P("wall_clock", 0.2, B + 0.09, 0, 2.5), P("flip_chart", -0.6, -2.4, 20),
@@ -163,6 +164,8 @@ SITES = [
         P("fountain_plaza", 0, 0), P("flagpole", -8, 7), *row("park_bench", [-4, 4], 5.5, 180), P("escalator_up", -7, -4.5, 90),
         P("revolving_door", 7.5, 5), P("lift_doors", 5, 9.6, 180), P("garage_door", 10.2, 1.5, 270), P("roller_shutter", 10.2, -4.5, 270), P("ballot_box", 4, -4), P("street_lamp", -9, -8), P("street_lamp", 9, 8),
         # a wall of windows and screens along the square's far edge, each standing free
+        # a row of entrance doors by kind of building, along the near edge
+        *[P(d, -9.5 + i * 2.1, 10.4, 180) for i, d in enumerate(["front_door_red", "front_door_green", "front_door_wood", "back_door", "fire_exit", "shop_door", "apartment_entrance", "office_entrance", "school_entrance", "civic_entrance"])],
         P("sash_window", -8, -9, 0, 0.9), P("casement_window", -6, -9, 0, 0.9), P("shoji_screens", -3, -9), P("cinema_seats", 3.5, -8.5),
         P("lecture_seats", 7.5, -8.5), P("dj_deck", 0.5, 8.5, 180), P("mirror_ball", 0.5, 8.5, 0, 3.0), P("clothes_rail_round", -4.5, 8.5),
     ]),

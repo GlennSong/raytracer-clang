@@ -20,7 +20,7 @@ local c = kit.maker()
 c.box("paint", V(0, H / 2, -0.02), V(W, H, D - 0.04), 0.012, col, 2)
 -- the lit window and what is in it
 local y0, y1 = 0.72, H - 0.08
-c.box("light", V(-0.04, (y0 + y1) / 2, D / 2 - 0.045), V(W - 0.2, y1 - y0, 0.01), 0.0, V(0.97, 0.97, 0.93), 1)
+c.box("light", V(-0.04, (y0 + y1) / 2, D / 2 - 0.042), V(W - 0.2, y1 - y0, 0.01), 0.0, V(0.97, 0.97, 0.93), 1)
 c.box("glass", V(-0.04, (y0 + y1) / 2, D / 2 - 0.0), V(W - 0.2, y1 - y0, 0.006), 0.0, V(0.9, 0.95, 0.95), 1)
 local per = math.max(4, math.floor((W - 0.24) / 0.085))
 local rowh = (y1 - y0) / ROWS
@@ -51,7 +51,7 @@ c.box("light", V(MX, 1.14, D / 2 - 0.034), V(0.06, 0.025, 0.003), 0.0, V(1, 0.4,
 c.box("metal", V(MX, 1.04, D / 2 - 0.034), V(0.06, 0.012, 0.004), 0.0, kit.CHROME, 1)
 c.box("hard", V(MX, 0.62, D / 2 - 0.03), V(0.07, 0.07, 0.02), 0.01, kit.BLACK * 1.5, 1)
 -- the opening the drink drops into
-c.box("hard", V(-0.04, 0.36, D / 2 - 0.1), V(W - 0.3, 0.2, 0.12), 0.0, kit.BLACK, 1)
+c.box("hard", V(-0.04, 0.36, D / 2 - 0.097), V(W - 0.3, 0.2, 0.12), 0.0, kit.BLACK, 1)
 kit.put(m, m, c)
 kit.far_box(m, m, "paint", { W, H, D }, { 0, H / 2, 0 }, col, far)
 kit.far_box(m, m, "light", { W - 0.2, y1 - y0, 0.01 }, { -0.04, (y0 + y1) / 2, D / 2 + 0.002 }, V(0.97, 0.97, 0.93), far)

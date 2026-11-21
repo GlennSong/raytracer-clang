@@ -212,4 +212,17 @@ return {
   exam_couch = { recipe = "prop_models", args = { kind = "furniture", name = "exam_couch" } },
   potted_plant = { recipe = "prop_models", args = { kind = "furniture", name = "potted_plant" } },
   shop_counter = { recipe = "prop_models", args = { kind = "furniture", name = "shop_counter" } },
+  school_chair = { recipe = "prop_models", args = { kind = "furniture", name = "school_chair" } },
+  -- entrance doors by the kind of building they belong on (hinged_door.lua at each one's leaves, glazing and finish):
+  -- what the building grammar's doorways will be given in place of its own drawn doors
+  front_door_red = { recipe = "hinged_door", args = { finish = "red", glazed = "window" } },
+  front_door_green = { recipe = "hinged_door", args = { finish = "green" } },
+  front_door_wood = { recipe = "hinged_door", args = { finish = "wood", wood = "walnut", glazed = "window" } },
+  back_door = { recipe = "hinged_door", args = { finish = "grey" } },
+  fire_exit = { recipe = "hinged_door", args = { finish = "green", kind = "push_bar" } },
+  shop_door = { recipe = "hinged_door", args = { glazed = "glass", finish = "white" } },
+  apartment_entrance = { recipe = "hinged_door", args = { leaves = 2, glazed = "window", finish = "grey" } },
+  office_entrance = { recipe = "hinged_door", args = { leaves = 2, glazed = "glass", finish = "grey", kind = "push_bar" } },
+  school_entrance = { recipe = "hinged_door", args = { leaves = 2, glazed = "window", finish = "red", kind = "push_bar" } },
+  civic_entrance = { recipe = "hinged_door", args = { leaves = 2, finish = "wood", wood = "oak" } },
 }

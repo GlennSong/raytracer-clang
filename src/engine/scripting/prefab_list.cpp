@@ -124,8 +124,8 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         for (const nlohmann::json& u : uses) {
             const std::string which = where + ": use " + std::to_string(++number);
             if (!u.is_object()) return fail(which + " is a table: { at = \"handle\", say = \"open\", ... }");
-            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "coast", "sway", "period", "sit", "lie", "id", "needs", "unless"}, stray))
-                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, coast, sway, period, sit, lie, id, needs, unless)");
+            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "stop", "coast", "sway", "period", "light", "light_at", "sit", "lie", "id", "needs", "unless"}, stray))
+                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, stop, coast, sway, period, light, light_at, sit, lie, id, needs, unless)");
             PrefabUse use;
             if (!u.contains("at") || !u["at"].is_string() || u["at"].get<std::string>().empty()) return fail(which + " needs `at`, a marker on the model");
             if (!u.contains("say") || !u["say"].is_string() || u["say"].get<std::string>().empty()) return fail(which + " needs `say`, the word offered (\"open\")");
@@ -155,16 +155,22 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 if (!u["sit"].is_boolean()) return fail(which + ": `sit` is true or false");
                 use.sit = u["sit"].get<bool>();
             }
-            for (const char* key : {"id", "needs", "unless"}) {
+            for (const char* key : {"id", "needs", "unless", "light", "light_at"}) {
                 if (!u.contains(key)) continue;
                 if (!u[key].is_string() || u[key].get<std::string>().empty()) return fail(which + ": `" + key + "` is a name");
-                (std::string(key) == "id" ? use.id : std::string(key) == "needs" ? use.needs : use.unless) = u[key].get<std::string>();
+                const std::string k = key;
+                (k == "id" ? use.id : k == "needs" ? use.needs : k == "unless" ? use.unless : k == "light" ? use.light : use.lightAt) = u[key].get<std::string>();
+            }
+            if (!use.lightAt.empty() && use.light.empty()) return fail(which + ": `light_at` needs `light`, a kind of light");
+            if (u.contains("stop")) {
+                if (!u["stop"].is_boolean()) return fail(which + ": `stop` is true or false");
+                use.stop = u["stop"].get<bool>();
             }
             if (u.contains("lie")) {
                 if (!u["lie"].is_boolean()) return fail(which + ": `lie` is true or false");
                 use.lie = u["lie"].get<bool>();
             }
-            if (use.move.empty() && use.run.empty() && use.sway.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sway`, `sit` or `lie`");
+            if (use.move.empty() && use.run.empty() && use.sway.empty() && use.light.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sway`, `light`, `sit` or `lie`");
             p.uses.push_back(use);
         }
         // a use that needs, or gives way to, another names one this line has
@@ -278,8 +284,11 @@ std::string prefabLine(const Prefab& p) {
             }
             if (u.speed > 0) out += ", speed = " + plainNumber(u.speed);
             if (u.seconds > 0) out += ", seconds = " + plainNumber(u.seconds);
+            if (u.stop) out += ", stop = true";
             if (u.coast > 0) out += ", coast = " + plainNumber(u.coast);
             if (!u.sway.empty()) out += ", period = " + plainNumber(u.period);
+            if (!u.light.empty()) out += ", light = " + luaQuoted(u.light);
+            if (!u.lightAt.empty()) out += ", light_at = " + luaQuoted(u.lightAt);
             if (u.sit) out += ", sit = true";
             if (u.lie) out += ", lie = true";
             out += " }, ";

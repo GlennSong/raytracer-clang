@@ -123,7 +123,7 @@ void LightSystem::render(FrameContext& ctx) {
             }
     }
     // the other channels
-    for (LightChannel ch : {LightChannel::Beacons, LightChannel::Traffic, LightChannel::Vehicles, LightChannel::Tool}) {
+    for (LightChannel ch : {LightChannel::Beacons, LightChannel::Traffic, LightChannel::Vehicles, LightChannel::Tool, LightChannel::Prefabs}) {
         const std::vector<LightCandidate>& list = board.channel(ch);
         cands_.insert(cands_.end(), list.begin(), list.end());
     }

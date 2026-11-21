@@ -59,8 +59,8 @@ for s = 0, S - 1 do
     local kind = (s + d) % 2 == 0
     local colour = colours[(s * 3 + d * 2) % #colours + 1]
     m:use(drink(kind and BOTTLE or CAN, kind and 0.21 or nil, colour),
-          scatter.grid{ origin = { -W / 2 + d * DW + 0.04, FOOT + inside * s / S + 0.012, -D / 2 + T + 0.05 }, u = { DW - 0.08, 0, 0 }, v = { 0, 0, D - T - 0.22 },
-                        count = { across, 4 }, margin = 0.035 })
+          scatter.grid{ origin = { -W / 2 + d * DW + 0.04, FOOT + inside * s / S + 0.012, -D / 2 + T + 0.05 }, u = { 0, 0, D - T - 0.22 }, v = { DW - 0.08, 0, 0 },   -- (back, then across: u x v is up)
+                        count = { 4, across }, margin = 0.035, })
   end
 end
 

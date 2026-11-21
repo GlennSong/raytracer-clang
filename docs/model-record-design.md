@@ -1520,6 +1520,31 @@ Not done:
 - A flaky test, not from this work: `cache_files_are_pruned_once_every_level_that_used_them_has_moved_on`
   (`tests/test_bundle.cpp`) failed once in a filtered run and passed twice alone straight after.
 
+### What walking through prefab_town found (Glenn, 2026-11-21), and what was done
+
+| What Glenn saw | Cause | Done |
+|---|---|---|
+| The drinks in the fridge are upside down | a grid of copies stands them along `u x v`; the shelves' grid had that pointing down | the grid runs back then across (`display_fridge.lua`) |
+| A standing desk cannot be set at a height | a `move` went all the way | `stop = true` on a use: used again while it moves, it stops there; the word offered meanwhile is "stop". The desks, the office chair's seat, the care bed and the recliner have it |
+| Some things shake when they arrive (the stand mixer) | a real fault from step 8: on the step a part arrived, its drawn "previous place" was a step behind and was never brought up, so the renderer drew it between the two for good. Scripts that moved parts all the time hid it | `ModelMotionSystem` brings an arrived copy's pieces up on the next step. Test: `a_part_that_has_arrived_is_drawn_still` |
+| Clocks should show the time; they freak out | scripts could not read any clock (`os` is not theirs), so every clock started at ten past ten; and a hand a hair behind was sent a whole turn round | `game.hour()` (the day and night cycle's hour, a `GameClock` any system can read); the clock script reads it and turns a hand the short way |
+| The books on the book truck would fall out | its shelves sloped down and outward | they slope in toward the middle |
+| Can the lamps cast light? | lights at markers were not built | `light = "<kind>"` on a use, with `light_at`: lit while the use is on. `PrefabUseSystem` publishes them on a new channel of the engine's one light board; kinds are in `lights.lua` (`lamp_warm`, `lamp_exam`, `lamp_cool`). The desk lamp, the exam lamp, and the fridge when its door is open |
+| The vending machine z-fights | two panels lay in the plane of its front | moved off it |
+| School desks have no chairs | the desk carried a seat marker with nothing to sit on | the desk has no seat; the kit's `school_chair` is a prefab of its own, stood behind each desk in the level |
+| Doors like these in the real city, and more kinds of entrance | the building grammar draws its own doors | ten entrance doors by kind of building as prefab lines (house, back door, fire exit, shop, apartment, office, school, civic), on the square. Putting them in the grammar's doorways is the port after the merge ("One catalog") |
+
+Seen after: the drinks upright; a desk lamp lighting its desk at night; a clock at half past three with the game's
+hour set to 15.5; in tests, a desk stopped part way and a part drawn still once arrived.
+
+**Sounds are not built.** Glenn: "are you going to make an audio component pass on all of these? Like a motor
+whirr for the standing desk? Cabinet open and close sounds?" Yes, as the next piece of step 9, and in the shape
+`light` has: a use names a sound for starting, one that lasts while parts move or run, and one for arriving
+(`sound = { start = "latch", moving = "motor_small", stop = "thud_soft" }`), played at the use's marker. The
+sounds themselves should come from the engine's procedural audio (the footstep and vehicle work), as a short list
+of named patches by material and mechanism (wood door, metal door, drawer, small motor, big motor, click, bell,
+water) in one data file, so 130 prefabs share about twenty sounds. The audio system has to be read first.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

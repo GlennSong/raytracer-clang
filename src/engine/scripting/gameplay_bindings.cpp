@@ -402,8 +402,26 @@ int l_events_off(lua_State* L) {
 
 }  // namespace
 
+// game.hour() -> the hour of the game's day, 0 to 24 (the day and night cycle's; GameClock), or nil in a level that
+// has no cycle. What a clock on a wall shows.
+int l_game_hour(lua_State* L) {
+    bool found = false;
+    double hour = 0;
+    requireWorld(L)->each<GameClock>([&](Entity, GameClock& c) { found = true; hour = c.hour; });
+    if (!found) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, hour);
+    return 1;
+}
+
 void openGameplayLibrary(ScriptVM& vm) {
     lua_State* L = luaState(vm);
+
+    static const luaL_Reg kGameFns[] = {
+        {"hour", l_game_hour},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kGameFns);
+    lua_setglobal(L, "game");
 
     lua_pushcfunction(L, l_log);
     lua_setglobal(L, "log");

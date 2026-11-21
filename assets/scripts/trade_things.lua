@@ -1,6 +1,7 @@
 -- PIECES FOR A SCHOOL, A LIBRARY AND A BAKER'S OR GROCER'S SHOP, each with a part that moves (#191):
 --
---   flip_desk        a school desk whose top lifts on hinges at the far edge (`lid`), with books inside
+--   flip_desk        a school desk whose top lifts on hinges at the far edge (`lid`), with books inside. It has no
+--                    seat: its chair is a prefab of its own (the kit's `school_chair`), stood at its `chair` marker
 --   school_bell      a brass bell on a wall bracket; it swings (`bell`) and so does its clapper (`clapper`, on
 --                    the bell). Its origin is the foot of the bracket's plate (put it on a wall)
 --   library_ladder   a ladder that leans on a rail along the shelves and rolls along it (`ladder`); the rail is
@@ -41,7 +42,7 @@ if a.kind == "flip_desk" then
   kit.put(m, m, c)
   kit.far_box(m, m, "wood", { W, BOX, D }, { 0, Y + BOX / 2, 0 }, wood, far)
   m:shape("box", { box = { W, BOX, D }, pos = { 0, Y + BOX / 2, 0 } })
-  m:marker("seat", { pos = { 0, 0.45, 0.5 }, turn = { 0, 180, 0 }, role = "seat" })
+  m:marker("chair", { pos = { 0, 0, 0.55 }, turn = { 0, 180, 0 }, role = "stand" })   -- where its chair goes (a prefab of its own)
   local lid = m:node("lid", { pos = { 0, Y + BOX, -D / 2 }, motion = { turn = { -1, 0, 0 }, min = 0, max = 75 } })
   local k = kit.maker()
   k.box("wood", V(0, 0.01, D / 2 + 0.01), V(W, 0.02, D + 0.03), 0.006, wood, 1)

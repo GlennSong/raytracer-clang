@@ -24,6 +24,7 @@ struct PrefabUses {
         bool on = false;
         Real left = 0;      // seconds until it turns itself off (a use with `seconds`)
         Real time = 0;      // seconds it has been on (where a sway is in its swing)
+        bool moving = false;   // its `move` parts are still on their way (kept by the step; a `stop` use reads it)
         Real coasting = 0;  // seconds of slowing down left, after a use with `coast` was turned off
     };
     std::vector<Use> uses;
@@ -33,7 +34,7 @@ struct PrefabUses {
 // left out (and `skipped` says which and why): one line serves a model built with more or fewer of a thing.
 void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vector<std::string>* skipped = nullptr);
 
-// The word a use offers now: its `say`, or its `back` once it is on.
+// The word a use offers now: its `say`, or its `back` once it is on; "stop" while a use that can be stopped is moving.
 const std::string& prefabUseWord(const PrefabUses::Use& use);
 
 // Is use `index` offered now? Not while a use it `needs` is off, nor while one it gives way to (`unless`) is on; and

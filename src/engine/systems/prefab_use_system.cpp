@@ -3,6 +3,8 @@
 #include "../components.h"
 #include "../interact_broker.h"
 #include "../interaction.h"   // Seated
+#include "../lights/light_board.h"
+#include "../lights/light_kinds.h"
 #include "../model_motion.h"
 #include "../prefab_use.h"
 
@@ -38,6 +40,27 @@ bool seatAt(World& world, Entity instance, const std::string& marker, bool lying
 }  // namespace
 
 void PrefabUseSystem::fixedUpdate(FrameContext& ctx) { stepPrefabUses(ctx.world, ctx.clock.fixedStep()); }
+
+// THE LAMPS THAT ARE ON: each use with a `light` that is on publishes one candidate on the board's Prefabs channel,
+// rebuilt every frame. LightSystem picks and lights them with every other light (ADR-0362); nothing here draws.
+void PrefabUseSystem::render(FrameContext& ctx) {
+    std::vector<LightCandidate>& lamps = ctx.view.lights.channel(LightChannel::Prefabs);
+    lamps.clear();
+    ctx.world.each<PrefabUses>([&](Entity e, PrefabUses& uses) {
+        for (const PrefabUses::Use& u : uses.uses) {
+            if (!u.on || u.use.light.empty()) continue;
+            Vec3 at;
+            Quat turn;
+            if (!modelMarkerWorld(ctx.world, e, u.use.lightAt.empty() ? u.use.at : u.use.lightAt, at, turn)) continue;
+            LightCandidate c;
+            c.kind = lightKindId(u.use.light.c_str());
+            if (c.kind < 0) continue;
+            c.position = at;
+            c.direction = turn.rotate(Vec3(0, 0, 1));
+            lamps.push_back(c);
+        }
+    });
+}
 
 void PrefabUseSystem::update(FrameContext& ctx) {
     Entity player;

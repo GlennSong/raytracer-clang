@@ -2,7 +2,7 @@
  "version": 1,
  "watch_scripts": true,
  "name": "prefab_town_busy",
- "_note": "PREFAB TOWN (#191): 286 prefabs stood in 11 rooms, along a street, in a park and on a square. Written by tools/prefab_town.py from the tables in it: edit those and run it again, not this file. Every piece that has an `_in_use` prefab is that one: all moving parts working at once, as a load test.",
+ "_note": "PREFAB TOWN (#191): 303 prefabs stood in 11 rooms, along a street, in a park and on a square. Written by tools/prefab_town.py from the tables in it: edit those and run it again, not this file. Every piece that has an `_in_use` prefab is that one: all moving parts working at once, as a load test.",
  "player": {
   "position": [
    -24,
@@ -2731,7 +2731,26 @@
   },
   {
    "id": 167,
-   "name": "flat: child's room / desk_pedestal 8",
+   "name": "flat: child's room / school_chair 8",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    -4.55,
+    0.05,
+    9.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 168,
+   "name": "flat: child's room / desk_pedestal 9",
    "shape": "prefab",
    "prefab": "desk_pedestal_in_use",
    "position": [
@@ -2749,8 +2768,8 @@
    }
   },
   {
-   "id": 168,
-   "name": "flat: child's room / roller_blind 9",
+   "id": 169,
+   "name": "flat: child's room / roller_blind 10",
    "shape": "prefab",
    "prefab": "roller_blind_in_use",
    "position": [
@@ -2768,8 +2787,8 @@
    }
   },
   {
-   "id": 169,
-   "name": "flat: child's room / globe 10",
+   "id": 170,
+   "name": "flat: child's room / globe 11",
    "shape": "prefab",
    "prefab": "globe_in_use",
    "position": [
@@ -2787,7 +2806,7 @@
    }
   },
   {
-   "id": 170,
+   "id": 171,
    "name": "clinic / door 1",
    "shape": "prefab",
    "prefab": "door_in_use",
@@ -2806,7 +2825,7 @@
    }
   },
   {
-   "id": 171,
+   "id": 172,
    "name": "clinic / care_bed 2",
    "shape": "prefab",
    "prefab": "care_bed_in_use",
@@ -2825,7 +2844,7 @@
    }
   },
   {
-   "id": 172,
+   "id": 173,
    "name": "clinic / care_bed 3",
    "shape": "prefab",
    "prefab": "care_bed_in_use",
@@ -2844,7 +2863,7 @@
    }
   },
   {
-   "id": 173,
+   "id": 174,
    "name": "clinic / iv_stand 4",
    "shape": "prefab",
    "prefab": "iv_stand_in_use",
@@ -2863,7 +2882,7 @@
    }
   },
   {
-   "id": 174,
+   "id": 175,
    "name": "clinic / iv_stand 5",
    "shape": "prefab",
    "prefab": "iv_stand_in_use",
@@ -2882,7 +2901,7 @@
    }
   },
   {
-   "id": 175,
+   "id": 176,
    "name": "clinic / curtains 6",
    "shape": "prefab",
    "prefab": "curtains_in_use",
@@ -2901,7 +2920,7 @@
    }
   },
   {
-   "id": 176,
+   "id": 177,
    "name": "clinic / exam_couch 7",
    "shape": "prefab",
    "prefab": "exam_couch",
@@ -2920,7 +2939,7 @@
    }
   },
   {
-   "id": 177,
+   "id": 178,
    "name": "clinic / exam_lamp 8",
    "shape": "prefab",
    "prefab": "exam_lamp_in_use",
@@ -2939,7 +2958,7 @@
    }
   },
   {
-   "id": 178,
+   "id": 179,
    "name": "clinic / wheelchair 9",
    "shape": "prefab",
    "prefab": "wheelchair_in_use",
@@ -2958,7 +2977,7 @@
    }
   },
   {
-   "id": 179,
+   "id": 180,
    "name": "clinic / waiting_seats 10",
    "shape": "prefab",
    "prefab": "waiting_seats",
@@ -2969,7 +2988,7 @@
    ]
   },
   {
-   "id": 180,
+   "id": 181,
    "name": "clinic / desk 11",
    "shape": "prefab",
    "prefab": "desk",
@@ -2980,7 +2999,7 @@
    ]
   },
   {
-   "id": 181,
+   "id": 182,
    "name": "clinic / reception_bell 12",
    "shape": "prefab",
    "prefab": "reception_bell_in_use",
@@ -2999,7 +3018,7 @@
    }
   },
   {
-   "id": 182,
+   "id": 183,
    "name": "clinic / office_chair 13",
    "shape": "prefab",
    "prefab": "office_chair",
@@ -3018,7 +3037,7 @@
    }
   },
   {
-   "id": 183,
+   "id": 184,
    "name": "clinic / ticket_dispenser 14",
    "shape": "prefab",
    "prefab": "ticket_dispenser_in_use",
@@ -3029,7 +3048,7 @@
    ]
   },
   {
-   "id": 184,
+   "id": 185,
    "name": "clinic / store_cupboard 15",
    "shape": "prefab",
    "prefab": "store_cupboard",
@@ -3048,7 +3067,7 @@
    }
   },
   {
-   "id": 185,
+   "id": 186,
    "name": "clinic / wall_clock 16",
    "shape": "prefab",
    "prefab": "wall_clock",
@@ -3067,7 +3086,7 @@
    }
   },
   {
-   "id": 186,
+   "id": 187,
    "name": "clinic / fire_hose_cabinet 17",
    "shape": "prefab",
    "prefab": "fire_hose_cabinet_in_use",
@@ -3086,7 +3105,7 @@
    }
   },
   {
-   "id": 187,
+   "id": 188,
    "name": "schoolroom and library / door 1",
    "shape": "prefab",
    "prefab": "door_in_use",
@@ -3105,7 +3124,7 @@
    }
   },
   {
-   "id": 188,
+   "id": 189,
    "name": "schoolroom and library / flip_desk 2",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3124,7 +3143,7 @@
    }
   },
   {
-   "id": 189,
+   "id": 190,
    "name": "schoolroom and library / flip_desk 3",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3143,7 +3162,7 @@
    }
   },
   {
-   "id": 190,
+   "id": 191,
    "name": "schoolroom and library / flip_desk 4",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3162,7 +3181,7 @@
    }
   },
   {
-   "id": 191,
+   "id": 192,
    "name": "schoolroom and library / flip_desk 5",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3181,7 +3200,7 @@
    }
   },
   {
-   "id": 192,
+   "id": 193,
    "name": "schoolroom and library / flip_desk 6",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3200,7 +3219,7 @@
    }
   },
   {
-   "id": 193,
+   "id": 194,
    "name": "schoolroom and library / flip_desk 7",
    "shape": "prefab",
    "prefab": "flip_desk_in_use",
@@ -3219,8 +3238,74 @@
    }
   },
   {
-   "id": 194,
-   "name": "schoolroom and library / lecture_blackboards 8",
+   "id": 195,
+   "name": "schoolroom and library / school_chair 8",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    15.0,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 196,
+   "name": "schoolroom and library / school_chair 9",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    13.8,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 197,
+   "name": "schoolroom and library / school_chair 10",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    12.6,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 198,
+   "name": "schoolroom and library / school_chair 11",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    15.0,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 199,
+   "name": "schoolroom and library / school_chair 12",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    13.8,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 200,
+   "name": "schoolroom and library / school_chair 13",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    12.6,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 201,
+   "name": "schoolroom and library / lecture_blackboards 14",
    "shape": "prefab",
    "prefab": "lecture_blackboards_in_use",
    "position": [
@@ -3238,8 +3323,8 @@
    }
   },
   {
-   "id": 195,
-   "name": "schoolroom and library / school_bell 9",
+   "id": 202,
+   "name": "schoolroom and library / school_bell 15",
    "shape": "prefab",
    "prefab": "school_bell_in_use",
    "position": [
@@ -3257,8 +3342,8 @@
    }
   },
   {
-   "id": 196,
-   "name": "schoolroom and library / projector_screen 10",
+   "id": 203,
+   "name": "schoolroom and library / projector_screen 16",
    "shape": "prefab",
    "prefab": "projector_screen_in_use",
    "position": [
@@ -3276,8 +3361,8 @@
    }
   },
   {
-   "id": 197,
-   "name": "schoolroom and library / bookcase 11",
+   "id": 204,
+   "name": "schoolroom and library / bookcase 17",
    "shape": "prefab",
    "prefab": "bookcase",
    "position": [
@@ -3295,8 +3380,8 @@
    }
   },
   {
-   "id": 198,
-   "name": "schoolroom and library / bookcase 12",
+   "id": 205,
+   "name": "schoolroom and library / bookcase 18",
    "shape": "prefab",
    "prefab": "bookcase",
    "position": [
@@ -3314,8 +3399,8 @@
    }
   },
   {
-   "id": 199,
-   "name": "schoolroom and library / bookcase 13",
+   "id": 206,
+   "name": "schoolroom and library / bookcase 19",
    "shape": "prefab",
    "prefab": "bookcase",
    "position": [
@@ -3333,8 +3418,8 @@
    }
   },
   {
-   "id": 200,
-   "name": "schoolroom and library / library_ladder 14",
+   "id": 207,
+   "name": "schoolroom and library / library_ladder 20",
    "shape": "prefab",
    "prefab": "library_ladder_in_use",
    "position": [
@@ -3352,8 +3437,8 @@
    }
   },
   {
-   "id": 201,
-   "name": "schoolroom and library / book_truck 15",
+   "id": 208,
+   "name": "schoolroom and library / book_truck 21",
    "shape": "prefab",
    "prefab": "book_truck",
    "position": [
@@ -3371,8 +3456,8 @@
    }
   },
   {
-   "id": 202,
-   "name": "schoolroom and library / reading_table 16",
+   "id": 209,
+   "name": "schoolroom and library / reading_table 22",
    "shape": "prefab",
    "prefab": "reading_table",
    "position": [
@@ -3390,8 +3475,8 @@
    }
   },
   {
-   "id": 203,
-   "name": "schoolroom and library / globe 17",
+   "id": 210,
+   "name": "schoolroom and library / globe 23",
    "shape": "prefab",
    "prefab": "globe_in_use",
    "position": [
@@ -3409,8 +3494,8 @@
    }
   },
   {
-   "id": 204,
-   "name": "schoolroom and library / wall_clock 18",
+   "id": 211,
+   "name": "schoolroom and library / wall_clock 24",
    "shape": "prefab",
    "prefab": "wall_clock",
    "position": [
@@ -3428,8 +3513,8 @@
    }
   },
   {
-   "id": 205,
-   "name": "schoolroom and library / flip_chart 19",
+   "id": 212,
+   "name": "schoolroom and library / flip_chart 25",
    "shape": "prefab",
    "prefab": "flip_chart_in_use",
    "position": [
@@ -3447,7 +3532,7 @@
    }
   },
   {
-   "id": 206,
+   "id": 213,
    "name": "bakery / door_glass 1",
    "shape": "prefab",
    "prefab": "door_glass_in_use",
@@ -3466,7 +3551,7 @@
    }
   },
   {
-   "id": 207,
+   "id": 214,
    "name": "bakery / deck_oven 2",
    "shape": "prefab",
    "prefab": "deck_oven_in_use",
@@ -3485,7 +3570,7 @@
    }
   },
   {
-   "id": 208,
+   "id": 215,
    "name": "bakery / dough_mixer 3",
    "shape": "prefab",
    "prefab": "dough_mixer_in_use",
@@ -3504,7 +3589,7 @@
    }
   },
   {
-   "id": 209,
+   "id": 216,
    "name": "bakery / kitchen_base 4",
    "shape": "prefab",
    "prefab": "kitchen_base",
@@ -3523,7 +3608,7 @@
    }
   },
   {
-   "id": 210,
+   "id": 217,
    "name": "bakery / kitchen_base 5",
    "shape": "prefab",
    "prefab": "kitchen_base",
@@ -3542,7 +3627,7 @@
    }
   },
   {
-   "id": 211,
+   "id": 218,
    "name": "bakery / kitchen_base 6",
    "shape": "prefab",
    "prefab": "kitchen_base",
@@ -3561,7 +3646,7 @@
    }
   },
   {
-   "id": 212,
+   "id": 219,
    "name": "bakery / shop_scales 7",
    "shape": "prefab",
    "prefab": "shop_scales_in_use",
@@ -3580,7 +3665,7 @@
    }
   },
   {
-   "id": 213,
+   "id": 220,
    "name": "bakery / stand_mixer 8",
    "shape": "prefab",
    "prefab": "stand_mixer_in_use",
@@ -3599,7 +3684,7 @@
    }
   },
   {
-   "id": 214,
+   "id": 221,
    "name": "bakery / kitchen_swing_doors 9",
    "shape": "prefab",
    "prefab": "kitchen_swing_doors_in_use",
@@ -3618,7 +3703,7 @@
    }
   },
   {
-   "id": 215,
+   "id": 222,
    "name": "bakery / bar_counter 10",
    "shape": "prefab",
    "prefab": "bar_counter",
@@ -3637,7 +3722,7 @@
    }
   },
   {
-   "id": 216,
+   "id": 223,
    "name": "bakery / cash_register 11",
    "shape": "prefab",
    "prefab": "cash_register_in_use",
@@ -3648,7 +3733,7 @@
    ]
   },
   {
-   "id": 217,
+   "id": 224,
    "name": "bakery / display_turntable 12",
    "shape": "prefab",
    "prefab": "display_turntable_in_use",
@@ -3667,7 +3752,7 @@
    }
   },
   {
-   "id": 218,
+   "id": 225,
    "name": "bakery / drinks_fridge_single 13",
    "shape": "prefab",
    "prefab": "drinks_fridge_single_in_use",
@@ -3686,7 +3771,7 @@
    }
   },
   {
-   "id": 219,
+   "id": 226,
    "name": "bakery / wall_clock 14",
    "shape": "prefab",
    "prefab": "wall_clock",
@@ -3705,7 +3790,7 @@
    }
   },
   {
-   "id": 220,
+   "id": 227,
    "name": "north pavement / vending_machine 1",
    "shape": "prefab",
    "prefab": "vending_machine_in_use",
@@ -3716,7 +3801,7 @@
    ]
   },
   {
-   "id": 221,
+   "id": 228,
    "name": "north pavement / kiddie_ride_car 2",
    "shape": "prefab",
    "prefab": "kiddie_ride_car_in_use",
@@ -3727,7 +3812,7 @@
    ]
   },
   {
-   "id": 222,
+   "id": 229,
    "name": "north pavement / kiddie_ride_rocket 3",
    "shape": "prefab",
    "prefab": "kiddie_ride_rocket_in_use",
@@ -3738,7 +3823,7 @@
    ]
   },
   {
-   "id": 223,
+   "id": 230,
    "name": "north pavement / newspaper_box 4",
    "shape": "prefab",
    "prefab": "newspaper_box_in_use",
@@ -3749,7 +3834,7 @@
    ]
   },
   {
-   "id": 224,
+   "id": 231,
    "name": "north pavement / litter_bin 5",
    "shape": "prefab",
    "prefab": "litter_bin_in_use",
@@ -3760,7 +3845,7 @@
    ]
   },
   {
-   "id": 225,
+   "id": 232,
    "name": "north pavement / sandwich_board 6",
    "shape": "prefab",
    "prefab": "sandwich_board",
@@ -3771,7 +3856,7 @@
    ]
   },
   {
-   "id": 226,
+   "id": 233,
    "name": "north pavement / barber_pole 7",
    "shape": "prefab",
    "prefab": "barber_pole",
@@ -3782,7 +3867,7 @@
    ]
   },
   {
-   "id": 227,
+   "id": 234,
    "name": "north pavement / awning 8",
    "shape": "prefab",
    "prefab": "awning_in_use",
@@ -3793,7 +3878,7 @@
    ]
   },
   {
-   "id": 228,
+   "id": 235,
    "name": "north pavement / patio_umbrella 9",
    "shape": "prefab",
    "prefab": "patio_umbrella_in_use",
@@ -3804,7 +3889,7 @@
    ]
   },
   {
-   "id": 229,
+   "id": 236,
    "name": "north pavement / picnic_table 10",
    "shape": "prefab",
    "prefab": "picnic_table",
@@ -3815,7 +3900,7 @@
    ]
   },
   {
-   "id": 230,
+   "id": 237,
    "name": "north pavement / park_bench 11",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -3826,7 +3911,7 @@
    ]
   },
   {
-   "id": 231,
+   "id": 238,
    "name": "north pavement / bike_rack 12",
    "shape": "prefab",
    "prefab": "bike_rack",
@@ -3837,7 +3922,7 @@
    ]
   },
   {
-   "id": 232,
+   "id": 239,
    "name": "north pavement / mailbox 13",
    "shape": "prefab",
    "prefab": "mailbox_in_use",
@@ -3848,7 +3933,7 @@
    ]
   },
   {
-   "id": 233,
+   "id": 240,
    "name": "north pavement / street_lamp 14",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -3859,7 +3944,7 @@
    ]
   },
   {
-   "id": 234,
+   "id": 241,
    "name": "north pavement / street_lamp 15",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -3870,7 +3955,7 @@
    ]
   },
   {
-   "id": 235,
+   "id": 242,
    "name": "north pavement / hydrant 16",
    "shape": "prefab",
    "prefab": "hydrant",
@@ -3881,7 +3966,7 @@
    ]
   },
   {
-   "id": 236,
+   "id": 243,
    "name": "north pavement / mailboxes 17",
    "shape": "prefab",
    "prefab": "mailboxes_in_use",
@@ -3892,7 +3977,7 @@
    ]
   },
   {
-   "id": 237,
+   "id": 244,
    "name": "south pavement / park_bench 1",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -3911,7 +3996,7 @@
    }
   },
   {
-   "id": 238,
+   "id": 245,
    "name": "south pavement / litter_bin 2",
    "shape": "prefab",
    "prefab": "litter_bin_in_use",
@@ -3930,7 +4015,7 @@
    }
   },
   {
-   "id": 239,
+   "id": 246,
    "name": "south pavement / street_lamp 3",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -3949,7 +4034,7 @@
    }
   },
   {
-   "id": 240,
+   "id": 247,
    "name": "south pavement / street_lamp 4",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -3968,7 +4053,7 @@
    }
   },
   {
-   "id": 241,
+   "id": 248,
    "name": "south pavement / awning 5",
    "shape": "prefab",
    "prefab": "awning_in_use",
@@ -3987,7 +4072,7 @@
    }
   },
   {
-   "id": 242,
+   "id": 249,
    "name": "south pavement / sandwich_board 6",
    "shape": "prefab",
    "prefab": "sandwich_board",
@@ -4006,7 +4091,7 @@
    }
   },
   {
-   "id": 243,
+   "id": 250,
    "name": "south pavement / bike_rack 7",
    "shape": "prefab",
    "prefab": "bike_rack",
@@ -4025,7 +4110,7 @@
    }
   },
   {
-   "id": 244,
+   "id": 251,
    "name": "street end / parking_barrier 1",
    "shape": "prefab",
    "prefab": "parking_barrier_in_use",
@@ -4044,7 +4129,7 @@
    }
   },
   {
-   "id": 245,
+   "id": 252,
    "name": "street end / rising_bollard 2",
    "shape": "prefab",
    "prefab": "rising_bollard_in_use",
@@ -4055,7 +4140,7 @@
    ]
   },
   {
-   "id": 246,
+   "id": 253,
    "name": "street end / rising_bollard 3",
    "shape": "prefab",
    "prefab": "rising_bollard_in_use",
@@ -4066,7 +4151,7 @@
    ]
   },
   {
-   "id": 247,
+   "id": 254,
    "name": "street end / rising_bollard 4",
    "shape": "prefab",
    "prefab": "rising_bollard_in_use",
@@ -4077,7 +4162,7 @@
    ]
   },
   {
-   "id": 248,
+   "id": 255,
    "name": "street end / parked_sedan 5",
    "shape": "prefab",
    "prefab": "parked_sedan",
@@ -4096,7 +4181,7 @@
    }
   },
   {
-   "id": 249,
+   "id": 256,
    "name": "street end / parked_pickup 6",
    "shape": "prefab",
    "prefab": "parked_pickup",
@@ -4115,7 +4200,7 @@
    }
   },
   {
-   "id": 250,
+   "id": 257,
    "name": "playground / playground_swing 1",
    "shape": "prefab",
    "prefab": "playground_swing_in_use",
@@ -4126,7 +4211,7 @@
    ]
   },
   {
-   "id": 251,
+   "id": 258,
    "name": "playground / playground_seesaw 2",
    "shape": "prefab",
    "prefab": "playground_seesaw_in_use",
@@ -4137,7 +4222,7 @@
    ]
   },
   {
-   "id": 252,
+   "id": 259,
    "name": "playground / playground_roundabout 3",
    "shape": "prefab",
    "prefab": "playground_roundabout_in_use",
@@ -4148,7 +4233,7 @@
    ]
   },
   {
-   "id": 253,
+   "id": 260,
    "name": "playground / playground_slide 4",
    "shape": "prefab",
    "prefab": "playground_slide",
@@ -4159,7 +4244,7 @@
    ]
   },
   {
-   "id": 254,
+   "id": 261,
    "name": "playground / park_bench 5",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -4170,7 +4255,7 @@
    ]
   },
   {
-   "id": 255,
+   "id": 262,
    "name": "playground / park_bench 6",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -4189,7 +4274,7 @@
    }
   },
   {
-   "id": 256,
+   "id": 263,
    "name": "playground / litter_bin 7",
    "shape": "prefab",
    "prefab": "litter_bin_in_use",
@@ -4200,7 +4285,7 @@
    ]
   },
   {
-   "id": 257,
+   "id": 264,
    "name": "playground / drinking_fountain 8",
    "shape": "prefab",
    "prefab": "drinking_fountain",
@@ -4211,7 +4296,7 @@
    ]
   },
   {
-   "id": 258,
+   "id": 265,
    "name": "playground / park_sculpture 9",
    "shape": "prefab",
    "prefab": "park_sculpture",
@@ -4222,7 +4307,7 @@
    ]
   },
   {
-   "id": 259,
+   "id": 266,
    "name": "playground / oak 10",
    "shape": "prefab",
    "prefab": "oak",
@@ -4233,7 +4318,7 @@
    ]
   },
   {
-   "id": 260,
+   "id": 267,
    "name": "playground / oak 11",
    "shape": "prefab",
    "prefab": "oak",
@@ -4244,7 +4329,7 @@
    ]
   },
   {
-   "id": 261,
+   "id": 268,
    "name": "playground / boulder 12",
    "shape": "prefab",
    "prefab": "boulder",
@@ -4255,7 +4340,7 @@
    ]
   },
   {
-   "id": 262,
+   "id": 269,
    "name": "playground / garden_gate 13",
    "shape": "prefab",
    "prefab": "garden_gate_in_use",
@@ -4274,7 +4359,7 @@
    }
   },
   {
-   "id": 263,
+   "id": 270,
    "name": "playground / picnic_table 14",
    "shape": "prefab",
    "prefab": "picnic_table",
@@ -4285,7 +4370,7 @@
    ]
   },
   {
-   "id": 264,
+   "id": 271,
    "name": "playground / bbq 15",
    "shape": "prefab",
    "prefab": "bbq_in_use",
@@ -4296,7 +4381,7 @@
    ]
   },
   {
-   "id": 265,
+   "id": 272,
    "name": "playground / porch_swing 16",
    "shape": "prefab",
    "prefab": "porch_swing_in_use",
@@ -4315,7 +4400,7 @@
    }
   },
   {
-   "id": 266,
+   "id": 273,
    "name": "playground / rotary_dryer 17",
    "shape": "prefab",
    "prefab": "rotary_dryer_in_use",
@@ -4326,7 +4411,7 @@
    ]
   },
   {
-   "id": 267,
+   "id": 274,
    "name": "playground / weathervane 18",
    "shape": "prefab",
    "prefab": "weathervane_in_use",
@@ -4337,7 +4422,7 @@
    ]
   },
   {
-   "id": 268,
+   "id": 275,
    "name": "playground / wind_chime 19",
    "shape": "prefab",
    "prefab": "wind_chime_in_use",
@@ -4348,7 +4433,7 @@
    ]
   },
   {
-   "id": 269,
+   "id": 276,
    "name": "square / fountain_plaza 1",
    "shape": "prefab",
    "prefab": "fountain_plaza",
@@ -4359,7 +4444,7 @@
    ]
   },
   {
-   "id": 270,
+   "id": 277,
    "name": "square / flagpole 2",
    "shape": "prefab",
    "prefab": "flagpole_in_use",
@@ -4370,7 +4455,7 @@
    ]
   },
   {
-   "id": 271,
+   "id": 278,
    "name": "square / park_bench 3",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -4389,7 +4474,7 @@
    }
   },
   {
-   "id": 272,
+   "id": 279,
    "name": "square / park_bench 4",
    "shape": "prefab",
    "prefab": "park_bench",
@@ -4408,7 +4493,7 @@
    }
   },
   {
-   "id": 273,
+   "id": 280,
    "name": "square / escalator_up 5",
    "shape": "prefab",
    "prefab": "escalator_up",
@@ -4427,7 +4512,7 @@
    }
   },
   {
-   "id": 274,
+   "id": 281,
    "name": "square / revolving_door 6",
    "shape": "prefab",
    "prefab": "revolving_door_in_use",
@@ -4438,7 +4523,7 @@
    ]
   },
   {
-   "id": 275,
+   "id": 282,
    "name": "square / lift_doors 7",
    "shape": "prefab",
    "prefab": "lift_doors_in_use",
@@ -4457,7 +4542,7 @@
    }
   },
   {
-   "id": 276,
+   "id": 283,
    "name": "square / garage_door 8",
    "shape": "prefab",
    "prefab": "garage_door_in_use",
@@ -4476,7 +4561,7 @@
    }
   },
   {
-   "id": 277,
+   "id": 284,
    "name": "square / roller_shutter 9",
    "shape": "prefab",
    "prefab": "roller_shutter_in_use",
@@ -4495,7 +4580,7 @@
    }
   },
   {
-   "id": 278,
+   "id": 285,
    "name": "square / ballot_box 10",
    "shape": "prefab",
    "prefab": "ballot_box_in_use",
@@ -4506,7 +4591,7 @@
    ]
   },
   {
-   "id": 279,
+   "id": 286,
    "name": "square / street_lamp 11",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -4517,7 +4602,7 @@
    ]
   },
   {
-   "id": 280,
+   "id": 287,
    "name": "square / street_lamp 12",
    "shape": "prefab",
    "prefab": "street_lamp",
@@ -4528,8 +4613,198 @@
    ]
   },
   {
-   "id": 281,
-   "name": "square / sash_window 13",
+   "id": 288,
+   "name": "square / front_door_red 13",
+   "shape": "prefab",
+   "prefab": "front_door_red",
+   "position": [
+    30.5,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 289,
+   "name": "square / front_door_green 14",
+   "shape": "prefab",
+   "prefab": "front_door_green",
+   "position": [
+    32.6,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 290,
+   "name": "square / front_door_wood 15",
+   "shape": "prefab",
+   "prefab": "front_door_wood",
+   "position": [
+    34.7,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 291,
+   "name": "square / back_door 16",
+   "shape": "prefab",
+   "prefab": "back_door",
+   "position": [
+    36.8,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 292,
+   "name": "square / fire_exit 17",
+   "shape": "prefab",
+   "prefab": "fire_exit",
+   "position": [
+    38.9,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 293,
+   "name": "square / shop_door 18",
+   "shape": "prefab",
+   "prefab": "shop_door",
+   "position": [
+    41.0,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 294,
+   "name": "square / apartment_entrance 19",
+   "shape": "prefab",
+   "prefab": "apartment_entrance",
+   "position": [
+    43.1,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 295,
+   "name": "square / office_entrance 20",
+   "shape": "prefab",
+   "prefab": "office_entrance",
+   "position": [
+    45.2,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 296,
+   "name": "square / school_entrance 21",
+   "shape": "prefab",
+   "prefab": "school_entrance",
+   "position": [
+    47.3,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 297,
+   "name": "square / civic_entrance 22",
+   "shape": "prefab",
+   "prefab": "civic_entrance",
+   "position": [
+    49.4,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 298,
+   "name": "square / sash_window 23",
    "shape": "prefab",
    "prefab": "sash_window_in_use",
    "position": [
@@ -4539,8 +4814,8 @@
    ]
   },
   {
-   "id": 282,
-   "name": "square / casement_window 14",
+   "id": 299,
+   "name": "square / casement_window 24",
    "shape": "prefab",
    "prefab": "casement_window_in_use",
    "position": [
@@ -4550,8 +4825,8 @@
    ]
   },
   {
-   "id": 283,
-   "name": "square / shoji_screens 15",
+   "id": 300,
+   "name": "square / shoji_screens 25",
    "shape": "prefab",
    "prefab": "shoji_screens_in_use",
    "position": [
@@ -4561,8 +4836,8 @@
    ]
   },
   {
-   "id": 284,
-   "name": "square / cinema_seats 16",
+   "id": 301,
+   "name": "square / cinema_seats 26",
    "shape": "prefab",
    "prefab": "cinema_seats_in_use",
    "position": [
@@ -4572,8 +4847,8 @@
    ]
   },
   {
-   "id": 285,
-   "name": "square / lecture_seats 17",
+   "id": 302,
+   "name": "square / lecture_seats 27",
    "shape": "prefab",
    "prefab": "lecture_seats_in_use",
    "position": [
@@ -4583,8 +4858,8 @@
    ]
   },
   {
-   "id": 286,
-   "name": "square / dj_deck 18",
+   "id": 303,
+   "name": "square / dj_deck 28",
    "shape": "prefab",
    "prefab": "dj_deck_in_use",
    "position": [
@@ -4602,8 +4877,8 @@
    }
   },
   {
-   "id": 287,
-   "name": "square / mirror_ball 19",
+   "id": 304,
+   "name": "square / mirror_ball 29",
    "shape": "prefab",
    "prefab": "mirror_ball_in_use",
    "position": [
@@ -4613,8 +4888,8 @@
    ]
   },
   {
-   "id": 288,
-   "name": "square / clothes_rail_round 20",
+   "id": 305,
+   "name": "square / clothes_rail_round 30",
    "shape": "prefab",
    "prefab": "clothes_rail_round_in_use",
    "position": [

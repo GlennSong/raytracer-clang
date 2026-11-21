@@ -2,6 +2,8 @@
 // sweeps a box off a post; and a script moves a copy's nodes.
 #include "test_framework.h"
 
+#include <algorithm>
+
 #include "../src/engine/model_motion.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/scripting/prefab_list.h"
@@ -84,4 +86,33 @@ TEST_CASE(a_cranes_boom_swung_by_its_cab_sweeps_a_box_off_a_post) {
     CHECK(fell.y < 1.0);
     CHECK(fell.z < -0.2);
     physics.shutdown();
+}
+
+TEST_CASE(a_part_that_has_arrived_is_drawn_still) {
+    // The renderer draws a piece between its previous place and its place. On the step a part arrives its previous
+    // place is one step behind; the step after must bring it up, or the part trembles for as long as it stands.
+    World world;
+    ModelStore store;
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    const Entity e = stampPrefab(world, nullptr, crane, Transform(), std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    ModelMotionSystem motion;   // no physics: the pieces are what is asked about
+    const Real deg = 3.14159265358979 / 180.0, step = 1.0 / 60.0;
+    CHECK(setModelTarget(world, e, "boom", 30 * deg, 20 * deg));
+    auto apart = [&]() {
+        Real most = 0;
+        for (Entity pe : world.get<ModelInstance>(e)->pieces) {
+            const Transform* t = world.get<Transform>(pe);
+            const PrevTransform* prev = world.get<PrevTransform>(pe);
+            if (t != nullptr && prev != nullptr) most = std::max(most, (t->position - prev->value.position).length());
+        }
+        return most;
+    };
+    for (int i = 0; i < 30; ++i) motion.step(world, step);
+    CHECK(apart() > 1e-4);                                  // on its way: a step behind, as it should be
+    for (int i = 0; i < 120; ++i) motion.step(world, step);
+    CHECK_APPROX(modelValue(world, e, "boom"), 30 * deg, 1e-9);
+    CHECK_APPROX(apart(), 0.0, 1e-12);                      // arrived, and still
 }

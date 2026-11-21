@@ -107,7 +107,8 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
     for (const PrefabUse& use : all) {
         std::string why;
         if (mi->model->findMarker(use.at) == nullptr) why = "no marker '" + use.at + "'";
-        if (why.empty() && use.move.empty() && use.run.empty() && use.sway.empty() && !use.sit && !use.lie) why = "none of the parts it names";
+        if (why.empty() && use.move.empty() && use.run.empty() && use.sway.empty() && use.light.empty() && !use.sit && !use.lie) why = "none of the parts it names";
+        if (why.empty() && !use.lightAt.empty() && mi->model->findMarker(use.lightAt) == nullptr) why = "no marker '" + use.lightAt + "'";
         for (const std::vector<std::pair<std::string, Real>>* list : {&use.move, &use.run, &use.sway})
             for (const std::pair<std::string, Real>& n : *list)
                 if (why.empty() && mi->model->jointAt(n.first) == nullptr) why = "no moving node '" + n.first + "'";
@@ -135,7 +136,11 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
     if (!mine.uses.empty()) world.add<PrefabUses>(instance, std::move(mine));
 }
 
-const std::string& prefabUseWord(const PrefabUses::Use& use) { return use.on && !use.use.back.empty() ? use.use.back : use.use.say; }
+const std::string& prefabUseWord(const PrefabUses::Use& use) {
+    static const std::string kStop = "stop";
+    if (use.use.stop && use.moving) return kStop;
+    return use.on && !use.use.back.empty() ? use.use.back : use.use.say;
+}
 
 bool prefabUseOffered(const PrefabUses& uses, std::size_t index) {
     if (index >= uses.uses.size()) return false;
@@ -159,6 +164,7 @@ bool setPrefabUse(World& world, Entity instance, std::size_t index, bool on) {
     if (on) { u.coasting = 0; if (!was) u.time = 0; }
     else if (was && u.use.coast > 0 && !u.use.run.empty()) u.coasting = u.use.coast;
     apply(world, instance, u);
+    u.moving = !u.use.move.empty() && u.use.speed > 0;
     // A use that cannot be undone by hand and has no time of its own (a button pressed) lets go by itself.
     if (on && u.use.back.empty() && u.use.seconds <= 0 && u.use.run.empty() && !u.use.move.empty()) u.left = Real(0.4);
     return true;
@@ -169,6 +175,11 @@ bool doPrefabUse(World& world, Entity instance, std::size_t index) {
     if (uses == nullptr || index >= uses->uses.size()) return false;
     const PrefabUses::Use& u = uses->uses[index];
     if (!prefabUseOffered(*uses, index)) return false;
+    if (u.use.stop && u.moving) {   // stopped part way: the parts stay where they are
+        for (const std::pair<std::string, Real>& m : u.use.move) setModelTarget(world, instance, m.first, modelValue(world, instance, m.first), 0);
+        world.get<PrefabUses>(instance)->uses[index].moving = false;
+        return true;
+    }
     return setPrefabUse(world, instance, index, u.use.back.empty() ? true : !u.on);
 }
 
@@ -181,6 +192,11 @@ void stepPrefabUses(World& world, Real dt) {
         if (uses == nullptr || mi == nullptr) continue;
         for (std::size_t i = 0; i < uses->uses.size(); ++i) {
             PrefabUses::Use& u = uses->uses[i];
+            if (u.moving) {   // still on its way? (its parts have a target until they arrive)
+                bool any = false;
+                for (const std::pair<std::string, Real>& m : u.use.move) any = any || mi->target.values.count(m.first) > 0;
+                u.moving = any;
+            }
             if (!u.on && u.coasting <= 0) continue;
             // how hard it runs: full while on, then less and less as it coasts
             const Real drive = u.on ? Real(1) : u.coasting / std::max(u.use.coast, Real(1e-6));

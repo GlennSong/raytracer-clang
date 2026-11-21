@@ -19,6 +19,7 @@ class PrefabUseSystem : public System {
 public:
     void update(FrameContext& ctx) override;
     void fixedUpdate(FrameContext& ctx) override;
+    void render(FrameContext& ctx) override;   // the lamps that are on, to the light board (lights/light_board.h)
 
     static constexpr double REACH = 1.8;
 };

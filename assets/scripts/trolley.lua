@@ -72,12 +72,12 @@ elseif a.kind == "books" then
   for row = 0, 1 do
     local y = 0.22 + row * 0.42
     for _, s in ipairs{ -1, 1 } do
-      c.tilted("paint", V(0, y, s * 0.11), V(0.86, 0.012, 0.22), 0.0, s * 0.25, col)       -- a shelf sloping in toward the middle
+      c.tilted("paint", V(0, y, s * 0.11), V(0.86, 0.012, 0.22), 0.0, -s * 0.25, col)       -- a shelf sloping in toward the middle
       local x = -0.4
       local i = 0
       while x < 0.36 do
         local w = 0.025 + 0.012 * ((i * 5 + row * 3) % 4)
-        c.tilted("hard", V(x + w / 2, y + 0.115, s * 0.1), V(w - 0.002, 0.2 + 0.02 * (i % 3), 0.16), 0.002, s * 0.25, shades[(i + row * 2 + (s > 0 and 3 or 0)) % #shades + 1])
+        c.tilted("hard", V(x + w / 2, y + 0.115, s * 0.1), V(w - 0.002, 0.2 + 0.02 * (i % 3), 0.16), 0.002, -s * 0.25, shades[(i + row * 2 + (s > 0 and 3 or 0)) % #shades + 1])
         x, i = x + w, i + 1
       end
     end

@@ -1047,6 +1047,12 @@ struct AuthoredPlace {
 // default, the same silent-override class as the bloom-settings stomp). A
 // level that authors a static sun sets enabled=false; one that wants the
 // cycle seeds its start time/speed. Absent block = cycle runs as before.
+// THE GAME'S CLOCK, where anything can read it (#191: a prefab's clock shows the game's time). One entity carries it;
+// DayNightSystem writes the hour of the game's day each frame. Absent in a level with no cycle.
+struct GameClock {
+    double hour = 12.0;   // 0..24
+};
+
 struct DayNightConfig {
     bool enabled = true;
     float timeOfDay = -1.0f;   // [0,1) start; <0 = keep the cycle's default

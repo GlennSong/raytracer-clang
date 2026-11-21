@@ -300,3 +300,37 @@ TEST_CASE(a_seat_that_is_sat_on_runs_and_sways_until_its_sitter_gets_up) {
     for (int i = 0; i < 60 * 3; ++i) { stepPrefabUses(world, step); advanceModelMotion(world, e, step); }
     CHECK_APPROX(modelValue(world, e, "rock"), 0.0, 1e-6);
 }
+
+TEST_CASE(a_desk_can_be_stopped_part_way_and_sent_back) {
+    World world;
+    ModelStore store;
+    Prefab desk;
+    CHECK(findPrefab("standing_desk", desk));
+    const Entity e = stampPrefab(world, nullptr, desk, Transform(), std::string(), nullptr, &store);
+    const PrefabUses* uses = e.valid() ? world.get<PrefabUses>(e) : nullptr;
+    CHECK(uses != nullptr && uses->uses.size() == 1 && uses->uses[0].use.stop);
+    if (uses == nullptr || uses->uses.empty()) return;
+    const Real step = 1.0 / 60.0;
+    auto run = [&](Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds * 60 + 0.5); ++i) { stepPrefabUses(world, step); advanceModelMotion(world, e, step); }
+    };
+    auto word = [&]() { return prefabUseWord(world.get<PrefabUses>(e)->uses[0]); };
+    // RAISE, and while it rises the word is "stop".
+    CHECK(word() == "raise");
+    CHECK(doPrefabUse(world, e, 0));
+    run(1.0);
+    CHECK(word() == "stop");
+    const Real rising = modelValue(world, e, "top");
+    CHECK(rising > 0.05 && rising < 0.12);                  // 0.08 m a second
+    // STOP: it stays where it is, and the next word sends it back down.
+    CHECK(doPrefabUse(world, e, 0));
+    run(1.0);
+    CHECK_APPROX(modelValue(world, e, "top"), rising, 1e-9);
+    CHECK(word() == "lower");
+    CHECK(doPrefabUse(world, e, 0));
+    run(0.5);
+    CHECK(word() == "stop");
+    run(3.0);
+    CHECK_APPROX(modelValue(world, e, "top"), 0.0, 1e-9);
+    CHECK(word() == "raise");
+}

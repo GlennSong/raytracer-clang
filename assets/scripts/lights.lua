@@ -86,6 +86,11 @@ return {
     -- ...and a dim fill a storey (the nearest building, 4 storeys round the player; BuildingInteriorSystem gives the
     -- building's reach): the light the rooms bounce about, and the corridors', which hang no fittings
     room_fill = { candela = 250, type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 5, range = 20 },
+    -- the lamps of stamped prefabs, lit while their use is on (prefabs.lua `light`; PrefabUseSystem): a desk or
+    -- bedside lamp's warm pool, an examination lamp's hard white cone, the cold light inside a fridge
+    lamp_warm = { candela = 120, type = "point", color = { 1.0, 0.78, 0.5 }, intensity = 5, range = 5 },
+    lamp_exam = { candela = 900, type = "spot", color = { 0.97, 0.98, 1.0 }, intensity = 30, range = 6, cone = { 0.35, 0.6 } },
+    lamp_cool = { candela = 60, type = "point", color = { 0.85, 0.93, 1.0 }, intensity = 2.5, range = 2.5 },
     -- an elevator cab's ceiling light
     cab = { candela = 300, type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
     -- city traffic's lamps, from each car's own markers (CityRenderSystem): a short red glow behind the tail lamps,

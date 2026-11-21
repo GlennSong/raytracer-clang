@@ -8,6 +8,8 @@
 #include "../system.h"
 #include "../world.h"
 
+#include <vector>
+
 namespace engine {
 
 class PhysicsSystem;
@@ -22,6 +24,7 @@ public:
 
 private:
     PhysicsSystem* physics_;
+    std::vector<Entity> settle_;   // moved last step: their pieces' previous place is brought up once they stop
 };
 
 }  // namespace engine
