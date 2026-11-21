@@ -81,6 +81,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | c4e42954 | furniture and street pieces with moving parts: `model_kit.lua` (the furniture kit's shape words on a model's nodes), `model_moves.lua` (one behaviour, a list per prefab), 21 recipes, 39 models, 67 prefabs; behaviour scripts can `require` (`ScriptSystem::setModuleSource`, `ScriptWatch::add`) |
 | 09172b7b | pieces for the city's kinds of place (doors, shop fridges and machines, cafe and bar things, campus seats and boards, an escalator, racks, rides, trolleys, a fountain): 22 recipes, 46 models, 81 prefabs; `model_moves.lua` gains `loop` |
 | 680a1467 | pieces for a home (kitchen, bathroom, bedroom, child's room, windows and curtains, piano and clock, garden): 11 recipes, 34 models, 67 prefabs; `model_moves.lua` gains `travel` (moves by the clock, so parts with different limits stay in step: fixes the shutter, awning and projector screen); `model_kit.lua` gains `carcass`, `facing`, `ball` |
+| 2308fd3d | pieces for gyms, clinics, offices, stations, public counters, schools and bakers: 6 recipes, 30 models, 60 prefabs; `loop` reused for things fed out one after another |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
