@@ -374,6 +374,7 @@ TEST_CASE(level_every_lanes_level_hands_the_sim_its_road_model) {
     std::sort(files.begin(), files.end());
     int lanesLevels = 0, handed = 0, withWalks = 0;
     std::vector<std::string> notHanded;
+    std::map<std::string, std::size_t> walksOf;   // per level handed: its walks
     for (const std::filesystem::path& p : files) {
         bundle::LevelInputs in;
         std::string err;
@@ -393,6 +394,24 @@ TEST_CASE(level_every_lanes_level_hands_the_sim_its_road_model) {
         if (!m) notHanded.push_back(p.filename().string() + " (" + (built.error.empty() ? "no built model" : built.error) + ")");
         std::printf("    [lanes levels] %-24s %s; %zu walks; %s\n", p.filename().string().c_str(),
                     m ? "the sim holds its road model" : "NO ROAD MODEL", walks, built.fromCache ? "from the cache" : "built");
+        for (const std::string& n : built.notes) std::printf("        note: %s\n", n.c_str());
+        if (!m) continue;
+        walksOf[p.filename().string()] = walks;
+        // what the walks are, and how much of the sidewalks one walker can get round (the parts on foot, ADR-0466)
+        const LaneGraph& G = m->laneLevel;
+        std::map<std::string, uint32_t> kinds;
+        for (uint32_t w = 0; w < G.walks.size(); ++w) ++kinds[m->walkKind(WalkId(w))];
+        const ReachableParts parts = reachableWalks(G, m->openTo("walker").walks);
+        uint32_t sidewalks = 0, inLargest = 0;
+        for (uint32_t w = 0; w < G.walks.size(); ++w) {
+            if (m->walkKind(WalkId(w)) != "sidewalk") continue;
+            ++sidewalks;
+            inLargest += parts.partOf[w] == parts.largest ? 1u : 0u;
+        }
+        std::printf("        ");
+        for (const std::pair<const std::string, uint32_t>& k : kinds) std::printf("%u %s, ", k.second, k.first.c_str());
+        std::printf("%zu lane paths; %zu parts on foot, %u of %u sidewalks (%.1f%%) in the largest\n", G.paths.size(),
+                    parts.sizes.size(), inLargest, sidewalks, sidewalks ? 100.0 * inLargest / sidewalks : 0.0);
     }
     std::printf("    [lanes levels] %d levels with a lane-built city and a city sim; %d hand the sim their road model, %d with walks\n",
                 lanesLevels, handed, withWalks);
@@ -400,9 +419,11 @@ TEST_CASE(level_every_lanes_level_hands_the_sim_its_road_model) {
     // Every level whose first city IS built hands it over, walks and all. The rest have no built model to hand: their
     // road files do not yet state what the lane level needs (lane rules, junction arms in ring order, and on rail_lab every
     // junction's control; the line above names the tool run for each), so the loader publishes only the planned layer and
-    // there are no walks to walk. Measured 2026-11-20: 13 levels, 5 handed. Stating those facts writes the road files and
-    // re-bakes the levels; it is Glenn's to schedule before #306 piece 6's switch (W3), and is NOT done here. When a level
-    // gains its lane level, it moves from the list below to the handed ones: take it out of the list.
+    // there are no walks to walk. Measured 2026-11-20: 13 levels, 5 handed. The 8 stay without walks by Glenn's decision
+    // (metro_planned is his work in progress). island_8_nature's facts were filled in once (ADR-0480 W1b: 14,563 walks) and
+    // PARKED: its lane level fails its own lane-table check at j396, so it is never cached and its bake runs out of
+    // memory; the filled-in road file is kept at out/w1b_island/island_8_nature_lanelab.filled.json until Glenn decides on
+    // j396. When a level gains its lane level, it moves from the list below to the handed ones: take it out of the list.
     const std::set<std::string> roadFileStatesNoLaneLevel = {"island_8_nature.json", "light_rail_lab.json", "metro_mountain.json",
                                                              "metro_planned.json",   "metro_v2_test.json",  "piedmont.json",
                                                              "rail_lab.json",        "wheel_lab.json"};
@@ -411,4 +432,5 @@ TEST_CASE(level_every_lanes_level_hands_the_sim_its_road_model) {
     CHECK(lanesLevels == 13);
     CHECK(handed == 5 && withWalks == handed);
     CHECK(notHandedNames == roadFileStatesNoLaneLevel);
+    CHECK(walksOf.count("island_8_nature.json") == 0u);
 }

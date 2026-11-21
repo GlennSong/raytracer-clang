@@ -455,11 +455,16 @@ data rows.
 ## 8. Known faults and open work
 
 - **8 of the 13 lanes levels have no lane level, so no walks** (ADR-0480): island_8_nature, light_rail_lab,
-  metro_mountain, metro_planned, metro_v2_test, piedmont, rail_lab, wheel_lab. Their road files state no lane rules
-  (all but wheel_lab also no ring order of their junctions' arms; rail_lab also not every control), so the loader
-  publishes the planned layer only. `level_every_lanes_level_hands_the_sim_its_road_model` names the tool run for each.
-  Stating them writes the road files and re-bakes those levels; it is needed before #306 piece 6 walks people by the
-  walks (W3).
+  metro_mountain, metro_planned (Glenn's work in progress: never touch), metro_v2_test, piedmont, rail_lab, wheel_lab.
+  Their road files state no lane rules (all but wheel_lab also no ring order of their junctions' arms; rail_lab also not
+  every control), so the loader publishes the planned layer only. They stay so by Glenn's decision.
+  `level_every_lanes_level_hands_the_sim_its_road_model` names the tool run for each.
+- **island_8_nature's fill-in is parked** (ADR-0480 W1b): with its lane facts stated (the file kept at
+  `out/w1b_island/island_8_nature_lanelab.filled.json`) its lane level builds (14,563 walks; 51 parts on foot, 19.8% of
+  sidewalks in the largest; a car gets round 50.2% of the lane paths) but fails its own check at j396 (lanes end up to
+  3.2 m from the junction's outline, 1.5 m allowed). Two engine weaknesses follow, one issue: a lane level failing its
+  check is never cached, so every reader builds it again (13-15 min); and a cold bake's lots producer builds it on top
+  of the grown lots and runs out of memory under the 30 GB limit. Waiting on Glenn's decision on j396.
 - **Step 9a's stop lines** (ADR-0428) sit 1–2 m further out than the paint's at most junctions. The old box was
   sampled every 2 m, so it usually ended a metre inside the crossing road. Corners are still drawn without a stated
   radius (step 9b). Since ADR-0471 the stop lines at sharp-angled junctions stand back further, which costs river_town
