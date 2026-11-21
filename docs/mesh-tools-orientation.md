@@ -80,6 +80,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | afc9ee0b | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
 | c4e42954 | furniture and street pieces with moving parts: `model_kit.lua` (the furniture kit's shape words on a model's nodes), `model_moves.lua` (one behaviour, a list per prefab), 21 recipes, 39 models, 67 prefabs; behaviour scripts can `require` (`ScriptSystem::setModuleSource`, `ScriptWatch::add`) |
 | 09172b7b | pieces for the city's kinds of place (doors, shop fridges and machines, cafe and bar things, campus seats and boards, an escalator, racks, rides, trolleys, a fountain): 22 recipes, 46 models, 81 prefabs; `model_moves.lua` gains `loop` |
+| 680a1467 | pieces for a home (kitchen, bathroom, bedroom, child's room, windows and curtains, piano and clock, garden): 11 recipes, 34 models, 67 prefabs; `model_moves.lua` gains `travel` (moves by the clock, so parts with different limits stay in step: fixes the shutter, awning and projector screen); `model_kit.lua` gains `carcass`, `facing`, `ball` |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
@@ -171,7 +172,7 @@ of the furniture kit's helpers), give its prefab a script that is a list for `mo
 and when two of its parts must stay in step or take turns give them `travel` (moves timed by the clock),
 and check it with `rt_model_sheet assets/scripts/<recipe>.lua --set <node>=<value>` and then in the editor in play.
 The lists of what exists are the tables in `docs/model-record-design.md`, "The third", "The fourth" (by kind of
-place) and "The fifth" (a home, by room). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
+place), "The fifth" (a home, by room) and "The sixth" (gym, clinic, office, station, counters, school, baker). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
 (`furniture_library.lua`), and interactions on prefabs must extend that, not sit beside it.
 
 

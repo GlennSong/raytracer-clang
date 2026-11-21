@@ -1185,6 +1185,36 @@ windows); hanging pieces (`baby_mobile`, `roller_blind`) still sit half in the f
 recipes that use `mesh.sphere` for small knobs (the espresso lever, the kiddie rides, the capsule machines, the
 racks, the barber pole, the queue posts) should change to `kit.ball`.
 
+### The sixth: gyms, clinics, offices, stations, counters, schools and bakers (2026-11-21)
+
+Glenn: "Keep building things!" 30 more models and 60 more prefabs from 6 recipes, for kinds of place the earlier
+batches had little for:
+
+| Place | Models | What moves |
+|---|---|---|
+| Gym | `exercise_bike`, `rowing_machine`, `weight_machine`, `punch_bag`, `treadmill` | cranks and flywheel; seat, handle and fan; the bar down as the weights go up; the bag; the deck tilts and marks run along the belt |
+| Clinic, hospital | `care_bed`, `iv_stand`, `wheelchair`, `exam_lamp` | the bed rises, its head end tilts, its rails drop; the pole; wheels and foot rests; the lamp's arm and head |
+| Office | `printer`, `shredder`, `server_rack`, `flip_chart`, `paper_trimmer` | lid, paper drawer and a sheet coming out; the bin and a sheet going in; a glass door and a server on rails; the top sheet; the blade |
+| Station, public hall | `flap_gate`, `departure_board`, `baggage_scanner`, `turnstile_full` | two paddles; 60 flap drums, a quarter turn at a time; rollers, curtain strips and a tray riding through; the rotor |
+| Civic counter, hotel, corridor | `ballot_box`, `room_safe`, `fire_hose_cabinet`, `reception_bell`, `teller_window`, `ticket_dispenser` | a paper dropping in; door and dial; door, reel and drum; the button; a tray and a blind of strips; a ticket |
+| School, library | `flip_desk`, `school_bell`, `library_ladder` | the lid; bell and clapper; the ladder rolls along its rail |
+| Baker, grocer | `dough_mixer`, `deck_oven`, `shop_scales` | bowl and hook, opposite ways; three drop doors; the pan and the needle |
+
+New in how they are made:
+
+- **Things that keep coming.** `loop` (made for the escalator) also serves anything fed out one after another: the
+  copier's sheets, the shredder's, ballot papers, queue tickets, the tray through the scanner, and the marks on the
+  treadmill's belt, which are how a belt that cannot scroll is seen to run.
+- **A board of drums.** The departure board's flaps are 60 small four-sided drums, each a node, stepped a quarter
+  turn at a time with waits that differ a little by row and column, so a change ripples across it. It shows marks,
+  not letters: text on models is not built.
+
+Seen: a sheet of each, and all 30 moving prefabs in the editor in play. The desk bell ran without error but its quarter-second press fell
+between the two readings, so it has not been seen to move.
+
+Not done: the wheelchair, the ladder's climber and the bed do not carry a person (step 9), and the wheelchair does
+not travel (#311).
+
 ### What step 9 must build on: the furniture kit already has seats and verbs
 
 Found while choosing these (not known when the markers above were named): `assets/scripts/furniture_library.lua`
