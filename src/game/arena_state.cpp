@@ -179,10 +179,19 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // The gun is a Lua ScriptBehaviour on the player (gun.lua, ADR-0024; the one gun since ADR-0283);
     // ScriptSystem drives it. The script is attached in onEnter, once the player
     // entity exists. A build without scripting has no gun.
-    addSystem<ScriptSystem>().setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
+    ScriptSystem& scripts = addSystem<ScriptSystem>();
+    scripts.setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
         const Vec3 d = to - from;
         Vec3 hit;
         return d.lengthSquared() > 1e-8 && physSys.physicsWorld().castRay(from, d * 1.05, hit);
+    });
+    // A behaviour may `require` a library beside it (a prefab's script: model_moves.lua). Found as a recipe's
+    // modules are, and watched once read, so an edit to the library reloads a watched level too.
+    scripts.setModuleSource([this, find = makeModuleSource(std::filesystem::path(levelFile).parent_path().string())](
+                                const std::string& name, std::string& source, std::string& resolvedPath) {
+        if (!find(name, source, resolvedPath)) return false;
+        watch.add(resolvedPath);
+        return true;
     });
 #endif
 #endif

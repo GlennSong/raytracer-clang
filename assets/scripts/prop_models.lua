@@ -25,15 +25,11 @@ local m = model.new()
 local builders = {}
 
 -- THE FURNITURE KIT: a mesh per finish, each finish a named material; the piece's footprint is its collision box.
+-- (The finishes are model_kit.lua's, so a kit piece and a model with moving parts name the same materials.)
 -- Piece space has z = 0 against a wall; the model is centred on its footprint so a prefab turns about its middle.
-local FINISH = {
-  furniture_wood    = material.new{ surface = "woodgrain", roughness = 0.55 },
-  furniture_fabric  = material.new{ surface = "fabric", roughness = 0.95 },
-  furniture         = material.new{ roughness = 0.55 },
-  furniture_metal   = material.new{ roughness = 0.3, metallic = 0.9 },
-  furniture_ceramic = material.new{ roughness = 0.15 },
-  lit_band          = material.new{ roughness = 0.5, emission = { 1, 0.95, 0.85 } },
-}
+local kit_finishes = require("model_kit").finishes
+local FINISH = {}
+for _, f in pairs(kit_finishes) do FINISH[f[1]] = material.new(f[2]) end
 function builders.furniture()
   local piece = furniture.piece{ name = a.name ~= "" and a.name or "office_chair", variant = a.variant }
   local w, h, d = piece.size[1], piece.size[2], piece.size[3]

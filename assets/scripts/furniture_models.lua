@@ -242,6 +242,10 @@ end
 
 local M = {}
 furniture_models = M
+-- the maker, the vectors and the swatch books, for a recipe that builds a MODEL with moving parts out of the same
+-- shape words (model_kit.lua; #191). Not a piece: the engine asks `furniture_models` for pieces by name.
+furniture_kit = { maker = maker, V = V, grey = grey, WOOD = WOOD, FABRIC = FABRIC, WHITE = WHITE, BLACK = BLACK,
+                  STEEL = STEEL, CHROME = CHROME, PORCELAIN = PORCELAIN, LINEN = LINEN, BEACH = BEACH }
 
 -- the swivel chair's five-star base and the stacking pedestal (DeskPod, Cubicle, MeetingTable)
 local SWIVEL_BASE = { { 0.26, 0.0 }, { 0.26, 0.03 }, { 0.03, 0.06 }, { 0.025, 0.44 }, { 0.0, 0.45 } }

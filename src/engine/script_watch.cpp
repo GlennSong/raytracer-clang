@@ -23,6 +23,13 @@ long long fileStamp(const std::string& path) {
 
 }  // namespace
 
+void ScriptWatch::add(const std::string& path) {
+    if (files_.empty()) return;
+    for (const Entry& e : files_) if (e.path == path) return;
+    const long long s = fileStamp(path);
+    if (s != 0) files_.push_back({path, s});
+}
+
 void ScriptWatch::collect(const std::string& levelFile) {
     files_.clear();
 #ifndef __EMSCRIPTEN__

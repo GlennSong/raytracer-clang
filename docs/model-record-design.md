@@ -1051,6 +1051,97 @@ Not done, on purpose: **the playground itself.** Setting pieces out on a patch o
 and a fence round them, is a site: something that holds prefabs at places, like the building of #316. Nothing here
 places a piece; a level does, by name. That is part of #315.
 
+**The third: furniture and street pieces with moving parts** (Glenn, 2026-11-20: an office chair that adjusts, a
+desk that goes up and down, and "what else can we make that we can later use in the city as furniture"; then
+"build them all"). 39 models and 67 prefabs from 21 recipes.
+
+Two libraries carry them:
+
+- `assets/scripts/model_kit.lua` builds a model's moving parts out of the FURNITURE KIT's own shape words
+  (`furniture_models.lua`: rounded boxes, rods, turned shapes, cushions, drawer fronts) in the kit's finishes and
+  colours, so the new pieces match what the interiors already place. The kit now hands out its maker as the global
+  `furniture_kit`; nothing about the kit's pieces changed. `prop_models.lua` and this use the same material names.
+- `assets/scripts/model_moves.lua` is one behaviour for every prefab that moves: a prefab's script is a short list
+  saying what each node does (go there and back, spin, sway, step), and `return require("model_moves").script{...}`.
+  A move stopped short by the model's limits counts as arrived, so a script may ask for more than a part can give.
+
+One engine change went with it: **a behaviour script can `require`** (`ScriptSystem::setModuleSource`; the arena
+gives it the same finder recipes use, and a library it reads is added to the watch, `ScriptWatch::add`). Before,
+only recipes could, and each of 25 scripts would have carried its own copy of the loop.
+
+| Where | Models | Moving nodes |
+|---|---|---|
+| Office | `office_chair_adjustable` (and `_navy`) | `lift` (gas column, 12 cm), `swivel`, `recline` (20 degrees), `caster_1..5` |
+| | `standing_desk` (and `_wide`) | `stage` and its child `top`, 0.3 m each: 0.72 m to 1.32 m |
+| | `filing_cabinet`, `desk_pedestal` | `drawer_N` slide out, each a real box |
+| | `monitor_arm`, `desk_lamp` | `shoulder`, `elbow`, `pan`, `tilt`; `swing`, `lower`, `upper`, `head` |
+| | `whiteboard`, `desk_fan`, `stand_fan`, `ceiling_fan`, `wall_clock` | `board` flips; `blades` spin, `head` sweeps; `hour`, `minute`, `second` |
+| Home | `wardrobe`, `kitchen_cupboard`, `kitchen_wall_cupboard`, `store_cupboard`, `fridge` | `door_N`; `fridge_door`, `freezer_door` |
+| | `rocking_chair`, `recliner` | `rock`; `back`, `footrest` |
+| Laundromat | `washing_machine`, `dryer` | `door`, `drum` |
+| Street | `parking_barrier`, `rising_bollard`, `turnstile` | `arm` lifts 90 degrees; `post` sinks; `arms` turn |
+| | `litter_bin`, `mailbox`, `newspaper_box` | `flap` |
+| Shops | `patio_umbrella`, `awning`, `barber_pole` | `rib_1..8` fold; `bar` and `strip_1..10` roll out; `stripes` turn |
+| Park | `picnic_table`, `park_bench`, `drinking_fountain`, `bike_rack` | none: they are here so a park's set comes by name |
+| Buildings | `revolving_door`, `roller_shutter`, `lift_doors` | `wings` turn; `section_N` rise into the box; `door_left`, `door_right` part |
+
+Each moving piece has a still prefab and an `_in_use` one (the clock always runs; the barber's pole always turns).
+Handles, levers, buttons, seats and places to stand are markers (`handle_N`, `lever`, `control`, `call`, `seat`,
+`front` ...), for step 9. Cupboards, the fridge and cabinets are solid as their walls, not as one box, so an open
+one can be reached into.
+
+Two tricks worth knowing, both for cloth or a curtain that cannot stretch: the awning's cloth is ten strips and
+the shutter's curtain is sections, each on its own node with its own limit; send them all the same way at one
+speed and each stops at its place, which looks like one sheet unrolling.
+
+Seen: a sheet of every model in an opened pose, and all 30 moving prefabs in the editor in play, joints read twice.
+
+What these do NOT do yet, and why:
+
+- **Nothing responds to a person.** Pulling the chair's lever, pressing the desk's control, opening a drawer by its
+  handle are interactions: step 9. Until then a script stands in.
+- **The chair does not roll**, and nothing can be pushed: a prefab's body is fixed or absent. A body with weight,
+  and hinges that are real joints, is #311 (the swing's seat is the same gap).
+- **The clock shows this computer's time**, not the game's: a script cannot ask for the time of day.
+- **Pieces that hang** (clock, ceiling fan, awning, barber's pole) have their origin on the wall or ceiling, so in
+  the studio, which stands every model on the floor, they sit half in the ground. They are right in a level that
+  places them at a height.
+- **Nothing in the city places any of them.** The interiors still place the kit's still `office_chair` and `desk`.
+  Swapping furniture over is #315.
+
+### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
+
+Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is
+remembered: "if you leave a floor and return it should just be reset."
+
+Everything placed is a prefab, always. A PLACED COPY is one prefab at one place in one pose (the values of its
+moving parts). What changes with distance is how the engine serves a copy, not what it is:
+
+| State | What the engine does for the copy | Where |
+|---|---|---|
+| drawn | draws it in a batch with every other copy of its model; nothing else | other floors, across the street, far away |
+| ready | still drawn in the batch, and its markers can be found and used; solid as its model's shapes | every copy on the floor the player is on |
+| awake | a full prefab entity: its own moving nodes, moving collision, its interaction or script running | the one just touched, the few a person nearby is using |
+
+- A copy WAKES when a person (the player or a city person near the player) uses it, at the pose the batch was
+  drawing it in, and SLEEPS when it has been still a while, in the pose it was left in. The batch draws a sleeping
+  copy in that pose (each moving part is its own drawn copy, as the kit cars' wheels are).
+- Both ways of serving a copy read the ONE model and the ONE pose. Neither keeps its own copy of a shape or a
+  collider, or the hand-off shows.
+- **A pose lasts only while the floor is loaded.** When the floor's contents unload, every pose on it is forgotten
+  and the floor comes back as placed. So there is no table of changes to keep, no stable name needed for a copy
+  across unloads, and nothing extra in a saved game. A thing that should be in some pose for a reason (a shop's
+  shutter down at night) gets that pose from the reason (the shop's hours), not from memory.
+- A prefab says in its own line whether a part returns by itself (a lift's doors, a bin's flap) or stays where it
+  was put while the floor is loaded (a raised desk, an open drawer).
+- The levels of detail a model already has (its far shape from 20 to 60 m) are about drawing only, and are separate
+  from the three states.
+- This is the pattern the city already uses for people and cars (a line in a schedule far away, a body near the
+  player). Build it as part of that, not as a second system.
+
+Open, for when it is built: what "leaving the floor" means exactly, so a quick trip up one storey and back does not
+reset a desk raised a minute ago (tie it to the contents actually unloading, which has slack).
+
 Left from what was agreed: the field declarations are written in C++ next to the reader (`prefabFieldsJson`), not
 declared by each component kind in data; that comes with step 9, when there is more than one kind to declare.
 Model rows in the Inspector (read-only facts) are not there: a picked piece shows the entity's ordinary properties.

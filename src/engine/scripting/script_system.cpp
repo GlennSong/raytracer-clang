@@ -84,6 +84,8 @@ ScriptSystem::ScriptSystem() {
     openProcgenLibrary(vm_);
 }
 
+void ScriptSystem::setModuleSource(ScriptModuleSource source) { openModuleLoader(vm_, std::move(source)); }
+
 GameplayContext ScriptSystem::context(World* world, std::vector<SpawnCommand>* spawns) {
     GameplayContext g;
     g.world = world;

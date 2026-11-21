@@ -24,6 +24,10 @@ public:
     // watch empty, unless the level sets "watch_scripts": true.
     void collect(const std::string& levelFile);
 
+    // One more file to watch: something read after the load (a library a behaviour script `require`d when it
+    // started). Nothing happens when the watch is empty (the level did not ask to be watched) or has it already.
+    void add(const std::string& path);
+
     // True when any watched file's mtime moved since the last call (and adopts
     // the new stamps, so it reports a given edit once).
     bool changed();
