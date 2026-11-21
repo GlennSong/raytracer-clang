@@ -44,6 +44,13 @@ namespace engine {
 //            marker faces, and is carried with it if its node moves
 //   lie      the same lying down: the eye low over the marker, looking up and along the way it faces
 //
+//   id       a name for this use, for another to refer to
+//   needs    the id of a use that must be ON for this one to be offered (a server slides out only while the rack's
+//            door is open). While this one is on, the one it needs cannot be turned off (the door will not shut
+//            on a server that is out)
+//   unless   the id of a use that must be OFF for this one to be offered (a washing machine is not switched on
+//            with its door open, and its door is not opened while it runs: each says `unless` the other)
+//
 // A marker whose role is "seat" or "lie" offers sitting or lying WITHOUT a line saying so, unless a use of the line
 // already names that marker: a seat is a seat on every model that has one.
 //
@@ -51,6 +58,7 @@ namespace engine {
 // line serves a model built with more or fewer of a thing.
 struct PrefabUse {
     std::string at, say, back;
+    std::string id, needs, unless;
     std::vector<std::pair<std::string, Real>> move;   // node, value (degrees or metres, as the line says)
     Real speed = 0;
     std::vector<std::pair<std::string, Real>> run;    // node, rate (degrees or metres a second)

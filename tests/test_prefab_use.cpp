@@ -126,12 +126,19 @@ TEST_CASE(a_stamped_copy_keeps_the_uses_its_model_has_and_doing_one_moves_its_pa
 
     // No such use: refused.
     CHECK(!doPrefabUse(world, e, 7));
-    // A prefab with no uses has none on its copy.
+    // A prefab whose line has no uses and whose model has no seat has none on its copy.
     Prefab plain;
-    CHECK(findPrefab("crane", plain));
+    CHECK(findPrefab("hydrant", plain));
     plain.uses.clear();
     const Entity c = stampPrefab(world, nullptr, plain, Transform(), std::string(), nullptr, &store);
     CHECK(c.valid() && !world.has<PrefabUses>(c));
+    // The crane's line has none either, but its model has a driver's seat, and a seat is a seat.
+    Prefab crane;
+    CHECK(findPrefab("crane", crane));
+    crane.uses.clear();
+    const Entity k = stampPrefab(world, nullptr, crane, Transform(), std::string(), nullptr, &store);
+    const PrefabUses* cab = k.valid() ? world.get<PrefabUses>(k) : nullptr;
+    CHECK(cab != nullptr && cab->uses.size() == 1 && cab->uses[0].use.sit && cab->uses[0].use.at == "driver");
 }
 
 TEST_CASE(a_seat_is_a_seat_the_furniture_kits_sofa_stamped_as_a_prefab_offers_its_seats) {
@@ -163,4 +170,49 @@ TEST_CASE(a_seat_is_a_seat_the_furniture_kits_sofa_stamped_as_a_prefab_offers_it
     const Entity f = stampPrefab(world, nullptr, named, Transform(), std::string(), nullptr, &store);
     const PrefabUses* mine = f.valid() ? world.get<PrefabUses>(f) : nullptr;
     CHECK(mine != nullptr && mine->uses.size() == 4 && mine->uses[0].use.say == "perch");
+}
+
+TEST_CASE(a_use_that_needs_another_waits_for_it_and_holds_it_open) {
+    // A washing machine as a stand-in for a server rack: the drum may be run only while the door is open (`needs`),
+    // and a third use gives way to the drum running (`unless`).
+    World world;
+    ModelStore store;
+    Prefab p;
+    CHECK(findPrefab("washing_machine", p));
+    PrefabUse door = use("handle", "open", "close");
+    door.id = "door";
+    door.move = {{"door", 110}};
+    PrefabUse spin = use("controls", "spin", "stop");
+    spin.id = "spin";
+    spin.needs = "door";
+    spin.run = {{"drum", 90}};
+    PrefabUse nudge = use("controls", "nudge", "");
+    nudge.unless = "spin";
+    nudge.move = {{"door", 20}};
+    p.uses = {door, spin, nudge};
+    const Entity e = stampPrefab(world, nullptr, p, Transform(), std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    auto offered = [&](std::size_t i) { return prefabUseOffered(*world.get<PrefabUses>(e), i); };
+    CHECK(offered(0) && !offered(1) && offered(2));
+    CHECK(!doPrefabUse(world, e, 1));                       // not while the door is shut
+    CHECK(doPrefabUse(world, e, 0));                        // open the door
+    CHECK(offered(1));
+    CHECK(doPrefabUse(world, e, 1));                        // now it spins
+    CHECK(!offered(0));                                     // and the door cannot be shut on it
+    CHECK(!doPrefabUse(world, e, 0));
+    CHECK(world.get<PrefabUses>(e)->uses[0].on);
+    CHECK(!offered(2));                                     // the nudge gives way while it spins
+    CHECK(doPrefabUse(world, e, 1));                        // stop
+    CHECK(offered(0) && offered(2));
+    CHECK(doPrefabUse(world, e, 0));                        // and shut
+    CHECK(!world.get<PrefabUses>(e)->uses[0].on);
+
+    // A line whose use names an id no use has is refused.
+    nlohmann::json line = nlohmann::json::parse(R"JSON({ "model": "washing_machine",
+        "uses": [ { "at": "controls", "say": "spin", "needs": "lid", "run": { "drum": 90 } } ] })JSON");
+    Prefab q;
+    std::string why;
+    CHECK(!readPrefabLine("washer", line, q, std::string(), &why));
+    CHECK(why.find("names 'lid'") != std::string::npos);
 }

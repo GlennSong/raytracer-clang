@@ -1462,6 +1462,33 @@ Not carried over from the library: a spot being TAKEN (two people cannot yet be 
 on a sofa does not need its three seats free), and "stand" verbs (a lectern). Both matter when city people use
 prefabs. The view direction when lying was not checked by eye.
 
+**Uses in tiers, the same day.** Glenn: "the server rack and murphy bed might need tiered interactions. Like for
+the server rack it should be open door and then you can pull out the rack(s)."
+
+A use may have an `id`. Another use may say `needs = "<id>"`: it is offered only while that one is on, and while
+it is on itself the one it needs cannot be turned off (the door will not shut on a server that is out). Or
+`unless = "<id>"`: offered only while that one is off. A line that names an id no use has is refused.
+
+| Prefab | Tiers |
+|---|---|
+| `server_rack` | open the door, then pull a server out |
+| `wall_bed` | pull the bed down, then lie on it; it cannot be folded away while someone lies on it |
+| `dishwasher` | open the door, then pull out either rack |
+| `washing_machine`, `dryer` | not switched on with the door open; the door not opened while it runs |
+| `record_player` | open the cover, then play |
+| `fire_hose_cabinet` | open the door, then swing the reel out |
+| `stand_mixer` | not switched on with the head tilted back; the head not tilted while it runs |
+
+Being sat or lain on counts as that use being on until the person gets up, which is what holds the wall bed down.
+A timed use whose time is up while something still needs it waits. `prefabUseOffered` (`engine/prefab_use.h`) is
+the one rule; the offers and `doPrefabUse` both ask it. Seen at the server rack in `prefab_town`: only "open" at
+first, then "pull out" and "close".
+
+**A mistake to record.** The first commit of uses (21ca9252) went in with one failing check: my command printed
+the suite's last line and carried on whatever it said. The failure was in the new test, which assumed a crane
+offers nothing; its model has a driver's seat, so "a seat is a seat" rightly gives it one. The test is corrected
+in the commit after. A commit is to be gated on the count of failed cases, not on a line being printed.
+
 Not done, in the order I would do them:
 
 - **Riding.** Sitting on the exercise bike does not pedal it; "pedal" is a second press. A use that runs while

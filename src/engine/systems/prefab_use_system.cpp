@@ -62,6 +62,7 @@ void PrefabUseSystem::update(FrameContext& ctx) {
         const PrefabUses* uses = ctx.world.get<PrefabUses>(s->set);
         const bool move = std::fabs(ctx.actions.axis("cam_forward")) > 0.5 || std::fabs(ctx.actions.axis("cam_right")) > 0.5;
         if (move || commanded || s->piece >= uses->uses.size()) {
+            setPrefabUse(ctx.world, s->set, s->piece, false);   // the seat is free again
             ctx.world.remove<Seated>(player);
             return;
         }
@@ -86,8 +87,8 @@ void PrefabUseSystem::update(FrameContext& ctx) {
     if (commanded && cmd.entity.valid() && ctx.world.alive(cmd.entity)) {
         if (const PrefabUses* uses = ctx.world.get<PrefabUses>(cmd.entity); uses != nullptr && cmd.key < uses->uses.size()) {
             const PrefabUse use = uses->uses[static_cast<std::size_t>(cmd.key)].use;
-            doPrefabUse(ctx.world, cmd.entity, static_cast<std::size_t>(cmd.key));
-            if (use.sit || use.lie) {
+            const bool done = doPrefabUse(ctx.world, cmd.entity, static_cast<std::size_t>(cmd.key));
+            if (done && (use.sit || use.lie)) {
                 Seated seat;
                 seat.set = cmd.entity;
                 seat.piece = static_cast<uint32_t>(cmd.key);
@@ -110,6 +111,7 @@ void PrefabUseSystem::update(FrameContext& ctx) {
         for (std::size_t i = 0; i < uses.uses.size(); ++i) {
             Vec3 at;
             Quat turn;
+            if (!prefabUseOffered(uses, i)) continue;
             if (!modelMarkerWorld(ctx.world, e, uses.uses[i].use.at, at, turn)) continue;
             if (std::hypot(at.x - feet.x, at.z - feet.z) > REACH || at.y < feet.y - 0.5 || at.y > feet.y + 2.6) continue;
             near.push_back(Near{e, i, at});

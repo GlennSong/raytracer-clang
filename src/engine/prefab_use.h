@@ -34,7 +34,11 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
 // The word a use offers now: its `say`, or its `back` once it is on.
 const std::string& prefabUseWord(const PrefabUses::Use& use);
 
-// Do use `index` of a copy: a use that is off turns on (its nodes head for their values, its running parts start)
+// Is use `index` offered now? Not while a use it `needs` is off, nor while one it gives way to (`unless`) is on; and
+// a use that is on is not offered to be turned off while another that needs it is on.
+bool prefabUseOffered(const PrefabUses& uses, std::size_t index);
+
+// Do use `index` of a copy (nothing happens, and false, when it is not offered now): a use that is off turns on (its nodes head for their values, its running parts start)
 // and one that is on turns off (they return to 0, or stop). A use with no `back` is always done afresh. False when
 // the entity has no such use. (`sit` is the caller's: it seats whoever asked. This does the rest of that use, if any.)
 bool doPrefabUse(World& world, Entity instance, std::size_t index);

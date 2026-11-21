@@ -124,8 +124,8 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         for (const nlohmann::json& u : uses) {
             const std::string which = where + ": use " + std::to_string(++number);
             if (!u.is_object()) return fail(which + " is a table: { at = \"handle\", say = \"open\", ... }");
-            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "sit", "lie"}, stray))
-                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, sit, lie)");
+            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "sit", "lie", "id", "needs", "unless"}, stray))
+                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, sit, lie, id, needs, unless)");
             PrefabUse use;
             if (!u.contains("at") || !u["at"].is_string() || u["at"].get<std::string>().empty()) return fail(which + " needs `at`, a marker on the model");
             if (!u.contains("say") || !u["say"].is_string() || u["say"].get<std::string>().empty()) return fail(which + " needs `say`, the word offered (\"open\")");
@@ -152,6 +152,11 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 if (!u["sit"].is_boolean()) return fail(which + ": `sit` is true or false");
                 use.sit = u["sit"].get<bool>();
             }
+            for (const char* key : {"id", "needs", "unless"}) {
+                if (!u.contains(key)) continue;
+                if (!u[key].is_string() || u[key].get<std::string>().empty()) return fail(which + ": `" + key + "` is a name");
+                (std::string(key) == "id" ? use.id : std::string(key) == "needs" ? use.needs : use.unless) = u[key].get<std::string>();
+            }
             if (u.contains("lie")) {
                 if (!u["lie"].is_boolean()) return fail(which + ": `lie` is true or false");
                 use.lie = u["lie"].get<bool>();
@@ -159,6 +164,14 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
             if (use.move.empty() && use.run.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sit` or `lie`");
             p.uses.push_back(use);
         }
+        // a use that needs, or gives way to, another names one this line has
+        for (const PrefabUse& use : p.uses)
+            for (const std::string* other : {&use.needs, &use.unless}) {
+                if (other->empty()) continue;
+                bool found = false;
+                for (const PrefabUse& candidate : p.uses) found = found || candidate.id == *other;
+                if (!found) return fail(where + ": the use '" + use.say + "' names '" + *other + "', which no use of this prefab has as its `id`");
+            }
     }
     out = p;
     return true;
@@ -244,6 +257,9 @@ std::string prefabLine(const Prefab& p) {
         out += ", uses = { ";
         for (const PrefabUse& u : p.uses) {
             out += "{ at = " + luaQuoted(u.at) + ", say = " + luaQuoted(u.say);
+            if (!u.id.empty()) out += ", id = " + luaQuoted(u.id);
+            if (!u.needs.empty()) out += ", needs = " + luaQuoted(u.needs);
+            if (!u.unless.empty()) out += ", unless = " + luaQuoted(u.unless);
             if (!u.back.empty()) out += ", back = " + luaQuoted(u.back);
             for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run}) {
                 if (list->empty()) continue;

@@ -68,6 +68,19 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
 
 const std::string& prefabUseWord(const PrefabUses::Use& use) { return use.on && !use.use.back.empty() ? use.use.back : use.use.say; }
 
+bool prefabUseOffered(const PrefabUses& uses, std::size_t index) {
+    if (index >= uses.uses.size()) return false;
+    const PrefabUses::Use& u = uses.uses[index];
+    for (const PrefabUses::Use& other : uses.uses) {
+        if (&other == &u) continue;
+        if (!u.use.needs.empty() && other.use.id == u.use.needs && !other.on) return false;
+        if (!u.use.unless.empty() && other.use.id == u.use.unless && other.on) return false;
+        // turning off what another stands on
+        if (u.on && !u.use.id.empty() && other.use.needs == u.use.id && other.on) return false;
+    }
+    return true;
+}
+
 bool setPrefabUse(World& world, Entity instance, std::size_t index, bool on) {
     PrefabUses* uses = world.get<PrefabUses>(instance);
     if (uses == nullptr || index >= uses->uses.size()) return false;
@@ -83,6 +96,7 @@ bool doPrefabUse(World& world, Entity instance, std::size_t index) {
     const PrefabUses* uses = world.get<PrefabUses>(instance);
     if (uses == nullptr || index >= uses->uses.size()) return false;
     const PrefabUses::Use& u = uses->uses[index];
+    if (!prefabUseOffered(*uses, index)) return false;
     return setPrefabUse(world, instance, index, u.use.back.empty() ? true : !u.on);
 }
 
@@ -104,7 +118,10 @@ void stepPrefabUses(World& world, Real dt) {
             }
             if (u.left > 0) {
                 u.left -= dt;
-                if (u.left <= 0) setPrefabUse(world, e, i, false);
+                if (u.left <= 0) {
+                    if (prefabUseOffered(*uses, i)) setPrefabUse(world, e, i, false);
+                    else u.left = Real(0.5);   // something that needs it is still on: look again shortly
+                }
             }
         }
     }
