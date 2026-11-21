@@ -1489,17 +1489,36 @@ the suite's last line and carried on whatever it said. The failure was in the ne
 offers nothing; its model has a driver's seat, so "a seat is a seat" rightly gives it one. The test is corrected
 in the commit after. A commit is to be gated on the count of failed cases, not on a line being printed.
 
-Not done, in the order I would do them:
+**Riding, rocking, coasting and many like parts, the same day.** Glenn, of the list of what was missing: "can you
+work on those issues next?"
 
-- **Riding.** Sitting on the exercise bike does not pedal it; "pedal" is a second press. A use that runs while
-  someone sits is a small addition (`while_seated`).
-- **The swing, the seesaw and the roundabout are not physical.** Sitting works; the swing should become the
-  engine's own `PlaySwing` (see "four things the engine already has").
-- **Only the player.** City people do not use prefabs yet.
-- **Many of the rule-made uses have not been tried one by one.** Words like "pull" on a part that should say
-  "press" are likely; each is a one-word fix in `prefabs.lua`.
+| Added | What it does | Where it is used |
+|---|---|---|
+| a seat's own `run`, `sway`, `move` | a use that sits is ON while the person stays, so what it runs lasts that long | the exercise bike's pedals and flywheel; the lecture and cinema seats' pans fold down |
+| `sway = { node = degrees }`, `period` | parts rock either side of rest while the use is on | rocking chair and horse, the swings, the seesaw, the porch swing, kiddie rides, the cradle, the punch bag, the school bell |
+| `coast = seconds` | running parts slow to a stop over that long when turned off or when their time is up | the roundabout after a push, the revolving door, the globe, the shop's racks |
+| `*` in `at` | the use is made once for every marker that fits, the same text put for each `*` in its parts and ids | lockers, coin lockers and mailboxes (a door for every handle), filing drawers, rows of seats, the swing's seats |
+| `*` in a part's name | every moving part that fits, at one marker | the departure board: every flap at one touch |
+
+A pattern line serves a model built with more or fewer of a thing, which is what prefabs with arguments will need.
+
+Seen in `prefab_town`: sat on the exercise bike ("ride") and its crank and flywheel kept turning while seated;
+pushed the roundabout and its deck was still turning, slower, seconds later. Tests: a pattern made for every
+locker door; a push that coasts to a stop; a rocking chair that sways while sat on and comes to rest.
+
+Not done:
+
+- **Nothing here is physical.** The swing sways and the roundabout coasts by rule: neither answers to the
+  rider's weight or to how hard it was pushed. The engine's own swing (`PlaySwing`) and a hinge with friction for
+  the roundabout are the real thing, and are their own piece of work.
+- **Only the player.** City people do not use prefabs. That is in the city sim's activities, which the parent
+  branch is changing, so it waits for the merge.
+- **Seats are not refused when taken**, for the same reason: there is no second person yet. A seat that is on is
+  already marked so.
 - **The editor does not show or edit uses** (its rewrite of a line keeps them).
-- Lockers, the departure board and other things with many like parts have no uses: one marker per part is needed.
+- **Most uses have not been tried one by one.** Of about 125, perhaps fifteen have been used in the game.
+- A flaky test, not from this work: `cache_files_are_pruned_once_every_level_that_used_them_has_moved_on`
+  (`tests/test_bundle.cpp`) failed once in a filtered run and passed twice alone straight after.
 
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 

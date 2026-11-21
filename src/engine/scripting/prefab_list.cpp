@@ -124,8 +124,8 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         for (const nlohmann::json& u : uses) {
             const std::string which = where + ": use " + std::to_string(++number);
             if (!u.is_object()) return fail(which + " is a table: { at = \"handle\", say = \"open\", ... }");
-            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "sit", "lie", "id", "needs", "unless"}, stray))
-                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, sit, lie, id, needs, unless)");
+            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "coast", "sway", "period", "sit", "lie", "id", "needs", "unless"}, stray))
+                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, coast, sway, period, sit, lie, id, needs, unless)");
             PrefabUse use;
             if (!u.contains("at") || !u["at"].is_string() || u["at"].get<std::string>().empty()) return fail(which + " needs `at`, a marker on the model");
             if (!u.contains("say") || !u["say"].is_string() || u["say"].get<std::string>().empty()) return fail(which + " needs `say`, the word offered (\"open\")");
@@ -135,19 +135,22 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 if (!u["back"].is_string()) return fail(which + ": `back` is the word offered once it is done (\"close\")");
                 use.back = u["back"].get<std::string>();
             }
-            for (const char* key : {"move", "run"}) {
+            for (const char* key : {"move", "run", "sway"}) {
                 if (!u.contains(key)) continue;
                 if (!u[key].is_object()) return fail(which + ": `" + key + "` is a table of nodes and numbers: { door = 105 }");
+                const std::string k = key;
                 for (nlohmann::json::const_iterator it = u[key].begin(); it != u[key].end(); ++it) {
                     if (!it.value().is_number()) return fail(which + ": " + key + "." + it.key() + " is a number");
-                    (std::string(key) == "move" ? use.move : use.run).emplace_back(it.key(), it.value().get<double>());
+                    (k == "move" ? use.move : k == "run" ? use.run : use.sway).emplace_back(it.key(), it.value().get<double>());
                 }
             }
-            for (const char* key : {"speed", "seconds"}) {
+            for (const char* key : {"speed", "seconds", "coast", "period"}) {
                 if (!u.contains(key)) continue;
                 if (!u[key].is_number() || u[key].get<double>() < 0) return fail(which + ": `" + key + "` is a number, 0 or more");
-                (std::string(key) == "speed" ? use.speed : use.seconds) = u[key].get<double>();
+                const std::string k = key;
+                (k == "speed" ? use.speed : k == "seconds" ? use.seconds : k == "coast" ? use.coast : use.period) = u[key].get<double>();
             }
+            if (!use.sway.empty() && use.period <= 0) return fail(which + ": `period` is the seconds one sway takes, more than 0");
             if (u.contains("sit")) {
                 if (!u["sit"].is_boolean()) return fail(which + ": `sit` is true or false");
                 use.sit = u["sit"].get<bool>();
@@ -161,15 +164,17 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 if (!u["lie"].is_boolean()) return fail(which + ": `lie` is true or false");
                 use.lie = u["lie"].get<bool>();
             }
-            if (use.move.empty() && use.run.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sit` or `lie`");
+            if (use.move.empty() && use.run.empty() && use.sway.empty() && !use.sit && !use.lie) return fail(which + " does nothing: give it `move`, `run`, `sway`, `sit` or `lie`");
             p.uses.push_back(use);
         }
         // a use that needs, or gives way to, another names one this line has
+        // (a name with a `*` in it is matched when the copy is stamped, each `*` against the same text)
+        auto starless = [](std::string s) { s.erase(std::remove(s.begin(), s.end(), '*'), s.end()); return s; };
         for (const PrefabUse& use : p.uses)
             for (const std::string* other : {&use.needs, &use.unless}) {
                 if (other->empty()) continue;
                 bool found = false;
-                for (const PrefabUse& candidate : p.uses) found = found || candidate.id == *other;
+                for (const PrefabUse& candidate : p.uses) found = found || starless(candidate.id) == starless(*other);
                 if (!found) return fail(where + ": the use '" + use.say + "' names '" + *other + "', which no use of this prefab has as its `id`");
             }
     }
@@ -261,15 +266,20 @@ std::string prefabLine(const Prefab& p) {
             if (!u.needs.empty()) out += ", needs = " + luaQuoted(u.needs);
             if (!u.unless.empty()) out += ", unless = " + luaQuoted(u.unless);
             if (!u.back.empty()) out += ", back = " + luaQuoted(u.back);
-            for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run}) {
+            for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run, &u.sway}) {
                 if (list->empty()) continue;
-                out += std::string(list == &u.move ? ", move = { " : ", run = { ");
-                for (std::size_t i = 0; i < list->size(); ++i)
-                    out += std::string(i > 0 ? ", " : "") + (*list)[i].first + " = " + plainNumber((*list)[i].second);
+                out += std::string(list == &u.move ? ", move = { " : list == &u.run ? ", run = { " : ", sway = { ");
+                for (std::size_t i = 0; i < list->size(); ++i) {
+                    const std::string& node = (*list)[i].first;
+                    // a name with a `*` in it is not a plain Lua key
+                    out += std::string(i > 0 ? ", " : "") + (node.find('*') != std::string::npos ? "[" + luaQuoted(node) + "]" : node) + " = " + plainNumber((*list)[i].second);
+                }
                 out += " }";
             }
             if (u.speed > 0) out += ", speed = " + plainNumber(u.speed);
             if (u.seconds > 0) out += ", seconds = " + plainNumber(u.seconds);
+            if (u.coast > 0) out += ", coast = " + plainNumber(u.coast);
+            if (!u.sway.empty()) out += ", period = " + plainNumber(u.period);
             if (u.sit) out += ", sit = true";
             if (u.lie) out += ", lie = true";
             out += " }, ";

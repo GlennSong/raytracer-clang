@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -215,4 +216,87 @@ TEST_CASE(a_use_that_needs_another_waits_for_it_and_holds_it_open) {
     std::string why;
     CHECK(!readPrefabLine("washer", line, q, std::string(), &why));
     CHECK(why.find("names 'lid'") != std::string::npos);
+}
+
+TEST_CASE(a_pattern_use_is_made_for_every_part_that_fits_and_a_push_coasts_to_a_stop) {
+    World world;
+    ModelStore store;
+    // LOCKERS: one line, a door for every handle the model has.
+    Prefab lockers;
+    CHECK(findPrefab("lockers", lockers));
+    CHECK(lockers.uses.size() == 1);
+    const Entity e = stampPrefab(world, nullptr, lockers, Transform(), std::string(), nullptr, &store);
+    const PrefabUses* uses = e.valid() ? world.get<PrefabUses>(e) : nullptr;
+    CHECK(uses != nullptr);
+    if (uses == nullptr) return;
+    CHECK(uses->uses.size() >= 4);                         // the default lockers are four tall doors in a row
+    std::size_t one = uses->uses.size();
+    for (std::size_t i = 0; i < uses->uses.size(); ++i) {
+        const PrefabUse& u = uses->uses[i].use;
+        CHECK(u.move.size() == 1);
+        // handle_2_1 opens door_2_1
+        if (u.move.size() == 1) CHECK(u.move[0].first == "door_" + u.at.substr(std::string("handle_").size()));
+        if (u.at == "handle_2_1") one = i;
+    }
+    CHECK(one < uses->uses.size());
+    if (one >= uses->uses.size()) return;
+    CHECK(doPrefabUse(world, e, one));
+    advanceModelMotion(world, e, 5.0);
+    CHECK(modelValue(world, e, "door_2_1") > 100 * kDeg);
+    CHECK_APPROX(modelValue(world, e, "door_1_1"), 0.0, 1e-12);
+
+    // THE ROUNDABOUT: a push runs the deck for a moment, then it slows over its coast and stops.
+    Prefab round;
+    CHECK(findPrefab("playground_roundabout", round));
+    const Entity r = stampPrefab(world, nullptr, round, Transform(), std::string(), nullptr, &store);
+    const PrefabUses* ru = r.valid() ? world.get<PrefabUses>(r) : nullptr;
+    CHECK(ru != nullptr);
+    if (ru == nullptr) return;
+    std::size_t push = ru->uses.size();
+    for (std::size_t i = 0; i < ru->uses.size(); ++i)
+        if (ru->uses[i].use.say == "push") push = i;
+    CHECK(push < ru->uses.size());
+    if (push >= ru->uses.size()) return;
+    CHECK(doPrefabUse(world, r, push));
+    const Real step = 1.0 / 60.0;
+    auto run = [&](Real seconds) {
+        const Real before = modelValue(world, r, "deck");
+        for (int i = 0; i < static_cast<int>(seconds * 60 + 0.5); ++i) { stepPrefabUses(world, step); advanceModelMotion(world, r, step); }
+        return modelValue(world, r, "deck") - before;
+    };
+    const Real pushed = run(0.5);
+    CHECK(pushed > 40 * kDeg);                              // at 110 degrees a second
+    CHECK(world.get<PrefabUses>(r)->uses[push].on);
+    run(0.3);                                               // its time is up: it is off, and coasting
+    CHECK(!world.get<PrefabUses>(r)->uses[push].on);
+    const Real early = run(1.0);
+    run(5.0);
+    const Real late = run(1.0);
+    CHECK(early > late && late > 0);                        // slower and slower
+    run(4.0);
+    CHECK_APPROX(run(1.0), 0.0, 1e-9);                      // stopped
+}
+
+TEST_CASE(a_seat_that_is_sat_on_runs_and_sways_until_its_sitter_gets_up) {
+    World world;
+    ModelStore store;
+    Prefab chair;
+    CHECK(findPrefab("rocking_chair", chair));
+    const Entity e = stampPrefab(world, nullptr, chair, Transform(), std::string(), nullptr, &store);
+    const PrefabUses* uses = e.valid() ? world.get<PrefabUses>(e) : nullptr;
+    CHECK(uses != nullptr && uses->uses.size() == 1 && uses->uses[0].use.sit);
+    if (uses == nullptr || uses->uses.empty()) return;
+    CHECK(doPrefabUse(world, e, 0));                        // someone sits (the system seats them; the use is on)
+    const Real step = 1.0 / 60.0;
+    Real lo = 0, hi = 0;
+    for (int i = 0; i < 60 * 4; ++i) {
+        stepPrefabUses(world, step);
+        advanceModelMotion(world, e, step);
+        lo = std::min(lo, modelValue(world, e, "rock"));
+        hi = std::max(hi, modelValue(world, e, "rock"));
+    }
+    CHECK(hi > 8 * kDeg && lo < -8 * kDeg);                 // ten degrees each way
+    CHECK(setPrefabUse(world, e, 0, false));                // they get up: it comes to rest
+    for (int i = 0; i < 60 * 3; ++i) { stepPrefabUses(world, step); advanceModelMotion(world, e, step); }
+    CHECK_APPROX(modelValue(world, e, "rock"), 0.0, 1e-6);
 }

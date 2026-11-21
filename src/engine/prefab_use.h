@@ -22,7 +22,9 @@ struct PrefabUses {
     struct Use {
         PrefabUse use;
         bool on = false;
-        Real left = 0;   // seconds until it turns itself off (a use with `seconds`)
+        Real left = 0;      // seconds until it turns itself off (a use with `seconds`)
+        Real time = 0;      // seconds it has been on (where a sway is in its swing)
+        Real coasting = 0;  // seconds of slowing down left, after a use with `coast` was turned off
     };
     std::vector<Use> uses;
 };
