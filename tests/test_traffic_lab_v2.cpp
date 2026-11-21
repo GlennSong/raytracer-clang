@@ -177,7 +177,13 @@ constexpr double kLongestStand = 100.0;
 // Retaken for ADR-0452 (crosswalks in the road model, laid in the lane level: their crossing points move each
 // connector's waiting gaps; far turns lead on a green arrow; walk signals lengthen some greens): the same two failures,
 // queues 3.26 -> 2.40 s a car, and cars over kLongestStand. (Before: 0x480f608a3a35465c, ADR-0451.)
-constexpr uint64_t kFiveMinuteStateHash = 0x55109fe9a8e247b1ull;
+// Retaken at the S7 re-bake (ADR-0478; the road changes of ADR-0470..0473 and 0477): stop lines at sharp-angled junctions
+// stand further back (ADR-0471), every ramp is reachable (j153/j154's turns fit, ADR-0472), s208 is j95's fourth arm
+// (ADR-0473), so routes and waits moved. 0x55109fe9a8e247b1 -> 0x9956a73de1425d39. Arrivals 398 -> 399, mean speed
+// 8.85 -> 9.67 m/s, standing at the end 78 -> 52, ramps used 6 -> 8, cars over kLongestStand 12 -> 10 (the longest
+// 142.9 -> 169.5 s: car 9 refused room beyond). The same two failures: queues 2.40 -> 3.03 s a car (over 8 gaps; turns
+// included 3.09 -> 3.08), and cars over kLongestStand.
+constexpr uint64_t kFiveMinuteStateHash = 0x9956a73de1425d39ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -980,10 +986,13 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         // carry none are the on-ramp d0_0_a_on (model lane 1111, starting at (-563, -74)) and the off-ramp d1_0_a_off
         // (model lane 1114, at (356, -403)): the freeway kerb lanes on their ways end at the freeway joints j153 and j154,
         // whose stated turns all leave the paved road (corner faults, step 9), so no route of the run uses either. When step 9 fits those corners, this list shrinks: write the new numbers here.
+        // RE-PINNED at the S7 re-bake (ADR-0478): 6 -> 8 of 8 used, unused {1111, 1114} -> none. ADR-0472's mitres made
+        // j153's and j154's stated turns fit (fits-no-vehicle 68 -> 66 there), so routes now use lane 1111 (17 cars) and
+        // lane 1114 (26 cars). Every ramp carries cars.
         if (steps == static_cast<int>(300.0 / kStep + 0.5)) {
             CHECK(carsOnRamp.size() == 8u);
-            CHECK(used == 6u);
-            CHECK(unused == std::set<uint32_t>({1111u, 1114u}));
+            CHECK(used == 8u);
+            CHECK(unused.empty());
         }
     }
     const driving::MeasurementReport report = sim.drivingHost().measurements().report();
@@ -1433,10 +1442,13 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
     const engine::RoadModel& model = *level->cities[0];
     CHECK(model.built);
     CHECK(model.junctions.size() == 156u && model.streets.size() == 293u);
-    CHECK(model.laneLevel.paths.size() == 3364u);
+    // RE-PINNED at the S7 re-bake (ADR-0478): 3364 -> 3358 lane-level paths (1604 lanes, 1754 connectors). The 3364 had
+    // been stale since at least ADR-0453 (the model held 3370 then); retaken from the level as it now loads, after the box
+    // edge by angle (ADR-0471), the mitred corners (ADR-0472) and s208 stated at j95 (ADR-0473) moved its turns.
+    CHECK(model.laneLevel.paths.size() == 3358u);
     // what the loader attached (name signs, signal poles, lamps, control signs) is on the model that is driven on
     CHECK(model.attachments.size() > 1500u);
-    CHECK(level->laneLevelReport.find("3364 paths") != std::string::npos);
+    CHECK(level->laneLevelReport.find("3358 paths") != std::string::npos);
     // the driving reads this object's lane level, not a copy and not a model of its own
     const driving::Driving* d = lc.city.sim().drivingV2();
     CHECK(d != nullptr);
@@ -1446,12 +1458,15 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
     // on the road are one for each space, in the model's order, each where a car in that space stands. (Before, the
     // paint drew the old driving's own bays: 1294 on this level, laid by another rule, where no car of the new
     // driving parks.)
+    // RE-PINNED at the S7 re-bake (ADR-0478): 129 -> 127 streets holding spaces, 1098 -> 1080 spaces, 7686 -> 7560 m of
+    // kerb (132 streets state a band, as before). Spaces start 10 m back from each arm's stop line, and at sharp-angled
+    // junctions the stop lines now stand further back (ADR-0471); s208 stated at j95 (ADR-0473) has a stop line too.
     const engine::KerbSpaceCounts spaces = engine::kerbSpaceCounts(model);
-    CHECK(spaces.streetsWithBand == 132u && spaces.streets == 129u && spaces.spaces == 1098u);
-    CHECK(engine::approxEqual(spaces.kerbMetres, 7686.0, engine::kSamePoint));
+    CHECK(spaces.streetsWithBand == 132u && spaces.streets == 127u && spaces.spaces == 1080u);
+    CHECK(engine::approxEqual(spaces.kerbMetres, 7560.0, engine::kSamePoint));
     const engine::InstanceGroup* outlines = lc.world.get<engine::InstanceGroup>(lc.city.parkBayGroup());
     CHECK(outlines != nullptr);
-    if (outlines) CHECK(outlines->transforms.size() == 1098u);
+    if (outlines) CHECK(outlines->transforms.size() == 1080u);
     std::size_t counted = 0;
     int offItsSpace = 0, noKerbLane = 0;
     for (std::size_t s = 0; s < model.streets.size(); ++s)
@@ -1468,9 +1483,10 @@ TEST_CASE(level_traffic_lab_v2_one_road_model_is_published_and_driven_on) {
             }
             ++counted;
         }
-    CHECK(counted == 1098u && offItsSpace == 0 && noKerbLane == 0);
-    std::printf("    [lab-v2] kerb parking: %u spaces on %u streets, %zu outlines painted\n", spaces.spaces,
-                spaces.streets, outlines ? outlines->transforms.size() : std::size_t(0));
+    CHECK(counted == 1080u && offItsSpace == 0 && noKerbLane == 0);
+    std::printf("    [lab-v2] kerb parking: %u spaces on %u streets (%u state a band) along %.1f m of kerb, %zu outlines painted\n",
+                spaces.spaces, spaces.streets, spaces.streetsWithBand, static_cast<double>(spaces.kerbMetres),
+                outlines ? outlines->transforms.size() : std::size_t(0));
     // the vehicles the roads were checked against: the level's own fleet, read by the roads themselves
     engine::bundle::LevelInputs in;
     std::string err;

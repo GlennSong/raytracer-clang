@@ -23455,3 +23455,94 @@ Words:
 **For players** (after S7's re-bake): at river_town's Redwood Parkway and Fifth Avenue the two staggered crossings are two junctions with their own stop lines and crosswalks on the parkway between them. Cars can now take every turn there that the old six-arm junction refused (14 turns no vehicle could take, now 0).
 
 **Revisit when** the planner states junctions as it plans them (no grouping by storage); when Glenn wants j135 or j0's link split anyway (their stop lines overlap: the box edge rule would need a cap there too); or when a split junction's short street (s313, 3.9 m between stop lines) shows up as a queueing problem in driving.
+
+## ADR-0478 — The one re-bake for the #306 bundle: five levels baked, the level tests run, the pins that moved retaken once; the near crowd got worse and was not pinned (#306 task 4, S7)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: ADR-0469 to ADR-0477 changed the roads and the lots without baking any level. This is the one bake that picks them all up, and the one pass over the level tests that read those levels. Every pinned value that moved is retaken here, with old, new and why in the test's comment. One test moved the wrong way (the near crowd's physics cars now hit things). It was not pinned, and is listed under "Found" for a sitting of its own.
+
+Words:
+- **Bake / bundle:** a level's built city (roads, lots, buildings), saved under `cache/levels/` and reused while its key matches (docs/bakes.md).
+- **Pin:** a value a test checks exactly, taken from a run that was looked at, so any change to it is seen.
+- **Cut off:** a place whose sidewalk is in a part of the walks that cannot be walked to from the largest part.
+- **Held past a sidewalk's end:** the place's stated station lies beyond where its kerb's sidewalk stops, so it is joined to that walk's nearest end instead.
+- **Near crowd:** `near_tier_in_the_crowd_follows_the_player` (physics_tests): brain_crowd's cars, where those within reach of a stand-in player are switched into Jolt physics cars.
+
+**What went into the bake** (ADR-0469..0477):
+- the at-grade rule (0470);
+- box edges set back by the angle the roads meet at (0471);
+- sidewalks mitred at kinks (0472);
+- the road-file fixes: s208, tn0/tn1 ramps, smooth loop ramps (0473);
+- lot frontage, lots format 6 (0474);
+- stated walkways in the road model, and lots stating their paths as walkways, lots format 7 (0475, 0476);
+- the staggered junctions split: j14/j144 and j0/j145 (0477).
+
+Tags: `kLanesBuildTag` 2026-11-20.3, `kLotsBuildTag` 2026-11-20.2, `kLotsFormatVersion` 7, `kRoadModelFormat` 18.
+
+**The bakes** (`build-viewer/rt_bake assets/levels/<level>.json`, one at a time, under `ulimit -v 30000000`):
+
+| Level | Time | Summary |
+|---|---|---|
+| traffic_lab | 33 s | built city: 329 edges, 1118 lanes, 227 cell meshes, 113 pavement holes, 277k triangles (12.4 s); 24.3 MB, 2% shared with the last bundle |
+| brain_lab | 0 s | up to date: the same bundle as traffic_lab (the same roads, no lots) |
+| brain_crowd | 0 s | up to date: the same bundle |
+| river_town | 169 s | built city (1434 lanes, 323 cell meshes, 142 holes, 534k triangles, 37.4 s) and lots (130 blocks, 625 lots, 626 buildings, 88.1 s; 1465 paths stated as walkways, 0 crossing a carriageway, 25 doors onto a path); 229.9 MB, 28% shared |
+| agent_lab | 169 s | the same roads and lots as river_town; 229.9 MB, 28% shared |
+
+No crash, no hang. metro_v2_test was baked inside `metro_pedestrians_walk_and_keep_apart` (124 s).
+
+**Re-pinned** (each test comment says old -> new -> why):
+
+| Test | Value | Old | New | Why |
+|---|---|---|---|---|
+| `level_traffic_lab_v2_drives` | five-minute state hash | 0x55109fe9a8e247b1 | 0x9956a73de1425d39 | stop lines moved (0471), every ramp reachable (0472), s208 stated (0473): routes and waits moved. Arrivals 398 -> 399, mean speed 8.85 -> 9.67 m/s, standing at the end 78 -> 52 |
+| `level_traffic_lab_v2_drives` | ramps used / unused | 6 / {1111, 1114} | 8 / none | j153's and j154's turns fit now (0472) |
+| `..._one_road_model_is_published_and_driven_on` | lane-level paths | 3364 (stale: 3370 at ADR-0453) | 3358 | the turns moved with the box edges, the mitres and s208 |
+| same | kerb spaces: streets / spaces / metres / outlines | 129 / 1098 / 7686 / 1098 | 127 / 1080 / 7560 / 1080 | spaces start 10 m behind a stop line; stop lines stand further back at sharp angles (0471), and s208 gained one (0473) |
+| `level_brain_lab_one_resident_makes_the_trip` | red lights stood at | 3 | 1 | another route, 13 junctions; the drive 14024 -> 8240 ticks |
+| `level_brain_crowd_the_residents_make_their_day` | cars / with one; most on the road (minute); busy minutes; trips; parked; another place; arrivals; no plan; hash | 231 / 249; 91 (10); 13; 261; 205; 1; 422; 1; 0xf0003605a4cb6ba2 | 229 / 246; 88 (11); 12; 233; 179; 0; 426; 0; 0xb67879f5b6ec7210 | no place is cut off any more, so more people walk and fewer drive; fewer kerb spaces, fewer cars; rings 0 |
+| `level_river_town_crowd_drives_on_the_new_driving` | cars / with one; most on the road; trips; parked; walks blocked; another place; arrivals; no plan; hash | 388 / 415; 117; 259; 141; 7; 6; 621; 225; 0x83b99189cfc16fbd | 364 / 393; 135; 322; 210; 11; 9; 753; 9; 0xc02460bd06f44189 | places cut off 97 -> 23, so nobody is stuck in no_way (8 -> 0). Walks blocked and another place are a little worse |
+| `level_walk_join_..._beside_the_one_query`, brain_crowd | cut off; placing / starting / finishing; fallback | 4; 445 / 405 / 405; 445 | 0; 447 / 411 / 411; 447 | corners at sharp angles have walks (0471, 0472) |
+| same, river_town | cut off; placing / starting / finishing; fallback; doors / joined / agree | 97; 751 / 749 / 746; 764; 913 / 902 / 746 | 23; 747 / 745 / 742; 754; 891 / 882 / 821 | cut off 97 -> 23. The street map's nearest is the cross street at a corner 30 -> 40 times (box edges stand back). Doors snapping to a footpath 136 -> 50 (paths are walkways, 0476) |
+
+`level_walk_join` now also prints the places held past a sidewalk's end, per street. `..._one_road_model_...` prints the kerb metres and banded streets it pins.
+
+**Known failures, before -> after:**
+- brain_crowd, walkers waiting away from a kerb end (line 275): 75.45% -> 62.68% of samples. Better, still failing (the target is under 5%).
+- v2_drives, the measurements table (line 1011): only "how a queue empties" fails, 2.40 -> 3.03 s a car (over 8 gaps; turns included 3.09 -> 3.08). Worse, on a thin sample.
+- v2_drives, cars over kLongestStand (line 1035): 12 -> 10; the longest 142.9 -> 169.5 s (car 9, refused room beyond).
+- The stale 3364-paths pin: retaken (above); that test passes.
+- The near crowd's off-lane worst (line 1108): much worse, below.
+
+**Found:**
+- **Stopped, not pinned: the near crowd got worse.**
+  - Before (the C3b build): chassis hits on walkers 0, on other things 0; longest off its lane 9.5 s; most near 13; in 83, out 63; refused 3; hash 0x59168988decd4c99.
+  - Now: hits on walkers **2**, on other things **65** (limit 8); off its lane **220.7 s** (car 148, 1.19 m off); most near 20; in 72, out 55; refused 16 (one "a wreck", one "not upright"); hash 0xd389302ce3688a32.
+  - Where: cars 148, 88 and 21 hit an entity that is not a car on traffic_lab's s211 near j7, at about (-364, -16 to -29), 0.8-2.8 m from the junction road's centre line. Car 148 hit it at 7.44 m/s, then stood off its lane on s24 near j19 (-334, 179).
+  - j7 and j19 are both junctions whose box edges ADR-0471 moved (their crosswalk kerb ends had been in another road's carriageway).
+  - What the cars hit is not yet known. It could be street furniture placed from the moved arms, or a mitre piece of kerb or sidewalk (ADR-0472) standing in a junction road.
+  - The lane-car tests pass, and so do the other 11 near_tier cases.
+  - It needs a sitting: look at those two spots in the viewer.
+- **`metro_pedestrians_walk_and_keep_apart` fails before anyone walks, for a reason outside this bundle.** The city does not build on metro_v2_test. Its road file states no points for 16 spread junctions (j143..j200: "run `lanes_tool layout <road file> --nodes --write` once"). The file was last written 2026-11-13, before ADR-0425 made the street map need them. Not fixed here.
+- **One new cut-off part:** river_town's s169 is a part of its own, one walk, holding 20 places. It was not among ADR-0468's five parts. The other 3 cut-off places are one each on s10, s13 and s172.
+- **Places held past their sidewalk's end:**
+  - brain_crowd: 0 -> 2 (s33 8 m, s57 6 m).
+  - river_town: 0 -> 78. Most are the places once cut off on s10 (29, up to 40 m) and s13 (4, up to 38 m), where the box edges at j7/j8 (ADR-0471's "too close" pairs) leave little sidewalk. They can be reached now, but a walk ends up to 40 m from the place.
+- **Longest stands (not pinned):**
+  - brain_crowd: 341 s (car 123) -> 563 s (car 159, junction 93, from minute 15).
+  - river_town: 1480.9 s (car 76) -> 1540.6 s (car 237, giving way to people crossing from minute 5). The known jam, in another car.
+- `level_river_town_streets_are_drivable_grades` passes (the steepest 67.1% at (393, 274), the viaduct its ratchet names).
+
+**Suites:**
+- level_tests: traffic_lab filter 10/11 (v2_drives's two known), brain_lab 12/12, brain_crowd its one known, river_town 2/2, walk_join 1/1, metro_pedestrians 0/1 (above).
+- physics_tests near_tier: 11/12 (the near crowd, above).
+- lanes_tests 154/154, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513.
+
+**Prune (dry run only, `rt_bake --prune`):**
+- 24 bundles under cache/levels, 7 stale (1.43 GB).
+- 178 terrain, population and road model files, 44 stale (810.4 MB); 46 with no record of their levels (2.41 GB), kept.
+- Nothing was deleted.
+
+**Format and caches:** no tag, format or code moved; tests and this ADR only.
+
+**Revisit when** the near crowd's hits at j7/j19 are found (then retake its pins, and check whether the fix moves any pin here); when metro_v2_test's road file is given its points; or when s169's walk is joined.

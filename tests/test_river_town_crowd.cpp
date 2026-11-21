@@ -209,20 +209,27 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // jam at lane junction 29 build up: 99 of the 117 standing at the end, car 91 behind about 40 residents queued at
     // crosswalk 123's kerb end from minute 5, a known fault not yet diagnosed; 8 residents in no_way all run, planning
     // again each minute, most of the 225 no-plans). Another stretch of the day (RT_CROWD_MINUTES) holds only the rings.
+    // RE-PINNED at the S7 re-bake (ADR-0478; the roads of ADR-0470..0473 and 0477, the lots' frontage and walkways of
+    // ADR-0474..0476): places in a cut-off part on foot 97 -> 23 (level_walk_join), so nobody is left in no_way (8 -> 0)
+    // and no-plans fall 225 -> 9; trips 259 -> 322, parked 141 -> 210, arrivals 621 -> 753, the most on the road 117 ->
+    // 135 (still minute 11). Fewer households hold a car: cars 388 -> 364 (with one 415 -> 393), the kerb spaces having
+    // moved with the stop lines. Worse, small: walks blocked 7 -> 11, another place 6 -> 9. The known jam is still there,
+    // another car: car 237 stands 1540.6 s from minute 5 giving way to people crossing (was car 76, 1480.9 s). Rings still
+    // 0, touching spells 0. Hash 0x83b99189cfc16fbd -> 0xc02460bd06f44189.
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
-        CHECK(b.cars().size() == 388u);
-        CHECK(withCar == 415);
+        CHECK(b.cars().size() == 364u);
+        CHECK(withCar == 393);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 117);
+        CHECK(mostOnRoad == 135);
         CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 259u);
-        CHECK(b.counts().parkedReports == 141u);
-        CHECK(b.counts().walksBlocked == 7u);
-        CHECK(b.counts().otherPlaces == 6u);
-        CHECK(b.machine()->counts().arrivals == 621u);
-        CHECK(b.machine()->counts().noPlans == 225u);
+        CHECK(b.counts().tripsBegun == 322u);
+        CHECK(b.counts().parkedReports == 210u);
+        CHECK(b.counts().walksBlocked == 11u);
+        CHECK(b.counts().otherPlaces == 9u);
+        CHECK(b.machine()->counts().arrivals == 753u);
+        CHECK(b.machine()->counts().noPlans == 9u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -233,6 +240,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // were rows 0-14 of the old sim's vehicle list, and a car entity is numbered past every row (nextCarNumber), so
         // every household car's number is 15 lower now (the longest stand: car 91 -> 76). Every count, every minute,
         // is the same.
-        CHECK(hash == 0x83b99189cfc16fbdull);
+        // 0x83b99189cfc16fbd -> 0xc02460bd06f44189 (ADR-0478, the S7 re-bake): the counts above.
+        CHECK(hash == 0xc02460bd06f44189ull);
     }
 }

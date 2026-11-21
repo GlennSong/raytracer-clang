@@ -296,24 +296,31 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // no longer waits for that clock's WALK and judges the gap instead (the runs part at minute 3). Trips 260 -> 261,
     // parked 204 -> 205, arrivals 415 -> 422, hash 0xfd98526fa3b9d920 -> 0xf0003605a4cb6ba2. (The one pole obstacle the
     // old clock's links stood where no pole is, link 561, went too; put back, the hash is the same.)
+    // AND AGAIN at the S7 re-bake (ADR-0478; the roads of ADR-0470..0473): kerb spaces moved with the stop lines set back
+    // at sharp angles (the lab's 1098 -> 1080), so cars 231 -> 229 (with one 249 -> 246); the walks join up (no place in
+    // a cut-off part, 4 -> 0, level_walk_join), so more people walk: trips 261 -> 233, parked 205 -> 179, the most on the
+    // road 91 at minute 10 -> 88 at minute 11, busy minutes 13 -> 12, another place 1 -> 0, no plan 1 -> 0, arrivals 422
+    // -> 426, hash 0xf0003605a4cb6ba2 -> 0xb67879f5b6ec7210; rings still 0. Walkers waiting away from a kerb end 75.45%
+    // -> 62.68% (still failing, above). Not pinned, looked at: the longest stand 341 s (car 123) -> 563 s (car 159,
+    // junction 93, from minute 15).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
-        CHECK(b.cars().size() == 231u);
-        CHECK(withCar == 249);
+        CHECK(b.cars().size() == 229u);
+        CHECK(withCar == 246);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 91);
-        CHECK(mostOnRoadAt == 10);
-        CHECK(busyMinutes == 13);
-        CHECK(b.counts().tripsBegun == 261u);
-        CHECK(b.counts().parkedReports == 205u);
+        CHECK(mostOnRoad == 88);
+        CHECK(mostOnRoadAt == 11);
+        CHECK(busyMinutes == 12);
+        CHECK(b.counts().tripsBegun == 233u);
+        CHECK(b.counts().parkedReports == 179u);
         CHECK(b.counts().walksBlocked == 1u);
-        CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 422u);
-        CHECK(b.machine()->counts().noPlans == 1u);
+        CHECK(b.counts().otherPlaces == 0u);
+        CHECK(b.machine()->counts().arrivals == 426u);
+        CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xf0003605a4cb6ba2ull);
+        CHECK(hash == 0xb67879f5b6ec7210ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

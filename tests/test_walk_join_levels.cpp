@@ -124,12 +124,25 @@ bool crowdPlace(const std::string& name) {
 // The counts pinned per level, from the run looked at (2026-11-19, ADR-0468). river_town's places in a cut-off part
 // were 98, now 97 (ADR-0469): s345's one place, whose sidewalks end under the freeway, is joined to the rest across that
 // dead end's turn-round.
+// RE-PINNED at the S7 re-bake (ADR-0478; the roads of ADR-0470..0473 and 0477, the lots of ADR-0474..0476), old -> new:
+//   - brain_crowd: cut off 4 -> 0 (one part on foot: every walk joins up); placing 445 -> 447, starting and finishing
+//     405 -> 411, the fallback 445 -> 447 (the corners at sharp angles have walks now, ADR-0471/0472). Held past a
+//     sidewalk's end: 0 -> 2 (s33 8 m, s57 6 m).
+//   - river_town: cut off 97 -> 23 (5 parts -> 4: 20 places on s169, one each on s10, s13 and s172; s169 is NEW among
+//     them, its one walk a part of its own); placing 751 -> 747, starting 749 -> 745, finishing 746 -> 742, the
+//     fallback 764 -> 754 (the street map's nearest is the cross street at a corner 30 -> 40: the box edges stand back
+//     at sharp angles, ADR-0471, so a place near a corner is nearer the cross street's link than its own). Held past a
+//     sidewalk's end 0 -> 78, most of them the places once cut off on s10 (29, up to 40 m) and s13 (4, up to 38 m),
+//     joined now at their kerb's sidewalk's end (the box edges at j7/j8 stand back, ADR-0471's "too close" pairs).
+//   - river_town's doors: 913 -> 891 (the lots regrown), joined 902 -> 882 (26 -> 0 in a cut-off part), agreeing with
+//     the street map's snap 746 -> 821 (snaps to a park's or the quad's footpath 136 -> 50: the lots state their paths
+//     as walkways, ADR-0476).
 struct Pinned {
     int places, cutOff, placing, starting, finishing, fallbackSame, rampNodes, atNode, doors, doorsJoined, doorsAgree;
 };
 const Pinned& pinnedFor(const std::string& level) {
-    static const Pinned kBrainCrowd{451, 4, 445, 405, 405, 445, 1, 0, 0, 0, 0};
-    static const Pinned kRiverTown{799, 97, 751, 749, 746, 764, 0, 3, 913, 902, 746};
+    static const Pinned kBrainCrowd{451, 0, 447, 411, 411, 447, 1, 0, 0, 0, 0};
+    static const Pinned kRiverTown{799, 23, 747, 745, 742, 754, 0, 3, 891, 882, 821};
     return level == "brain_crowd.json" ? kBrainCrowd : kRiverTown;
 }
 }  // namespace
@@ -168,14 +181,18 @@ TEST_CASE(level_walk_join_the_street_maps_lookups_beside_the_one_query) {
             std::set<std::string> streets;
         };
         std::map<uint32_t, CutOffPart> cutOffParts;
+        std::map<std::string, std::pair<int, double>> heldOn;   // street -> places held past its kerb's sidewalk, the most metres
         for (const citysim::BrainMarker& mk : b->markers()) {
             const WalkJoin j = m.walkJoinOn(mk.frontage, open, &parts);
             statedCount += mk.stated ? 1 : 0;
             joined += j.valid() ? 1 : 0;
             if (j.valid() && j.held > 1.0) {
                 ++held;
-                notes.push_back(mk.name + ": past where its kerb's sidewalk stops, joined " + std::to_string(static_cast<int>(j.held + 0.5)) +
-                                " m along at its end");
+                std::pair<int, double>& h = heldOn[m.streets[j.street.index].id];
+                ++h.first;
+                h.second = std::max(h.second, static_cast<double>(j.held));
+                notes.push_back(mk.name + " (" + m.streets[j.street.index].id + "): past where its kerb's sidewalk stops, joined " +
+                                std::to_string(static_cast<int>(j.held + 0.5)) + " m along at its end");
             }
             across += j.valid() && j.across ? 1 : 0;
             if (j.valid() && j.cutOff) {
@@ -269,6 +286,12 @@ TEST_CASE(level_walk_join_the_street_maps_lookups_beside_the_one_query) {
             for (std::size_t i = 0; i < fallbackDiffer.size() && i < 8; ++i) std::printf("          - %s\n", fallbackDiffer[i].c_str());
             for (std::size_t i = 0; i < notes.size() && i < 16; ++i) std::printf("          * %s\n", notes[i].c_str());
             if (notes.size() > 16) std::printf("          * ... and %zu more\n", notes.size() - 16);
+            if (!heldOn.empty()) {
+                std::printf("        held past a sidewalk's end, by street (places, the most metres):");
+                for (const std::pair<const std::string, std::pair<int, double>>& h : heldOn)
+                    std::printf(" %s %d (%.0f m);", h.first.c_str(), h.second.first, h.second.second);
+                std::printf("\n");
+            }
             std::printf("    [walk join] %s: the walks' parts on foot: %zu, the largest %u walks of %zu; places in a cut-off part: %d, in %zu "
                         "parts\n",
                         level, parts.sizes.size(), parts.sizes.empty() ? 0u : parts.sizes[parts.largest], m.laneLevel.walks.size(), cutOff,
