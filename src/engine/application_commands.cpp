@@ -22,6 +22,10 @@
 #include "../log.h"
 #include "model_inspect.h"   // models?, model?
 #include "model_motion.h"    // model_set
+#include "model_overlay.h"   // model_overlay
+#ifdef RT_ENABLE_SCRIPTING
+#include "scripting/prefab_list.h"   // prefabs?, prefab?
+#endif
 #include "engine/bundle/bundle.h"
 #include "engine/bundle/bake.h"
 #include <algorithm>
@@ -547,6 +551,42 @@ void Application::registerPlayerVerbs() {
         std::snprintf(buf, sizeof buf, "ok %s %s %.4g", cmd.args[0].c_str(), speed > 0 ? "heading for" : "at", node->motion.clamped(value * unit) / unit);
         return buf;
     });
+
+    commandTable.add("model_overlay", "model_overlay [shapes] [markers] [joints] | all | off",
+                     "Draw over every stamped model what it carries that is not drawn: its collision shapes (green: still; orange: on a moving node), its markers (three axes each), its joints (axis, limits, where it is now). Names what to show; no argument answers what is shown.",
+                     [](const ControlCommand& cmd) -> std::string {
+        ModelOverlay& o = modelOverlay();
+        if (!cmd.args.empty()) {
+            ModelOverlay next;
+            for (const std::string& a : cmd.args) {
+                if (a == "all") next.shapes = next.markers = next.joints = true;
+                else if (a == "shapes") next.shapes = true;
+                else if (a == "markers") next.markers = true;
+                else if (a == "joints") next.joints = true;
+                else if (a != "off") return "err model_overlay [shapes] [markers] [joints] | all | off";
+            }
+            o = next;
+        }
+        std::string shown = std::string(o.shapes ? " shapes" : "") + (o.markers ? " markers" : "") + (o.joints ? " joints" : "");
+        return "ok" + (shown.empty() ? std::string(" off") : shown);
+    });
+
+#ifdef RT_ENABLE_SCRIPTING
+    // PREFABS AS DATA (#191): the list's names, and one prefab as the editor's inspector shows it.
+    commandTable.add("prefabs?", "prefabs?",
+                     "The names in prefabs.lua: every thing a level can place a copy of.",
+                     [](const ControlCommand&) -> std::string {
+        std::string why, names;
+        for (const std::string& name : namedPrefabs(std::string(), &why)) names += (names.empty() ? "" : " ") + name;
+        return why.empty() ? "ok " + names : "err " + why;
+    });
+    commandTable.add("prefab?", "prefab? <name>",
+                     "One prefab as JSON: its model and how that is built (recipe and arguments), its physics, draw class and distance, its behaviour script, and the line of prefabs.lua it is on; `error` when its line is wrong.",
+                     [](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err prefab? <name>";
+        return "ok " + prefabJson(cmd.args[0]);
+    });
+#endif
 
     commandTable.add("teleport", "teleport <x y z [pitch yaw] | x z> | open",
                      "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel.",

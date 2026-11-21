@@ -38,6 +38,11 @@ private:
     EditorFactory makeEditorState;
     engine::EditorBridge* bridge = nullptr;
     bool fromHere_ = false;
+    // A watched script changed mid-playtest: the fresh state starts the player where they stood, not back at the
+    // level's spawn (the model studio: walk round a model, edit its script, and still be standing there).
+    bool keepPlace_ = false;
+    engine::Vec3 keptPlace_;
+    std::unique_ptr<ArenaState> reloaded(engine::FrameContext& ctx) const;
 
     // Recipe hot-reload (the BUILDING LAB loop, building-grammar-plan.md P1):
     // a level with `"watch_scripts": true` watches its own file plus every

@@ -17,6 +17,8 @@
 #include "../systems/residency_system.h"
 #include "../systems/grass_system.h"
 #include "../systems/render_system.h"
+#include "../systems/debug_draw_system.h"
+#include "../systems/model_overlay_system.h"
 #include "../systems/light_system.h"
 #include "../systems/probe_system.h"
 #ifdef __EMSCRIPTEN__
@@ -51,6 +53,8 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     addSystem<LightSystem>();        // the street lamps (ADR-0362)
     addSystem<ProbeSystem>();        // the reflection probes (ADR-0374)
     addSystem<RenderSystem>();
+    addSystem<ModelOverlaySystem>();  // stamped models' shapes, markers and joints, when asked (#191)
+    addSystem<DebugDrawSystem>();     // ...drawn as lines over the scene (ADR-0067)
     addSystem<CameraPanelSystem>(camSys);
     addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)
     addSystem<EditorSystem>(camSys, this->levelFile, std::move(makePlayState),

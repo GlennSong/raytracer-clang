@@ -312,6 +312,12 @@
   "usage": "model? [n]"
  },
  {
+  "name": "model_overlay",
+  "owner": "engine",
+  "summary": "Draw over every stamped model what it carries that is not drawn: its collision shapes (green: still; orange: on a moving node), its markers (three axes each), its joints (axis, limits, where it is now). Names what to show; no argument answers what is shown.",
+  "usage": "model_overlay [shapes] [markers] [joints] | all | off"
+ },
+ {
   "name": "model_set",
   "owner": "engine",
   "summary": "Move a moving node of a stamped model: degrees for a turn, metres for a slide; with a speed (per second) it travels there, without it is there at once. n from models?, default 0.",
@@ -394,6 +400,18 @@
   "owner": "engine",
   "summary": "Stop the possessed agent where it is.",
   "usage": "possess_stop"
+ },
+ {
+  "name": "prefab?",
+  "owner": "engine",
+  "summary": "One prefab as JSON: its model and how that is built (recipe and arguments), its physics, draw class and distance, its behaviour script, and the line of prefabs.lua it is on; `error` when its line is wrong.",
+  "usage": "prefab? <name>"
+ },
+ {
+  "name": "prefabs?",
+  "owner": "engine",
+  "summary": "The names in prefabs.lua: every thing a level can place a copy of.",
+  "usage": "prefabs?"
  },
  {
   "name": "publish",

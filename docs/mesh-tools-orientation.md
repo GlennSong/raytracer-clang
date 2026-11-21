@@ -144,6 +144,14 @@ window; write to the script's file while it runs to see a rebuild. To drive a ru
 over its control socket (`tools/rtctl.py`; `build-viewer/sheets/studio/ctl_check.py` is a worked example, not
 tracked): `studio?`, `model?`, `model_set boom 40`.
 
+The studio views a model OR a prefab (`./build-viewer/editor_app --prefab crane_working`): the prefab's settings
+are a form in the Inspector dock that rewrites only that prefab's entry in `prefabs.lua`
+(`scripting/prefab_list.h` `savePrefab`); Play runs it with its script; three boxes draw its collision shapes,
+markers and joints as lines (`engine/model_overlay.h`). The design note's "The studio's next shape" says what was
+agreed with Glenn and what of it is built. **Next there: step 9** (sounds, lights and offers at markers, as prefab
+components with tree rows, lines and a check that each names a marker the model has); the crane's cab is its first
+test.
+
 
 Glenn's order (2026-11-20): the systems first, the fancy crane last. **Prefabs, then test them with many procgen
 models, then modelling tools.**

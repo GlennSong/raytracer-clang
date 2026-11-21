@@ -967,6 +967,53 @@ Glenn's calls, from talking it through:
 Order: (1) the studio opens a prefab entry, body and script as its first components, and Play stamps it; (2) the
 physics overlay; (3) step 9 as prefab components with rows, overlays and attachment checks.
 
+**Built the same day: (1) and (2).**
+
+- **The studio views a model or a prefab.** A "Showing" list in the dock: the model alone (the script run
+  directly), or any prefab in `prefabs.lua` whose model that script builds. "Open prefab..." picks one by name and
+  puts its model's recipe in the pane; "Make prefab" (was "Add to lists") gives the script its two lines and views
+  the new prefab. `editor_app --prefab <name>` starts there. A prefab's studio level is
+  `cache/model_studio/<name>.prefab.json`, with the plain `"prefab": "<name>"` entity a real level uses, so what
+  the viewport shows is what a level would get. The loader now watches `prefabs.lua` for such an entity, found or
+  not, so a wrong line can be mended and tried again. The Arguments box is greyed while a prefab is viewed and
+  shows its model's arguments from `models.lua`.
+- **The prefab's own rows in the tree**, above the model's: its model, physics, draw and script, each in words, with
+  the line of `prefabs.lua` the entry starts on. Clicking one brings the Inspector forward.
+- **The Inspector's prefab form.** At the top of the editor's existing Inspector dock, shown only while a prefab is
+  viewed: model (the names in `models.lua`), physics body and friction, draw class and distance, script. It is
+  built from data the engine gives (`prefabFieldsJson`), one control per thing a line can say; an optional number
+  has a "not set" position that leaves its key out of the line. Changing the model puts the new model's recipe in
+  the pane.
+- **The one rewrite.** A change in the form calls `savePrefab` (`scripting/prefab_list.{h,cpp}`): the line is
+  checked exactly as the list's reader checks it (`readPrefabLine`, which `findPrefab` now also uses), and only then
+  written. `putPrefabLine` replaces that prefab's entry and nothing else: every other character of the file is as
+  typed, including comments before and after the entry; comments inside the entry go. A new prefab is added as the
+  table's last line. A wrong value writes nothing and is said under the form. No recipe script is ever rewritten.
+- **Play.** The toolbar's Play works on the studio's level as on any other: the prefab is solid, its script runs
+  (the crane's cab, boom and hook move), and the model overlay and the tree's values follow. A script edit while
+  playing rebuilds the level, and the player now stays where they stood (`ArenaState::reloaded` hands the fresh
+  state the player's place; before, every rebuild sent them back to the spawn point). A model viewed alone was
+  already solid in play (a recipe run directly is stamped with a static body).
+- **Lines over the model** (`engine/model_overlay.{h,cpp}`, `systems/model_overlay_system`): three boxes in the
+  dock, "shapes", "markers", "joints". Collision shapes where they now are (green: still; orange: on a node that
+  moves; a mesh or hull as the box round its points), markers as three axes, and each moving node's axis, limits
+  and present value. Drawn with the engine's debug lines, in the editor (which now has the debug line system) and
+  in play, for every stamped model in any level.
+- **On the control channel** (docs/control-channel.md): `prefabs?`, `prefab? <name>`, `model_overlay ...` in the
+  engine; `studio_prefab <name | none>`, `studio_prefab_set <part>[.<key>] <value | none>`, `play [here]`, `stop`
+  in the editor. `studio?` now says whether a model or a prefab is shown, the prefab's data, and which lines are on.
+
+Checked: unit tests for the entry rewrite, the prefab as data and the overlay's lines; and the editor run unattended
+(`build-viewer/sheets/studio/prefab_check.py`, `play_check.py`, `overlay_check.py`, not tracked): the form's write
+seen in `prefabs.lua` and undone, a wrong class and a missing script refused, the joints' values changing in play,
+the player at the same place after a rebuild in play, both captures looked at. NOT checked by a person: the form's
+controls and the boxes under a mouse.
+
+Left from what was agreed: the field declarations are written in C++ next to the reader (`prefabFieldsJson`), not
+declared by each component kind in data; that comes with step 9, when there is more than one kind to declare.
+Model rows in the Inspector (read-only facts) are not there: a picked piece shows the entity's ordinary properties.
+The body's fixed-or-moving choice has only "static" and "none" because the engine has no other prefab body yet.
+
 ## The model half, done; what the prefab half starts from
 
 Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of

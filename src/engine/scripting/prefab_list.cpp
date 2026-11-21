@@ -6,6 +6,10 @@
 #include "model_recipes.h"      // readScriptList, namedModels
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
 
 namespace engine {
 
@@ -43,16 +47,24 @@ std::vector<std::string> namedPrefabs(const std::string& levelDir, std::string* 
 
 bool findPrefab(const std::string& name, Prefab& out, const std::string& levelDir, std::string* error, const std::string& listFile,
                 const std::string& modelsFile) {
+    nlohmann::json list;
+    std::string why;
+    if (!readScriptList(listFile, levelDir, list, &why) || !list.contains(name) || !list[name].is_object()) {
+        if (error != nullptr) *error = why.empty() ? listFile + " has no prefab named '" + name + "'" : why;
+        return false;
+    }
+    return readPrefabLine(name, list[name], out, levelDir, error, listFile, modelsFile);
+}
+
+bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab& out, const std::string& levelDir, std::string* error,
+                    const std::string& listFile, const std::string& modelsFile) {
     auto fail = [&](const std::string& why) {
         if (error != nullptr) *error = why;
         return false;
     };
-    nlohmann::json list;
     std::string why;
-    if (!readScriptList(listFile, levelDir, list, &why)) return fail(why);
-    if (!list.contains(name) || !list[name].is_object()) return fail(listFile + " has no prefab named '" + name + "'");
-    const nlohmann::json& line = list[name];
     const std::string where = listFile + ": '" + name + "'";
+    if (!line.is_object()) return fail(where + " is a table: { model = \"...\" }");
 
     std::string stray;
     if (!onlyKeys(line, {"model", "physics", "draw", "script"}, stray)) {
@@ -106,6 +118,234 @@ bool findPrefab(const std::string& name, Prefab& out, const std::string& levelDi
     }
     out = p;
     return true;
+}
+
+namespace {
+
+// A number as a list's line writes it: 0.7, 400 (no trailing zeros).
+std::string plainNumber(double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.6g", v);
+    return buf;
+}
+
+std::string luaQuoted(const std::string& text) {
+    std::string out = "\"";
+    for (char c : text) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+
+// A walk over Lua text that knows what is code: `visit(i)` is called at each character that is not inside a comment
+// or a string, and may return a new place to go on from (or i, to step on by one).
+template <typename Visit>
+void walkLuaCode(const std::string& text, Visit visit) {
+    // the end of a long bracket opened at `i` ("[[" or "[==["), or npos when `i` does not open one
+    auto longEnd = [&](std::size_t i) -> std::size_t {
+        if (i >= text.size() || text[i] != '[') return std::string::npos;
+        std::size_t j = i + 1;
+        while (j < text.size() && text[j] == '=') ++j;
+        if (j >= text.size() || text[j] != '[') return std::string::npos;
+        const std::string close = "]" + std::string(j - i - 1, '=') + "]";
+        const std::size_t at = text.find(close, j + 1);
+        return at == std::string::npos ? text.size() : at + close.size();
+    };
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const char c = text[i];
+        if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+            const std::size_t block = longEnd(i + 2);
+            if (block != std::string::npos) { i = block; continue; }
+            const std::size_t eol = text.find('\n', i);
+            i = eol == std::string::npos ? text.size() : eol;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            std::size_t j = i + 1;
+            while (j < text.size() && text[j] != c && text[j] != '\n') j += text[j] == '\\' ? 2 : 1;
+            i = std::min(text.size(), j + 1);
+            continue;
+        }
+        if (c == '[') {
+            const std::size_t block = longEnd(i);
+            if (block != std::string::npos) { i = block; continue; }
+        }
+        const std::size_t next = visit(i);
+        i = next > i ? next : i + 1;
+    }
+}
+
+bool nameChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; }
+
+}  // namespace
+
+std::string prefabLine(const Prefab& p) {
+    std::string out = p.name + " = { model = " + luaQuoted(p.model);
+    if (p.body == Prefab::Body::Static) {
+        out += ", physics = { body = \"static\"";
+        if (p.friction >= 0) out += ", friction = " + plainNumber(p.friction);
+        out += " }";
+    }
+    const bool ownClass = p.drawClass != Prefab().drawClass;
+    if (ownClass || p.drawDistance > 0) {
+        out += ", draw = { ";
+        if (ownClass) out += "class = " + luaQuoted(p.drawClass);
+        if (p.drawDistance > 0) out += std::string(ownClass ? ", " : "") + "distance = " + plainNumber(p.drawDistance);
+        out += " }";
+    }
+    if (!p.script.empty()) out += ", script = " + luaQuoted(p.script);
+    return out + " },";
+}
+
+bool findPrefabLine(const std::string& text, const std::string& name, std::size_t& begin, std::size_t& end, int* line) {
+    // an entry is  name = { ... }  directly inside the table the list returns
+    int depth = 0;
+    bool found = false;
+    std::size_t entryDepthAt = 0;
+    walkLuaCode(text, [&](std::size_t i) -> std::size_t {
+        const char c = text[i];
+        if (c == '{') { ++depth; return i; }
+        if (c == '}') {
+            --depth;
+            if (found && end == 0 && depth == 1 && i > entryDepthAt) {
+                end = i + 1;
+                std::size_t j = end;
+                while (j < text.size() && (text[j] == ' ' || text[j] == '\t')) ++j;
+                if (j < text.size() && text[j] == ',') end = j + 1;
+            }
+            return i;
+        }
+        if (found || depth != 1 || !nameChar(c) || (i > 0 && nameChar(text[i - 1]))) return i;
+        std::size_t j = i;
+        while (j < text.size() && nameChar(text[j])) ++j;
+        if (text.compare(i, j - i, name) != 0) return j;
+        std::size_t k = j;
+        while (k < text.size() && std::isspace(static_cast<unsigned char>(text[k])) != 0) ++k;
+        if (k >= text.size() || text[k] != '=') return j;
+        ++k;
+        while (k < text.size() && std::isspace(static_cast<unsigned char>(text[k])) != 0) ++k;
+        if (k >= text.size() || text[k] != '{') return j;
+        found = true;
+        begin = i;
+        end = 0;
+        entryDepthAt = k;
+        return k;      // (the brace is counted on the next step)
+    });
+    if (!found || end == 0) return false;
+    if (line != nullptr) *line = 1 + static_cast<int>(std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(begin), '\n'));
+    return true;
+}
+
+bool putPrefabLine(std::string& text, const Prefab& prefab, std::string* error) {
+    const std::string written = prefabLine(prefab);
+    std::size_t begin = 0, end = 0;
+    if (findPrefabLine(text, prefab.name, begin, end)) {
+        text.replace(begin, end - begin, written);
+        return true;
+    }
+    // new: before the brace that closes the table
+    int depth = 0;
+    std::size_t close = std::string::npos;
+    walkLuaCode(text, [&](std::size_t i) -> std::size_t {
+        if (text[i] == '{') ++depth;
+        if (text[i] == '}' && --depth == 0) close = i;
+        return i;
+    });
+    if (close == std::string::npos) {
+        if (error != nullptr) *error = "the list has no table to add '" + prefab.name + "' to (it returns { name = { ... }, ... })";
+        return false;
+    }
+    std::size_t at = close;
+    while (at > 0 && (text[at - 1] == ' ' || text[at - 1] == '\t')) --at;
+    const bool ownLine = at == 0 || text[at - 1] == '\n';
+    text.insert(at, std::string(ownLine ? "" : "\n") + "  " + written + "\n");
+    return true;
+}
+
+bool savePrefab(const std::string& name, const nlohmann::json& line, const std::string& levelDir, std::string* error, const std::string& listFile,
+                const std::string& modelsFile) {
+    auto fail = [&](const std::string& why) {
+        if (error != nullptr) *error = why;
+        return false;
+    };
+    if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0])) != 0 || !std::all_of(name.begin(), name.end(), nameChar))
+        return fail("a prefab's name is letters, digits and _, and does not start with a digit");
+    Prefab prefab;
+    if (!readPrefabLine(name, line, prefab, levelDir, error, listFile, modelsFile)) return false;
+    const std::string path = resolveScriptPath(listFile, levelDir);
+    if (path.empty()) return fail(listFile + " cannot be found");
+    std::string text;
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return fail(path + " cannot be read");
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    const std::string before = text;
+    if (!putPrefabLine(text, prefab, error)) return false;
+    if (text == before) return true;
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return fail(path + " cannot be written");
+    out << text;
+    return true;
+}
+
+std::string prefabJson(const std::string& name, const std::string& levelDir, const std::string& listFile, const std::string& modelsFile) {
+    nlohmann::json o;
+    o["name"] = name;
+    o["list"] = resolveScriptPath(listFile, levelDir);
+    o["line"] = 0;
+    {
+        std::ifstream in(o["list"].get<std::string>(), std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::size_t begin = 0, end = 0;
+        int line = 0;
+        if (findPrefabLine(text, name, begin, end, &line)) o["line"] = line;
+    }
+    Prefab p;
+    std::string why;
+    if (!findPrefab(name, p, levelDir, &why, listFile, modelsFile)) {
+        o["error"] = why;
+        return o.dump();
+    }
+    o["model"] = p.model;
+    nlohmann::json models;
+    if (readScriptList(modelsFile, levelDir, models) && models.contains(p.model) && models[p.model].is_object()) {
+        const nlohmann::json& m = models[p.model];
+        if (m.contains("recipe") && m["recipe"].is_string()) {
+            o["recipe"] = m["recipe"];
+            if (m.contains("args")) o["args"] = m["args"];
+        } else if (m.contains("files")) {
+            o["files"] = true;
+        }
+    }
+    o["physics"] = {{"body", p.body == Prefab::Body::Static ? "static" : "none"}};
+    if (p.friction >= 0) o["physics"]["friction"] = p.friction;
+    o["draw"] = {{"class", p.drawClass}};
+    if (p.drawDistance > 0) o["draw"]["distance"] = p.drawDistance;
+    o["script"] = p.script;
+    return o.dump();
+}
+
+std::string prefabFieldsJson(const std::string& levelDir, const std::string& modelsFile) {
+    nlohmann::json classes = nlohmann::json::array();
+    for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+        if (const char* known = drawClassName(static_cast<DrawClass>(c))) classes.push_back(known);
+    nlohmann::json fields = nlohmann::json::array();
+    fields.push_back({{"part", "model"}, {"name", ""}, {"type", "choice"}, {"choices", namedModels(levelDir, nullptr, modelsFile)},
+                      {"hint", "The model it shows: a name in " + modelsFile + ". Every copy shares the one model."}});
+    fields.push_back({{"part", "physics"}, {"name", "body"}, {"type", "choice"}, {"choices", {"static", "none"}},
+                      {"hint", "static: the model's collision shapes become bodies (those on moving nodes move with them). none: a copy is not solid."}});
+    fields.push_back({{"part", "physics"}, {"name", "friction"}, {"type", "number"}, {"min", 0.0}, {"step", 0.05}, {"optional", true},
+                      {"hint", "One friction for every shape. Left unsaid: each shape's own."}});
+    fields.push_back({{"part", "draw"}, {"name", "class"}, {"type", "choice"}, {"choices", classes},
+                      {"hint", "The draw class whose distance the level sets."}});
+    fields.push_back({{"part", "draw"}, {"name", "distance"}, {"type", "number"}, {"min", 0.0}, {"step", 10.0}, {"optional", true},
+                      {"hint", "How far it is drawn, in metres. Left unsaid: the class's distance."}});
+    fields.push_back({{"part", "script"}, {"name", ""}, {"type", "text"}, {"optional", true},
+                      {"hint", "A behaviour script every copy runs (a file under assets/scripts), which moves the model's nodes. Empty: none."}});
+    return fields.dump();
 }
 
 }  // namespace engine

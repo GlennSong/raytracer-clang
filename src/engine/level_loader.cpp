@@ -1529,6 +1529,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
             } else {
                 found = findPrefab(what.is_string() ? what.get<std::string>() : std::string(), prefab, levelDir, &why);
                 modelName = prefab.model;
+                // (the list itself is watched, found or not: a line with a mistake in it can be mended and tried again)
+                const std::string list = resolveScriptPath("prefabs.lua", levelDir);
+                if (!list.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), list) == g_loadedScriptFiles.end())
+                    g_loadedScriptFiles.push_back(list);
             }
             const Entity stamped = found ? stampPrefab(world, &prefabDresser, prefab, at, levelDir, &why) : Entity();
             // What it was built from is watched, so an edit to its recipe (or to a library the recipe requires)

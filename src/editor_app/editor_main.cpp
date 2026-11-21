@@ -34,6 +34,8 @@
 #include "../engine/model_inspect.h"
 #include "../engine/model_motion.h"
 #include "../engine/scripting/model_recipes.h"
+#include "../engine/model_overlay.h"
+#include "../engine/scripting/prefab_list.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #ifdef RT_ROADS_LANES
@@ -701,9 +703,11 @@ int main(int argc, char** argv) {
 
     std::string levelPath = "assets/levels/arena.json";
     // --model <name>: start in the model studio on assets/scripts/<name>.lua (model_studio.h)
-    std::string studioScript;
+    std::string studioScript, studioPrefab;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc) { studioScript = argv[++i]; continue; }
+        // --prefab <name>: start in the model studio viewing that line of prefabs.lua
+        if (std::strcmp(argv[i], "--prefab") == 0 && i + 1 < argc) { studioPrefab = argv[++i]; continue; }
         if (argv[i][0] != '-') levelPath = argv[i];
     }
 
@@ -984,6 +988,33 @@ int main(int argc, char** argv) {
         return ok;
     };
     modelStudio->recipeParams = [](const QString& recipe) { return QString::fromStdString(engine::recipeParams(recipe.toStdString())); };
+    // A PREFAB VIEWED: the engine's own reading and writing of prefabs.lua (scripting/prefab_list.h); the panel only
+    // shows it. Its form goes at the top of the Inspector dock, above the entity's properties.
+    modelStudio->prefabNames = []() {
+        QStringList names;
+        for (const std::string& name : engine::namedPrefabs()) names << QString::fromStdString(name);
+        return names;
+    };
+    modelStudio->prefabData = [](const QString& name) { return QString::fromStdString(engine::prefabJson(name.toStdString())); };
+    modelStudio->prefabFields = []() { return QString::fromStdString(engine::prefabFieldsJson()); };
+    modelStudio->savePrefab = [](const QString& name, const QString& lineJson) {
+        std::string why;
+        const nlohmann::json line = nlohmann::json::parse(lineJson.toStdString(), nullptr, false);
+        if (line.is_discarded()) return QString("the form's line is not JSON");
+        return engine::savePrefab(name.toStdString(), line, std::string(), &why) ? QString() : QString::fromStdString(why);
+    };
+    modelStudio->setOverlay = [](bool shapes, bool markers, bool joints) {
+        engine::ModelOverlay& o = engine::modelOverlay();
+        o.shapes = shapes; o.markers = markers; o.joints = joints;
+    };
+    modelStudio->getOverlay = [](bool& shapes, bool& markers, bool& joints) {
+        const engine::ModelOverlay& o = engine::modelOverlay();
+        shapes = o.shapes; markers = o.markers; joints = o.joints;
+    };
+    modelStudio->showInspector = [inspectorDock]() { inspectorDock->show(); inspectorDock->raise(); };
+    if (auto* scroll = qobject_cast<QScrollArea*>(inspectorDock->widget()))
+        if (auto* column = scroll->widget() != nullptr ? qobject_cast<QVBoxLayout*>(scroll->widget()->layout()) : nullptr)
+            column->insertWidget(0, modelStudio->prefabForm());
     // "Copy view": where the camera is, and a screenshot of the viewport taken now.
     modelStudio->viewNote = [&]() -> QString {
         const engine::CameraState& cam = app.renderView().camera;
@@ -1089,6 +1120,22 @@ int main(int argc, char** argv) {
         if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
         if (!QFileInfo::exists(script)) return "err no such script: " + script.toStdString();
         modelStudio->openScript(script);
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_prefab", "studio_prefab <name | none>",
+                       "View a prefab from prefabs.lua in the studio: its model's script in the pane, the prefab in the viewport as a level would place it. `none`: the open script's model alone.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_prefab <name | none>";
+        modelStudio->openPrefab(cmd.args[0] == "none" ? QString() : QString::fromStdString(cmd.args[0]));
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_prefab_set", "studio_prefab_set <part>[.<key>] <value | none>",
+                       "Change the viewed prefab as the Inspector's form does, rewriting its entry in prefabs.lua: model <name>; physics.body static|none; physics.friction <n>; draw.class <class>; draw.distance <metres>; script <file>. `none` leaves an optional one unsaid.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.size() < 2) return "err studio_prefab_set <part>[.<key>] <value | none>";
+        const QString what = QString::fromStdString(cmd.args[0]), value = QString::fromStdString(cmd.args[1]);
+        const QString why = modelStudio->setPrefabField(what.section('.', 0, 0), what.section('.', 1), value == "none" ? QString() : value);
+        if (!why.isEmpty()) return "err " + why.toStdString();
         return "ok " + modelStudio->describe().toStdString();
     }, "editor");
     app.commands().add("studio_args", "studio_args <a Lua table | none>",
@@ -1376,6 +1423,22 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     stopAction->setToolTip("Stop and return to edit mode (Esc asks first)");
+    // Play and Stop on the control channel: a tool beside the person starts and ends a playtest of what is open
+    // (the model studio's level included), as the toolbar's buttons do.
+    app.commands().add("play", "play [here]",
+                       "Start a playtest of the open level, as the toolbar's Play does; `here` starts at the editor's camera.",
+                       [&, startPlay](const engine::ControlCommand& cmd) -> std::string {
+        if (!bridge.editable()) return "err already playing";
+        startPlay(!cmd.args.empty() && cmd.args[0] == "here");
+        return "ok playing";
+    }, "editor");
+    app.commands().add("stop", "stop",
+                       "End the playtest and return to edit mode, as the toolbar's Stop does.",
+                       [&](const engine::ControlCommand&) -> std::string {
+        if (bridge.editable()) return "err not playing";
+        app.requestState(makeEditor());
+        return "ok editing";
+    }, "editor");
 
     // Esc while playing: pause, free the mouse, and ASK (Glenn: "a dialog ... if I want to
     // quit the simulation so I can cancel out of it"). Keep playing restores the pause state
@@ -1671,6 +1734,10 @@ int main(int argc, char** argv) {
         if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
         QTimer::singleShot(0, [modelStudio, script]() { modelStudio->openScript(script); });
     }
+    if (!studioPrefab.empty()) {
+        const QString name = QString::fromStdString(studioPrefab);
+        QTimer::singleShot(0, [modelStudio, name]() { modelStudio->openPrefab(name); });
+    }
     // RT_STUDIO_ARGS=<a Lua table>: type that into the studio's Arguments box a few seconds in (unattended checking)
     if (const char* typed = std::getenv("RT_STUDIO_ARGS"); typed && *typed) {
         const QString text = QString::fromUtf8(typed);
@@ -1884,6 +1951,7 @@ int main(int argc, char** argv) {
             }
             studioShown = picked;
         }
+        modelStudio->refreshOverlayBoxes();   // (the control channel's model_overlay may have changed them)
         panels.refresh();
         refreshChrome();
         pollBakeJob();

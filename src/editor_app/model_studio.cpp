@@ -68,8 +68,8 @@ const char* kLevel = R"JSON({
   "watch_scripts": true,
   "editor_view": "models",
   "name": "model_studio",
-  "_note": "Written by the editor's model studio. One prefab straight from a recipe; edit the recipe, not this.",
-  "_studio_args": %3,
+  "_note": "Written by the editor's model studio. One prefab: a recipe run directly, or a line of prefabs.lua. Edit those, not this.",
+  "_studio_args": %2,
   "player": { "position": [0, 1.2, -8], "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.6 }, "friction": 0.5 },
   "environment": { "skyColor": [0.55, 0.68, 0.86] },
   "lighting": { "ambientMultiplier": 0.7, "exposure": 0.7,
@@ -78,7 +78,7 @@ const char* kLevel = R"JSON({
     { "id": 1, "name": "ground", "shape": "box", "position": [0, -0.2, 0], "size": [40, 0.4, 40],
       "material": { "albedo": [0.5, 0.5, 0.48], "metallic": 0.0, "roughness": 1.0, "opacity": 1.0, "emission": [0, 0, 0], "checkerboard": true },
       "physics": { "motion": "static", "friction": 0.9, "restitution": 0.0 } },
-    { "id": 2, "name": "model", "shape": "prefab", "prefab": { "recipe": "%1"%2 }, "position": [0, 0, 0] }
+    { "id": 2, "name": "model", "shape": "prefab", "prefab": %1, "position": [0, 0, 0] }
   ]
 }
 )JSON";
@@ -222,17 +222,77 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     reloadButton->setToolTip("Take the script from disk again, dropping what is in the pane.");
     auto* copyButton = new QPushButton("Copy view", this);
     copyButton->setToolTip("Copy what you are looking at (the script, the piece last clicked and its line, the camera, a screenshot's path)\nto paste into a message.");
-    auto* listButton = new QPushButton("Add to lists", this);
-    listButton->setToolTip("Give this script its line in models.lua and prefabs.lua: the engine can then build it by name and a level can place it.");
+    auto* listButton = new QPushButton("Make prefab", this);
+    listButton->setToolTip("Give this script its line in models.lua and in prefabs.lua (the engine can then build it by name and a level can place it),\nand view that prefab.");
+    auto* prefabButton = new QPushButton("Open prefab...", this);
+    prefabButton->setToolTip("View a prefab from prefabs.lua: its model's script here, the prefab itself in the viewport, its settings in the Inspector.");
     file_ = new QLabel("no script open", this);
     row->addWidget(newButton);
     row->addWidget(openButton);
+    row->addWidget(prefabButton);
     row->addWidget(saveButton);
     row->addWidget(reloadButton);
     row->addWidget(copyButton);
     row->addWidget(listButton);
     column->addLayout(row);
     column->addWidget(file_);
+    // what the viewport shows: the script's model alone, or a prefab made of it
+    auto* showRow = new QHBoxLayout();
+    showRow->addWidget(new QLabel("Showing", this));
+    showing_ = new QComboBox(this);
+    showing_->setToolTip("The model alone: the script run directly (shape only).\nA prefab: a line of prefabs.lua that shows this script's model, as a level would place it,\nwith its physics and behaviour script. Its settings are in the Inspector.");
+    showRow->addWidget(showing_, 1);
+    showRow->addWidget(new QLabel("  Lines", this));
+    const char* overlayNames[3] = {"shapes", "markers", "joints"};
+    const char* overlayHints[3] = {"The collision shapes, as lines. Green: it stands still. Orange: it is on a node that moves.",
+                                   "The markers: three short axes each (x red, y green, z blue; +z is the way it faces).",
+                                   "The moving nodes: what each turns about or slides along, its limits (white) and where it is now (yellow)."};
+    for (int i = 0; i < 3; ++i) {
+        overlay_[i] = new QCheckBox(overlayNames[i], this);
+        overlay_[i]->setToolTip(overlayHints[i]);
+        showRow->addWidget(overlay_[i]);
+        QObject::connect(overlay_[i], &QCheckBox::toggled, [this](bool) {
+            if (!loading_ && setOverlay) setOverlay(overlay_[0]->isChecked(), overlay_[1]->isChecked(), overlay_[2]->isChecked());
+        });
+    }
+    column->addLayout(showRow);
+    QObject::connect(showing_, &QComboBox::activated, [this](int index) {
+        const QString name = showing_->itemData(index).toString();
+        if (name != prefab_) openScriptAs(path_, name);
+    });
+    QObject::connect(prefabButton, &QPushButton::clicked, [this]() {
+        const QStringList names = prefabNames ? prefabNames() : QStringList();
+        if (names.isEmpty()) { setStatus("prefabs.lua has no prefabs (or cannot be read).", true); return; }
+        bool ok = false;
+        const QString name = QInputDialog::getItem(this, "Open a prefab", "A prefab in prefabs.lua:", names, std::max(0, static_cast<int>(names.indexOf(prefab_))), false, &ok);
+        if (ok && !name.isEmpty()) openPrefab(name);
+    });
+    // the prefab's form (it lives in the editor's Inspector dock: editor_main puts it there)
+    prefabForm_ = new QWidget();
+    {
+        auto* box = new QVBoxLayout(prefabForm_);
+        box->setContentsMargins(4, 4, 4, 8);
+        prefabTitle_ = new QLabel(prefabForm_);
+        QFont bold = prefabTitle_->font();
+        bold.setBold(true);
+        prefabTitle_->setFont(bold);
+        prefabTitle_->setWordWrap(true);
+        box->addWidget(prefabTitle_);
+        auto* rows = new QWidget(prefabForm_);
+        prefabRows_ = new QFormLayout(rows);
+        prefabRows_->setContentsMargins(0, 0, 0, 0);
+        box->addWidget(rows);
+        prefabError_ = new QLabel(prefabForm_);
+        prefabError_->setWordWrap(true);
+        prefabError_->setStyleSheet("color: #d05040;");
+        prefabError_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        box->addWidget(prefabError_);
+        auto* note = new QLabel("A change here rewrites this prefab's entry in prefabs.lua (comments inside the entry are not kept). The model's shape is the script's.", prefabForm_);
+        note->setWordWrap(true);
+        note->setStyleSheet("color: palette(placeholder-text);");
+        box->addWidget(note);
+        prefabForm_->hide();
+    }
     auto* argsRow = new QHBoxLayout();
     argsRow->addWidget(new QLabel("Arguments", this));
     args_ = new QLineEdit(this);
@@ -270,7 +330,7 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     // the script above, the model's tree below, the bar between them draggable
     tree_ = new QTreeWidget(this);
     tree_->setColumnCount(3);
-    tree_->setHeaderLabels({"Model", "Placed / what it is", "Line"});
+    tree_->setHeaderLabels({"Prefab / model", "Placed / what it is", "Line"});
     tree_->header()->setStretchLastSection(false);
     tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -286,6 +346,13 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
     QObject::connect(tree_, &QTreeWidget::itemClicked, [this](QTreeWidgetItem* item, int) {
         const int line = item->data(0, Qt::UserRole).toInt();
         const int piece = item->data(0, Qt::UserRole + 1).toInt();
+        // a row of the prefab: its line is in prefabs.lua, not in the pane; its settings are in the Inspector
+        if (item->data(0, Qt::UserRole + 2).toBool()) {
+            if (showInspector) showInspector();
+            pickedLine_ = 0;
+            pickedWhat_ = "prefab " + prefab_ + ": " + item->text(0).trimmed() + " (" + item->text(1) + ")";
+            return;
+        }
         if (line > 0) gotoLine(line);
         if (piece >= 0 && selectPiece) selectPiece(piece);
         pickedLine_ = line;
@@ -343,7 +410,9 @@ ModelStudioPanel::ModelStudioPanel(QWidget* parent) : QWidget(parent) {
 }
 
 QString ModelStudioPanel::recipeName() const { return QFileInfo(path_).completeBaseName(); }
-QString ModelStudioPanel::levelPath() const { return QString("%1/%2.json").arg(kLevels, recipeName()); }
+QString ModelStudioPanel::levelPath() const {
+    return prefab_.isEmpty() ? QString("%1/%2.json").arg(kLevels, recipeName()) : QString("%1/%2.prefab.json").arg(kLevels, prefab_);
+}
 bool ModelStudioPanel::dirty() const { return !path_.isEmpty() && edit_->document()->isModified(); }
 
 void ModelStudioPanel::setStatus(const QString& text, bool bad) {
@@ -387,7 +456,7 @@ void ModelStudioPanel::loadText() {
 bool ModelStudioPanel::writeLevel() {
     // the arguments as the level carries them
     QString json, why;
-    const QString typed = args_->text().trimmed();
+    const QString typed = prefab_.isEmpty() ? args_->text().trimmed() : QString();    // (a prefab's model has its arguments in models.lua)
     if (!typed.isEmpty()) {
         if (!argsToJson || !argsToJson(typed, json, why)) {
             setStatus("The arguments are not a Lua table: " + (why.isEmpty() ? QString("{ name = value, ... }") : why), true);
@@ -403,13 +472,19 @@ bool ModelStudioPanel::writeLevel() {
         setStatus("Cannot write " + levelPath(), true);
         return false;
     }
-    f.write(QString(kLevel).arg(recipeName(), json.isEmpty() ? QString() : ", \"args\": " + json, kept).toUtf8());
+    const QString what = prefab_.isEmpty() ? QString("{ \"recipe\": \"%1\"%2 }").arg(recipeName(), json.isEmpty() ? QString() : ", \"args\": " + json)
+                                           : "\"" + prefab_ + "\"";
+    f.write(QString(kLevel).arg(what, kept).toUtf8());
     argsJson_ = json;
     return true;
 }
 
 bool ModelStudioPanel::setArguments(const QString& luaTable) {
     if (path_.isEmpty()) { setStatus("Open a script first.", true); return false; }
+    if (!prefab_.isEmpty()) {
+        setStatus("A prefab's model takes its arguments from its line in models.lua. Show the model alone to try others.", true);
+        return false;
+    }
     args_->setText(luaTable);
     if (!writeLevel()) return false;
     // (the level's own file is watched: writing it rebuilds the model with the new arguments, the camera left alone)
@@ -417,39 +492,227 @@ bool ModelStudioPanel::setArguments(const QString& luaTable) {
     return true;
 }
 
-void ModelStudioPanel::openScript(const QString& chosen) {
-    if (dirty()) {
+void ModelStudioPanel::openScript(const QString& chosen) { openScriptAs(chosen, QString()); }
+
+void ModelStudioPanel::openPrefab(const QString& name) {
+    if (name.isEmpty()) {
+        if (!path_.isEmpty()) openScriptAs(path_, QString());
+        return;
+    }
+    const QJsonObject data = QJsonDocument::fromJson((prefabData ? prefabData(name) : QString()).toUtf8()).object();
+    if (data.contains("error") || data.isEmpty()) {
+        setStatus("The prefab '" + name + "' cannot be viewed: " + data.value("error").toString("nothing is known of it"), true);
+        return;
+    }
+    const QString recipe = data.value("recipe").toString();
+    if (recipe.isEmpty()) {
+        setStatus("The prefab '" + name + "' shows the model '" + data.value("model").toString() + "', which is read from files: there is no script to show.", true);
+        return;
+    }
+    openScriptAs(QString("%1/%2.lua").arg(kScripts, recipe), name);
+}
+
+void ModelStudioPanel::openScriptAs(const QString& chosen, const QString& prefab) {
+    const QString abs = QFileInfo(chosen).absoluteFilePath();
+    const bool sameScript = abs == path_;        // only what is shown changes: the pane and its edits stay
+    if (!sameScript && dirty()) {
         const QMessageBox::StandardButton choice = QMessageBox::warning(
             this, "Save the script?", "The script in the pane has changes that are not saved.", QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
             QMessageBox::Save);
         if (choice == QMessageBox::Cancel) return;
         if (choice == QMessageBox::Save && !save()) return;
     }
-    const QString abs = QFileInfo(chosen).absoluteFilePath();
     // A recipe is found by its name under assets/scripts (or the level's own folder): one outside would open in the
     // pane and build nothing.
     const QString scripts = QFileInfo(kScripts).absoluteFilePath();
-    if (QFileInfo(abs).absolutePath() != scripts) {
-        setStatus("A model script lives in " + QString(kScripts) + " (the engine finds a recipe by its name there).", true);
+    if (QFileInfo(abs).absolutePath() != scripts || !QFile::exists(abs)) {
+        setStatus(QFile::exists(abs) ? "A model script lives in " + QString(kScripts) + " (the engine finds a recipe by its name there)."
+                                     : "There is no script " + QDir::current().relativeFilePath(abs) + ".", true);
         return;
     }
-    if (!path_.isEmpty()) watcher_->removePath(path_);
-    path_ = abs;
-    pickedLine_ = 0;            // what was picked belonged to the script before
+    if (!sameScript) {
+        if (!path_.isEmpty()) watcher_->removePath(path_);
+        path_ = abs;
+        watcher_->addPath(path_);
+        edit_->setTextCursor(QTextCursor(edit_->document()));
+    }
+    prefab_ = prefab;
+    pickedLine_ = 0;            // what was picked belonged to what was shown before
     pickedWhat_.clear();
     numbers_->clear();
-    watcher_->addPath(path_);
-    edit_->setTextCursor(QTextCursor(edit_->document()));
-    loadText();
-    // the arguments this script was last run with here, from its studio level
+    if (!sameScript) loadText();
+    // the arguments: this script's as last run here (from its studio level), or the prefab's model's (not to change here)
     args_->clear();
-    {
+    args_->setEnabled(prefab_.isEmpty());
+    if (prefab_.isEmpty()) {
         QFile was(levelPath());
         if (was.open(QIODevice::ReadOnly | QIODevice::Text)) args_->setText(QJsonDocument::fromJson(was.readAll()).object().value("_studio_args").toString());
     }
     if (!writeLevel()) { args_->clear(); writeLevel(); }
-    setStatus("Building " + recipeName() + " ...", false);
+    if (!prefab_.isEmpty()) {
+        const QJsonObject data = QJsonDocument::fromJson((prefabData ? prefabData(prefab_) : QString()).toUtf8()).object();
+        const QJsonValue modelArgs = data.value("args");
+        args_->setText(modelArgs.isObject() ? "models.lua: " + QString::fromUtf8(QJsonDocument(modelArgs.toObject()).toJson(QJsonDocument::Compact)) : QString("models.lua: none"));
+    }
+    refreshPrefab();
+    setStatus("Building " + (prefab_.isEmpty() ? recipeName() : "the prefab " + prefab_) + " ...", false);
     if (openLevel) openLevel(levelPath().toStdString());
+}
+
+void ModelStudioPanel::refreshOverlayBoxes() {
+    if (!getOverlay) return;
+    bool on[3] = {false, false, false};
+    getOverlay(on[0], on[1], on[2]);
+    const bool was = loading_;
+    loading_ = true;
+    for (int i = 0; i < 3; ++i) overlay_[i]->setChecked(on[i]);
+    loading_ = was;
+}
+
+void ModelStudioPanel::refreshPrefab() {
+    if (path_.isEmpty()) return;
+    // SHOWING: the model alone, then each prefab whose model is built by this script
+    loading_ = true;
+    showing_->clear();
+    showing_->addItem("the model alone  (" + recipeName() + ".lua run directly)", QString());
+    for (const QString& name : prefabNames ? prefabNames() : QStringList()) {
+        const QJsonObject data = QJsonDocument::fromJson((prefabData ? prefabData(name) : QString()).toUtf8()).object();
+        if (data.value("recipe").toString() != recipeName() && name != prefab_) continue;
+        const QJsonValue modelArgs = data.value("args");
+        showing_->addItem("prefab  " + name + "   (model " + data.value("model").toString() +
+                              (modelArgs.isObject() ? " " + QString::fromUtf8(QJsonDocument(modelArgs.toObject()).toJson(QJsonDocument::Compact)) : QString()) + ")", name);
+    }
+    showing_->setCurrentIndex(std::max(0, showing_->findData(prefab_)));
+    loading_ = false;
+
+    // THE FORM: a control for each thing a prefab's line can say, at what this prefab's line says
+    prefabForm_->setVisible(!prefab_.isEmpty());
+    if (prefab_.isEmpty()) return;
+    const QString fieldsJson = prefabFields ? prefabFields() : QString();
+    if (fieldsJson != prefabFieldsJson_) {
+        prefabFieldsJson_ = fieldsJson;
+        while (prefabRows_->rowCount() > 0) prefabRows_->removeRow(0);
+        for (const QJsonValue& v : QJsonDocument::fromJson(fieldsJson.toUtf8()).array()) {
+            const QJsonObject d = v.toObject();
+            const QString part = d.value("part").toString(), name = d.value("name").toString(), type = d.value("type").toString();
+            const bool optional = d.value("optional").toBool();
+            QWidget* control = nullptr;
+            if (type == "choice") {
+                auto* box = new QComboBox(prefabForm_);
+                for (const QJsonValue& c : d.value("choices").toArray()) box->addItem(c.toString());
+                QObject::connect(box, &QComboBox::activated, [this](int) { prefabFormChanged(); });
+                control = box;
+            } else if (type == "number") {
+                // (one step under its least value is "not said": the key is left out of the line)
+                auto* box = new QDoubleSpinBox(prefabForm_);
+                const double least = d.value("min").toDouble(), step = d.value("step").toDouble(0.1);
+                box->setDecimals(step < 1 ? 3 : 1);
+                box->setSingleStep(step);
+                box->setRange(optional ? least - step : least, 1e9);
+                if (optional) box->setSpecialValueText("not set");
+                box->setKeyboardTracking(false);
+                QObject::connect(box, &QDoubleSpinBox::valueChanged, [this](double) { prefabFormChanged(); });
+                control = box;
+            } else {
+                auto* box = new QLineEdit(prefabForm_);
+                if (optional) box->setPlaceholderText("none");
+                QObject::connect(box, &QLineEdit::editingFinished, [this]() { prefabFormChanged(); });
+                control = box;
+            }
+            control->setProperty("part", part);
+            control->setProperty("key", name);
+            control->setToolTip(d.value("hint").toString());
+            auto* label = new QLabel(name.isEmpty() ? part : part + " " + name, prefabForm_);
+            label->setToolTip(d.value("hint").toString());
+            prefabRows_->addRow(label, control);
+        }
+    }
+    const QJsonObject data = QJsonDocument::fromJson((prefabData ? prefabData(prefab_) : QString()).toUtf8()).object();
+    const QString list = QDir::current().relativeFilePath(data.value("list").toString());
+    prefabTitle_->setText("Prefab  " + prefab_ + (data.value("line").toInt() > 0 ? QString("   (%1, line %2)").arg(list).arg(data.value("line").toInt()) : QString()));
+    if (data.contains("error")) {
+        // (its line is wrong, by another hand: the controls keep what they had, and the mistake is said)
+        prefabError_->setText(data.value("error").toString());
+        return;
+    }
+    prefabError_->clear();
+    loading_ = true;
+    for (int row = 0; row < prefabRows_->rowCount(); ++row) {
+        QLayoutItem* item = prefabRows_->itemAt(row, QFormLayout::FieldRole);
+        QWidget* control = item != nullptr ? item->widget() : nullptr;
+        if (control == nullptr) continue;
+        const QString part = control->property("part").toString(), key = control->property("key").toString();
+        const QJsonValue value = key.isEmpty() ? data.value(part) : data.value(part).toObject().value(key);
+        if (auto* combo = qobject_cast<QComboBox*>(control)) combo->setCurrentText(value.toString());
+        else if (auto* number = qobject_cast<QDoubleSpinBox*>(control)) number->setValue(value.isDouble() ? value.toDouble() : number->minimum());
+        else if (auto* line = qobject_cast<QLineEdit*>(control)) line->setText(value.toString());
+    }
+    loading_ = false;
+}
+
+QString ModelStudioPanel::setPrefabField(const QString& part, const QString& key, const QString& value) {
+    if (prefab_.isEmpty()) return "no prefab is viewed (studio_prefab <name>)";
+    for (int row = 0; row < prefabRows_->rowCount(); ++row) {
+        QLayoutItem* item = prefabRows_->itemAt(row, QFormLayout::FieldRole);
+        QWidget* control = item != nullptr ? item->widget() : nullptr;
+        if (control == nullptr || control->property("part").toString() != part || control->property("key").toString() != key) continue;
+        loading_ = true;
+        QString why;
+        if (auto* combo = qobject_cast<QComboBox*>(control)) {
+            if (combo->findText(value) < 0) {
+                QStringList choices;
+                for (int i = 0; i < combo->count(); ++i) choices << combo->itemText(i);
+                why = "it is one of: " + choices.join(", ");
+            } else {
+                combo->setCurrentText(value);
+            }
+        } else if (auto* number = qobject_cast<QDoubleSpinBox*>(control)) {
+            bool ok = false;
+            const double v = value.toDouble(&ok);
+            if (value.isEmpty() && !number->specialValueText().isEmpty()) number->setValue(number->minimum());
+            else if (ok) number->setValue(v);
+            else why = "it is a number";
+        } else if (auto* text = qobject_cast<QLineEdit*>(control)) {
+            text->setText(value);
+        }
+        loading_ = false;
+        if (!why.isEmpty()) return why;
+        prefabFormChanged();
+        return prefabError_->text();
+    }
+    return "a prefab has no `" + part + (key.isEmpty() ? QString() : " " + key) + "` (model; physics body, friction; draw class, distance; script)";
+}
+
+void ModelStudioPanel::prefabFormChanged() {
+    if (loading_ || prefab_.isEmpty() || !savePrefab) return;
+    // the line as the list would give it: model = ..., physics = { ... }, draw = { ... }, script = ...
+    QJsonObject line;
+    for (int row = 0; row < prefabRows_->rowCount(); ++row) {
+        QLayoutItem* item = prefabRows_->itemAt(row, QFormLayout::FieldRole);
+        QWidget* control = item != nullptr ? item->widget() : nullptr;
+        if (control == nullptr) continue;
+        const QString part = control->property("part").toString(), key = control->property("key").toString();
+        QJsonValue value;
+        if (auto* combo = qobject_cast<QComboBox*>(control)) value = combo->currentText();
+        else if (auto* number = qobject_cast<QDoubleSpinBox*>(control)) { if (number->specialValueText().isEmpty() || number->value() > number->minimum()) value = number->value(); }
+        else if (auto* text = qobject_cast<QLineEdit*>(control)) { if (!text->text().trimmed().isEmpty()) value = text->text().trimmed(); }
+        if (value.isNull() || value.isUndefined()) continue;
+        if (key.isEmpty()) { line[part] = value; continue; }
+        QJsonObject table = line.value(part).toObject();
+        table[key] = value;
+        line[part] = table;
+    }
+    const QJsonObject before = QJsonDocument::fromJson((prefabData ? prefabData(prefab_) : QString()).toUtf8()).object();
+    const QString why = savePrefab(prefab_, QString::fromUtf8(QJsonDocument(line).toJson(QJsonDocument::Compact)));
+    if (!why.isEmpty()) {
+        prefabError_->setText("Not written: " + why);
+        return;
+    }
+    prefabError_->clear();
+    setStatus("Wrote the prefab " + prefab_ + " to prefabs.lua. Placing it again ...", false);
+    // another model: its recipe goes in the pane (the list's change places the prefab again either way)
+    if (line.value("model").toString() != before.value("model").toString()) openPrefab(prefab_);
+    else refreshPrefab();
 }
 
 void ModelStudioPanel::newScript() {
@@ -505,7 +768,8 @@ void ModelStudioPanel::showPiece(int line, const QString& what) {
 }
 
 void ModelStudioPanel::refreshForm() {
-    const QString json = recipeParams && !path_.isEmpty() ? recipeParams(recipeName()) : QString();
+    // (viewing a prefab, the arguments are its model's line's: nothing to set here)
+    const QString json = recipeParams && !path_.isEmpty() && prefab_.isEmpty() ? recipeParams(recipeName()) : QString();
     const QJsonArray declared = QJsonDocument::fromJson(json.toUtf8()).array();
     const QJsonObject now = QJsonDocument::fromJson(argsJson_.toUtf8()).object();
     // the same arguments as before: only put the controls where the arguments now in force say (the user may have
@@ -569,7 +833,7 @@ void ModelStudioPanel::refreshForm() {
 }
 
 void ModelStudioPanel::formChanged() {
-    if (loading_ || path_.isEmpty()) return;
+    if (loading_ || path_.isEmpty() || !prefab_.isEmpty()) return;
     // the arguments as a Lua table: only what differs from its default (the script's defaults say the rest)
     QStringList parts;
     for (int row = 0; row < formRows_->rowCount(); ++row) {
@@ -598,6 +862,40 @@ void ModelStudioPanel::formChanged() {
 void ModelStudioPanel::refreshTree() {
     tree_->clear();
     if (!modelTree) return;
+    // THE PREFAB'S OWN ROWS, when one is viewed: what a copy carries besides the model's shape
+    if (!prefab_.isEmpty()) {
+        const QJsonObject data = QJsonDocument::fromJson((prefabData ? prefabData(prefab_) : QString()).toUtf8()).object();
+        const int line = data.value("line").toInt();
+        auto* top = new QTreeWidgetItem(tree_);
+        top->setText(0, "prefab  " + prefab_);
+        top->setText(1, data.contains("error") ? data.value("error").toString() : QString("prefabs.lua: what a copy carries (the Inspector changes these)"));
+        top->setText(2, line > 0 ? QString::number(line) : QString());
+        QFont bold = top->font(0);
+        bold.setBold(true);
+        top->setFont(0, bold);
+        top->setData(0, Qt::UserRole + 2, true);
+        top->setData(0, Qt::UserRole + 1, -1);
+        auto add = [&](const QString& what, const QString& detail) {
+            auto* item = new QTreeWidgetItem(top);
+            item->setText(0, what);
+            item->setText(1, detail);
+            item->setData(0, Qt::UserRole + 2, true);
+            item->setData(0, Qt::UserRole + 1, -1);
+        };
+        if (!data.contains("error")) {
+            const QJsonObject physics = data.value("physics").toObject(), draw = data.value("draw").toObject();
+            const QJsonValue modelArgs = data.value("args");
+            add("model  " + data.value("model").toString(),
+                data.contains("recipe") ? "models.lua: " + data.value("recipe").toString() + ".lua" +
+                                              (modelArgs.isObject() ? " with " + QString::fromUtf8(QJsonDocument(modelArgs.toObject()).toJson(QJsonDocument::Compact)) : QString())
+                                        : QString("models.lua: read from files"));
+            add("physics", physics.value("body").toString() == "static"
+                               ? "solid: the model's collision shapes are bodies; friction " + (physics.contains("friction") ? QString::number(physics.value("friction").toDouble()) : QString("each shape's own"))
+                               : QString("not solid"));
+            add("draw", "class " + draw.value("class").toString() + ", " + (draw.contains("distance") ? QString("to %1 m").arg(draw.value("distance").toDouble()) : QString("to the class's distance")));
+            add("script", data.value("script").toString().isEmpty() ? QString("none: nothing moves it") : data.value("script").toString() + ": the behaviour every copy runs");
+        }
+    }
     std::vector<QTreeWidgetItem*> parents;     // the last row at each depth
     for (const StudioRow& row : modelTree()) {
         QTreeWidgetItem* parent = row.depth > 0 && row.depth - 1 < static_cast<int>(parents.size()) ? parents[static_cast<std::size_t>(row.depth - 1)] : nullptr;
@@ -637,6 +935,9 @@ void ModelStudioPanel::refreshTree() {
 QString ModelStudioPanel::describe() const {
     QJsonObject o;
     o["script"] = path_.isEmpty() ? QString() : QDir::current().relativeFilePath(path_);
+    o["showing"] = prefab_.isEmpty() ? QString("model") : QString("prefab");
+    if (!prefab_.isEmpty()) o["prefab"] = QJsonDocument::fromJson((prefabData ? prefabData(prefab_) : QString()).toUtf8()).object();
+    o["lines"] = QString(overlay_[0]->isChecked() ? "shapes " : "") + (overlay_[1]->isChecked() ? "markers " : "") + (overlay_[2]->isChecked() ? "joints" : "");
     o["arguments"] = args_->text().trimmed();
     o["unsaved"] = dirty();
     o["status"] = status_->text();
@@ -652,6 +953,7 @@ QString ModelStudioPanel::describe() const {
 void ModelStudioPanel::copyView() {
     if (path_.isEmpty()) { setStatus("Open a script first.", true); return; }
     QString text = "Model studio: " + QDir::current().relativeFilePath(path_) + (dirty() ? " (the pane has edits not yet saved)" : "") + "\n";
+    if (!prefab_.isEmpty()) text += "Showing the prefab: " + prefab_ + " (prefabs.lua)\n";
     if (pickedLine_ > 0) {
         text += QString("Picked: line %1: %2\n").arg(pickedLine_).arg(pickedWhat_);
         const QTextBlock block = edit_->document()->findBlockByNumber(pickedLine_ - 1);
@@ -681,7 +983,8 @@ void ModelStudioPanel::addToLists() {
                                                              : QString("  %1 = { recipe = \"%1\", args = %2 },").arg(name, typed));
     if (why.isEmpty()) why = addListLine(prefabs, name, QString("  %1 = { model = \"%1\", physics = { body = \"static\" } },").arg(name));
     if (!why.isEmpty()) { setStatus("Not added: " + why, true); return; }
-    setStatus(QString("'%1' is in models.lua and prefabs.lua. A level places it with { \"shape\": \"prefab\", \"prefab\": \"%1\", \"position\": [x, y, z] }.").arg(name), false);
+    openPrefab(name);
+    setStatus(QString("'%1' is in models.lua and prefabs.lua, and is what the viewport now shows. A level places it with { \"shape\": \"prefab\", \"prefab\": \"%1\", \"position\": [x, y, z] }.").arg(name), false);
 }
 
 void ModelStudioPanel::noteLog(bool isError, const QString& line) {
@@ -705,15 +1008,16 @@ void ModelStudioPanel::noteLog(bool isError, const QString& line) {
         return;
     }
     // ...and when the level has loaded (again): built, unless an error for this load came first.
-    if (!isError && line.contains("Loaded level:") && line.contains(recipeName() + ".json")) {
+    if (!isError && line.contains("Loaded level:") && line.contains("/" + QFileInfo(levelPath()).fileName())) {
         if (!status_->property("bad").toBool() || status_->text().startsWith("Saved") || status_->text().startsWith("Building"))
-            setStatus("Built " + recipeName() + ".", false);
+            setStatus(prefab_.isEmpty() ? "Built " + recipeName() + "." : "Built " + recipeName() + ", placed as the prefab " + prefab_ + ".", false);
+        refreshPrefab();
         if (modelNumbers) numbers_->setText(modelNumbers());
         refreshTree();
         refreshForm();
         return;
     }
     if (!isError && line.contains("watch_scripts: change detected")) {
-        if (!changedOnDisk_) setStatus("Rebuilding " + recipeName() + " ...", false);
+        if (!changedOnDisk_ && !status_->text().startsWith("Wrote the prefab")) setStatus("Rebuilding " + recipeName() + " ...", false);
     }
 }

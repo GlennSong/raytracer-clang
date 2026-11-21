@@ -8,6 +8,7 @@
 #include "../src/engine/model_inspect.h"
 #include "../src/engine/model_motion.h"
 #include "../src/engine/model_spawn.h"
+#include "../src/engine/model_overlay.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/procgen/proc_model.h"
 #include "../src/engine/scripting/model_recipes.h"
@@ -144,6 +145,116 @@ TEST_CASE(prefab_list_says_what_is_wrong_with_a_line) {
     }
     CHECK(!findPrefab("plain", p, f.dir, &err, "test_prefab_no_such_list_tmp.lua", kModels));
     CHECK(err.find("cannot be read") != std::string::npos);
+}
+
+TEST_CASE(a_prefabs_entry_is_rewritten_in_the_list_and_nothing_else_is) {
+    // The editor's inspector changes a prefab by rewriting its entry in prefabs.lua: only that entry.
+    Folder f;
+    f.write(kModels, R"LUA(return { box = { recipe = "test_prefab_box_tmp" }, ball = { recipe = "test_prefab_box_tmp" } })LUA");
+    f.write("test_prefab_box_tmp.lua", "local m = model.new() return m");
+    f.write("test_prefab_act_tmp.lua", "return {}");
+    const std::string typed = R"LUA(-- the list { not a table } "nor this = {"
+return {
+  -- before: plain = { model = "wrong" }
+  first = { model = "box" },   -- kept: a note after the first
+  plain = {
+    model = "box",   -- a comment inside the entry goes
+    physics = { body = "static", friction = 0.5 },
+    script = "has } and { in it.lua",
+  },   -- kept: a note after plain
+  plainer = { model = "ball" },
+  --[[ a long comment with plain = { model = "no" } in it ]]
+}
+)LUA";
+
+    // where the entry is: its own name only, not a longer one, a comment or a string
+    std::size_t begin = 0, end = 0;
+    int line = 0;
+    CHECK(findPrefabLine(typed, "plain", begin, end, &line));
+    CHECK(line == 5);
+    CHECK(typed.compare(begin, 9, "plain = {") == 0);
+    CHECK(typed.compare(end - 2, 2, "},") == 0);
+    CHECK(typed.substr(begin, end - begin).find("has } and { in it.lua") != std::string::npos);
+    CHECK(!findPrefabLine(typed, "plai", begin, end));
+    CHECK(!findPrefabLine(typed, "model", begin, end));
+
+    // the line a prefab is written as says only what differs from an unsaid key
+    Prefab p;
+    p.name = "plain";
+    p.model = "ball";
+    CHECK(prefabLine(p) == "plain = { model = \"ball\" },");
+    p.body = Prefab::Body::Static;
+    p.friction = 0.7;
+    p.drawClass = "structure";
+    p.drawDistance = 400;
+    p.script = "test_prefab_act_tmp.lua";
+    CHECK(prefabLine(p) == "plain = { model = \"ball\", physics = { body = \"static\", friction = 0.7 }, draw = { class = \"structure\", distance = 400 }, "
+                           "script = \"test_prefab_act_tmp.lua\" },");
+
+    // put into the text: the entry changes, every other character stays
+    std::string text = typed;
+    CHECK(putPrefabLine(text, p));
+    CHECK(text.find("-- kept: a note after the first") != std::string::npos);
+    CHECK(text.find("  " + prefabLine(p) + "   -- kept: a note after plain") != std::string::npos);
+    CHECK(text.find("a comment inside the entry goes") == std::string::npos);
+    CHECK(text.substr(0, begin - 0) == typed.substr(0, begin));
+    CHECK(text.substr(text.find("  plainer")) == typed.substr(typed.find("  plainer")));
+    // a new one goes in as the table's last line
+    Prefab added;
+    added.name = "added";
+    added.model = "box";
+    CHECK(putPrefabLine(text, added));
+    CHECK(text.find("in it ]]\n  added = { model = \"box\" },\n}\n") != std::string::npos);
+    std::string none = "-- nothing here";
+    std::string err;
+    CHECK(!putPrefabLine(none, added, &err));
+    CHECK(err.find("no table") != std::string::npos);
+
+    // through the file: checked first, and the list reads back as what was saved
+    f.write(kPrefabs, typed);
+    const std::string listPath = f.dir + "/" + kPrefabs;
+    auto fileText = [&]() {
+        std::ifstream in(listPath);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    err.clear();
+    CHECK(!savePrefab("plain", {{"model", "no_such"}}, f.dir, &err, kPrefabs, kModels));
+    CHECK(err.find("no model named 'no_such'") != std::string::npos);
+    CHECK(!savePrefab("plain", {{"model", "box"}, {"script", "test_prefab_absent_tmp.lua"}}, f.dir, &err, kPrefabs, kModels));
+    CHECK(!savePrefab("2bad", {{"model", "box"}}, f.dir, &err, kPrefabs, kModels));
+    CHECK(fileText() == typed);                      // a wrong line writes nothing
+    err.clear();
+    CHECK(savePrefab("plain", {{"model", "ball"}, {"physics", {{"body", "static"}, {"friction", 0.7}}}, {"draw", {{"class", "structure"}, {"distance", 400}}},
+                               {"script", "test_prefab_act_tmp.lua"}}, f.dir, &err, kPrefabs, kModels));
+    CHECK(err.empty());
+    CHECK(fileText() == text.substr(0, text.find("  added")) + "}\n");
+    Prefab back;
+    CHECK(findPrefab("plain", back, f.dir, &err, kPrefabs, kModels));
+    CHECK(back.model == "ball" && back.body == Prefab::Body::Static && back.drawClass == "structure" && back.script == "test_prefab_act_tmp.lua");
+    CHECK(std::abs(back.friction - 0.7) < 1e-9 && std::abs(back.drawDistance - 400) < 1e-9);
+    Prefab other;
+    CHECK(findPrefab("plainer", other, f.dir, &err, kPrefabs, kModels) && other.model == "ball");
+    CHECK(savePrefab("newcomer", {{"model", "box"}}, f.dir, &err, kPrefabs, kModels));
+    CHECK(findPrefab("newcomer", other, f.dir, &err, kPrefabs, kModels) && other.model == "box" && other.body == Prefab::Body::None);
+
+    // the prefab as data, for the inspector and `prefab?`
+    const nlohmann::json data = nlohmann::json::parse(prefabJson("plain", f.dir, kPrefabs, kModels));
+    CHECK(data.value("model", std::string()) == "ball");
+    CHECK(data.value("recipe", std::string()) == "test_prefab_box_tmp");
+    CHECK(data["physics"].value("body", std::string()) == "static" && std::abs(data["physics"].value("friction", 0.0) - 0.7) < 1e-9);
+    CHECK(data["draw"].value("class", std::string()) == "structure" && data.value("script", std::string()) == "test_prefab_act_tmp.lua");
+    CHECK(data.value("line", 0) == 5);
+    CHECK(nlohmann::json::parse(prefabJson("absent", f.dir, kPrefabs, kModels)).contains("error"));
+    // ...and what a line can say: every field's part is a key findPrefab knows, the model choices are the list's
+    const nlohmann::json fields = nlohmann::json::parse(prefabFieldsJson(f.dir, kModels));
+    CHECK(fields.is_array() && fields.size() >= 6);
+    bool sawModels = false;
+    for (const nlohmann::json& field : fields) {
+        const std::string part = field.value("part", std::string());
+        CHECK(part == "model" || part == "physics" || part == "draw" || part == "script");
+        if (part == "model") sawModels = field["choices"] == nlohmann::json({"ball", "box"});
+    }
+    CHECK(sawModels);
 }
 
 TEST_CASE(model_draws_carry_the_band_of_distances_each_is_seen_in) {
@@ -845,4 +956,54 @@ TEST_CASE(a_stamped_models_tree_is_described_as_data) {
     for (const nlohmann::json& r : nlohmann::json::parse(modelTreeJson(world, e)))
         if (r.contains("joint") && r["joint"] == "boom") CHECK_APPROX(r["value"].get<double>(), 30.0, 1e-6);
     CHECK(modelTreeJson(world, world.create()) == "[]");
+}
+
+TEST_CASE(a_stamped_models_shapes_markers_and_joints_are_drawn_as_lines_where_they_now_are) {
+    World world;
+    std::string err;
+    const Entity crane = stampPrefab(world, nullptr, "crane", turnedAt(Vec3(10, 0, 5), 0), std::string(), &err);
+    CHECK(crane.valid());
+    const ModelInstance* mi = world.get<ModelInstance>(crane);
+    CHECK(mi != nullptr && mi->model != nullptr);
+    if (mi == nullptr || mi->model == nullptr) return;
+    auto linesOf = [&](bool shapes, bool markers, bool joints) {
+        DebugDraw out;
+        ModelOverlay what;
+        what.shapes = shapes;
+        what.markers = markers;
+        what.joints = joints;
+        drawModelOverlay(world, crane, what, out);
+        return out.lines();
+    };
+    CHECK(linesOf(false, false, false).empty());
+    // every box shape is its twelve edges; every marker its three axes
+    std::size_t boxes = 0, moving = 0;
+    for (const ProcCollider& c : mi->model->colliders) {
+        boxes += c.kind == ProcCollider::Kind::Box ? 1 : 0;
+        moving += mi->model->nodeMoves(c.node) ? 1 : 0;
+    }
+    CHECK(boxes == mi->model->colliders.size() && boxes > 0 && moving > 0);
+    const std::vector<DebugDraw::Line> shapes = linesOf(true, false, false);
+    CHECK(shapes.size() == boxes * 12);
+    CHECK(linesOf(false, true, false).size() == mi->model->markerCount() * 3);
+    CHECK(!linesOf(false, false, true).empty());
+    CHECK(linesOf(true, true, true).size() == shapes.size() + linesOf(false, true, false).size() + linesOf(false, false, true).size());
+    // they are where the instance is (it stands at x = 10), a still shape green and one on a moving node orange
+    std::size_t green = 0, orange = 0;
+    for (const DebugDraw::Line& l : shapes) {
+        CHECK(std::abs(l.a.x - 10) < 12 && std::abs(l.a.z - 5) < 12);
+        green += l.color.y > l.color.x ? 1 : 0;
+        orange += l.color.x > l.color.y ? 1 : 0;
+    }
+    CHECK(orange == moving * 12 && green == (boxes - moving) * 12);
+    // ...and they follow the pose: lift the boom and a moving shape's lines move, the still ones do not
+    CHECK(setModelTarget(world, crane, "boom", 0.6));
+    const std::vector<DebugDraw::Line> lifted = linesOf(true, false, false);
+    CHECK(lifted.size() == shapes.size());
+    std::size_t movedGreen = 0, movedOrange = 0;
+    for (std::size_t i = 0; i < shapes.size() && i < lifted.size(); ++i) {
+        const bool moved = (shapes[i].a - lifted[i].a).length() > 1e-6 || (shapes[i].b - lifted[i].b).length() > 1e-6;
+        if (moved) (shapes[i].color.y > shapes[i].color.x ? movedGreen : movedOrange)++;
+    }
+    CHECK(movedGreen == 0 && movedOrange >= 12);
 }

@@ -215,6 +215,17 @@ The Qt editor adds the model studio's own verbs (it registers them, so a plain v
 - `studio?` says what the studio shows: the script, its arguments, unsaved edits, the status line and whether it
   is an error, the model's numbers, what was last picked and its script line.
 - `studio_open <script>`, `studio_args <a Lua table | none>`, `studio_pick <piece>`.
+- `studio_prefab <name | none>` views a prefab from `prefabs.lua` (its model's script in the pane, the prefab in
+  the viewport as a level would place it); `none` goes back to the open script's model alone.
+- `studio_prefab_set <part>[.<key>] <value | none>` changes the viewed prefab as the Inspector's form does,
+  rewriting its entry in `prefabs.lua`: `model crane`, `physics.body static`, `physics.friction 0.6`,
+  `draw.class structure`, `draw.distance 400`, `script crane_swing.lua`. `none` leaves an optional one unsaid.
+- `play [here]` and `stop` start and end a playtest of the open level, as the toolbar's buttons do.
+
+In the engine (the viewer has them too): `prefabs?` lists the names in `prefabs.lua`, `prefab? <name>` gives one as
+JSON (its model and how that is built, physics, draw, script, and its line in the list), and
+`model_overlay [shapes] [markers] [joints] | all | off` draws over every stamped model its collision shapes, its
+markers and its joints as lines.
 
 The editor contains the engine, so it is one program with one socket: a tool attached to it has the engine's verbs
 and the studio's together.

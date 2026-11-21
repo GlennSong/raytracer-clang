@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+class QCheckBox;
+class QComboBox;
 class QFileSystemWatcher;
 class QFormLayout;
 class QLabel;
@@ -67,8 +69,35 @@ public:
     std::function<void(int piece)> selectPiece;
     std::function<void(const QString& joint, double value)> setJoint;
     void refreshTree();
+    // WHAT IS NOT DRAWN, DRAWN: the model's collision shapes, markers and joints as lines over it (the engine's
+    // model_overlay.h). editor_main sets and reads the engine's switches.
+    std::function<void(bool shapes, bool markers, bool joints)> setOverlay;
+    std::function<void(bool& shapes, bool& markers, bool& joints)> getOverlay;
+    void refreshOverlayBoxes();      // the boxes at what the engine now shows (a tool may have changed it)
     // The model in the viewport in numbers, one line: its size, triangles, pieces, shapes (editor_main reads the world).
     std::function<QString()> modelNumbers;
+
+    // A PREFAB, VIEWED (Glenn, 2026-11-20: "the runtime view should be able to view a model or prefab"). The studio
+    // shows a model alone (a recipe run directly: shape only) or a PREFAB (a line of prefabs.lua: a model and what a
+    // copy of it carries). Viewing a prefab, the pane still holds its model's recipe, the viewport shows the prefab
+    // as a level would place it, the tree gains the prefab's own rows, and `prefabForm` edits them. The form is the
+    // ONE thing here that rewrites a script, and it rewrites only that prefab's entry (prefab_list.h savePrefab); a
+    // recipe is written as typed. editor_main gives the engine's four functions:
+    std::function<QStringList()> prefabNames;                                              // namedPrefabs
+    std::function<QString(const QString& name)> prefabData;                                // prefabJson
+    std::function<QString()> prefabFields;                                                 // prefabFieldsJson
+    std::function<QString(const QString& name, const QString& lineJson)> savePrefab;       // "" or why not
+    // Something of the prefab was chosen in the tree: bring its form forward (editor_main raises the Inspector).
+    std::function<void()> showInspector;
+    // View the prefab named `name` (its model's recipe goes in the pane); empty: the open script's model alone.
+    void openPrefab(const QString& name);
+    QString prefabName() const { return prefab_; }
+    // The prefab's form, for the editor's Inspector dock (made here, shown only while a prefab is viewed).
+    QWidget* prefabForm() const { return prefabForm_; }
+    void refreshPrefab();            // the form and the "showing" list from the lists as they now are
+    // Set one thing of the viewed prefab as the form would (`key` empty when the part is the value itself; an empty
+    // `value` leaves an optional one unsaid) and write it. Empty, or why not. For a tool on the control channel.
+    QString setPrefabField(const QString& part, const QString& key, const QString& value);
 
     // Show the script at `path` (a .lua under assets/scripts): its text in the pane, its model in the viewport.
     void openScript(const QString& path);
@@ -97,6 +126,16 @@ public:
     QString scriptPath() const { return path_; }
 
 private:
+    void openScriptAs(const QString& path, const QString& prefab);
+    void prefabFormChanged();        // a control of the prefab's form moved: its entry rewritten
+    QString prefab_;                 // the prefab viewed ("": the model alone)
+    QCheckBox* overlay_[3] = {nullptr, nullptr, nullptr};   // shapes, markers, joints
+    QComboBox* showing_ = nullptr;   // the model alone, or one of the prefabs that show this script's model
+    QWidget* prefabForm_ = nullptr;
+    QFormLayout* prefabRows_ = nullptr;
+    QLabel* prefabTitle_ = nullptr;
+    QLabel* prefabError_ = nullptr;
+    QString prefabFieldsJson_;       // what the prefab's form was built from
     void loadText();                 // the file's text into the pane
     bool writeLevel();               // the studio level for this script, with the Arguments box's arguments
     QString levelPath() const;

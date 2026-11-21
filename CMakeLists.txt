@@ -235,6 +235,7 @@ add_library(engine_core STATIC
     src/engine/prefab_stamp.cpp     # a prefab stamped as one entity (#191)
     src/engine/model_motion.cpp     # a model instance's moving nodes (#191)
     src/engine/model_inspect.cpp    # a stamped model described: its tree as data (#191)
+    src/engine/model_overlay.cpp    # a stamped model's shapes, markers and joints as debug lines (#191)
     src/engine/drawn_road.cpp
     src/engine/level_params.cpp
     src/engine/level_writer.cpp
@@ -292,6 +293,7 @@ add_library(engine_core STATIC
     src/engine/systems/ladder_system.cpp
     src/engine/systems/elevator_system.cpp
     src/engine/systems/model_motion_system.cpp   # moves model instances and their kinematic bodies (#191)
+    src/engine/systems/model_overlay_system.cpp  # draws them when asked (#191)
     src/engine/systems/interaction_system.cpp
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
