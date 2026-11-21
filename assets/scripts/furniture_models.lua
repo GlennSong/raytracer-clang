@@ -1002,6 +1002,7 @@ M.bookcase = function(v)
                    V(0.40, 0.22, 0.12), V(0.60, 0.38, 0.22), V(0.35, 0.08, 0.10), V(0.08, 0.12, 0.25),
                    V(0.70, 0.62, 0.40), V(0.55, 0.55, 0.52), V(0.20, 0.30, 0.15), V(0.80, 0.30, 0.20) }
   local bands = { V(0.80, 0.65, 0.25), V(0.88, 0.85, 0.75), V(0.08, 0.08, 0.08) }
+  local PAGES = V(0.93, 0.90, 0.80)
   for _, y in ipairs({ 0.04, 0.42, 0.80, 1.18, 1.56 }) do
     k.box("wood", V(0, y, 0.18), V(1.14, 0.025, 0.32), 0.002, wood, 1)
     local x = -0.55
@@ -1015,6 +1016,8 @@ M.bookcase = function(v)
           local sx = 0.22 + 0.04 * r:next()
           local sz = 0.17 + 0.04 * r:next()
           k.box("hard", V(x + 0.12, yy + th * 0.5, 0.17), V(sx, th, sz), 0.002, pick(spines, r:next()), 1)
+          -- (lying flat, its pages show along the edge that faces the room)
+          k.box("hard", V(x + 0.12, yy + th * 0.5, 0.17 + sz * 0.5 + 0.0003), V(sx - 0.008, th - 0.008, 0.001), 0.0, PAGES, 1)
           yy = yy + th
         end
         x = x + 0.28
@@ -1026,6 +1029,10 @@ M.bookcase = function(v)
         local col
         if r:next() < 0.45 then col = spines[series] * (0.85 + 0.3 * r:next()) else col = pick(spines, r:next()) end
         k.box("hard", V(x + w * 0.5, y + 0.013 + hh * 0.5, 0.29 - dd * 0.5), V(w - 0.003, hh, dd), 0.002, col, 1)
+        -- its PAGES, seen from above between the two boards (Glenn, 2026-11-21: "see pages vs cover"): a cream
+        -- strip on the book's top, a board's thickness in from each side and from the spine. (No dice are thrown
+        -- for it, so every bookcase keeps the books it had.)
+        k.box("hard", V(x + w * 0.5, y + 0.013 + hh + 0.0005, 0.29 - dd * 0.5 - 0.002), V(w - 0.003 - 0.007, 0.001, dd - 0.006), 0.0, PAGES, 1)
         -- title bands on the spine's face
         if w > 0.026 and r:next() < 0.75 then
           local band = pick(bands, r:next())
