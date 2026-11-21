@@ -173,7 +173,12 @@ of the furniture kit's helpers), give its prefab a script that is a list for `mo
 and when two of its parts must stay in step or take turns give them `travel` (moves timed by the clock),
 and check it with `rt_model_sheet assets/scripts/<recipe>.lua --set <node>=<value>` and then in the editor in play.
 The lists of what exists are the tables in `docs/model-record-design.md`, "The third", "The fourth" (by kind of
-place), "The fifth" (a home, by room) and "The sixth" (gym, clinic, office, station, counters, school, baker). Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
+place), "The fifth" (a home, by room) and "The sixth" (gym, clinic, office, station, counters, school, baker).
+
+Before placing prefabs anywhere, read "One catalog" in `docs/model-record-design.md`: everything placed is a prefab,
+the older lists and paths retire as each system is ported, and nothing is described twice. The place to try a
+prefab among others is the test level `prefab_town` (its table is `tools/prefab_town.py`; run it to rewrite the
+level). `_in_use` prefabs are test rigs and belong only in `prefab_town_busy` and the model studio. Before step 9, read "What step 9 must build on" there: the furniture kit already has seats and verbs
 (`furniture_library.lua`), and interactions on prefabs must extend that, not sit beside it.
 
 

@@ -1215,6 +1215,86 @@ between the two readings, so it has not been seen to move.
 Not done: the wheelchair, the ladder's climber and the bed do not carry a person (step 9), and the wheelchair does
 not travel (#311).
 
+### One catalog: everything placed is a prefab, and the old paths retire (agreed with Glenn, 2026-11-21)
+
+Glenn: "the old recipes vs these new prefabs ... now sound like competing code paths and we don't want to have a
+ton of dual representation." Checked against the code, and this is what was agreed.
+
+Words: a RECIPE is a Lua script that builds a shape. A MODEL is the shape it builds (pieces, materials, moving
+parts, collision shapes, markers). A PREFAB is a model plus what makes it a thing in the world. A PLACEMENT is one
+prefab at one place.
+
+**What does not compete: shapes.** The furniture kit's recipes (`furniture_models.lua`), the kerb props
+(`street_props.lua`), trees and rocks are each already a model through one recipe, `prop_models.lua`, which calls
+the same builders the city uses. No shape is written twice, and none should be.
+
+**What is double today, and which side stays:**
+
+| Thing | The older path (retires) | The one that stays |
+|---|---|---|
+| The list of what exists | the C++ list of kit pieces (`Piece`, `furniture_kit.h`); each system's own prop list | `models.lua` and `prefabs.lua` |
+| Where a thing is solid | a kit piece's footprint box | the model's collision shapes |
+| Where a person uses it | spots and verbs (`furniture_library.lua`) | the same spots and verbs, read from the prefab: a spot is a marker on the model. The verbs system stays and grows ("open", "pull"); it is not rebuilt (see "What step 9 must build on") |
+| What a piece is for | family and tags in `furniture_library.lua` | the same tags, on prefabs. A room program asks for tags and gets prefabs |
+| How a copy is placed | the floor planner emits a kit piece, a variant and a place (`PlacedPiece`, `BuildingMesh::furniture`) | the same list, naming a prefab |
+| How a copy is drawn | the kit's batches | one drawer for placed prefabs: far copies in batches by model, near ones usable, a touched one a full entity ("How many copies would work near and far") |
+
+So a prefab far from the player is served as its model and nothing more. It is still a prefab in the data; only
+how the engine serves it changes with distance.
+
+**A finding that makes the switch small.** The floor planner already hands back a list of placements
+(`BuildingMesh::furniture`: piece, variant, transform) and the drawing is done from that list afterwards. Placing
+prefabs indoors is then a change to what one entry names, not a new planner.
+
+**Rules that follow:**
+
+1. Anything the city places is a line in `prefabs.lua`. A kit piece becomes one through `prop_models.lua` (a line,
+   no new recipe).
+2. No system keeps its own list of pieces, its own collision for a piece, or its own idea of where a person sits
+   on one. When a system is ported, its old list is deleted in the same change.
+3. A prefab with moving parts has STATES ("idle", "running", "open"). An interaction changes the state; a state
+   says what the parts do (a `model_moves.lua` list). Nothing in the game world runs a loop for its own sake. The
+   `_in_use` prefabs are test rigs for the model studio and the test level, and the city never places them.
+4. Tags live in one place (the furniture library's), cover every prefab, and are what room programs, parks and
+   kerbs choose by.
+5. A SITE (a playground, a cafe terrace, a furnished room) is a list of placements, not a prefab.
+
+**Order:** a test level on this branch (`prefab_town`, below); states and interactions; many copies; tags. Then,
+after the parent branch's agent-brain work is merged: parks and kerbs choose prefabs, then the floor planner, then
+the building grammar's doors and windows, each deleting what it replaces. The last three change baked output.
+
+### The test level: prefab_town (2026-11-21)
+
+A small place to stand prefabs in before the city does it: `assets/levels/prefab_town.json`.
+
+- **The place** is one script, `assets/scripts/prefab_town.lua`: a street 84 m long with a pavement each side, eleven
+  rooms along it (floor, four walls, a doorway to the street, no ceiling), a park and a paved square. It makes no
+  furniture.
+- **Everything else is a prefab**, 286 of them, one level entity each: a konbini, a cafe, an office, a gym and a
+  station hall on one side; a flat in three rooms (kitchen and living room, bedroom and bathroom, child's room), a
+  clinic, a schoolroom with a library corner and a bakery on the other; kerb pieces along both pavements; a
+  playground and garden things in the park; a fountain, an escalator, doors, windows and seats on the square.
+- **Both come from one table**, in `tools/prefab_town.py`: each room's or site's list of (prefab, across, toward the
+  door, facing, height). Run it and it writes the level. Edit the table, not the level file.
+- **Two levels from the one table.** `prefab_town` has every piece still, as the city would place it.
+  `prefab_town_busy` has each piece's `_in_use` prefab where there is one, every moving part working at once: a
+  load test, and the only place those prefabs are placed.
+- 22 more of the furniture kit's pieces became prefab lines for it (counters, worktops, tables, beds, bookcases),
+  each through `prop_models.lua`: rule 1 above, in use.
+
+What it showed:
+
+- **It loads in 2.2 seconds with no errors, and is 5,376 entities for 286 prefabs.** One stocked drinks fridge is
+  566 drawn pieces, because every bottle is a piece of its own. That is the case for "many copies" in one number:
+  a stamped prefab is right for a crane and wrong for a shop.
+- In play, with every script running, no script errors; of 74 moving parts sampled, 46 had moved in four seconds
+  (the rest were waiting their turn). Frame time was not measured: the viewer has no command that reports it.
+- Placing by hand works, and is exactly as tedious as expected: a facing or a height wrong by eye, found in a
+  picture. That is the argument for sites and the floor planner placing prefabs from tags.
+
+What it is not: the rooms are stand-ins, not rooms grown by the building grammar, and nothing here is chosen by
+the city. To see it: `./build-viewer/viewer assets/levels/prefab_town.json --play`.
+
 ### What step 9 must build on: the furniture kit already has seats and verbs
 
 Found while choosing these (not known when the markers above were named): `assets/scripts/furniture_library.lua`
