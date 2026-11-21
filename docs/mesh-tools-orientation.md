@@ -78,7 +78,7 @@ For whoever picks this work up, person or helper. Read this first, then the two 
 | 517f8c0b | the studio views a model OR a prefab: `savePrefab` and the entry rewrite in `scripting/prefab_list`, the prefab form in the Inspector dock, `--prefab <name>`, play keeping the player's place on a rebuild, `engine/model_overlay` (shapes, markers, joints as lines); commands `prefabs?`, `prefab?`, `model_overlay`, `studio_prefab`, `studio_prefab_set`, `play`, `stop` |
 | 2ad5f8ad | the park sculpture, the first model made in the studio: `park_sculpture.lua`, `park_sculpture_turn.lua`, two models and two prefabs |
 | afc9ee0b | playground pieces: `playground_kit.lua` and four recipes (swing, seesaw, roundabout, slide), three scripts that move them, six models and nine prefabs |
-| (next commit) | furniture and street pieces with moving parts: `model_kit.lua` (the furniture kit's shape words on a model's nodes), `model_moves.lua` (one behaviour, a list per prefab), 21 recipes, 39 models, 67 prefabs; behaviour scripts can `require` (`ScriptSystem::setModuleSource`, `ScriptWatch::add`) |
+| c4e42954 | furniture and street pieces with moving parts: `model_kit.lua` (the furniture kit's shape words on a model's nodes), `model_moves.lua` (one behaviour, a list per prefab), 21 recipes, 39 models, 67 prefabs; behaviour scripts can `require` (`ScriptSystem::setModuleSource`, `ScriptWatch::add`) |
 
 The unit suite passed 1600 of 1600 on 19fd8fc2. `physics_tests` (built here since 2026-11-20:
 `cmake --build build-viewer --target physics_tests`) passes all but one driving case, see "What is next". The
