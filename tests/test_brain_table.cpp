@@ -299,7 +299,8 @@ TEST_CASE(brain_data_that_disagrees_with_the_code_is_refused_by_file_and_key) {
 }
 
 TEST_CASE(brain_a_plan_over_the_cap_is_refused_and_the_next_cheapest_taken) {
-    const engine::NavGraph nav = longStreet();
+    const StreetNet street = longStreetNet();
+    const TripNetwork nav = street.net();
     const TravelCatalog travel = testTravel();
     // the fixed form holds 8 legs: a 9-leg way is refused, by the file and the row
     TripRequest ask;
@@ -374,9 +375,8 @@ TEST_CASE(brain_a_state_that_is_not_built_refuses_entry_and_says_so) {
 // the renderer, the entity world and the physics wrapper are not on it.
 TEST_CASE(brain_includes_nothing_past_its_boundary) {
     const std::vector<std::string> allowed = {
-        "apps/citysim/trip_plan.h",                 // THE trip planner, which the brain plans with
-        "engine/ai/nav_graph.h",                    // ... the street map it plans on
-        "engine/ai/pathfind.h",                     // ... and its router
+        "apps/citysim/trip_plan.h",                 // THE trip planner, which the brain plans with (over the road
+                                                    // model's walks, by the one router below)
         "engine/procgen/city/road_network.h", "engine/procgen/city/road_spec.h", "engine/procgen/city/polygon.h",
         "engine/procgen/city/roads/road_model.h", "engine/procgen/city/roads/road_model_parts.h",
         "engine/procgen/city/roads/walkway.h",      // the road model's walkways (ADR-0475; their own header since ADR-0476)

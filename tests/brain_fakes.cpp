@@ -1,7 +1,6 @@
 #include "brain_fakes.h"
 
 #include "apps/citysim/brain/scripting/brain_lua.h"
-#include "engine/ai/pathfind.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/scripting/script_vm.h"
 
@@ -342,11 +341,30 @@ void FakeDrive::tick(Machine& machine) {
 }
 
 // ---- the lab -----------------------------------------------------------------------------------------------------------
-engine::NavGraph longStreet() {
+// (the road is laid along y = -h, h being how far its sidewalk's middle lies from its centre line, so the north
+// sidewalk runs along y = 0: a place at (x, 0) stands on the walk, and a walk between two of them is their
+// straight-line metres, as the stand-ins take it)
+const citytest::ModelScene& longStreet() {
+    static const Real h = [] {
+        const citytest::ModelScene& probe = citytest::straightScene(2000.0);
+        Vec2 out(0, 0);
+        const engine::RoadFrontage f = probe.model->frontageAt(Vec2(1000, 5));
+        if (f.valid()) probe.model->sidewalkBeside(f, out);
+        return out.y;
+    }();
     engine::RoadGraph g;
-    for (int i = 0; i <= 20; ++i) g.nodes.push_back({Vec2(100.0 * i, 0)});
-    for (int i = 0; i < 20; ++i) g.edges.push_back(engine::RoadEdge{i, i + 1, 8, engine::RoadClass::Local, 0});
-    return engine::buildNavGraph(g);
+    g.nodes = {{Vec2(0, -h)}, {Vec2(2000, -h)}, {Vec2(2000, -h - 30)}, {Vec2(2000, -h + 30)}};
+    g.edges = {engine::RoadEdge{0, 1, 8, engine::RoadClass::Local, 0}, engine::RoadEdge{1, 2, 8, engine::RoadClass::Local, 0},
+               engine::RoadEdge{1, 3, 8, engine::RoadClass::Local, 0}};
+    return citytest::graphScene("brain_long_street", g);
+}
+
+TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker}; }
+
+StreetNet longStreetNet() {
+    StreetNet s;
+    s.walker = engine::roads::bindWalker(*longStreet().model, "walker", 1.4);
+    return s;
 }
 
 TravelCatalog testTravel() {
@@ -400,7 +418,7 @@ bool shippedBrainSpec(BrainSpec& out) {
 }
 
 Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
-    nav = longStreet();
+    street = longStreetNet();
     travel = ways ? *ways : testTravel();
     registerBehaviours(behaviours);
     BrainSpec spec;
@@ -417,7 +435,7 @@ Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
         world.walk = walk.get();
         world.drive = drive.get();
     }
-    planner.reset(new TripPlanner(nav, travel, world));
+    planner.reset(new TripPlanner(street.net(), travel, world));
     machine.reset(new Machine(table, world, *planner, skills ? walk.get() : nullptr, skills ? drive.get() : nullptr));
     machine->traceTo(&trace);
 }

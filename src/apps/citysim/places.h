@@ -1,7 +1,12 @@
 #ifndef RAYTRACER_APPS_CITYSIM_PLACES_H
 #define RAYTRACER_APPS_CITYSIM_PLACES_H
 
-#include "../../engine/ai/nav_graph.h"   // engine::NavGraph, Vec2, Real
+#include "../../engine/procgen/city/road_network.h"   // StatedFrontage
+#include "../../rt_math.h"   // Vec2, Real
+
+namespace engine {
+struct RoadModel;
+}
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -84,8 +89,6 @@ struct Place {
     PlaceType type = PlaceType::Home;
     Vec2 site;             // building footprint centroid (world XZ)
     Vec2 entrance;         // door on the pedestrian network (sidewalk point)
-    int entranceLink = -1; // NavGraph link the entrance sits on (-1 = unsnapped)
-    Real entranceT = 0;    // parameter along that link, [0,1]
     Vec2 door;             // the real door it was snapped from (the site when none was given)
     // Light metadata (surface-level ⟨A6⟩). Hours are in-world 0..24; the default
     // window [0,24) is "always open". `capacity` 0 means unlimited.
@@ -123,24 +126,19 @@ struct Place {
 inline Vec2 placeDoor(const Place& p) { return p.entrance + (p.site - p.entrance) * 0.4; }
 
 // Indexes places by type and answers nearest-of-type queries. Build it by
-// add()-ing each building; the entrance is snapped against the NavGraph at add
+// add()-ing each building; the entrance is snapped to the road model's walks at add
 // time so a place is routable the moment it exists.
 class PlaceMap {
 public:
-    // Register a building as a place, snapping its entrance to the nearest
-    // walkable point of `graph` (the sidewalk in front of the nearest road).
-    // Returns the assigned PlaceId (== its index in places()). If the graph is
-    // empty the entrance falls back to the site and entranceLink stays -1.
+    // Register a building as a place, snapping its entrance to where its door joins the walks of `roads`
+    // (RoadModel::walkJoinNear: the sidewalk in front of the road it fronts). Returns the assigned PlaceId (== its
+    // index in places()). No model (or none built): the entrance is the site.
     // `entranceHint` (ADR-0080): the building's real door (world XZ, a step
     // outside the aperture) -- when given, the sidewalk snap runs from IT,
     // not the centroid, so the entrance lands in front of the actual door.
-    PlaceId add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
+    PlaceId add(PlaceType type, Vec2 site, const engine::RoadModel* roads,
                 Real openHour = 0, Real closeHour = 24, int capacity = 0,
                 std::string name = {}, const Vec2* entranceHint = nullptr);
-    // THE WALKS, once they join the network (NavGraph::appendFootpaths): a place whose door stands beside a walk --
-    // a paseo's shop, its door on the walk, not the street -- but far from the street point it was snapped to, takes
-    // its entrance on the walk. Returns how many moved.
-    int snapToWalks(const engine::NavGraph& graph, Real reach = 4.0, Real farFromStreet = 6.0);
 
     int size() const { return static_cast<int>(places_.size()); }
     bool empty() const { return places_.empty(); }
@@ -194,14 +192,9 @@ private:
     std::vector<PlaceId> byType_[static_cast<int>(PlaceType::Count)];
 };
 
-// Snap a world point to the nearest walkable point of `graph`: finds the nearest
-// link, projects onto its centreline for the parameter t, and returns the
-// sidewalk point there (just outside the kerb). Fills `outLink`/`outT`. Returns
-// the input point unchanged with outLink=-1 when the graph has no links.
-// Exposed so the level loader / generator can snap doors with the same logic the
-// tests pin. `verge` matches NavGraph::sidewalkPoint's kerb offset.
-Vec2 snapToSidewalk(const engine::NavGraph& graph, Vec2 site,
-                    int& outLink, Real& outT, Real verge = 1.0);
+// Snap a world point to where it joins the walks of `roads` (RoadModel::walkJoinNear, every walk): the point on the
+// sidewalk in front of the road it fronts. The input point unchanged with no model, or where it joins no walk.
+Vec2 snapToSidewalk(const engine::RoadModel* roads, Vec2 site);
 
 }  // namespace citysim
 

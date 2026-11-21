@@ -24002,3 +24002,37 @@ Words:
 - **The near crowd**, re-pinned: 11 at minute 8 -> 11 at minute 6; in 81 -> 52; out 71 -> 48; hash 0xb182a398296f4017 -> 0x0fb18ec83c665a00. Its touches on walkers 1 -> 0 and on other things 1 -> 0, so it passes: car 220's day is not in this crowd. Whether a car can still stand off its carriageway as car 220 did is not known.
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1512/1512; brain_tests 23/23; `level_brain_crowd` 1/1; `near_tier_in_the_crowd_follows_the_player` 1/1; `level_river_town_crowd` runs to the end and fails 8 pinned counts (above, not re-pinned).
+
+### The sweep, midpoint 1 — the city sim stands on the road model alone: its people rest at walk points, its trips are priced over the walks
+
+What it does: Glenn's call (2026-11-21): "eliminate the old code and replace it with the new system and we can iron out bugs afterwards". The street map (the NavGraph the loader made from the road model, ADR-0425) is deleted in one sweep, in two halves. This half takes the city sim and everything it holds off it: no file under `src/apps/citysim` reads the street map. The loader still makes it for the street furniture, the probes, the map tool and the planner's tools; the second half moves those and deletes it.
+
+Words:
+- **Walk point:** a place on one of the road model's walks where the sim's people rest, set out from and go to (`city_walk_points.h`, `WalkPointMap`). A **street point** is set out every 30 m along each sidewalk, footway and walkway walk; a **place point** is each place's door joined to the walks. The sim numbers them, and an agent's home, work, rest and trip goal are walk-point numbers: the street map's nodes were those numbers before.
+- **Part:** a set of walks a walker can get round (`reachableWalks`). Two walk points in one part reach each other on foot; another part is another town, reached by train.
+
+**What changed:**
+- **The sim** (`city_sim.h/.cpp`): `build(pedCount, seed)` sets the walk points out on the road model handed in by `setRoads` (which must come first), on every part with at least 60 m of street and walkway walks. Homes and jobs are drawn among the street points; "there and back" is "the same part". A commute's time, the brain's commute measure and the students' walk are the one router's walk between two points (`pointRoute`, `findWalkRoute`). `assignPlaces(places)` gives each place's door its own point, by its stated frontage (`walkJoinOn`) or by position (`walkJoinNear`). Deleted: the street map pointer, the junction boxes (`junctionRadius`, `nearJunction`, nothing asked them since the old driving), `laneSpacingFor`. `idlePose` stands a person a step along its point's walk; `pushPoseClearOfLanes` asks the road it fronts (`frontageAt`, the carriageway's half-width). `clearOfWalks` reads the walkway walks' lines. The population cache's format is 14 (its key reads the walk points).
+- **The trains' riders** (`city_rail_riders`): a station's way in is pinned to the nearest street point, its network is the point's part.
+- **The places** (`places.h/.cpp`): `PlaceMap::add` takes the road model; a door's entrance is where it joins the walks (`walkJoinNear`). `entranceLink`/`entranceT` and `snapToWalks` are deleted: a walkway door states its frontage.
+- **The trip planner** (`trip_plan.h/.cpp`; the brain's `TripPlanner`): a leg is routed over the walks from where each end joins them. A leg on foot is timed at the way's speed; a leg on the roads at each walk's street's class speed (`classSpeed`, moved to `road_network.h`). The simplest port: a drive is priced along the sidewalks of the streets it would drive, so no freeway (known bug, below).
+- **The brain**: its "steps off the paths" go to the sidewalk on the person's side of the road it fronts (`frontageAt`, `sidewalkBeside`).
+- **The city host** (`city_render`): hands the sim the road model before anything else, and has no city sim on a level without a built lane city with walks. The density count reads the model's streets (lane-km) and walks (walk-km). The signal poles are adopted in the loader's order (no longer keyed by street-map link). The street-map census, its height fixing, the footpath joining and the `ground?` link dump are deleted. The "nav" debug layer draws the walk points.
+
+**Tests, old -> new:**
+- `test_trip_plan` rewritten on the straight scene: numbers read off the walks, not worked out from a hand-made map. Deleted: `trip_plan_drive_minutes_are_the_router_s_road_class_times` (a freeway priced over the street map's links).
+- Deleted: `near_junction_covers_the_box_and_only_the_box` (the junction boxes), `freeway_census_links_and_routes` (the street map's links and router), `place_entrance_empty_graph_falls_back` (replaced by `place_entrance_with_no_road_model_falls_back`).
+- Rewritten: `place_entrance_lands_on_sidewalk` (the entrance is the walk join's point, off the carriageway), the city-render census (every walk point in one part; sampled pairs route), the "nav" view test (one strip and one ring per walk point), the perception tests' poles (along the walks), the rail riders' (walk points), the footpath crowd (block corners from the model's junctions), the traffic lab's stops (a junction's mouth: 12 m round the model's junction).
+- The brain lab's street is laid so its north sidewalk runs along y = 0 (places stand on the walk): every hand-worked time is the same. One re-pin: `brain_trip_a_new_intent_at_the_wheel_redirects_the_drive`, "car 6.3 min (5.1 car + 1.2 walk)" -> "car 6.1 min (4.9 car + 1.2 walk)": priced from where the car is, not the street map's node 44 m behind it.
+- **brain_crowd:** the most on the road 57 at minute 10 -> 87 at minute 9; busy minutes 3 -> 16; trips 201 -> 313; parked 164 -> 238; arrivals 487 -> 470; hash 0xbacfb8b215f04aa1 -> 0xf0e62a8d7fffa45b. **Still failing:** one ring of waits (a deadlock).
+- **The near crowd:** 11 at minute 6 -> 20 at minute 12; in 52 -> 120; out 48 -> 90; hash 0x0fb18ec83c665a00 -> 0xed4281eb889d8e9b. **Still failing:** car 10 off its lane 14.8 s (0.56 m).
+- **river_town's crowd** (pinned now): cars 383 -> 391 (with one 407 -> 413); the most on the road 139 at 11 -> 98 at 10; trips 318 -> 292; parked 209 -> 240; arrivals 730 -> 472; no way 0; hash 0xa15a1ec8afaff85d -> 0x9362ecbc934c82cf. The sim's own walkers there: 6,730 -> 5,149 (the density count now reads the model's walks).
+
+**Known bugs after this half:**
+- brain_crowd: one ring of waits from about minute 30; the longest stand 193 s -> 1,247.6 s (car 109).
+- The near crowd: car 10 stands 0.56 m off its lane for 14.8 s.
+- river_town: arrivals 472 of the old 730; about 410 of the 630 walking at any minute.
+- A drive is priced over the sidewalks: no freeway in a plan's price (the driving itself still drives freeways).
+- A place whose door joins no walk takes the walk point nearest its entrance.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1510/1510; lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23.

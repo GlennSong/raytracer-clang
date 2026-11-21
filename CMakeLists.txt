@@ -618,6 +618,7 @@ add_library(citysim STATIC
     src/apps/citysim/households.cpp      # ages, life stages, households in the dwellings (people.lua)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_walk_points.cpp   # the sim's walk points: places on the road model's walks (the street map's nodes were)
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_car.cpp       # a household's car as one entity: its components (ADR-0444)
     src/apps/citysim/city_poses.cpp     # where the city's bodies are each fixed step: cars and walkers (ADR-0454)

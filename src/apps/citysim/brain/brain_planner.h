@@ -21,8 +21,8 @@ namespace brain {
 
 class TripPlanner : public Planner {
 public:
-    TripPlanner(const engine::NavGraph& nav, const TravelCatalog& travel, const World& world)
-        : nav_(nav), travel_(travel), world_(world) {}
+    TripPlanner(const TripNetwork& net, const TravelCatalog& travel, const World& world)
+        : nav_(net), travel_(travel), world_(world) {}
 
     bool plan(const PlanAsk& ask, PlanLegs& out) override;
 
@@ -31,7 +31,7 @@ public:
     const std::string& lastError() const { return lastError_; }
 
 private:
-    const engine::NavGraph& nav_;
+    TripNetwork nav_;   // the road model and the walker every leg is routed on (trip_plan.h)
     const TravelCatalog& travel_;
     const World& world_;
     std::string lastReason_, lastError_;

@@ -40,37 +40,21 @@ void RailRiders::clear() {
     stats = Stats{};
 }
 
-void RailRiders::build(const RailSim* rail, const engine::NavGraph& nav, Real reach, Real minNetworkStreet) {
+void RailRiders::build(const RailSim* rail, const WalkPointMap& spots, Real reach, Real minNetworkStreet) {
     clear();
-    if (!rail || rail->lines().empty() || nav.nodeCount() == 0) return;
+    if (!rail || rail->lines().empty() || spots.empty()) return;
     rail_ = rail;
 
-    // STREET NETWORKS: components over walkable, non-freeway links (a town is one; the freeway joins them for cars only)
-    const int N = nav.nodeCount();
-    std::vector<std::vector<int>> adj(static_cast<std::size_t>(N));
-    for (const engine::NavLink& L : nav.links) {
-        if (!L.walkable || L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp) continue;
-        adj[static_cast<std::size_t>(L.from)].push_back(L.to);
-        adj[static_cast<std::size_t>(L.to)].push_back(L.from);
-    }
-    comp_.assign(static_cast<std::size_t>(N), -1);
+    // STREET NETWORKS: the parts of the walks (a town is one; city_walk_points.h), each as long as its street points
+    // space out
+    comp_ = spots.part;
     std::vector<Real> street;
-    for (int s = 0; s < N; ++s) {
-        if (comp_[static_cast<std::size_t>(s)] >= 0 || adj[static_cast<std::size_t>(s)].empty()) continue;
-        const int c = static_cast<int>(street.size());
-        street.push_back(0);
-        std::queue<int> q;
-        q.push(s);
-        comp_[static_cast<std::size_t>(s)] = c;
-        while (!q.empty()) {
-            const int u = q.front(); q.pop();
-            for (int v : adj[static_cast<std::size_t>(u)])
-                if (comp_[static_cast<std::size_t>(v)] < 0) { comp_[static_cast<std::size_t>(v)] = c; q.push(v); }
-        }
+    for (int s = 0; s < spots.streetNodeCount(); ++s) {
+        const int c = comp_[static_cast<std::size_t>(s)];
+        if (c < 0) continue;
+        if (c >= static_cast<int>(street.size())) street.resize(static_cast<std::size_t>(c) + 1, 0);
+        street[static_cast<std::size_t>(c)] += kWalkPointSpacing;
     }
-    for (const engine::NavLink& L : nav.links)
-        if (L.walkable && L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp)
-            street[static_cast<std::size_t>(comp_[static_cast<std::size_t>(L.from)])] += 0.5 * L.length;
     const int biggest = street.empty() ? -1 : static_cast<int>(std::max_element(street.begin(), street.end()) - street.begin());
 
     // THE STATIONS, by name across the lines (a double track's two lines both stop at each)
@@ -97,15 +81,14 @@ void RailRiders::build(const RailSim* rail, const engine::NavGraph& nav, Real re
             stations_[static_cast<std::size_t>(k)].stopOnLine[li] = static_cast<int>(si);
         }
     }
-    // each pinned to a street node
+    // each pinned to a street spot
     for (RailStation& S : stations_) {
         Real bd = reach;
-        for (const engine::NavLink& L : nav.links) {
-            if (!L.walkable || L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp) continue;
-            const int c = comp_[static_cast<std::size_t>(L.from)];
-            if (c != biggest && street[static_cast<std::size_t>(c)] < minNetworkStreet) continue;
-            const Real d = dist(nav.nodes[static_cast<std::size_t>(L.from)], S.access);
-            if (d < bd) { bd = d; S.accessNode = L.from; S.network = c; }
+        for (int s = 0; s < spots.streetNodeCount(); ++s) {
+            const int c = comp_[static_cast<std::size_t>(s)];
+            if (c < 0 || (c != biggest && street[static_cast<std::size_t>(c)] < minNetworkStreet)) continue;
+            const Real d = dist(spots.nodes[static_cast<std::size_t>(s)], S.access);
+            if (d < bd) { bd = d; S.accessNode = s; S.network = c; }
         }
     }
 }

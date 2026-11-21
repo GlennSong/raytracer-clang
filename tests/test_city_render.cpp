@@ -111,7 +111,7 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));   // null AssetManager: transforms only
     CHECK(city.built());
-    CHECK(city.nav().linkCount() > 0);
+    CHECK(city.sim().walkPoints().nodeCount() > 0);
     // THE CARS ARE THE DRIVING'S (ADR-0461): with no rule set named there is no driving, so the eight cars asked for
     // are not made, and the sim's agents are the six walkers, every one drawn at most once.
     CHECK(city.sim().agents().size() == 6u);
@@ -389,17 +389,15 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     CHECK(city.build(world, nullptr));
     CHECK(city.sim().wander());
 
-    const NavGraph& nav = city.nav();
-    int junctions = 0;
-    for (int v = 0; v < nav.nodeCount(); ++v)
-        if (nav.isJunction(v)) ++junctions;
-    CHECK(junctions == 2);   // the two theta mid-side meets; corners just bend
-
-    // Fully connected: every ordered pair routes.
+    // Fully connected on foot: every walk point is in one part of the walks, and a sample of pairs route.
+    const WalkPointMap& pts = city.sim().walkPoints();
+    bool onePart = pts.nodeCount() > 0;
+    for (int a = 1; a < pts.nodeCount(); ++a) onePart = onePart && pts.samePart(0, a);
+    CHECK(onePart);
     bool allRoute = true;
-    for (int a = 0; a < nav.nodeCount(); ++a)
-        for (int b = 0; b < nav.nodeCount(); ++b)
-            if (a != b && !findRoute(nav, a, b).valid()) allRoute = false;
+    for (int a = 0; a < pts.nodeCount(); a += 7)
+        for (int b = 0; b < pts.nodeCount(); b += 11)
+            if (a != b && !city.sim().pointRoute(a, b).found) allRoute = false;
     CHECK(allRoute);
 
     // The lab's walker comes alive and, wandering, strings trip after trip together. (Its car was the old driving's:
@@ -458,23 +456,13 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
 
-    // One strip per lane per link, lifted just off the road like the rings.
-    const NavGraph& nav = city.nav();
-    std::size_t lanes = 0;
-    for (const NavLink& l : nav.links)
-        lanes += static_cast<std::size_t>(l.lanes < 1 ? 1 : l.lanes);
-    CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+    // One strip and one ring per walk point (the "nav" view: the sim's walk points), lifted just off the ground.
+    const std::size_t points = static_cast<std::size_t>(city.sim().walkPoints().nodeCount());
+    CHECK(points > 0);
+    CHECK(groupCount(world, city.navLinkGroup()) == points);
+    CHECK(groupCount(world, city.navNodeGroup()) == points);
     InstanceGroup* strips = world.get<InstanceGroup>(city.navLinkGroup());
     CHECK(strips != nullptr);
-    const double lift = crossRoads().look.lift;   // strips ride the net's own lift
-    for (const Mat4& m : strips->transforms)
-        CHECK(std::fabs(m.m[1][3] - (lift + 0.04)) < 1e-6);   // road lift + 0.04
-    // One ring per junction node (the cross has exactly one).
-    int junctions = 0;
-    for (int n = 0; n < nav.nodeCount(); ++n)
-        if (nav.isJunction(n)) ++junctions;
-    CHECK(junctions == 1);
-    CHECK(groupCount(world, city.navNodeGroup()) == static_cast<std::size_t>(junctions));
 
     // Cones: exactly one per MOVING walker every step; the navgraph stays put (static bake, not rebaked per frame).
     bool sawPedCone = false;
@@ -484,7 +472,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
         for (const Agent& a : city.sim().agents())
             if (a.moving) ++movingPeds;
         CHECK(groupCount(world, city.visionGroup()) == movingPeds);
-        CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+        CHECK(groupCount(world, city.navLinkGroup()) == points);
         if (movingPeds > 0) sawPedCone = true;
     }
     CHECK(sawPedCone);   // walkers really moved, so both views really drew

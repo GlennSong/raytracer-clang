@@ -11,11 +11,17 @@
 // moves the person differently, its execution (the agent brain's skills, city_brain.h). This module names no way of
 // travelling.
 //
-// Pure: the nav graph and the table in, the plan out. No sim, no world, no Lua (the reader is
+// Pure: the road model, the walker and the table in, the plan out. No sim, no world, no Lua (the reader is
 // scripting/travel_lua.h), so it is unit-tested headless.
+//
+// THE NETWORK (#306, the street map's deletion): every leg is routed over the road model's walks by the one router
+// (findWalkRoute) -- the sidewalks run along every street a person drives too. A leg on the roads is timed by the
+// class of the street each walk runs along (classSpeed), a leg on foot at the way's speed. (So a drive is priced on
+// the streets that have sidewalks: no freeway. The simplest port; the driving's own lane router is the one to price
+// a drive by, later.)
 
-#include "../../engine/ai/nav_graph.h"
-#include "../../engine/ai/pathfind.h"
+#include "../../engine/procgen/city/road_network.h"   // RoadClass, classSpeed
+#include "../../engine/procgen/city/roads/route.h"     // findWalkRoute, WalkRoute, RouteWalker
 
 #include <cstdint>
 #include <string>
@@ -99,8 +105,7 @@ struct TripLeg {
     int mode = -1;               // row in the catalog
     LegEnd end = LegEnd::Door;
     Vec2 from, to;
-    engine::Route route;         // links of the leg's network (empty when from and to share a node)
-    int fromNode = -1, toNode = -1;
+    engine::roads::WalkRoute route;   // the walks of the leg (not found when from and to join the walks at one point)
     Real metres = 0;             // the route plus the bits off the network at each end
     // On foot: metres at the way's speed. On the roads: the router's time for the route (engine::routeSeconds),
     // the bits off the network at a local street's speed. Plus the way's start and end minutes either way.
@@ -175,12 +180,19 @@ constexpr long kMaxLegSeconds = 65535;
 // more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
 bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
-// One leg by `mode` from `from` to `to`: routed on the way's network between the nearest nodes that connect. False
-// (leg untouched) when nothing near the two ends routes.
-bool planLeg(const engine::NavGraph& nav, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out);
+// The network a plan is routed on: the road model and the walker on its walks (route.h bindWalker).
+struct TripNetwork {
+    const engine::RoadModel* model = nullptr;
+    const engine::roads::RouteWalker* walker = nullptr;
+    bool valid() const;
+};
+
+// One leg by `mode` from `from` to `to`: each end joined to the walks by position (RoadModel::walkJoinNear), routed
+// between them. False (leg untouched) when either end joins no walk or no route leads there.
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out);
 
 // Every option, and the choice.
-TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const TripRequest& req);
+TripPlan planTrip(const TripNetwork& net, const TravelCatalog& cat, const TripRequest& req);
 
 // "car 6.0 min (2.0 walk + 3.0 car + 1.0 walk)", or "car -- no car" when it is not possible.
 std::string describeOption(const TravelCatalog& cat, const TripOption& o);

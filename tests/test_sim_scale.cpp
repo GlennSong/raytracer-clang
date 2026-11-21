@@ -82,8 +82,7 @@ TEST_CASE(sim_scale_census_prints) {
     // A 1.2 km grid on 120 m blocks: a small city, not a test stub. (A road file built as a level's roads are, its street
     // map made from the model: model_scene.h, #306 piece 6 W2.)
     const citytest::ModelScene& s = citytest::gridScene(1200, 120, 11);
-    const NavGraph& nav = s.nav;
-    std::printf("    [scale] nav: %zu nodes, %zu links\n", nav.nodes.size(), nav.links.size());
+    std::printf("    [scale] the road model: %zu walks\n", s.model->laneLevel.walks.size());
     std::printf("    [scale] %-7s %-7s %9s %7s %7s %7s %9s\n",
                 "agents", "mode", "ms/tick", "K", "V", "D", "sleeping");
     // Glenn, 2026-09-16: "can we reach say 50k agents walking around?" The
@@ -117,9 +116,8 @@ TEST_CASE(sim_scale_census_prints) {
 TEST_CASE(sim_scale_100k_island_prints) {
     if (!std::getenv("RT_SIM_SCALE")) return;
     const citytest::ModelScene& s = citytest::gridScene(4000, 120, 11);   // (model_scene.h, W2)
-    const NavGraph& nav = s.nav;
-    std::printf("    [100k] nav: %zu nodes, %zu links (8 km grid); sizeof(Agent) %zu bytes\n", nav.nodes.size(),
-                nav.links.size(), sizeof(citysim::Agent));
+    std::printf("    [100k] the road model: %zu walks (8 km grid); sizeof(Agent) %zu bytes\n", s.model->laneLevel.walks.size(),
+                sizeof(citysim::Agent));
     for (int n : {25000, 50000, 100000}) {
         for (int moving = 0; moving < 2; ++moving) {
             const auto b0 = std::chrono::steady_clock::now();

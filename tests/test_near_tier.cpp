@@ -1143,12 +1143,17 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // 0x0fb18ec83c665a00: the crowd maker puts places where the sim's walks and the brain's kerb spaces serve them (see
     // test_brain_crowd), so brain_crowd's households, cars and days are other ones (cars 229 -> 209, the most on the road
     // 80 -> 57). The touches above went with that day: on walkers 1 -> 0, on other things 1 -> 0.
-    CHECK(mostNear == 11);
-    CHECK(mostNearAt == 6);
-    CHECK(c.intoPhysics == 52u);
-    CHECK(c.intoLane == 48u);
+    // And again (#306, the street map's deletion) from 11 at minute 6, in 52, out 48, 0x0fb18ec83c665a00 to 20 at
+    // minute 12, in 120, out 90, 0xed4281eb889d8e9b: the sim's own walkers rest at and go to walk points on the road
+    // model's walks (city_walk_points.h), not street-map nodes, so every walker's day, and every driver's stops for
+    // them, moved. STILL FAILING, not loosened, on the known-bugs list: car 10 stands 0.56 m off its lane for 14.8 s
+    // (kOffLaneKnownWorst).
+    CHECK(mostNear == 20);
+    CHECK(mostNearAt == 12);
+    CHECK(c.intoPhysics == 120u);
+    CHECK(c.intoLane == 90u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x0fb18ec83c665a00ull);
+    CHECK(hash == 0xed4281eb889d8e9bull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

@@ -4,9 +4,9 @@
 // STAND-INS FOR THE WORLD AND THE SKILLS, for the agent brain's tests (ADR-0440). Each does what the real thing will,
 // by the clock alone and with no chance in it: a walk takes its straight-line metres at the way's speed, a drive its
 // straight-line metres at a local street's speed (the router's own, engine::classSpeed), and each reports to the
-// machine on the first tick at or after the moment it ends. On the test street (one straight road with a node every
-// 100 m, every place on a node) those times are the trip planner's own, so a near person (skills) and a far one (the
-// clock) keep the same times.
+// machine on the first tick at or after the moment it ends. On the test street (one straight 2 km road, places every
+// 100 m along it) those times are close to the trip planner's own, which routes over the road model's walks (the
+// sidewalk, and the steps from a place to it), so a near person (skills) and a far one (the clock) keep close times.
 //
 // A LAB is the whole set-up: the street, the ways of travelling (written here as numbers, so every expected time can be
 // worked out by hand), the shipped brain.lua compiled against the real behaviours, the stand-ins, the real trip planner
@@ -16,6 +16,7 @@
 #include "apps/citysim/brain/brain_planner.h"
 #include "apps/citysim/brain/brain_states.h"
 #include "apps/citysim/trip_plan.h"
+#include "model_scene.h"   // the test street, as a level's roads are made
 
 #include <cstdint>
 #include <memory>
@@ -142,8 +143,14 @@ private:
     EventId parkedEvent_;
 };
 
-// The test street: along x from 0 to 2000 m, a node every 100 m, walkable and drivable.
-engine::NavGraph longStreet();
+// The test street: a 2000 m local road along x from 0 (model_scene.h straightScene), its sidewalks walked and its
+// lanes driven; and the walker on its walks (route.h bindWalker), with the network the trip planner routes on.
+const citytest::ModelScene& longStreet();
+struct StreetNet {
+    engine::roads::RouteWalker walker;
+    TripNetwork net() const;
+};
+StreetNet longStreetNet();
 // The ways of travelling, as numbers: walk 5 km/h (100 m in 72 s); car at the router's speeds (a local street 8 m/s),
 // 1 minute to pull out, 1.5 to park, and at most 2 minutes waiting for a clear lane to set off into; skateboard 10 km/h (100 m in 36 s), for someone with a board, a leg of at most 6
 // minutes (1000 m), a minute of it minded as 1.2; scooter the same at 12 km/h, at most 6 minutes. Each begins in the
@@ -156,7 +163,7 @@ constexpr WayId kWalk = 0, kCar = 1, kSkateboard = 2, kScooter = 3;
 bool shippedBrainSpec(BrainSpec& out);
 
 struct Lab {
-    engine::NavGraph nav;
+    StreetNet street;
     TravelCatalog travel;
     BehaviourSet behaviours;
     BrainTable table;

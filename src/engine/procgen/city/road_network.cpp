@@ -7,6 +7,18 @@
 
 namespace engine {
 
+Real classSpeed(RoadClass klass) {
+    switch (klass) {
+        case RoadClass::Freeway:   return 28.0;   // ~100 km/h
+        case RoadClass::Arterial:  return 16.0;   // ~58 km/h
+        case RoadClass::Collector: return 12.0;
+        case RoadClass::Local:     return 8.0;
+        case RoadClass::Ramp:      return 10.0;
+        case RoadClass::Alley:     return 8.0;
+    }
+    return 8.0;
+}
+
 const char* roadClassName(RoadClass k) {
     switch (k) {
         case RoadClass::Freeway:   return "freeway";

@@ -8,17 +8,6 @@
 
 namespace engine {
 
-Real classSpeed(RoadClass klass) {
-    switch (klass) {
-        case RoadClass::Freeway:   return 28.0;   // ~100 km/h
-        case RoadClass::Arterial:  return 16.0;   // ~58 km/h
-        case RoadClass::Collector: return 12.0;
-        case RoadClass::Local:     return 8.0;
-        case RoadClass::Ramp:      return 10.0;
-    }
-    return 8.0;
-}
-
 namespace {
 // The fastest class speed bounds the A* heuristic so it never overestimates the
 // remaining travel time (admissibility -> optimal routes).

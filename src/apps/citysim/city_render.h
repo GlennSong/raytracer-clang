@@ -2,7 +2,6 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_RENDER_H
 
 #include "../../engine/system.h"
-#include "../../engine/ai/nav_graph.h"
 #include "../../engine/components.h"   // engine::AuthoredPlace (level-authored places)
 #include "city_car.h"      // CityCarBody, CityCarLink (entityCarDrawKey)
 #include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
@@ -21,15 +20,15 @@
 namespace citysim {
 
 // The ECS render bridge for the agent-based city simulation (ADR-0060 Phase 6).
-// It builds a NavGraph from the level's RoadEntity entities, runs a deterministic
-// CitySim of driver+pedestrian agents over it, and bakes their poses into
+// It hands the level's road model to a deterministic
+// CitySim of pedestrian agents over its walks, and bakes their poses into
 // InstanceGroups so RenderSystem draws the whole city as a few instanced
 // batches: one for cars, one for pedestrians, and one per signal state (red /
 // yellow / green) whose emissive lenses light up to show each stoplight phase.
 //
 // This is the APPLICATION layer (apps/citysim). It depends on the core engine
 // (World, components, AssetManager) but the core never depends on it. The
-// reusable primitives it stands on — NavGraph, A*, perception — live in core.
+// reusable primitives it stands on — the road model, its router, perception — live in core.
 //
 // build()/step() take a World directly (like TrafficSystem) so the spawn +
 // pose-bake logic is unit-tested headless; mesh upload is the only part that
@@ -199,10 +198,10 @@ public:
     }
 
     // --- testable core (no FrameContext) -----------------------------------
-    // Build the NavGraph from every RoadEntity in `world`, seed the CitySim, and
+    // Hand the sim the level's road model (engine::LevelRoadModel), seed the CitySim, and
     // create the instance-group entities. `assets` may be null (tests): then the
     // groups carry a null MeshHandle and only the transforms are populated.
-    // No-op (returns false) if the world holds no navigable roads.
+    // No-op (returns false) if the world holds no built road model with walks.
     // `ground` (optional) is the terrain sampler for worlds WITHOUT a CDLOD
     // terrain config — loader-less test worlds on a slope pass theirs here
     // (roads no longer store one); a level's TerrainLodConfig still wins.
@@ -285,10 +284,8 @@ public:
         return link.driver >= 0 ? link.driver : entityCarKey(body.id);
     }
     const PlaceMap& places() const { return places_; }
-    const engine::NavGraph& nav() const { return nav_; }
-    // The height things drawn along a route stand on: link `link`'s surface at `station` (deckYAt), the ground for
-    // link -1 (the trip lab's plan line and its destination mark).
-    Real surfaceY(int link, Real station, engine::Vec2 p) const { return deckYAt(link, station, p); }
+    // The height things drawn at `p` stand on: the ground.
+    Real surfaceY(engine::Vec2 p) const;
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
     const std::vector<engine::Entity>& carGroups() const { return carGroups_; }
@@ -324,9 +321,8 @@ public:
     // state, and a forward trajectory arrow. Empty unless params.debugWidgets.
     engine::Entity footprintGroup(Agent::State s) const { return footprintGroups_[static_cast<int>(s)]; }
     engine::Entity forwardGroup() const { return forwardGroup_; }
-    // Debug NAVGRAPH view: ground strips along every link's lane centrelines +
-    // a small ring at each junction node. Static data (depends only on nav_),
-    // baked once at build; shown/hidden with the same HUD toggle as the rings.
+    // Debug WALK-POINT view (the "nav" layer): a short strip and a small ring at each of the sim's walk points. Static
+    // data, baked once at build; shown/hidden with the same HUD toggle as the rings.
     engine::Entity navLinkGroup() const { return navLinkGroup_; }
     engine::Entity navNodeGroup() const { return navNodeGroup_; }
     // Debug VISION-CONE view: one ground wedge per MOVING walker, sized to its
@@ -467,19 +463,12 @@ private:
     // Ties each head to the new driving's lane level (tieSignalHeads, when the driving or its model changes).
     void tieSignalHeads(engine::World& world);
     Real groundAt(Real x, Real z) const;
-    // The height of the DRIVING SURFACE on `link` at `station` metres along it —
-    // the same reading the sim gives a car driving that spot (Agent::deckY), so
-    // anything placed against the road (a parked car, a painted bay outline)
-    // lands on the deck the mesher actually built rather than on the raw
-    // terrain beside it (#25). Falls back to the ground for an unknown link.
-    Real deckYAt(int link, Real station, engine::Vec2 p) const;
     // A deck car's height: the drawn deck it is on (RoadDeckField::heightNear, within 3 m of its link's
     // lerped height `refY`, so never the street under it or the freeway over it), else `refY` itself.
     // The lerp between nav ends cuts under a ramp's vertical curves; the drawn profile does not (#35).
     Real deckSurfaceNear(Real x, Real z, Real refY) const;
 
     CityRenderParams params_;
-    engine::NavGraph nav_;
     // EVERY BUS BODY (Glenn, 2026-11-06: two saloons, "one where it's all seats and one where they're standing room"):
     // the fleet's slots whose class is a bus ("bus", "bus_standing")
     std::vector<int> busVariants_;
@@ -682,12 +671,11 @@ private:
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
-    // THE PLACED SIGNAL POLES (the loader's StreetFurniture, adopted at build): each link's pole site (siteHasLink_: it
-    // has one), the walkers' obstacles; and the heads, one per post instance, with the lane junction of the new
+    // THE PLACED SIGNAL POLES (the loader's StreetFurniture, adopted at build): each pole's site, in the loader's
+    // order, the walkers' obstacles; and the heads, one per post instance, with the lane junction of the new
     // driving each is tied to (tieSignalHeads; headsModel_: the model they were asked of). The poles never move: their
     // lens poses are worked out once (a ground sample apiece every bake was 10.6 ms of the island's 13 ms sync).
-    std::vector<SignalSite> siteByLink_;
-    std::vector<uint8_t> siteHasLink_;
+    std::vector<SignalSite> signalSites_;
     std::vector<SignalHead> signalHeads_;
     const engine::RoadModel* headsModel_ = nullptr;
     std::vector<engine::JunctionId> headJunctions_;

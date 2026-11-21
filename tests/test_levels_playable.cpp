@@ -2582,206 +2582,9 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
     }
 }
 
-// THE FREEWAY CENSUS (Glenn, 2026-09-21: "vehicles don't take the freeway"). The
-// questions, so a zero can be pinned on the right layer:
-//   1. is there a freeway in the sim's graph at all (links by class);
-//   2. does the ROUTER take it when it should — long cross-city pairs, travel time;
-//   3. are its carriageways one-way (no reverse twin).
-// (Whether TRAFFIC took it was the old driving's cars, gone with ADR-0462.)
-TEST_CASE(freeway_census_links_and_routes) {
-    const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
-    for (const char* name : kCities) {
-        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
-        std::unique_ptr<Renderer> renderer = Renderer::create();
-        RendererMeshUploader uploader(*renderer);
-        AssetManager assets(uploader);
-        World world;
-        RenderView view;
-        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
-            CHECK(false);
-            continue;
-        }
-        citysim::CityRenderSystem city;
-        CHECK(city.build(world, &assets, nullptr));
-        const engine::NavGraph& nav = city.nav();
-        auto klassName = [](engine::RoadClass k) {
-            switch (k) {
-                case engine::RoadClass::Freeway: return "freeway";
-                case engine::RoadClass::Arterial: return "arterial";
-                case engine::RoadClass::Collector: return "collector";
-                case engine::RoadClass::Local: return "local";
-                case engine::RoadClass::Ramp: return "ramp";
-            }
-            return "?";
-        };
-        // 1. The graph.
-        std::map<std::string, std::pair<int, double>> byClass;
-        for (const engine::NavLink& l : nav.links) {
-            auto& e = byClass[klassName(l.klass)];
-            ++e.first;
-            e.second += l.length;
-        }
-        std::string mix;
-        for (const auto& [k, v] : byClass) {
-            char buf[96];
-            std::snprintf(buf, sizeof buf, " %s %d (%.1f km)", k.c_str(), v.first, v.second / 1000.0);
-            mix += buf;
-        }
-        std::printf("    [freeway] %-18s links:%s\n", name, mix.c_str());
-        auto usesFreeway = [&](const engine::Route& r) {
-            for (int li : r.links)
-                if (nav.links[static_cast<std::size_t>(li)].klass == engine::RoadClass::Freeway) return true;
-            return false;
-        };
-        // 1b. CONNECTIVITY: the directed graph's strongly connected components. A car's
-        // home and work must route BOTH ways (commutable), so anything outside the biggest
-        // component can only ever host trips inside its own little island.
-        {
-            const int nn = nav.nodeCount();
-            std::vector<int> idx(nn, -1), low(nn, 0), comp(nn, -1);
-            std::vector<char> onStack(nn, 0);
-            std::vector<int> stack;
-            int counter = 0, comps = 0;
-            // Iterative Tarjan.
-            for (int s0 = 0; s0 < nn; ++s0) {
-                if (idx[s0] >= 0) continue;
-                std::vector<std::pair<int, std::size_t>> work{{s0, 0}};
-                idx[s0] = low[s0] = counter++;
-                stack.push_back(s0);
-                onStack[s0] = 1;
-                while (!work.empty()) {
-                    auto& [v, ei] = work.back();
-                    if (ei < nav.outLinks[v].size()) {
-                        const engine::NavLink& ol = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])];
-                        if (ol.footpath) continue;   // a walk joins nothing for a car
-                        const int w = ol.to;
-                        if (idx[w] < 0) {
-                            idx[w] = low[w] = counter++;
-                            stack.push_back(w);
-                            onStack[w] = 1;
-                            work.push_back({w, 0});
-                        } else if (onStack[w]) {
-                            low[v] = std::min(low[v], idx[w]);
-                        }
-                    } else {
-                        if (low[v] == idx[v]) {
-                            while (true) {
-                                const int w = stack.back();
-                                stack.pop_back();
-                                onStack[w] = 0;
-                                comp[w] = comps;
-                                if (w == v) break;
-                            }
-                            ++comps;
-                        }
-                        const int done = v;
-                        work.pop_back();
-                        if (!work.empty()) low[work.back().first] = std::min(low[work.back().first], low[done]);
-                    }
-                }
-            }
-            std::vector<int> size(comps, 0);
-            for (int v = 0; v < nn; ++v) ++size[comp[v]];
-            const int big = static_cast<int>(std::max_element(size.begin(), size.end()) - size.begin());
-            std::map<std::string, std::pair<int, int>> inBig;   // class -> (links in the big SCC, all)
-            for (const engine::NavLink& l : nav.links) {
-                auto& e = inBig[klassName(l.klass)];
-                ++e.second;
-                if (comp[l.from] == big && comp[l.to] == big) ++e.first;
-            }
-            std::string cls;
-            for (const auto& [k, v] : inBig) cls += " " + k + " " + std::to_string(v.first) + "/" + std::to_string(v.second);
-            int singles = 0;
-            for (int c = 0; c < comps; ++c) singles += size[c] == 1;
-            // Which way is the freeway cut off? Forward reach from the big component
-            // (can a street GET ON?) and backward reach to it (can the freeway GET OFF?).
-            std::vector<char> fwd(nn, 0), bwd(nn, 0);
-            std::vector<std::vector<int>> inLinks(nn);
-            for (std::size_t li = 0; li < nav.links.size(); ++li) inLinks[nav.links[li].to].push_back(static_cast<int>(li));
-            int seed = -1;
-            for (int v = 0; v < nn && seed < 0; ++v) if (comp[v] == big) seed = v;
-            if (seed >= 0) {
-                std::vector<int> q{seed};
-                fwd[seed] = 1;
-                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : nav.outLinks[v]) { int w = nav.links[li].to; if (!fwd[w]) { fwd[w] = 1; q.push_back(w); } } }
-                q = {seed};
-                bwd[seed] = 1;
-                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : inLinks[v]) { int w = nav.links[li].from; if (!bwd[w]) { bwd[w] = 1; q.push_back(w); } } }
-            }
-            int fwOn = 0, fwOff = 0, fwLinks = 0, rampOn = 0, rampOff = 0, ramps = 0;
-            for (const engine::NavLink& l : nav.links) {
-                if (l.klass == engine::RoadClass::Freeway) { ++fwLinks; fwOn += fwd[l.from]; fwOff += bwd[l.to]; }
-                if (l.klass == engine::RoadClass::Ramp) { ++ramps; rampOn += fwd[l.from]; rampOff += bwd[l.to]; }
-            }
-            std::printf("    [freeway] %-18s reach: freeway links a street can get onto %d/%d, that can get back to a "
-                        "street %d/%d | ramps reachable %d/%d, leading back %d/%d\n",
-                        name, fwOn, fwLinks, fwOff, fwLinks, rampOn, ramps, rampOff, ramps);
-            {   // the ramps and freeway links a street cannot get onto, or that lead nowhere: where they are
-                int shown = 0;
-                for (const engine::NavLink& l : nav.links)
-                    if ((l.klass == engine::RoadClass::Ramp || l.klass == engine::RoadClass::Freeway) && (!fwd[l.from] || !bwd[l.to]) && shown++ < 8)
-                        std::printf("    [freeway] %-18s   %s %s link from (%.1f, %.1f) to (%.1f, %.1f), %d links into its start, %zu out of its end, %.1f m\n",
-                                    name, !fwd[l.from] ? "unreachable" : "dead-end", l.klass == engine::RoadClass::Ramp ? "ramp" : "freeway",
-                                    nav.nodes[l.from].x, nav.nodes[l.from].y, nav.nodes[l.to].x, nav.nodes[l.to].y,
-                                    static_cast<int>(inLinks[l.from].size()), nav.outLinks[l.to].size(), (nav.nodes[l.to] - nav.nodes[l.from]).length());
-            }
-            // THE GATE: every freeway and ramp link can be reached from the streets and
-            // leads back to them (the twin welds each ramp end to the road it merges into).
-            CHECK(fwOn == fwLinks);
-            CHECK(fwOff == fwLinks);
-            CHECK(rampOn == ramps);
-            CHECK(rampOff == ramps);
-            // one drivable network -- of the DRIVABLE links: a park's or the quad's walk (a footpath, walkers only)
-            // is not a road and no car reaches it
-            int linksInBig = 0, drivable = 0;
-            for (const engine::NavLink& l : nav.links) {
-                if (l.footpath) continue;
-                ++drivable;
-                linksInBig += comp[l.from] == big && comp[l.to] == big;
-            }
-            CHECK(linksInBig == drivable);
-            std::printf("    [freeway] %-18s connectivity: %d nodes, %d strongly connected components, the biggest "
-                        "holds %d nodes; %d nodes are islands of one | links inside it:%s\n",
-                        name, nn, comps, size[big], singles, cls.c_str());
-        }
-        // 2. The router, on long pairs.
-        uint32_t h = 2024;
-        auto rnd = [&h] { h = h * 1664525u + 1013904223u; return h >> 8; };
-        int pairs = 0, routed = 0, viaFreeway = 0;
-        const int n = nav.nodeCount();
-        for (int k = 0; k < 4000 && pairs < 200 && n > 1; ++k) {
-            const int a = static_cast<int>(rnd() % n), b = static_cast<int>(rnd() % n);
-            if ((nav.nodes[a] - nav.nodes[b]).length() < 1500.0) continue;
-            ++pairs;
-            const engine::Route r = engine::findRoute(nav, a, b);
-            if (!r.valid()) continue;
-            ++routed;
-            if (usesFreeway(r)) ++viaFreeway;
-        }
-        std::printf("    [freeway] %-18s router: %d pairs > 1.5 km apart, %d routable, %d via the freeway\n",
-                    name, pairs, routed, viaFreeway);
-        // 3. The carriageways. WHAT GLENN SAW (2026-09-21): "turning around between freeways which is not possible
-        // since there are walls": no freeway/ramp link has a reverse. (The traffic on them, the old driving's cars, was
-        // counted here until ADR-0462: their routes turning back, cars off the deck, the drivers' commutes.)
-        int deckLinks = 0, twoWayDeck = 0;
-        {
-            std::set<std::pair<int, int>> dir;
-            for (const engine::NavLink& l : nav.links) dir.insert({l.from, l.to});
-            for (const engine::NavLink& l : nav.links) {
-                if (l.klass != engine::RoadClass::Freeway && l.klass != engine::RoadClass::Ramp) continue;
-                ++deckLinks;
-                if (dir.count({l.to, l.from})) ++twoWayDeck;
-            }
-        }
-        std::printf("    [freeway] %-18s carriageways: %d freeway/ramp links, %d with a reverse twin\n", name, deckLinks,
-                    twoWayDeck);
-        CHECK(twoWayDeck == 0);
-        // A city with a freeway USES it: long pairs route over it.
-        if (byClass.count("freeway")) {
-            CHECK(viaFreeway * 4 >= routed);        // metro_lanes: 124 of 184
-        }
-    }
-}
+// (freeway_census_links_and_routes went with the street map, #306: it counted the street map's links by class, their
+// strongly connected parts, and the street map's router's use of the freeway. The driving's own lane graph and router
+// are checked by the driving's tests.)
 
 // THE BLOCK CENSUS (Glenn, 2026-09-21: "Some of the city blocks only create a lot or two. I'd be
 // curious as to why that is ... I would accept having 1 lot with a large massive building on it
@@ -3801,19 +3604,14 @@ TEST_CASE(level_traffic_lab_cars_do_not_freeze_in_a_junction) {
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
     citysim::CitySim& sim = city.simMutable();
-    const engine::NavGraph& nav = city.nav();
-    std::vector<int> junctions;
-    std::vector<Real> mouth;
-    for (int j = 0; j < nav.nodeCount(); ++j) {
-        if (!nav.isJunction(j)) continue;
-        Real r = 0;
-        for (int li : nav.outLinks[static_cast<std::size_t>(j)]) r = std::max(r, nav.links[static_cast<std::size_t>(li)].width * 0.5);
-        junctions.push_back(j);
-        mouth.push_back(r + 3.5);
-    }
+    // a junction's mouth: within 12 m of its point, the road model's junctions (the street map's junction nodes and their
+    // widest link went with it, #306)
+    const engine::RoadModel* model = sim.roads();
+    CHECK(model != nullptr);
+    if (!model) return;
     auto inBox = [&](Vec2 p) {
-        for (std::size_t j = 0; j < junctions.size(); ++j)
-            if ((p - nav.nodes[static_cast<std::size_t>(junctions[j])]).length() < mouth[j]) return true;
+        for (const engine::ModelJunction& j : model->junctions)
+            if ((p - j.at).length() < 12.0) return true;
         return false;
     };
     // THE LAB'S CARS are car entities the new driving moves (ADR-0453), each with a lane component while on the road;

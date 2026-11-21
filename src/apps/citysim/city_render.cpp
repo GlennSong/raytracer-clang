@@ -151,21 +151,9 @@ Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
 
 Real CityRenderSystem::groundAt(Real x, Real z) const { return sim_.poses().ground.groundAt(x, z); }
 
-// The mirror of CitySim's own per-agent height read (city_sim.cpp, "continuous
-// carriageway height"): lerp the link's end elevations along it, absolute for a
-// corridor deck/ramp, ground-relative plus the layer lift otherwise. Keeping the
-// two readings identical is the whole point — a parked car placed by this and a
-// moving car placed by the sim sit on the same surface (#25).
-Real CityRenderSystem::deckYAt(int link, Real station, Vec2 p) const {
-    if (link < 0 || link >= nav_.linkCount()) return groundAt(p.x, p.y);
-    const engine::NavLink& L = nav_.links[link];
-    const Real t = L.length > 1e-6
-                       ? std::clamp(station / L.length, Real(0), Real(1))
-                       : Real(0);
-    const Real e = L.elevA + (L.elevB - L.elevA) * t;
-    if (L.elevAbsolute) return deckSurfaceNear(p.x, p.y, e);
-    return groundAt(p.x, p.y) + L.layer * kLayerClearance + e;
-}
+// The height a thing drawn at `p` stands on: the ground (the street map's links, which carried a deck's height, went
+// with it: #306).
+Real CityRenderSystem::surfaceY(Vec2 p) const { return groundAt(p.x, p.y); }
 
 Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
     return sim_.poses().ground.deckSurfaceNear(x, z, refY);
@@ -286,128 +274,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             return engine::terrainHeight(*params, *noise, x, z);
         };
     });
-    // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the one map, built at load from the road model
-    // (engine::LevelRoadModel::streetMap), every link and node carrying its street's and junction's ids, its signals stated by its
-    // junctions' controls -- the same map the furniture was planned on, so a pole's link is this link. The sim copies it
-    // and appends its walks (below).
+    // THE LEVEL'S ROAD MODEL (ADR-0480; #306, the street map's deletion): the sim's people live, rest and walk on its
+    // walks, so a level with no built lane city has no city sim. Handed to the sim now (the places' doors and the walk
+    // points are joined to its walks), and again below once the driving is made.
+    std::shared_ptr<engine::RoadModel> roadModel;
     {
-        std::shared_ptr<const engine::NavGraph> map;
-        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!map && m.streetMap) map = m.streetMap; });
-        if (!map || map->linkCount() == 0) return false;
-        nav_ = *map;
+        std::string line = "no lane graph: the level published no road model";
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+            if (roadModel || m.cities.empty()) return;
+            line = m.laneLevelReport;
+            roadModel = m.builtCity();
+        });
+        if (!roadModel || !roadModel->built || roadModel->laneLevel.walks.empty()) return false;
+        sim_.setRoads(roadModel, line);
     }
-    // HEIGHTS RESOLVED ONCE, where the ground is known (review of #35 / the ramp-foot sink): every link end
-    // gets its ABSOLUTE carriageway Y (elevA/B on an absolute link -- what draws the car) and its height
-    // ABOVE THE GROUND (aboveA/B -- what the sim's same-level tests compare). A deck-to-street link (one
-    // absolute end, one relative) was absolute as a whole: cars lerped toward y = 0 and sank, and on it the
-    // sim compared an absolute Y against street cars' heights above ground, so a car at a ramp foot saw
-    // street traffic tens of metres away. Now both forms are exact at both ends of every link.
-    {
-        int mixed = 0;
-        for (engine::NavLink& L : nav_.links) {
-            if (L.from < 0 || L.to < 0) continue;
-            const engine::Vec2 pa = nav_.nodes[static_cast<std::size_t>(L.from)], pb = nav_.nodes[static_cast<std::size_t>(L.to)];
-            const Real ga = groundAt(pa.x, pa.y), gb = groundAt(pb.x, pb.y);
-            const Real lift = L.layer * kLayerClearance;
-            // above the ground: a relative end's own height (+ the layer lift), an absolute end's over its ground
-            L.aboveA = L.elevAbsA ? L.elevA - ga : lift + L.elevA;
-            L.aboveB = L.elevAbsB ? L.elevB - gb : lift + L.elevB;
-            if (L.elevAbsolute && L.elevAbsA != L.elevAbsB) {   // mixed: the relative end becomes absolute too
-                if (!L.elevAbsA) L.elevA = ga + L.aboveA;
-                if (!L.elevAbsB) L.elevB = gb + L.aboveB;
-                L.elevAbsA = L.elevAbsB = true;
-                ++mixed;
-            }
-        }
-        if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links resolved to absolute heights at both ends";
-    }
-
-    // Connectivity truth (device: "I don't see the freeway connected yet"):
-    // walk the built nav and report whether a car can actually reach the
-    // corridor from the streets and come back. If either direction is zero,
-    // the weld failed and freeway traffic is impossible — say so loudly.
-    {
-        int fwLinks = 0, rampLinks = 0, onWelds = 0, offWelds = 0;
-        auto street = [&](int li) { const engine::RoadClass k = nav_.links[li].klass; return k != engine::RoadClass::Ramp && k != engine::RoadClass::Freeway; };
-        // A street link ENTERING a node counts as much as one leaving it: an on-ramp's street-level
-        // run is a one-way link into the node where its deck begins, and a census that only looked
-        // at links leaving that node called every such on-ramp unconnected.
-        std::vector<char> streetIn(static_cast<std::size_t>(nav_.nodeCount()), 0);
-        for (int li = 0; li < nav_.linkCount(); ++li) if (street(li)) streetIn[static_cast<std::size_t>(nav_.links[li].to)] = 1;
-        for (int li = 0; li < nav_.linkCount(); ++li) {
-            const engine::NavLink& L = nav_.links[li];
-            if (L.klass == engine::RoadClass::Freeway) ++fwLinks;
-            if (L.klass != engine::RoadClass::Ramp) continue;
-            ++rampLinks;
-            bool fromStreet = streetIn[static_cast<std::size_t>(L.from)] != 0, toStreet = false;
-            for (int ol : nav_.outLinks[L.from]) if (street(ol)) fromStreet = true;
-            for (int ol : nav_.outLinks[L.to]) if (street(ol)) toStreet = true;
-            if (fromStreet) ++onWelds;
-            if (toStreet) ++offWelds;
-        }
-        // ...and the truth the welds only suggest: WALK it. From every street, how much of the
-        // carriageway can a car reach; from the carriageway, can it get back to a street.
-        auto reach = [&](auto&& seed) {
-            std::vector<char> seen(static_cast<std::size_t>(nav_.linkCount()), 0);
-            std::vector<int> stack;
-            for (int li = 0; li < nav_.linkCount(); ++li) if (seed(li)) { seen[static_cast<std::size_t>(li)] = 1; stack.push_back(li); }
-            while (!stack.empty()) {
-                const int li = stack.back(); stack.pop_back();
-                for (int ol : nav_.outLinks[nav_.links[li].to]) if (!seen[static_cast<std::size_t>(ol)]) { seen[static_cast<std::size_t>(ol)] = 1; stack.push_back(ol); }
-            }
-            return seen;
-        };
-        const std::vector<char> fromStreets = reach(street);
-        const std::vector<char> fromFreeway = reach([&](int li) { return nav_.links[li].klass == engine::RoadClass::Freeway; });
-        int fwReached = 0, streetsReached = 0;
-        for (int li = 0; li < nav_.linkCount(); ++li) {
-            if (nav_.links[li].klass == engine::RoadClass::Freeway && fromStreets[static_cast<std::size_t>(li)]) ++fwReached;
-            if (street(li) && fromFreeway[static_cast<std::size_t>(li)]) ++streetsReached;
-        }
-        // STRANDED STREETS: links a car can reach the city from and get back to — the main loop —
-        // against those it cannot. A home on one of the rest routes nowhere, and assignPlaces then
-        // tries every job in the city from it, a full search each.
-        {
-            int seedLink = -1;
-            for (int li = 0; li < nav_.linkCount() && seedLink < 0; ++li) if (street(li) && nav_.outLinks[nav_.links[li].to].size() >= 3) seedLink = li;
-            if (seedLink >= 0) {
-                const std::vector<char> down = reach([&](int li) { return li == seedLink; });
-                std::vector<std::vector<int>> inLinks(static_cast<std::size_t>(nav_.nodeCount()));
-                for (int li = 0; li < nav_.linkCount(); ++li) inLinks[static_cast<std::size_t>(nav_.links[li].to)].push_back(li);
-                std::vector<char> up(static_cast<std::size_t>(nav_.linkCount()), 0);
-                std::vector<int> stack{seedLink};
-                up[static_cast<std::size_t>(seedLink)] = 1;
-                while (!stack.empty()) {
-                    const int li = stack.back(); stack.pop_back();
-                    for (int il : inLinks[static_cast<std::size_t>(nav_.links[li].from)]) if (!up[static_cast<std::size_t>(il)]) { up[static_cast<std::size_t>(il)] = 1; stack.push_back(il); }
-                }
-                int stranded = 0, streets = 0;
-                std::ostringstream where;
-                for (int li = 0; li < nav_.linkCount(); ++li) {
-                    if (!street(li)) continue;
-                    ++streets;
-                    if (down[static_cast<std::size_t>(li)] && up[static_cast<std::size_t>(li)]) continue;
-                    if (stranded++ < 8) {
-                        const Vec2 a = nav_.nodes[static_cast<std::size_t>(nav_.links[li].from)];
-                        where << " (" << static_cast<int>(a.x) << ", " << static_cast<int>(a.y) << ")" << (down[static_cast<std::size_t>(li)] ? "" : " unreachable") << (up[static_cast<std::size_t>(li)] ? "" : " no way back");
-                    }
-                }
-                if (stranded) LOG_WARN << "[citysim] " << stranded << " of " << streets << " street links are off the main loop, e.g." << where.str();
-            }
-        }
-        if (fwLinks > 0)
-            LOG_INFO << "[citysim] freeway in nav: " << fwLinks
-                     << " carriageway links, " << rampLinks << " ramp links, "
-                     << onWelds << " street->ramp welds, " << offWelds
-                     << " ramp->street welds; from the streets a car reaches " << fwReached << " of "
-                     << fwLinks << " carriageway links, and from the carriageway " << streetsReached << " street links"
-                     << ((fwReached == 0 || streetsReached == 0)
-                             ? "  <-- NOT DRIVABLE"
-                             : "");
-    }
-
     // Places (ADR-0066): turn the level-authored destinations into a routable
-    // PlaceMap now that the nav graph exists (each entrance snaps to a sidewalk).
+    // PlaceMap now that the road model exists (each entrance snaps to the walks).
     // An unrecognized type tag is warned-and-skipped so one typo can't drop the
     // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
     places_ = PlaceMap{};
@@ -467,7 +349,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             closeH = k.closeHour;
             synthetic = true;
         }
-        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, ap.capacity,
+        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), roadModel.get(), openH, closeH, ap.capacity,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
         placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
@@ -507,17 +389,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // city instead of a flat number tuned for one level.
     int carCount = params_.cars, pedCount = params_.pedestrians;
     if (carCount < 0 || pedCount < 0) {
+        // (the road model's streets, each lane of each; and its sidewalk and walkway walks)
         Real laneKm = 0, walkKm = 0;
-        for (int li = 0; li < nav_.linkCount(); ++li) {
-            const engine::NavLink& L = nav_.links[li];
-            laneKm += L.length * std::max(1, L.lanes) * 1e-3;
-            if (L.klass != engine::RoadClass::Freeway &&
-                L.klass != engine::RoadClass::Ramp)
-                walkKm += L.length * 2.0 * 1e-3;
-        }
-        // Directed links double-count each roadway: halve to physical km.
-        laneKm *= 0.5;
-        walkKm *= 0.5;
+        for (const engine::ModelStreet& s : roadModel->streets)
+            laneKm += (s.to - s.from) * std::max(1, s.section.lanesForward + s.section.lanesBackward) * 1e-3;
+        for (const engine::Walk& w : roadModel->laneLevel.walks)
+            if (w.street != engine::kNoIndex || w.modelWalkway != engine::kNoIndex) walkKm += w.length * 1e-3;
         const int ceiling = std::max(6, params_.maxAmbient);
         if (carCount < 0)
             carCount = std::clamp(
@@ -668,37 +545,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
 #endif
 
-    // THE WALKS (campus gap pass): the parks' paths and the quad's walks join the walking network, after the
-    // streets' own analyses and the places (link and node indices so far are unchanged) and before the sim reads it.
-    // Footpaths are walker-only (vehicle routing skips them; nearestNode never answers with one), so a route on foot
-    // simply finds the quad when it is the shorter way.
-    // THEY ARE THE ROAD MODEL'S WALKWAYS (ADR-0476), read through it with where each end lands as the lot pass stated
-    // it (street_map.h appendWalkways): EVERY city's model that holds walkways, as the loader published them, each city's
-    // walks joined to that city's streets.
-    std::vector<std::pair<int, std::shared_ptr<const engine::RoadModel>>> walkModels;
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
-        if (!walkModels.empty()) return;
-        for (std::size_t c = 0; c < m.cities.size(); ++c)
-            if (m.cities[c] && !m.cities[c]->walkways.empty()) walkModels.emplace_back(static_cast<int>(c), m.cities[c]);
-    });
-    if (!walkModels.empty() && !std::getenv("RT_NO_FOOTPATHS")) {
-        const auto tf0 = std::chrono::steady_clock::now();
-        engine::NavGraph::FootpathReport fr;
-        for (const std::pair<int, std::shared_ptr<const engine::RoadModel>>& wm : walkModels) {
-            const engine::NavGraph::FootpathReport one = engine::appendWalkways(nav_, *wm.second, wm.first);
-            fr.nodes += one.nodes;
-            fr.links += one.links;
-            fr.tees += one.tees;
-            fr.streetJoins += one.streetJoins;
-            fr.unjoined += one.unjoined;
-        }
-        LOG_INFO << "[citysim] footpaths joined in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tf0).count() << " s";
-        LOG_INFO << "[citysim] footpaths: " << fr.links << " walk links over " << fr.nodes << " nodes, " << fr.tees
-                 << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends joined to nothing (dead ends)";
-        // a paseo's shops: their doors are on its walks, not the street round the block (every shopper stood at the
-        // end of the paseo, by the restaurant there)
-        LOG_INFO << "[citysim] places entered from a walk: " << places_.snapToWalks(nav_);
-    }
+    // (THE WALKWAYS -- the parks' paths, the quad's walks, a paseo -- are walks of the road model's lane level, ADR-0475
+    // and ADR-0476: the walk points are set out on them and a route walks them like any sidewalk.)
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // the households' cars' bodies (ambientSlotFor)
     // THE LEVEL'S CARS are the driving's own: entities that drive round for ever, made when it begins (startDrivingV2;
@@ -709,7 +557,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!drives && carCount > 0)
         LOG_INFO << "[citysim] " << carCount << " cars asked for, but the level names no rule set (citysim.drivingRules): no traffic";
     { const auto tT0 = std::chrono::steady_clock::now();
-    sim_.build(nav_, pedCount, params_.seed);
+    sim_.build(pedCount, params_.seed);
     // THE DRIVING (#234): the driving library runs on a level that names a rule set (given its road below)
     if (drives) {
         sim_.useDrivingV2(true);
@@ -986,7 +834,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // The population cache (CitySim::setPopulationCacheDir): off under RT_NOCACHE, like the level bundle.
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
-    sim_.assignPlaces(places_, nav_);
+    sim_.assignPlaces(places_);
     if (!sim_.households().households.empty())
         LOG_INFO << "[citysim] population: " << sim_.populationLine()
                  << (sim_.unhousedCount() > 0 ? ", " + std::to_string(sim_.unhousedCount()) + " unhoused (more than the housing holds)" : std::string());
@@ -1427,33 +1275,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // attached to its arm. This system adopts the sites and the already-spawned post group and lights the heads from
     // the new driving's lamps (ADR-0456); it places no pole of its own (it once did, by the old signal clock's
     // links, where the loader had placed none).
-    siteByLink_.clear();
-    siteHasLink_.clear();
+    signalSites_.clear();
     signalHeads_.clear();
     headsModel_ = nullptr;
     headJunctions_.clear();
     engine::Entity adoptedPosts{};
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
-        // (the STREETS' links: the walks appended since are not the loader's. Comparing the whole count, every
-        // level with footpaths stopped adopting the placed poles and drew a second set of its own beside them --
-        // every signal on the island doubled, staggered. Glenn: "multiple traffic lights next to one another")
-        if (f.navLinkCount != nav_.streetLinkCount() || f.signalPoles.empty()) {
-            if (!f.signalPoles.empty())
-                LOG_WARN << "[citysim] the placed signal poles were built on a different street graph (" << f.navLinkCount
-                         << " links, the sim has " << nav_.streetLinkCount() << "): no signals drawn";
-            return;
-        }
-        siteByLink_.assign(nav_.linkCount(), SignalSite{});
-        siteHasLink_.assign(nav_.linkCount(), 0);
+        if (f.signalPoles.empty() || !signalSites_.empty()) return;
         for (const engine::StreetFurniture::Signal& s : f.signalPoles) {
-            if (s.link < 0 || s.link >= nav_.linkCount()) continue;
             SignalSite st;
             st.base = s.base;
             st.face = s.face;
             st.side = Vec3(s.face.z, 0, -s.face.x);   // rightOf(face): road centre
             st.yaw = std::atan2(s.face.x, s.face.z);
-            siteByLink_[s.link] = st;
-            siteHasLink_[s.link] = 1;
+            signalSites_.push_back(st);
             // the loader's post instances, in its order (a shared pole has none): one head each
             if (s.shared) continue;
             SignalHead h;
@@ -1554,13 +1389,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
     // on the sidewalk steer around the signal poles and never stand inside one.
     {
-        // (the placed poles, by their links in link order; a shared pole once per link it serves, as before)
+        // (the placed poles, in the loader's order; a shared pole once per arm it serves)
         std::vector<engine::Vec2> poles;
-        for (std::size_t li = 0; li < siteHasLink_.size(); ++li) {
-            if (!siteHasLink_[li]) continue;
-            const engine::Vec3 base = siteByLink_[li].base;
-            poles.push_back(engine::Vec2(base.x, base.z));
-        }
+        for (const SignalSite& st : signalSites_) poles.push_back(engine::Vec2(st.base.x, st.base.z));
         const std::size_t poleCount = poles.size();
         sim_.setStaticObstacles(std::move(poles));
         // ...and the street's FURNITURE: everything placed outdoors and drawn as furniture -- a bus stop's pole and
@@ -1679,38 +1510,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
     }
 
-    // Bake the navgraph view ONCE — it depends only on nav_, so unlike the
-    // per-agent widgets it never rebakes per frame. syncGroups copies the cached
-    // transforms in (HUD on) or leaves the groups empty (HUD off). The bake uses
-    // no sim RNG, so determinism is untouched.
+    // Bake the walk-point view ONCE (the "nav" layer: the sim's walk points, city_walk_points.h, each a short strip
+    // along its walk) -- it depends only on the points, so unlike the per-agent widgets it never rebakes per frame.
+    // syncGroups copies the cached transforms in (HUD on) or leaves the groups empty (HUD off). The bake uses no sim
+    // RNG, so determinism is untouched.
     navLinkBake_.clear();
     navNodeBake_.clear();
-    for (int li = 0; li < nav_.linkCount(); ++li) {
-        const engine::NavLink& L = nav_.links[li];
-        int lanes = L.lanes < 1 ? 1 : L.lanes;
-        // ASK the sim for the spacing rather than re-deriving it: on a street
-        // with a Parking band the drivable width is the carriageway minus the
-        // two parked strips, so a re-derived "half the carriageway" strip drew
-        // the debug lanes under the parked cars instead of under the traffic.
-        Real spacing = sim_.laneSpacingFor(li);
-        for (int lane = 0; lane < lanes; ++lane) {
-            Vec2 a = nav_.laneCenter(li, lane, 0.0, spacing);
-            Vec2 b = nav_.laneCenter(li, lane, 1.0, spacing);
-            Vec2 d(b.x - a.x, b.y - a.y);
-            Real len = std::sqrt(d.x * d.x + d.y * d.y);
-            if (len < 1e-6) continue;
-            Real y = groundAt(a.x, a.y) + L.layer * kLayerClearance + 0.04;
-            Real yaw = std::atan2(d.x, d.y);
-            navLinkBake_.push_back(Mat4::trs(
-                Vec3(a.x, y, a.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                Vec3(0.15, 1, len)));   // a thin lane-centreline strip
+    {
+        const WalkPointMap& pts = sim_.walkPoints();
+        for (int n = 0; n < pts.nodeCount(); ++n) {
+            const Vec2 p = pts.nodes[static_cast<std::size_t>(n)], d = pts.along[static_cast<std::size_t>(n)];
+            navLinkBake_.push_back(Mat4::trs(Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y),
+                                             Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(d.x, d.y)), Vec3(0.15, 1, 2.0)));
+            navNodeBake_.push_back(Mat4::trs(Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(0.6, 1, 0.6)));
         }
-    }
-    for (int n = 0; n < nav_.nodeCount(); ++n) {
-        if (!nav_.isJunction(n)) continue;
-        Vec2 p = nav_.nodes[n];
-        navNodeBake_.push_back(Mat4::trs(
-            Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
     // The CITY-PLAN outlines bake the first time they are shown (bakePlanOutlines): a
@@ -2717,7 +2530,6 @@ void CityRenderSystem::step(World& world, Real dt) {
     static double simMs = 0.0, syncMs = 0.0;
     static int calls = 0;
     const CitySim::PhaseTimes ph0 = sim_.phaseTimes();
-    const engine::RouteStats rs0 = engine::routeStats();
     auto t0 = std::chrono::steady_clock::now();
     sim_.step(dt, params_.hoursPerSecond);
     sim_.poses().stepCarPoses(world, sim_, dt);
@@ -2743,21 +2555,7 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << " pop " << (sim_.phaseTimes().advPop - ph0.advPop) / 1000.0
                  << " solver " << (sim_.phaseTimes().advSolver - ph0.advSolver) / 1000.0
                  << " tail " << (sim_.phaseTimes().advance - ph0.advance) / 1000.0
-                 << " total " << (sim_.phaseTimes().total - ph0.total) / 1000.0
-                 << " | routes " << engine::routeStats().calls - rs0.calls << " in "
-                 << engine::routeStats().ms - rs0.ms << " ms, " << engine::routeStats().expanded - rs0.expanded
-                 << " nodes expanded";
-        {   // who routed: caller addresses (the viewer is not PIE: `nm -C -n` names them)
-            std::vector<std::pair<const void*, long>> d;
-            for (const auto& c : engine::routeStats().callers) {
-                long before = 0;
-                for (const auto& b : rs0.callers) if (b.first == c.first) before = b.second;
-                if (c.second > before) d.push_back({c.first, c.second - before});
-            }
-            std::sort(d.begin(), d.end(), [](const auto& x, const auto& y) { return x.second > y.second; });
-            for (std::size_t k = 0; k < d.size() && k < 4; ++k)
-                LOG_INFO << "[stats]   route caller " << d[k].first << " x" << d[k].second;
-        }
+                 << " total " << (sim_.phaseTimes().total - ph0.total) / 1000.0;
     if (++calls % 300 == 0) {
         // `moving` means "has an open route" — it stays true through red
         // lights, crash freezes, car-following stops and the far tier's
@@ -3404,24 +3202,12 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             groundQuery_.clear();
             double qx = 0, qz = 0, qr = 0;
             const int nq = std::sscanf(q.c_str(), "%lf %lf %lf", &qx, &qz, &qr);
-            if (nq == 3 && qr > 0) {   // `ground? x z r`: dump nav links + deck spines within r to RT_GROUND_DUMP (JSON)
+            if (nq == 3 && qr > 0) {   // `ground? x z r`: dump the deck spines within r to RT_GROUND_DUMP (JSON)
                 const char* path = std::getenv("RT_GROUND_DUMP");
                 if (FILE* fp = path ? std::fopen(path, "w") : nullptr) {
                     auto near = [&](engine::Vec2 p) { return (p - engine::Vec2(qx, qz)).length() < qr; };
-                    std::fprintf(fp, "{\"links\":[");
+                    std::fprintf(fp, "{\"spines\":[");
                     bool first = true;
-                    for (int li = 0; li < nav_.linkCount(); ++li) {
-                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
-                        if (L.from < 0 || L.to < 0) continue;
-                        const engine::Vec2 a = nav_.nodes[static_cast<std::size_t>(L.from)], b = nav_.nodes[static_cast<std::size_t>(L.to)];
-                        if (!near(a) && !near(b)) continue;
-                        std::fprintf(fp, "%s{\"id\":%d,\"a\":[%.2f,%.2f],\"b\":[%.2f,%.2f],\"abs\":[%d,%d],\"elev\":[%.2f,%.2f],\"cls\":%d}",
-                                     first ? "" : ",", li, a.x, a.y, b.x, b.y, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.elevA, L.elevB,
-                                     static_cast<int>(L.klass));
-                        first = false;
-                    }
-                    std::fprintf(fp, "],\"spines\":[");
-                    first = true;
                     for (const engine::RoadDeckField& f : decks_)
                         for (const engine::UnionSpine& sp : f.spines) {
                             bool any = false;
@@ -3474,21 +3260,6 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     }
                     std::snprintf(buf, sizeof buf, " | decks=%zu spines=%zu nearestSpine d=%.2f y=%.2f hw=%.2f layer=%d",
                                   decks_.size(), nSp, bl >= 0 ? bd : -1.0, by, bhw, bl);
-                    out += buf;
-                }
-                // the nearest nav link, both height forms
-                const int li = nav_.nearestLink(engine::Vec2(qx, qz));
-                if (li >= 0) {
-                    const engine::NavLink& L = nav_.links[li];
-                    const engine::Vec2 a = nav_.nodes[L.from], b = nav_.nodes[L.to];
-                    const engine::Vec2 ab(b.x - a.x, b.y - a.y);
-                    const double len2 = ab.x * ab.x + ab.y * ab.y;
-                    const double t = len2 > 1e-9 ? std::clamp(((qx - a.x) * ab.x + (qz - a.y) * ab.y) / len2, 0.0, 1.0) : 0.0;
-                    std::snprintf(buf, sizeof buf,
-                                  " | link=%d t=%.2f len=%.1f abs=%d(%d,%d) layer=%d elev=%.2f..%.2f above=%.2f..%.2f deckYAt=%.2f",
-                                  li, t, L.length, L.elevAbsolute ? 1 : 0, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.layer,
-                                  L.elevA, L.elevB, L.aboveA, L.aboveB,
-                                  deckYAt(li, static_cast<engine::Real>(t * L.length), engine::Vec2(qx, qz)));
                     out += buf;
                 }
                 groundResult_ = out;

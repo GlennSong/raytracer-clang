@@ -4,9 +4,8 @@
 #include <algorithm>
 #include "../../proc_rng.h"
 #include "../../engine/ai/agent_memory.h"
-#include "../../engine/ai/nav_graph.h"
-#include "../../engine/ai/pathfind.h"
 #include "../../engine/procgen/city/roads/route.h"   // the one router: a walker's route over the walks (W3)
+#include "city_walk_points.h"   // the sim's walk points: places on the road model's walks (the street map's nodes were)
 #include "agent_grid.h"
 #include "agent_id.h"
 #include "activities.h"
@@ -46,10 +45,7 @@ class CityBrain;      // city_brain.h: the resident with the agent brain (ADR-04
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
-// kLayerClearance: nav_graph.h (the graph resolves a link's height above the ground with it).
-using engine::kLayerClearance;
-
-// The agent-based city simulation (ADR-0060). An Agent is a person on foot: it walks the street map (the cars are the
+// The agent-based city simulation (ADR-0060). An Agent is a person on foot: it walks the road model's walks (the cars are the
 // driving's car entities, city_car.h; a person in one is `inCar`, ADR-0444). The player is modelled as an agent too
 // (playerControlled = its brain is host input). This is the deterministic core (kinematic motion along the NavGraph).
 // (The old driving's agents in their own cars went with ADR-0461..0463.)
@@ -389,9 +385,10 @@ struct SensedGhost {
 
 class CitySim {
 public:
-    // `pedCount` agents on foot over `graph`, seeded by `seed`. Deterministic (ADR-0002). Nobody is built driving: the
-    // cars are the driving's car entities (city_car.h; ADR-0461, ADR-0462).
-    void build(const engine::NavGraph& graph, int pedCount, uint32_t seed);
+    // `pedCount` agents on foot over the walk points of the road model handed in (setRoads first: city_walk_points.h), seeded by
+    // `seed`. Deterministic (ADR-0002). Nobody is built driving: the cars are the driving's car entities (city_car.h;
+    // ADR-0461, ADR-0462). No road model, or one with no walks: no spots, nobody.
+    void build(int pedCount, uint32_t seed);
 
     // Adopt a fleet catalogue (vehicle_classes.lua, via the level's vehicle
     // recipes). Call BEFORE build(): drivers take their body at build time, so a
@@ -570,12 +567,13 @@ public:
     // tick (capped, and never past its link's end), so a far crowd moves rather than hopping once a second. False
     // for an agent with nothing to show: not far, indoors at rest, riding, released.
     bool farDrawPose(int agentIndex, engine::Vec2& pos, engine::Vec2& heading) const;
-    // A street-map link's lane spacing: the kerb half of its carriageway split among its lanes (the debug overlay's
-    // lane arrows; the old driving's cars drove these lanes, narrowed by its bays, until ADR-0463).
-    engine::Real laneSpacingFor(int li) const;
     int walkerFile(const Agent& a) const;       // which file across the pavement a walker keeps (0 = by the kerb)
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
-    const engine::NavGraph* graph() const { return nav_; }
+    const WalkPointMap& walkPoints() const { return walkPoints_; }
+    // The walk point of place `id` (assignPlaces gives each place's door its own); -1 none.
+    int placePoint(PlaceId id) const {
+        return id < placePoint_.size() ? placePoint_[static_cast<std::size_t>(id)] : -1;
+    }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
     // its follow gap -- the "spawn point" heaps. A CAR's (#218, the lab's mid-turn freezes): 10 a crash hold, 11 a red,
     // 12 a crossing car in the box, 13 oncoming (a turn), 14 no exit room, 15 its lane leader, 16 a body in the wedge,
@@ -684,17 +682,18 @@ public:
     // agent to the station's way in; the sim takes it from there. False when no train helps (same town, or a town
     // without a station) or the station cannot be walked to.
     bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
-        if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
+        if (walkPoints_.empty() || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
         if (rail_.tripOf(agentIndex)) return false;
-        const int origin = nav_->nearestNode(a.pos);
-        const int to = nav_->nearestNode(dest);
+        const int origin = walkPoints_.nearestNode(a.pos);
+        const int to = walkPoints_.nearestNode(dest);
         if (origin < 0 || to < 0 || origin == to) return false;
         RailTrip t;
-        if (!rail_.plan(origin, nav_->nodes[static_cast<std::size_t>(origin)], to, nav_->nodes[static_cast<std::size_t>(to)], t))
+        if (!rail_.plan(origin, walkPoints_.nodes[static_cast<std::size_t>(origin)], to, walkPoints_.nodes[static_cast<std::size_t>(to)], t))
             return false;
+        // (the station's way in can be walked to: the one router, point to point)
         const int acc = rail_.stations()[static_cast<std::size_t>(t.from)].accessNode;
-        if (acc != origin && !engine::findRoute(*nav_, origin, acc, /*pedestrian=*/true).valid()) return false;
+        if (acc != origin && !pointRoute(origin, acc).found) return false;
         rail_.start(agentIndex, t);
         ++rail_.stats.planned;
         a.wakeAt = -1;
@@ -802,11 +801,11 @@ public:
     // (the errand changes the plan, never the pose). False when out of range, when either end joins no walk or no route
     // leads there: the agent keeps its current plan (nothing is changed before the route is found).
     bool sendAgentTo(int agentIndex, engine::Vec2 dest);
-    // The `k` nav nodes nearest `p`, nearest first. Linear scan + partial sort:
-    // a director's command, not a per-frame path (nearestNode is a scan too).
-    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const {
-        return nav_ ? nav_->nearestNodes(p, k) : std::vector<int>{};
-    }
+    // The `k` spots nearest `p`, nearest first. Linear scan + partial sort: a director's command, not a per-frame path.
+    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const { return walkPoints_.nearestNodes(p, k); }
+    // THE WALK FROM SPOT `from` TO SPOT `to` (the one router, findWalkRoute, between their points on the walks): not
+    // found when either is out of range or no route leads there.
+    engine::roads::WalkRoute pointRoute(int from, int to) const;
 
     // Sample agent `agentIndex`'s current route as a polyline, ~`step` metres apart, from the start of its route to its
     // end, each point where refreshPose would put it (its file across the walk included). Empty when it has none.
@@ -836,10 +835,6 @@ public:
     // crowd maker puts places only where this joins the largest part (city_render.cpp, makeCrowd's CrowdUsable).
     bool walkJoin(engine::Vec2 p, engine::WalkPoint& out, bool* cutOff = nullptr) const;
 
-    // Is `pos` inside a junction box (within a junction node's widest incident
-    // half-width + `margin`)? The bridge uses this for don't-block-the-box (a
-    // physical car never idles inside one) and for spawn placement.
-    bool nearJunction(engine::Vec2 pos, Real margin = 0.0) const;
 
     // WANDER mode (ADR-0063, the agent lab): agents ignore the daily schedule and
     // start a fresh trip to a random reachable node the moment they arrive — so a
@@ -1029,7 +1024,6 @@ public:
     // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
     Real debugGap(int i) const { return i >= 0 && i < static_cast<int>(gaps_.size()) ? gaps_[static_cast<std::size_t>(i)] : -1; }
     Real debugMinGap(int i) const { return i >= 0 && i < static_cast<int>(minGaps_.size()) ? minGaps_[static_cast<std::size_t>(i)] : -1; }
-    const engine::NavGraph& nav() const { static const engine::NavGraph kEmpty; return nav_ ? *nav_ : kEmpty; }
     // ACTIVITY SPOTS (activities.h; the seats were the first kind -- the furniture library, M5; Glenn: benches you can
     // sit on, and so can everyone else): one per place a body does something, its point, the way it faces, its
     // height (a seat's hip), the path node it is reached from (setSpots finds it), what it is (kind), where it is
@@ -1171,8 +1165,6 @@ public:
     int walkersWaitingAtKerbs() const;
     int walkersOnCrosswalks() const;
     static constexpr Real kWalkerHalfAcross = 0.3;   // m: half a person's shoulders
-    // A junction's box radius (the stop lines and a walker's wait are measured from it).
-    Real junctionBox(int node) const { return junctionRadius(node); }
     // A group member's place in its session (formations other than Roam) and the way it faces there.
     engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
 
@@ -1181,12 +1173,12 @@ public:
     // home/work commute NODES to those places' sidewalk entrances, and seed the
     // surface-level relationship table (same workplace → coworker, same home →
     // neighbor). Deterministic (draws from each agent's `brain`, not the rng, so
-    // the build stream is unchanged). Call AFTER build()/setWander with the same
-    // graph; a no-op when `places` has no homes. `graph` must be the built one.
-    void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // the build stream is unchanged). Call AFTER build()/setWander; each place's door is given a spot of its own
+    // (WalkPointMap::add, where it joins the walks). A no-op when `places` has no homes.
+    void assignPlaces(const PlaceMap& places);
     // The university's students (campus milestone 4): walkers moved into the residence hall, with class
     // in the teaching hall and the library for study. Part of assignPlaces (and so of its cache).
-    void assignStudents(const PlaceMap& places, const engine::NavGraph& graph);
+    void assignStudents(const PlaceMap& places);
     // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
     // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
     // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
@@ -1343,13 +1335,8 @@ private:
     // Each place's frontage, by its id (assignPlaces copies it from the places: Place::frontage).
     std::vector<engine::StatedFrontage> placeFrontage_;
 
-    // Per-node junction box radius: the widest incident half-width (+ the
-    // junction pad at street intersections: the drawn mouth). Nonzero at
-    // PLAIN nodes too (their road's half-width) — launchClear reads it at
-    // arbitrary departure nodes; 0 only where a node has no out-links.
-    Real junctionRadius(int node) const;
     Real pairMinGap(int follower, int leader) const;   // a walker's follow gap
-    void measureCommute(const engine::NavGraph& graph);   // median commute (see .cpp)
+    void measureCommute();   // median commute (see .cpp)
     uint32_t tripRnd(Agent& a); // per-agent stream for TRIP decisions (see .cpp)
     void refreshPose(Agent& a) const;   // (const: it places `a` and reads the sim, so walkPoses can pose copies)
 
@@ -1360,7 +1347,8 @@ private:
     uint32_t rnd();
     Real rndUnit();
 
-    const engine::NavGraph* nav_ = nullptr;
+    WalkPointMap walkPoints_;   // where the people rest, set out from and go to: places on the walks (build)
+    std::vector<int> placePoint_;   // per place (PlaceId): its walk point (assignPlaces); -1 none
     std::vector<Agent> agents_;
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
     std::vector<VehicleBody> fleet_;
@@ -1405,13 +1393,10 @@ private:
                 for (int k : it->second) f(staticObstacles_[static_cast<std::size_t>(k)]);
             }
     }
-    std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
-    std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)
-    Real junctionPad_ = 0;              // + this at street intersections (see setJunctionPad)
+    Real junctionPad_ = 0;              // the sidewalk's width (see setJunctionPad): how many files fit across
     // P4.1 spatial index. grid_ holds every agent (K re-hashed each step —
     // effectively free, place() early-outs on an unchanged cell; V only on its
-    // coarse tick, when its position actually moves). junctionGrid_ is a static
-    // bake of junctions_ so nearJunction() stops scanning the whole list.
+    // coarse tick, when its position actually moves).
     AgentGrid grid_;
     AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
     std::vector<int> pedGridIds_;
@@ -1419,8 +1404,6 @@ private:
     // kilometre and the promote check for far ones in 500 m -- from grid_ that was everyone there (~5,000 at 100k),
     // each loaded and sorted to read its tier
     AgentGrid vGrid_, dGrid_;
-    AgentGrid junctionGrid_;
-    Real maxJunctionRadius_ = 0;
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
     RailRiders rail_;

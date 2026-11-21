@@ -1,5 +1,7 @@
 #include "trip_plan.h"
 
+#include "../../engine/procgen/city/roads/road_model.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -7,9 +9,6 @@
 namespace citysim {
 
 namespace {
-// How many of the nodes nearest each end are tried before a leg is called impossible -- the nearest node can sit on
-// a piece of the graph the other end cannot reach (sendAgentTo tries the same few).
-constexpr int kTryNodes = 8;
 // Two lengths of time in minutes this close are the same (a leg exactly as long as its way's longest is allowed).
 constexpr Real kSameMinutes = 1e-9;
 
@@ -39,61 +38,62 @@ int TravelCatalog::find(const std::string& name) const {
     return -1;
 }
 
-bool planLeg(const engine::NavGraph& nav, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out) {
-    if (mode < 0 || mode >= static_cast<int>(cat.modes.size()) || nav.nodeCount() == 0) return false;
+bool TripNetwork::valid() const { return model && model->built && walker && !walker->open.empty(); }
+
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out) {
+    if (mode < 0 || mode >= static_cast<int>(cat.modes.size()) || !net.valid()) return false;
     const TravelMode& m = cat.modes[static_cast<std::size_t>(mode)];
-    const bool onFoot = !m.roads;
-    const std::vector<int> ends = nav.nearestNodes(to, kTryNodes);
-    for (int s : nav.nearestNodes(from, kTryNodes)) {
-        // one flood from this start says which end, if any, it reaches: one search, not one per end
-        const std::vector<char> reach = engine::reachableFrom(nav, s, onFoot);
-        for (int e : ends) {
-            engine::Route r;
-            if (e != s) {
-                if (!reach[static_cast<std::size_t>(e)]) continue;
-                r = engine::findRoute(nav, s, e, onFoot);
-                if (!r.valid()) continue;
-            }
-            TripLeg leg;
-            leg.mode = mode;
-            leg.from = from;
-            leg.to = to;
-            leg.fromNode = s;
-            leg.toNode = e;
-            leg.metres = (from - nav.nodes[static_cast<std::size_t>(s)]).length() + r.length(nav) +
-                         (nav.nodes[static_cast<std::size_t>(e)] - to).length();
-            leg.route = std::move(r);
-            if (m.roads) {
-                // THE ROUTER'S OWN TIME (ADR-0416): each road class at its speed and a few seconds a street junction,
-                // what findRoute chose this route by; the bits off the network at a local street's speed
-                const Real off = leg.metres - leg.route.length(nav);
-                leg.minutes = (engine::routeSeconds(nav, leg.route) + off / engine::classSpeed(engine::RoadClass::Local)) / 60.0;
-                // ...and the kinds of road it is on, with the bits off the network counted as the street they join
-                leg.kindMetres.assign(cat.roadKinds.size(), 0);
-                leg.kindStretches.assign(cat.roadKinds.size(), 0);
-                int was = -1;
-                for (int li : leg.route.links) {
-                    const int k = cat.roadKindOf(nav.links[static_cast<std::size_t>(li)].klass);
-                    if (k >= 0) {
-                        leg.kindMetres[static_cast<std::size_t>(k)] += nav.links[static_cast<std::size_t>(li)].length;
-                        if (k != was) ++leg.kindStretches[static_cast<std::size_t>(k)];
-                    }
-                    was = k;
-                }
-                const int ends = cat.roadKindOf(engine::RoadClass::Local);
-                if (ends >= 0) leg.kindMetres[static_cast<std::size_t>(ends)] += off;
-            } else {
-                leg.minutes = leg.metres / m.speed / 60.0;
-            }
-            leg.minutes += m.startMinutes + m.endMinutes;
-            out = std::move(leg);
-            return true;
-        }
+    const engine::RoadModel& model = *net.model;
+    const engine::WalkJoin a = model.walkJoinNear(from, net.walker->open);
+    const engine::WalkJoin b = model.walkJoinNear(to, net.walker->open);
+    if (!a.valid() || !b.valid()) return false;
+    engine::roads::WalkRoute r;
+    if (a.at != b.at) {
+        r = engine::roads::findWalkRoute(model, *net.walker, a.at, b.at);
+        if (!r.found) return false;
     }
-    return false;
+    TripLeg leg;
+    leg.mode = mode;
+    leg.from = from;
+    leg.to = to;
+    const Real onWalks = r.found ? r.metres : 0;
+    leg.metres = (from - a.point).length() + onWalks + (b.point - to).length();
+    if (m.roads) {
+        // EACH WALK AT ITS STREET'S CLASS SPEED (classSpeed; a walk along no street, a corner or a crossing, at a local
+        // street's), the bits off the walks at a local street's speed; and the kinds of road it is on, the bits off
+        // the walks counted as a local street
+        const engine::LaneGraph& g = model.laneLevel;
+        const Real local = engine::classSpeed(engine::RoadClass::Local);
+        Real seconds = (leg.metres - onWalks) / local;
+        leg.kindMetres.assign(cat.roadKinds.size(), 0);
+        leg.kindStretches.assign(cat.roadKinds.size(), 0);
+        int was = -1;
+        for (const engine::roads::WalkStep& s : r.steps) {
+            const engine::Walk& w = g.walks[s.walk.index];
+            const engine::RoadClass klass =
+                w.street < model.streets.size() ? model.streets[w.street].section.klass : engine::RoadClass::Local;
+            const Real metres = std::fabs(s.to - s.from);
+            seconds += metres / engine::classSpeed(klass);
+            const int k = cat.roadKindOf(klass);
+            if (k >= 0) {
+                leg.kindMetres[static_cast<std::size_t>(k)] += metres;
+                if (k != was) ++leg.kindStretches[static_cast<std::size_t>(k)];
+            }
+            was = k;
+        }
+        const int ends = cat.roadKindOf(engine::RoadClass::Local);
+        if (ends >= 0) leg.kindMetres[static_cast<std::size_t>(ends)] += leg.metres - onWalks;
+        leg.minutes = seconds / 60.0;
+    } else {
+        leg.minutes = leg.metres / m.speed / 60.0;
+    }
+    leg.route = std::move(r);
+    leg.minutes += m.startMinutes + m.endMinutes;
+    out = std::move(leg);
+    return true;
 }
 
-TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const TripRequest& req) {
+TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRequest& req) {
     TripPlan plan;
     plan.from = req.from;
     plan.to = req.to;

@@ -26,6 +26,9 @@ enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp, Alle
 // name is none of them (travel.lua names the classes a drive is told apart by, ADR-0416).
 const char* roadClassName(RoadClass k);
 bool parseRoadClass(const std::string& name, RoadClass& out);
+// A CLASS'S SPEED, m/s, for a trip's estimate (the trip planner, a bus line's time): freeway ~100 km/h, arterial ~58,
+// collector 12, local and alley 8, ramp 10.
+Real classSpeed(RoadClass klass);
 // WHAT A BUILDING MAY FRONT -- THE ONE RULE (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since
 // that's not an accessible road"): a door, its walk and a plaza's mouths reach for city streets, never a freeway or a
 // ramp, nor a street carried over the ground on a bridge (`overGround`). Asked by the lot pass when it faces a door

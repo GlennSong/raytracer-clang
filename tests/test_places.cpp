@@ -32,41 +32,33 @@ TEST_CASE(place_type_name_roundtrip) {
 // ----- entrance snapping -----------------------------------------------------
 
 TEST_CASE(place_entrance_lands_on_sidewalk) {
-    // A real grid town: every door must snap onto a walkable edge, off the road. (The town a road file built as a level's
-    // roads are, its street map made from the model: model_scene.h, #306 piece 6 W2. PlaceMap::add snaps by the street
-    // map; W3 joins a place to the walks by RoadModel::walkJoinOn instead, and this test with it.)
-    const NavGraph& nav = citytest::gridScene(200, 90, 7).nav;
-    CHECK(nav.linkCount() > 0);
+    // A real grid town: every door must snap onto a walk, off the road. (The town a road file built as a level's roads
+    // are: model_scene.h. PlaceMap::add joins a door to the walks by the road model's one fallback by position,
+    // RoadModel::walkJoinNear; the street map's link-and-parameter snap went with #306.)
+    const engine::RoadModel& model = *citytest::gridScene(200, 90, 7).model;
 
     PlaceMap places;
     // Scatter a few buildings at arbitrary sites across the town.
     const Vec2 sites[] = {{20, 15}, {-40, 60}, {75, -30}, {5, -80}};
-    for (const Vec2& s : sites) places.add(PlaceType::Home, s, nav);
+    for (const Vec2& s : sites) places.add(PlaceType::Home, s, &model);
 
     CHECK(places.size() == 4);
     for (const Place& p : places.places()) {
-        CHECK(p.entranceLink >= 0);
-        CHECK(p.entranceLink < nav.linkCount());
-        CHECK(p.entranceT >= 0.0 && p.entranceT <= 1.0);
-        // The door sits on the verge OUTSIDE the carriageway: its distance from
-        // the road centreline is at least the road's half-width.
-        const NavLink& link = nav.links[p.entranceLink];
-        const Vec2 centre = nav.pointOnLink(p.entranceLink, p.entranceT);
-        const Real offset = (p.entrance - centre).length();
-        CHECK(offset >= link.width * 0.5 - 1e-6);
-        // And it is exactly the sidewalk point for its snapped (link, t).
-        const Vec2 walk = nav.sidewalkPoint(p.entranceLink, p.entranceT);
-        CHECK_APPROX(p.entrance.x, walk.x, 1e-9);
-        CHECK_APPROX(p.entrance.y, walk.y, 1e-9);
+        const engine::WalkJoin j = model.walkJoinNear(p.door);
+        CHECK(j.valid());
+        // the entrance is exactly the point on the walk the door joins...
+        CHECK_APPROX(p.entrance.x, j.point.x, 1e-9);
+        CHECK_APPROX(p.entrance.y, j.point.y, 1e-9);
+        // ...and that is off the carriageway of the road it fronts
+        const engine::RoadFrontage f = model.frontageAt(p.door);
+        CHECK(f.valid() && dot(p.entrance - f.on, f.towards) >= f.section->carriagewayHalfWidth() - 1e-6);
     }
 }
 
-TEST_CASE(place_entrance_empty_graph_falls_back) {
-    NavGraph empty;
+TEST_CASE(place_entrance_with_no_road_model_falls_back) {
     PlaceMap places;
-    PlaceId id = places.add(PlaceType::Shop, Vec2(3, 4), empty);
+    PlaceId id = places.add(PlaceType::Shop, Vec2(3, 4), nullptr);
     const Place& p = places[id];
-    CHECK(p.entranceLink == -1);      // nothing to snap to
     CHECK_APPROX(p.entrance.x, 3.0, 1e-9);   // entrance = site, untouched
     CHECK_APPROX(p.entrance.y, 4.0, 1e-9);
 }
@@ -74,7 +66,7 @@ TEST_CASE(place_entrance_empty_graph_falls_back) {
 // ----- indexing + nearest ----------------------------------------------------
 
 TEST_CASE(placemap_indexes_by_type) {
-    const NavGraph& nav = citytest::straightScene(120).nav;
+    const engine::RoadModel* nav = citytest::straightScene(120).model.get();
     PlaceMap places;
     places.add(PlaceType::Home,  {10, 5}, nav);
     places.add(PlaceType::Shop,  {30, 5}, nav);
@@ -91,7 +83,7 @@ TEST_CASE(placemap_indexes_by_type) {
 }
 
 TEST_CASE(placemap_nearest_of_type) {
-    const NavGraph& nav = citytest::straightScene(200).nav;
+    const engine::RoadModel* nav = citytest::straightScene(200).model.get();
     PlaceMap places;
     PlaceId a = places.add(PlaceType::Shop, {20, 6}, nav);   // near x=20
     PlaceId b = places.add(PlaceType::Shop, {150, 6}, nav);  // near x=150
@@ -164,7 +156,7 @@ TEST_CASE(place_entrance_hint_wins_over_the_site_snap) {
     // ADR-0080: a building knows its real door; the sidewalk snap must run
     // from the door, not the footprint centroid (which can be around a
     // corner from it).
-    const NavGraph& nav = citytest::straightScene(120).nav;
+    const engine::RoadModel* nav = citytest::straightScene(120).model.get();
     PlaceMap places;
     const Vec2 site(60, 20);
     const Vec2 door(20, 12);

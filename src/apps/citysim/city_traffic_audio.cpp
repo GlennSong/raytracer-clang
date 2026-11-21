@@ -26,7 +26,7 @@ void CityTrafficAudioSystem::update(engine::FrameContext& ctx) {
     carsNear(ctx.world, Vec2(ear.x, ear.z), kAudibleRange + 20.0, cars);
     for (const CarSeen& c : cars) {
         if (!c.onRoad) continue;   // standing in its space: its engine is off
-        const Vec3 pos(c.pos.x, city_.surfaceY(-1, 0, c.pos), c.pos.y);
+        const Vec3 pos(c.pos.x, city_.surfaceY(c.pos), c.pos.y);
         const uint64_t key = kHouseholdCarKey | c.id;
         const engine::Real d2 = (pos - ear).lengthSquared();
         if (d2 > kAudibleRange * kAudibleRange) continue;

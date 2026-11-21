@@ -87,9 +87,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), sim.agents().size(), walkers,
                 d.carCount(), mbLoaded, mb0);
     // THE ROADS THE NEW DRIVING HAS: the model's junctions and streets, and its lane level's paths
-    std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the street map %d nodes, %d links\n",
-                d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.nav().nodeCount(),
-                sim.nav().linkCount());
+    std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the sim's walk points %d\n",
+                d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.walkPoints().nodeCount());
 
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
@@ -222,19 +221,27 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // arrivals 753 -> 730, trips 322 -> 318, parked 210 -> 209. Cars 364 -> 383 (with one 393 -> 407), the most on the
     // road 135 -> 139 (still minute 11). Rings 0, touching spells 0. (An opening alone, without keeping the necks, cut
     // sidewalks in two and went the wrong way: arrivals 692, walks blocked 21, no way 42; not kept.)
+    // RE-PINNED at the street map's deletion (#306; ADR-0480 W3, W3b and the sweep), whatever the new system gives
+    // (Glenn: "kill the old system and replace it ... iron out bugs afterwards"): people walk the road model's walks by
+    // the one router (W3), river_town's sliver streets went (s8, s9, s10, s169), the crowd maker holds each home's kerb
+    // spaces and puts places only where the walks reach (W3b), and the sim's own walkers rest at walk points, not
+    // street-map nodes. Cars 383 -> 391 (with one 407 -> 413); the most on the road 139 at minute 11 -> 98 at minute 10;
+    // trips 318 -> 292; parked 209 -> 240; ARRIVALS 730 -> 472 (on the known-bugs list: about 410 of the 630 are
+    // walking at any minute from minute 8, and why the walks take longer is not known); the longest stand 734.7 s
+    // (car 19) -> 450.2 s (car 20). No plan, blocked, another place, rings, touching spells: 0.
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
-        CHECK(b.cars().size() == 383u);
-        CHECK(withCar == 407);
+        CHECK(b.cars().size() == 391u);
+        CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 139);
-        CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 318u);
-        CHECK(b.counts().parkedReports == 209u);
+        CHECK(mostOnRoad == 98);
+        CHECK(mostOnRoadAt == 10);
+        CHECK(b.counts().tripsBegun == 292u);
+        CHECK(b.counts().parkedReports == 240u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 730u);
+        CHECK(b.machine()->counts().arrivals == 472u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -248,6 +255,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // is the same.
         // 0x83b99189cfc16fbd -> 0xc02460bd06f44189 (ADR-0478, the S7 re-bake): the counts above.
         // 0xc02460bd06f44189 -> 0xa15a1ec8afaff85d (ADR-0479, the pavement layers cleaned): the counts above.
-        CHECK(hash == 0xa15a1ec8afaff85dull);
+        // 0xa15a1ec8afaff85d -> 0x9362ecbc934c82cf (#306, the street map's deletion): the counts above.
+        CHECK(hash == 0x9362ecbc934c82cfull);
     }
 }

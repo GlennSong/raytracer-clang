@@ -63,17 +63,14 @@ const char* const kReleased = "released";
 // pavement is the walkers' own (the verge they keep). The points to walk by, the next first, ending at `to`. (The
 // one-agent trip lab's once; the walk skill's alone since that lab was deleted with the old driving, ADR-0459.)
 std::vector<engine::Vec2> stepsOffThePaths(const CitySim& sim, int who, engine::Vec2 from, engine::Vec2 to) {
-    const engine::NavGraph& nav = *sim.graph();
-    const Real verge = sim.walkerVerge(sim.agents()[static_cast<std::size_t>(who)]);
+    (void)who;
+    const engine::RoadModel* model = sim.roads();
+    // (the sidewalk on p's side of the street it fronts: RoadModel::frontageAt, sidewalkBeside)
     auto pavement = [&](engine::Vec2 p) {
-        const int l = nav.nearestLink(p);
-        if (l < 0) return p;
-        const engine::NavLink& L = nav.links[static_cast<std::size_t>(l)];
-        const engine::Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)];
-        const Real t = L.length > 1e-6 ? std::clamp(dot(p - A, nav.direction(l)) / L.length, Real(0), Real(1)) : Real(0);
-        const engine::Vec2 q = nav.pointOnLink(l, t);
-        const engine::Vec2 side = nav.sidewalkPoint(l, t, verge) - q;
-        return dot(p - q, side) >= 0 ? q + side : q - side;   // (the pavement on p's side of the street)
+        if (!model || !model->built) return p;
+        const engine::RoadFrontage f = model->frontageAt(p);
+        engine::Vec2 out;
+        return f.valid() && model->sidewalkBeside(f, out) ? out : p;
     };
     std::vector<engine::Vec2> steps;
     for (const engine::Vec2 p : {pavement(from), pavement(to), to})
@@ -494,8 +491,8 @@ struct CityBrain::Impl::FrontPoints : brain::KerbLanes {
 // under that person, so `brain? <who>` can say why (one planner serves everybody, and its own last reason is whoever
 // planned last).
 struct CityBrain::Impl::NotingPlanner : brain::Planner {
-    NotingPlanner(Impl& i, const engine::NavGraph& nav, const TravelCatalog& ways, const brain::World& world)
-        : im(i), inner(nav, ways, world) {}
+    NotingPlanner(Impl& i, const TripNetwork& net, const TravelCatalog& ways, const brain::World& world)
+        : im(i), inner(net, ways, world) {}
     Impl& im;
     brain::TripPlanner inner;
     bool plan(const brain::PlanAsk& ask, brain::PlanLegs& out) override {
@@ -1133,7 +1130,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     };
     if (!sim.drivingV2_ || !sim.drivingV2_->roads() || !sim.drivingV2_->hasRules() || !sim.drivingHost_.active())
         return refuse("the driving does not run on this level (it runs where the level names citysim.drivingRules)");
-    if (!sim.nav_) return refuse("the city has no street map");
+    if (!sim.roads() || !sim.roads()->built || sim.walker_.open.empty()) return refuse("the city's road model has no walks");
     im.d = &*sim.drivingV2_;
     im.model = im.d->model();
     im.ecs = &world;
@@ -1264,7 +1261,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     }
 
     im.world = std::make_unique<Impl::LabWorld>(im);
-    im.planner = std::make_unique<Impl::NotingPlanner>(im, *sim.nav_, im.travel, *im.world);
+    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_}, im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
     im.room = std::make_unique<brain::LaneRoom>(*im.d);
 

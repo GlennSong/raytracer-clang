@@ -54,7 +54,7 @@ TEST_CASE(relationship_stronger_tag_wins_no_downgrade) {
 namespace {
 // A PlaceMap with `homes` homes and one shared office, snapped onto a 4-way cross (a road file built as a level's roads
 // are, its street map made from the model: model_scene.h, #306 piece 6 W2).
-PlaceMap townPlaces(const NavGraph& nav, int homes) {
+PlaceMap townPlaces(const engine::RoadModel* nav, int homes) {
     PlaceMap p;
     for (int i = 0; i < homes; ++i)
         p.add(PlaceType::Home, Vec2(-30 + i * 8.0, 20), nav);
@@ -65,11 +65,11 @@ PlaceMap townPlaces(const NavGraph& nav, int homes) {
 
 TEST_CASE(assign_places_gives_every_agent_a_home) {
     const citytest::ModelScene& s = citytest::crossScene(45);
-    const NavGraph& nav = s.nav;
+    const engine::RoadModel* nav = s.model.get();
     PlaceMap places = townPlaces(nav, 3);
     CitySim sim;
     s.build(sim,/*peds*/ 5, /*seed*/ 4);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
 
     for (const Agent& a : sim.agents()) {
         CHECK(a.homePlace != kNoPlace);
@@ -80,13 +80,13 @@ TEST_CASE(assign_places_gives_every_agent_a_home) {
 
 TEST_CASE(assign_places_seeds_coworkers_and_is_deterministic) {
     const citytest::ModelScene& s = citytest::crossScene(45);
-    const NavGraph& nav = s.nav;
+    const engine::RoadModel* nav = s.model.get();
     PlaceMap places = townPlaces(nav, 2);   // one shared office → coworkers likely
     CitySim a, b;
     s.build(a,5, 7);
-    a.assignPlaces(places, nav);
+    a.assignPlaces(places);
     s.build(b,5, 7);
-    b.assignPlaces(places, nav);
+    b.assignPlaces(places);
 
     // Anyone sharing the single office is a coworker; and two runs of the same
     // seed produce the same assignment + social graph (ADR-0002).
@@ -108,11 +108,11 @@ TEST_CASE(assign_places_seeds_coworkers_and_is_deterministic) {
 
 TEST_CASE(assign_places_no_homes_is_a_noop) {
     const citytest::ModelScene& s = citytest::crossScene(45);
-    const NavGraph& nav = s.nav;
+    const engine::RoadModel* nav = s.model.get();
     PlaceMap empty;                       // no places at all
     CitySim sim;
     s.build(sim,2, 3);
-    sim.assignPlaces(empty, nav);         // must not crash or assign
+    sim.assignPlaces(empty);         // must not crash or assign
     for (const Agent& a : sim.agents()) CHECK(a.homePlace == kNoPlace);
     CHECK(sim.relationships().pairCount() == 0);
 }
@@ -121,7 +121,7 @@ TEST_CASE(assign_places_no_homes_is_a_noop) {
 
 TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
     const citytest::ModelScene& s = citytest::crossScene(45);
-    const NavGraph& nav = s.nav;
+    const engine::RoadModel* nav = s.model.get();
     // A town with homes, a shop (8–20), an office, and a park — one of each role
     // is reachable.
     PlaceMap places;
@@ -132,9 +132,9 @@ TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
 
     CitySim a, b;
     s.build(a,12, 21);
-    a.assignPlaces(places, nav);
+    a.assignPlaces(places);
     s.build(b,12, 21);
-    b.assignPlaces(places, nav);
+    b.assignPlaces(places);
 
     for (std::size_t i = 0; i < a.agents().size(); ++i) {
         const Agent& ag = a.agents()[i];
@@ -165,7 +165,7 @@ TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
 // population (and their parked cars) in place forever.
 TEST_CASE(shop_without_hours_does_not_strand_its_worker) {
     const citytest::ModelScene& s = citytest::crossScene(45);
-    const NavGraph& nav = s.nav;
+    const engine::RoadModel* nav = s.model.get();
     PlaceMap places;
     for (int i = 0; i < 3; ++i)
         places.add(PlaceType::Home, Vec2(-30 + i * 8.0, 20), nav);
@@ -174,7 +174,7 @@ TEST_CASE(shop_without_hours_does_not_strand_its_worker) {
 
     CitySim sim;
     s.build(sim,12, 21);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
 
     for (const Agent& a : sim.agents()) {
         if (a.home == a.work) continue;   // stranded at build, not our concern

@@ -4,16 +4,15 @@
 // THE CITY SIM'S TEST SCENES, MADE AS A LEVEL MAKES ITS ROADS (#306 task 4, piece 6, W2; ADR-0480). A scene is a small
 // road file, stated in memory: each road a polyline with its class; its layout, controls and lane rules filled in as the
 // one-off tools would write them (lane_level_scene.h withLaneLevelFacts). It is built by the one road builder and the road
-// model is assembled from it, lane level and walks included (assembleRoadModel), exactly as a level's roads are; the
-// street map the sim still walks on until W3 is made from that model by the loader's own function (appendStreetMap,
-// ADR-0425), never by hand. The sim is handed the model too (CitySim::setRoads), as the city host does on every lanes
-// level.
+// model is assembled from it, lane level and walks included (assembleRoadModel), exactly as a level's roads are. The
+// sim is handed the model (CitySim::setRoads), as the city host does on every lanes level, and sets its walk points
+// out on its walks (city_walk_points.h; the street map went, #306).
 //
 // A scene is built once per test run and shared (the build takes a moment): `sceneNamed` keeps each by its name.
 //
 // The shapes are the ones the sim tests used as hand-made street maps (city_test_util.h): a cross, a T, a straight road,
-// the jittered grid town. They are stated here as road files, so the street map's nodes, links and widths are whatever
-// the model makes of them: a test finds a place by where it is (nearestNode, nearestLink), never by a node's number.
+// the jittered grid town. They are stated here as road files, so the walks and widths are whatever the model makes of
+// them: a test finds a place by where it is (the sim's walk points, nearestNode), never by a number.
 
 #include "test_framework.h"   // CHECK: every scene asked for is checked to have built cleanly (sceneNamed)
 #include "city_test_util.h"
@@ -21,14 +20,11 @@
 
 #include <cstdio>
 
-#include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/ai/nav_graph.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/roads/lanes/lanes.h"
 #include "../src/engine/procgen/city/roads/lanes/lane_graph_build.h"     // LaneGraphOptions, LaneGraphBuild
 #include "../src/engine/procgen/city/roads/lanes/lane_graph_connect.h"
 #include "../src/engine/procgen/city/roads/road_model.h"
-#include "../src/engine/procgen/city/roads/street_map.h"
 
 #include <nlohmann/json.hpp>
 
@@ -43,14 +39,15 @@ namespace citytest {
 struct ModelScene {
     std::shared_ptr<engine::RoadModel> model;         // the built model: its streets, its lane level, its walks. Shared by
                                                       // every test on the scene: read it; to change it, copy it
-    engine::NavGraph nav;                             // the street map made from it, as a level's loader makes it
     std::string problems;                             // what building it found (the lane level's error, its own check's
-                                                      // faults, the street map's errors); empty: none
+                                                      // faults); empty: none
 
-    // A sim on this scene: built over its street map with `walkers` people from `seed`, and handed the model.
-    void build(citysim::CitySim& sim, int walkers, uint32_t seed) const {
-        sim.build(nav, walkers, seed);
+    // A sim on this scene: handed the model, and built over its walk points with `walkers` people from `seed`.
+    // (a template, so this header needs no sim: the brain's tests build scenes without one)
+    template <class Sim>
+    void build(Sim& sim, int walkers, uint32_t seed) const {
         sim.setRoads(model, "test scene");
+        sim.build(walkers, seed);
     }
     // The middle of the sidewalk beside `p`, on p's side of the road the model says p fronts (RoadModel::frontageAt,
     // sidewalkBeside): where a test puts a place or sends a walker. `p` itself when the model finds none.
@@ -100,7 +97,7 @@ inline engine::roads::lanes::LaneGraphOptions sceneVehicles() {
     return o;
 }
 
-// BUILDS a road file into a scene: the road build, the model with its lane level, the street map from the model.
+// BUILDS a road file into a scene: the road build, the model with its lane level and walks.
 inline ModelScene modelScene(const nlohmann::json& roadFile) {
     using namespace engine::roads::lanes;
     ModelScene s;
@@ -109,16 +106,12 @@ inline ModelScene modelScene(const nlohmann::json& roadFile) {
     std::shared_ptr<engine::RoadModel> m = std::make_shared<engine::RoadModel>(engine::assembleRoadModel(*r, sceneVehicles(), &report));
     s.problems = report.error;
     for (const std::string& p : engine::validate(m->laneLevel)) s.problems += (s.problems.empty() ? "" : "; ") + p;   // its own check
-    engine::StreetMapReport rep;
-    if (!engine::appendStreetMap(s.nav, *m, 0, nullptr, &rep)) {
-        for (const std::string& e : rep.errors) s.problems += (s.problems.empty() ? "" : "; ") + e;
-    }
     s.model = std::move(m);
     return s;
 }
 
 // ONE SCENE PER NAME, built on first asking and kept for the run. EVERY asking checks it built cleanly (a scene the road
-// build, the lane level's own check or the street map found faults in would make the test on it meaningless): a failed
+// build or the lane level's own check found faults in would make the test on it meaningless): a failed
 // check in the asking test, with the scene's name and what was found.
 template <typename Make>
 const ModelScene& sceneNamed(const std::string& name, Make make) {
@@ -127,7 +120,7 @@ const ModelScene& sceneNamed(const std::string& name, Make make) {
     if (it == scenes.end()) it = scenes.emplace(name, make()).first;
     const ModelScene& s = it->second;
     if (!s.problems.empty()) std::printf("    scene %s: %s\n", name.c_str(), s.problems.c_str());
-    CHECK(s.problems.empty() && s.model && s.nav.linkCount() > 0 && !s.model->laneLevel.walks.empty());
+    CHECK(s.problems.empty() && s.model && !s.model->laneLevel.walks.empty());
     return s;
 }
 

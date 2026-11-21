@@ -11,10 +11,12 @@
 // holds the part in between and who is in it.
 //
 // RailSim (rail_sim.h) runs the trains and is only READ here: a rider boards a train standing at their platform with
-// its doors open, and steps off when the train stands at theirs. The footway itself is not in the nav graph, so the
+// its doors open, and steps off when the train stands at theirs. The footway itself is not on the walks, so the
 // walk along it is a timed absence (a rider on the stairs is not drawn), the wait is a place on the platform.
+//
+// (A "street node" here is one of the sim's walk points, city_walk_points.h, and a street network one part of the walks.)
 
-#include "../../engine/ai/nav_graph.h"
+#include "city_walk_points.h"
 #include "rail_sim.h"
 
 #include <string>
@@ -45,10 +47,10 @@ struct RailTrip {
 
 class RailRiders {
 public:
-    // The stations of `rail`'s lines (by name: each line stops at each), pinned to `nav`. Street networks are the
-    // walkable links' components; a station's node is the nearest walkable street node to its way in (within
-    // `reach`) in a network of at least `minNetworkStreet` metres -- the same rule the bus anchors use.
-    void build(const RailSim* rail, const engine::NavGraph& nav, engine::Real reach = 120.0,
+    // The stations of `rail`'s lines (by name: each line stops at each), pinned to `spots`. Street networks are the
+    // parts of the walks; a station's node is the nearest street spot to its way in (within `reach`) in a network of
+    // at least `minNetworkStreet` metres.
+    void build(const RailSim* rail, const WalkPointMap& spots, engine::Real reach = 120.0,
                engine::Real minNetworkStreet = 3000.0);
     void clear();
     bool active() const { return rail_ != nullptr && stations_.size() >= 2; }
@@ -91,7 +93,7 @@ public:
 
 private:
     const RailSim* rail_ = nullptr;
-    std::vector<int> comp_;   // street network per nav node
+    std::vector<int> comp_;   // street network (part of the walks) per spot
     std::vector<RailStation> stations_;
     std::unordered_map<int, RailTrip> trips_;
 };

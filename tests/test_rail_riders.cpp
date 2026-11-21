@@ -38,7 +38,7 @@ const citytest::ModelScene& twoTowns() {
 
 // rail_sim's test oval (two tracks, one each way; straights at z = +-200), its stations given ways in at the near
 // edge of each town
-std::vector<RailTrack> ovalWithWaysIn(const NavGraph& nav) {
+std::vector<RailTrack> ovalWithWaysIn(const WalkPointMap& nav) {
     auto nearestNode = [&](Vec2 p) {
         Vec2 best = nav.nodes.front();
         for (const Vec2& n : nav.nodes)
@@ -84,7 +84,9 @@ std::vector<RailTrack> ovalWithWaysIn(const NavGraph& nav) {
 }  // namespace
 
 TEST_CASE(rail_riders_pin_each_station_to_its_town) {
-    const NavGraph& nav = twoTowns().nav;
+    CitySim host;   // (the two towns' walk points: the sim sets them out on the model's walks)
+    twoTowns().build(host, 1, 1);
+    const WalkPointMap& nav = host.walkPoints();
     RailSim rail;
     rail.build(ovalWithWaysIn(nav), trainKindNamed("intercity"), 2);
     RailRiders rr;
@@ -125,11 +127,10 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
 
 TEST_CASE(people_sent_to_the_other_town_go_by_train_and_arrive) {
     const citytest::ModelScene& s = twoTowns();
-    const NavGraph& nav = s.nav;
-    RailSim rail;
-    rail.build(ovalWithWaysIn(nav), trainKindNamed("intercity"), 2);
     CitySim sim;
     s.build(sim, 120, 17);
+    RailSim rail;
+    rail.build(ovalWithWaysIn(sim.walkPoints()), trainKindNamed("intercity"), 2);
     sim.setRail(&rail);
     CHECK(sim.railRiders().active());
 

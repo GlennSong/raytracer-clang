@@ -49,18 +49,8 @@ TEST_CASE(agents_have_distinct_personal_paces) {
     CHECK(factors.size() >= 6u);   // a genuinely mixed crowd, not lockstep
 }
 
-TEST_CASE(near_junction_covers_the_box_and_only_the_box) {
-    // A 4-way cross at the origin, local roads: the box test drives spawn placement,
-    // so it must be tight — inside the node's half-width (+margin) yes, mid-link no.
-    const citytest::ModelScene& s = citytest::crossScene(60);
-    CitySim sim;
-    s.build(sim, 2, 3);
-    CHECK(sim.nearJunction(Vec2(0, 0)));            // dead centre
-    CHECK(sim.nearJunction(Vec2(3, 1)));            // inside the half-width
-    CHECK(sim.nearJunction(Vec2(0, 5.5), 2.0));     // margin extends the box
-    CHECK(!sim.nearJunction(Vec2(0, 30)));          // mid-link: open road
-    CHECK(!sim.nearJunction(Vec2(0, 58)));          // a dead-end is not a junction
-}
+// (near_junction_covers_the_box_and_only_the_box went with the street map's junction boxes, #306: nothing asked them
+// after the old driving went.)
 
 TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
     // The player (an external obstacle) gets a hard clearance like the poles do,

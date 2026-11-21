@@ -240,7 +240,7 @@ void CityPossessSystem::possessWalker(engine::FrameContext& ctx,
 }
 
 void CityPossessSystem::walkTo(engine::Real x, engine::Real z) {
-    if (!city_.sim().graph()) { error_ = "no nav graph"; return; }
+    if (!city_.sim().roads()) { error_ = "no road model"; return; }
     // One line per director errand. It prints where the agent STOOD and where
     // it was placed, because those differing is the whole bug this path had:
     // sendAgentTo used to put the planner ghost on its new route's first leg,

@@ -320,24 +320,31 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // computeGaps; without that, the same counts and 0xe7299b584c61b745). Rings, no plan, another place, blocked,
     // errors, refused still 0. Away from a kerb end 4.38% -> 3.24%. Not pinned, looked at: the longest stand 166 s ->
     // 193 s (car 176).
+    // AND AGAIN when the street map went (#306, the sweep): the sim's own walkers -- the city's people besides the
+    // brain's residents -- rest at and go to walk points on the road model's walks (city_walk_points.h), not
+    // street-map nodes, so their days, and the drivers' stops for them, moved. The most on the road 57 at minute 10
+    // -> 87 at minute 9; busy minutes 3 -> 16; trips 201 -> 313; parked 164 -> 238; arrivals 487 -> 470; hash
+    // 0xbacfb8b215f04aa1 -> 0xf0e62a8d7fffa45b. Away from a kerb end 3.24% -> 1.93%. STILL FAILING, on the known-bugs
+    // list: ONE RING OF WAITS (a deadlock) from about minute 30 (the rings checks above), and the longest stand
+    // 193 s -> 1247.6 s (car 109).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 209u);
         CHECK(withCar == 222);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 57);
-        CHECK(mostOnRoadAt == 10);
-        CHECK(busyMinutes == 3);
-        CHECK(b.counts().tripsBegun == 201u);
-        CHECK(b.counts().parkedReports == 164u);
+        CHECK(mostOnRoad == 87);
+        CHECK(mostOnRoadAt == 9);
+        CHECK(busyMinutes == 16);
+        CHECK(b.counts().tripsBegun == 313u);
+        CHECK(b.counts().parkedReports == 238u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 487u);
+        CHECK(b.machine()->counts().arrivals == 470u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xbacfb8b215f04aa1ull);
+        CHECK(hash == 0xf0e62a8d7fffa45bull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full
@@ -348,16 +355,12 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
             if (b.stateName(who) == "no_way") {
                 const Vec2 at = sim.agents()[static_cast<std::size_t>(b.residentAgent(who))].pos;
                 const engine::RoadFrontage f = d.model()->frontageAt(at);
-                const int node = sim.graph()->nearestNode(at);
-                int walkLinks = 0, links = 0;
-                for (const engine::NavLink& L : sim.graph()->links)
-                    if (L.from == node || L.to == node) {
-                        ++links;
-                        walkLinks += L.walkable ? 1 : 0;
-                    }
-                std::printf("    [crowd] nearest node %d at (%.1f, %.1f): %d links, %d walkable\n", node,
-                            sim.graph()->nodes[static_cast<std::size_t>(node)].x, sim.graph()->nodes[static_cast<std::size_t>(node)].y, links,
-                            walkLinks);
+                engine::WalkPoint joined;
+                bool cutOff = false;
+                const bool joins = sim.walkJoin(at, joined, &cutOff);
+                std::printf("    [crowd] where it stands joins %s%s\n",
+                            joins ? ("walk " + std::to_string(joined.walk.index)).c_str() : "no walk",
+                            joins && cutOff ? " (cut off from the largest part)" : "");
                 std::printf("    [crowd] no way: %s | street %s, class %s\n      trace: %s\n", b.describe(who).c_str(),
                             f.street.valid() ? d.model()->streets[f.street.index].id.c_str() : "?",
                             f.section ? f.section->roadClass.c_str() : "?", b.traceText(who).c_str());

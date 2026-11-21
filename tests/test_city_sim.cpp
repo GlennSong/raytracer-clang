@@ -172,7 +172,7 @@ TEST_CASE(night_shift_agents_have_a_wrapping_window) {
 // The 1.2 km walk measured 656 s, 2.6 h at 0.004.)
 TEST_CASE(a_commute_fits_inside_the_working_day) {
     const citytest::ModelScene& scene = citytest::gridScene(600, 90, 5);   // a town ~600 m across
-    const NavGraph& nav = scene.nav;
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
     scene.build(sim, 400, 13);
 
@@ -182,7 +182,7 @@ TEST_CASE(a_commute_fits_inside_the_working_day) {
         places.add(PlaceType::Home, Vec2(-250 + i * 30.0, -200), nav);
     for (int i = 0; i < 6; ++i)
         places.add(PlaceType::Office, Vec2(-150 + i * 45.0, 200), nav, 9, 17);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
 
     const Real secs = sim.commuteSecondsMedian();
     CHECK(secs > 0);   // the measurement is actually wired up
@@ -514,9 +514,9 @@ TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
 TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     const std::string dir = (std::filesystem::temp_directory_path() / "rt_population_cache_test").string();
     std::filesystem::remove_all(dir);
-    auto town = [&](CitySim& sim, NavGraph& nav, PlaceMap& places, Real shopClose) {
+    auto town = [&](CitySim& sim, const engine::RoadModel*& nav, PlaceMap& places, Real shopClose) {
         const citytest::ModelScene& scene = citytest::gridScene(1200, 90, 5);   // (model_scene.h, W2)
-        nav = scene.nav;
+        nav = scene.model.get();
         scene.build(sim, 500, 13);
         for (int i = 0; i < 14; ++i) places.add(PlaceType::Home, Vec2(-500 + i * 60.0, -400), nav);
         for (int i = 0; i < 6; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 90.0, 400), nav, 9, 17);
@@ -524,13 +524,13 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
         places.add(PlaceType::Park, Vec2(300, -100), nav);
         places.add(PlaceType::Cafe, Vec2(-100, 150), nav, 7, 19);
     };
-    NavGraph navA, navB, navC, navD;
+    const engine::RoadModel *navA = nullptr, *navB = nullptr, *navC = nullptr, *navD = nullptr;
     PlaceMap pA, pB, pC, pD;
     CitySim A, B, C, D;
     town(A, navA, pA, 20);
-    A.assignPlaces(pA, navA);                                           // no cache: the reference
-    town(B, navB, pB, 20); B.setPopulationCacheDir(dir); B.assignPlaces(pB, navB);   // decides, saves
-    town(C, navC, pC, 20); C.setPopulationCacheDir(dir); C.assignPlaces(pC, navC);   // reads
+    A.assignPlaces(pA);                                           // no cache: the reference
+    town(B, navB, pB, 20); B.setPopulationCacheDir(dir); B.assignPlaces(pB);   // decides, saves
+    town(C, navC, pC, 20); C.setPopulationCacheDir(dir); C.assignPlaces(pC);   // reads
     CHECK(B.populationCache().used && !B.populationCache().hit && B.populationCache().saved);
     CHECK(C.populationCache().hit);
     CHECK(C.populationCache().key == B.populationCache().key);
@@ -566,13 +566,13 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     CHECK(apart == 0);
 
     // a changed input misses
-    town(D, navD, pD, 21); D.setPopulationCacheDir(dir); D.assignPlaces(pD, navD);
+    town(D, navD, pD, 21); D.setPopulationCacheDir(dir); D.assignPlaces(pD);
     CHECK(!D.populationCache().hit && D.populationCache().key != C.populationCache().key);
 
     // VERIFY: decide again over a hit, compare
     setenv("RT_POPULATION_VERIFY", "1", 1);
-    NavGraph navE; PlaceMap pE; CitySim E;
-    town(E, navE, pE, 20); E.setPopulationCacheDir(dir); E.assignPlaces(pE, navE);
+    const engine::RoadModel* navE = nullptr; PlaceMap pE; CitySim E;
+    town(E, navE, pE, 20); E.setPopulationCacheDir(dir); E.assignPlaces(pE);
     unsetenv("RT_POPULATION_VERIFY");
     CHECK(E.populationCache().hit && E.populationCache().mismatches == 0);
     std::filesystem::remove_all(dir);

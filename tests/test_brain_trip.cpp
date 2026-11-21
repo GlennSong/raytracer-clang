@@ -475,12 +475,13 @@ TEST_CASE(brain_trip_a_new_intent_at_the_wheel_redirects_the_drive) {
         // redirected at once: still driving, the same car, a new plan of two legs
         CHECK(s.lab.stateName(s.who) == "driving" && s.lab.planOf(s.who) == "car>5 walk>4");
         CHECK(s.lab.machine->agent(s.who).legNow == 0 && s.lab.machine->agent(s.who).intentBegan == 199500u);
-        // (the planner prices the drive from the street's node nearest the car, at 600 m: 1200 m is 150 s, the 44 m to
-        // that node 5.5 s, and the way's 150 s of pulling out and parking -- the first minute of which is already
-        // behind a driver at the wheel, a known over-count: 305.5 s is 5.1 min. On foot is not priced: nobody leaves a
-        // car in a lane to walk.)
+        // (the planner prices the drive from where the car is, at 644 m, along the street's walk to the space at
+        // 1800 m: 1156 m is 144.5 s, and the way's 150 s of pulling out and parking -- the first minute of which is
+        // already behind a driver at the wheel, a known over-count: 294.5 s is 4.9 min. On foot is not priced: nobody
+        // leaves a car in a lane to walk.) RE-PINNED (#306, the street map's deletion) from "car 6.3 min (5.1 car +
+        // 1.2 walk)": the street map priced it from its node nearest the car, at 600 m, 44 m off.
         CHECK(s.lab.planner->lastReason() ==
-              "walk -- at the wheel of the car, car 6.3 min (5.1 car + 1.2 walk): car");
+              "walk -- at the wheel of the car, car 6.1 min (4.9 car + 1.2 walk): car");
         CHECK(s.lab.drive->begun == 1 && s.lab.drive->redirected == 1 && s.lab.drive->ended == 0);
         Vec2 at;
         CHECK(s.lab.drive->where(s.car, at) && approxEqual(at, Vec2(644, 0), engine::kSamePoint));

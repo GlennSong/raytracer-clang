@@ -15,14 +15,22 @@ using namespace citysim;
 
 namespace {
 // This file's town: the grid town (city_test_util.h gridCity, its historical size and seed) as a road file, built as a
-// level's roads are and walked on the street map made from its road model (model_scene.h, #306 piece 6 W2).
+// level's roads are and walked on its road model's walks (model_scene.h, #306).
 const citytest::ModelScene& town() {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     const citytest::ModelScene& s = citytest::gridScene(180, 45, 4);
-    std::printf("    [scene] grid town 180/45/4: %d nodes, %d links, %zu walks; %.2f s%s%s\n", s.nav.nodeCount(), s.nav.linkCount(),
-                s.model->laneLevel.walks.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
+    std::printf("    [scene] grid town 180/45/4: %zu walks; %.2f s%s%s\n", s.model->laneLevel.walks.size(),
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
                 s.problems.empty() ? "" : "; ", s.problems.c_str());
     return s;
+}
+// A pole a fraction `t` along every sidewalk stretch of the town's walks (each walk along a street).
+std::vector<Vec2> polesAlongSidewalks(const citytest::ModelScene& s, Real t) {
+    std::vector<Vec2> poles;
+    const engine::LaneGraph& g = s.model->laneLevel;
+    for (uint32_t w = 0; w < g.walks.size(); ++w)
+        if (g.walks[w].street != engine::kNoIndex) poles.push_back(g.pointAt(engine::WalkId(w), g.walks[w].length * t));
+    return poles;
 }
 }  // namespace
 
@@ -38,8 +46,7 @@ TEST_CASE(pedestrians_walk_around_static_poles) {
     CitySim sim;
     s.build(sim, 30, 11);
 
-    std::vector<Vec2> poles;
-    for (int li = 0; li < s.nav.linkCount(); ++li) poles.push_back(s.nav.sidewalkPoint(li, 0.5));
+    const std::vector<Vec2> poles = polesAlongSidewalks(s, 0.5);
     sim.setStaticObstacles(poles);
 
     Real minDist = 1e9;
@@ -63,8 +70,7 @@ TEST_CASE(static_obstacle_avoidance_is_deterministic) {
     CitySim a, b;
     s.build(a, 24, 77);
     s.build(b, 24, 77);
-    std::vector<Vec2> poles;
-    for (int li = 0; li < s.nav.linkCount(); ++li) poles.push_back(s.nav.sidewalkPoint(li, 0.4));
+    const std::vector<Vec2> poles = polesAlongSidewalks(s, 0.4);
     a.setStaticObstacles(poles);
     b.setStaticObstacles(poles);
     for (int i = 0; i < 2500; ++i) { a.step(0.1, 0.4); b.step(0.1, 0.4); }

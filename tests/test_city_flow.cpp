@@ -138,7 +138,6 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
 // one (and where the sim knows no pavement) one file, as before.
 TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     const citytest::ModelScene& s = citytest::gridScene(600.0, 120.0, 5);
-    const NavGraph& nav = s.nav;
     CitySim sim;
     sim.setWander(true);
     s.build(sim, 300, 11);
@@ -163,7 +162,6 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
 
     // where they walk: their own file across the street's walk (W3: measured against the walk's own line, the sidewalk's
     // middle; a file is its distance in from the kerb, walkerVerge, held within the walk)
-    (void)nav;
     sim.setJunctionPad(5.0);
     for (int t = 0; t < 200; ++t) sim.step(0.05, 0.0);
     int checked = 0, onFile = 0;
