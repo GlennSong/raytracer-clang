@@ -23,4 +23,7 @@ return {
   street_lamp = { recipe = "prop_models", args = { kind = "lamp", height = 6 } },
   oak = { recipe = "prop_models", args = { kind = "tree", shape = "oak", seed = 3 } },
   boulder = { recipe = "prop_models", args = { kind = "rock", seed = 5 } },
+  -- a sculpture for a park, on a plinth to sit on: written in the model studio (park_sculpture.lua)
+  park_sculpture = { recipe = "park_sculpture" },
+  park_sculpture_steel = { recipe = "park_sculpture", args = { finish = "steel", height = 3.4, twist = -110, taper = 0.45, strings = 17 } },
 }

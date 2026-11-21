@@ -26,4 +26,7 @@ return {
   street_lamp = { model = "street_lamp", physics = { body = "static" } },
   oak = { model = "oak", physics = { body = "static" }, draw = { class = "scenery" } },
   boulder = { model = "boulder", physics = { body = "static" }, draw = { class = "scenery" } },
+  -- park furniture: a sculpture on a plinth to sit on; the second turns slowly, and is another finish and shape
+  park_sculpture = { model = "park_sculpture", physics = { body = "static" } },
+  park_sculpture_turning = { model = "park_sculpture_steel", physics = { body = "static" }, script = "park_sculpture_turn.lua" },
 }

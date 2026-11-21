@@ -1009,6 +1009,18 @@ seen in `prefabs.lua` and undone, a wrong class and a missing script refused, th
 the player at the same place after a rebuild in play, both captures looked at. NOT checked by a person: the form's
 controls and the boxes under a mouse.
 
+**The first thing made in it: a park sculpture** (`assets/scripts/park_sculpture.lua`; Glenn asked for "some kind of
+sculpture that could be placed in a park as a piece of furniture"). A plinth 0.45 m tall to sit on (rounded with
+`P:bevel`, a seat marker on each side, a plaque held by four bolts from `scatter.grid`), and on it a slab with a
+hole cut through it (`openings.hole`), made smooth (`P:subdivide`), then twisted, narrowed and leant (`P:map`),
+with wires strung across the hole (`cable.wire`) whose ends are moved by the same rule. Its `params` are finish,
+height, twist, taper, lean and strings. Two models in `models.lua` (`park_sculpture`, bronze; `park_sculpture_steel`,
+taller and turned the other way) and two prefabs: `park_sculpture`, and `park_sculpture_turning`, whose script
+(`park_sculpture_turn.lua`) turns the form on its node, 3 degrees a second. It is not yet placed by the city: a
+park's furniture comes from the city's own lists, and wiring a prefab into those is its own piece of work.
+Seen: the sheet (`rt_model_sheet assets/scripts/park_sculpture.lua`), the editor's prefab view, and play (the form
+turning). Its collision box is one turned box and fits a strongly twisted form loosely.
+
 Left from what was agreed: the field declarations are written in C++ next to the reader (`prefabFieldsJson`), not
 declared by each component kind in data; that comes with step 9, when there is more than one kind to declare.
 Model rows in the Inspector (read-only facts) are not there: a picked piece shows the entity's ordinary properties.
