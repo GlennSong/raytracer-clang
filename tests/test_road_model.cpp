@@ -1931,9 +1931,13 @@ TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_not
     struct Shipped { const char* file; std::size_t streetsCarryingOn, carryOnEnds, junctionsWithNodes; };
     // (river_town / agent_lab junctions listing their nodes 30 -> 31, ADR-0477: j14 stated as two, each over two of its
     // points (j14, j144); j0's split-off T, j145, is over one point and lists none)
+    // (ADR-0480 "river_town slivers": streets carrying on 22 -> 23 and their ends 32 -> 34, junctions listing their nodes
+    // 31 -> 29. s8, s9, s10 and s169 are gone, so j7 and j91 are each one point now (s12 was inside j7, s168 inside j91).
+    // s12 is a street that carries on as s287. s168 runs on as s170 at a junction of two arms, j146, so it is not a
+    // carry-on.)
     const Shipped files[] = {{"planned/traffic_lab_lanelab.json", 0, 0, 15},
-                             {"planned/river_town_lanelab.json", 22, 32, 31},
-                             {"planned/agent_lab_lanelab.json", 22, 32, 31}};
+                             {"planned/river_town_lanelab.json", 23, 34, 29},
+                             {"planned/agent_lab_lanelab.json", 23, 34, 29}};
     for (const Shipped& f : files) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.file;
         const std::string text = slurp(path);
@@ -3772,13 +3776,18 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         // (ADR-0473, the road files: traffic_lab's meets another road 2 -> 0, s208 now j95's fourth arm; river_town's
         // carry-ons 16 -> 8 and sidewalks cut off 14 -> 10, tn0 and tn1 now ramps with no sidewalks, so only bv0's and bv1's
         // sidewalks end where they run on as the freeway.)
+        // (ADR-0480 "river_town slivers": kerb end out 22 -> 16 and sidewalks cut off 10 -> 6, river_town only. The 8 kerb
+        // ends out at j7, j8, j75 and j91 were the inner kerbs between s10 and s13 and between s169 and s172. Those roads
+        // were two streets alongside one another, and s10 and s169 are gone. The 4 islands between them went with them.
+        // 2 are new: the inner corner of j146, where s170 runs on as s168 at a 63-degree bend. Its arm 0's kerb end lies
+        // 5.7 m from the nearest drawn sidewalk.)
         const bool lab = std::string(level) == "traffic_lab";
         const std::map<std::string, uint32_t> pinned =
             lab ? std::map<std::string, uint32_t>{{"kerb end out", 4}}
-                : std::map<std::string, uint32_t>{{"kerb end out", 22}, {"two pieces", 1}, {"carry-on", 8}};
+                : std::map<std::string, uint32_t>{{"kerb end out", 16}, {"two pieces", 1}, {"carry-on", 8}};
         CHECK(cause == pinned);
         CHECK(kinds.count("turn_round") && kinds.at("turn_round") == (lab ? 16u : 31u));
-        CHECK(sidewalks - inLargest == (lab ? 0u : 10u));
+        CHECK(sidewalks - inLargest == (lab ? 0u : 6u));
     }
 }
 
@@ -4509,8 +4518,11 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         {"traffic_lab", {"j0:5", "j0:6", "j22:0", "j24:0", "j37:3", "j70:0", "j70:1", "j84:3", "j84:4"}},
         // (ADR-0477: j14:0 (s21, too close to j13) -> gone, j14 stated as two and s21 now its arm 3 with the room the
         // square rule gives; j0:5 (s274_0, too close to j145) new, j0's T stated apart 28.6 m along s274_0)
+        // (ADR-0480 "river_town slivers": 26 -> 18. j7:0, j7:1, j8:2, j8:3, j75:0, j75:2, j91:2 and j91:3 are gone. They
+        // were the pairs s10/s13 and s169/s172, running between the same two junctions at 7 and 29 degrees; s10 and s169 are
+        // gone, so the arterials s13 and s172 have their junctions to themselves.)
         {"river_town", {"j135:4", "j135:5", "j0:5", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
-                        "j72:0", "j72:1", "j73:0", "j75:0", "j75:2", "j7:0", "j7:1", "j8:2", "j8:3", "j90:0", "j90:4", "j91:2", "j91:3"}}};
+                        "j72:0", "j72:1", "j73:0", "j90:0", "j90:4"}}};
     for (const char* level : {"traffic_lab", "river_town", "agent_lab"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
         RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/')));
@@ -4560,7 +4572,10 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         // (ADR-0477, the one stated exception: Glenn split river_town's j14 into j14 and j144, whose facing stop lines on
         // Redwood Parkway's s313 leave 3.9 m between them, less than the 6.5 m storage -- the reason the grouping had made
         // them one junction. Was none.)
-        const std::set<std::string> knownShort = known == "river_town" ? std::set<std::string>({"j14:2", "j144:0"}) : std::set<std::string>();
+        // (ADR-0480 "river_town slivers": + j146:0 and j91:3, the two ends of s168, the 27.2 m street from j91 to j146, the
+        // junction of two arms where it runs on as s170. Their stop lines leave less than the storage between them.)
+        const std::set<std::string> knownShort =
+            known == "river_town" ? std::set<std::string>({"j14:2", "j144:0", "j146:0", "j91:3"}) : std::set<std::string>();
         CHECK(pairs > 500u && short_ == knownShort && past == 0u);
         CHECK(squeezed == knownSqueezed.at(known));
     }
@@ -5284,7 +5299,9 @@ TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
         const std::string dir = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned";
         const std::string text = slurp(dir + "/" + level + "_lanelab.json");
         const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir);
-        CHECK(g.junctions.size() == 146u);
+        // (146 -> 147, ADR-0480 "river_town slivers": j146, the two-arm junction where s170 runs on as s168 at j91's old
+        // point A, written at the list's end)
+        CHECK(g.junctions.size() == 147u);
         for (std::size_t i = 0; i < g.junctions.size(); ++i) CHECK(g.junctions[i].id == "j" + std::to_string(i));
         std::map<std::string, const ModelJunction*> J;
         for (const ModelJunction& j : g.junctions) J[j.id] = &j;

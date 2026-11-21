@@ -12,7 +12,6 @@
 #include "city_car.h"                                 // ...which are entities
 #include "city_near.h"                                // CityNearCar: a near car the driving sees by itself (ADR-0451)
 #include "city_crowd.h"                               // a crowd made from the roads (ADR-0446)
-#include "../../engine/ai/pathfind.h"                 // stronglyConnected: where a crowd's people can walk
 #include "../../engine/procgen/city/polyline.h"       // distToSegment
 
 #include "../../engine/vehicle_lamps.h"               // the lamp decision core (ADR-0065)
@@ -1775,21 +1774,17 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         std::string err;
         CrowdSpec spec;
         CrowdMade made;
-        // WHERE PEOPLE CAN WALK TO AND FROM: the largest part of the walking network in which every node reaches every
-        // other on foot, and within a walker's last straight steps (kBoardReach) of one of its streets. (Streets at the
-        // lab's open edges have sidewalks the walking network does not reach: people put there could go nowhere.)
-        const std::vector<int> part = engine::stronglyConnected(nav_, true);
-        std::vector<int> partSize;
-        for (const int p : part)
-            if (p >= 0) {
-                if (p >= static_cast<int>(partSize.size())) partSize.resize(static_cast<std::size_t>(p) + 1, 0);
-                ++partSize[static_cast<std::size_t>(p)];
-            }
-        const int mainPart = partSize.empty() ? -1 : static_cast<int>(std::max_element(partSize.begin(), partSize.end()) - partSize.begin());
-        // ...and, for a home, where the households' cars can be parked: kerb spaces within a walk the brain offers
-        // (kSpaceReach, the nearest kSpacesLookedAt) beside lanes in the largest part of the road every vehicle class
-        // drives (driving/trip_places.h), at least kHomeSpaces of them (the brain then offers only those: the level's
-        // drivableSpacesOnly)
+        // WHERE PEOPLE CAN WALK TO AND FROM: a place whose stand joins the walks (CitySim::walkJoin, the very join a
+        // walk from or to it starts and ends by: the brain sends its people to their places' stands) in the largest
+        // part of them a walker can get round. (A place on a walk cut off from the rest, a sidewalk ending short of its
+        // junction or a sliver between two roads, is one its people could walk nowhere from.) Was the street map's
+        // walking network, which walked nobody after #306 piece 6 W3 (ADR-0480).
+        // ...and, for a home, where the households' cars can be parked: the kerb spaces the brain offers (the one list,
+        // kerbSpacesOffered), kept to those beside lanes in the largest part of the road every vehicle class drives
+        // (driving/trip_places.h; the brain, with the level's drivableSpacesOnly, keeps those of the car's own class,
+        // so these are among them), at least kHomeSpaces of them for the comings and goings; and as many of them free
+        // as its household can have cars, which the home then holds (makeCrowd's CrowdSpaces: the generator never
+        // deals a household whose car the brain finds no free space for)
         // (12 at ADR-0446's 200 residents; at 350 a household's car found none of 12 free)
         constexpr int kHomeSpaces = 24;
         const driving::Driving& d2 = *sim_.drivingV2();
@@ -1807,29 +1802,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             classMain.push_back(main);
         }
         const engine::RoadModel& model = *d2.model();
-        const CrowdUsable onFoot = [&](Vec2 p, bool cars) {
-            // the nearest link people walk (NavLink::walkable), within a walker's last straight steps, and in the
-            // largest part of the walking network
-            const int best = nearestWalkableLink(p, kBoardReach);
-            if (best < 0) return false;
-            const engine::NavLink& L = nav_.links[static_cast<std::size_t>(best)];
-            if (part[static_cast<std::size_t>(L.from)] != mainPart || part[static_cast<std::size_t>(L.to)] != mainPart) return false;
-            // (a walk away from here starts at the network's nearest node, whatever it is: CitySim::sendAgentTo)
-            const int node = nav_.nearestNode(p);
-            if (node < 0 || part[static_cast<std::size_t>(node)] != mainPart) return false;
-            if (!cars) return true;
-            int spaces = 0;
-            for (const engine::KerbSpaceNear& near : model.kerbSpacesNear(model.frontageAt(p), kSpaceReach, kSpacesLookedAt)) {
-                const engine::KerbLanePlace lane = model.kerbLaneBeside(near.space);
-                bool everyClass = lane.valid();
-                for (std::size_t cls = 0; cls < classParts.size() && everyClass; ++cls)
-                    everyClass = classParts[cls].partOf(lane.path) == classMain[cls];
-                spaces += everyClass ? 1 : 0;
-            }
-            return spaces >= kHomeSpaces;
+        const auto everyClass = [&](const engine::KerbSpace& space) {
+            const engine::KerbLanePlace lane = model.kerbLaneBeside(space);
+            bool every = lane.valid();
+            for (std::size_t cls = 0; cls < classParts.size() && every; ++cls)
+                every = classParts[cls].partOf(lane.path) == classMain[cls];
+            return every;
+        };
+        const CrowdSpaces carSpaces = [&](const engine::RoadFrontage& f) { return kerbSpacesOffered(model, f, everyClass); };
+        const CrowdUsable onFoot = [&](Vec2 p, const engine::RoadFrontage& f, bool cars) {
+            engine::WalkPoint joined;
+            bool cutOff = true;
+            if (!sim_.walkJoin(p, joined, &cutOff) || cutOff) return false;
+            return !cars || static_cast<int>(carSpaces(f).size()) >= kHomeSpaces;
         };
         if (code.empty() || !vm.doString(code, &err) || !engine::loadCrowdSpec(vm, params_.crowd, spec, &err) ||
-            !makeCrowd(spec, *sim_.drivingV2()->model(), onFoot, params_.seed, made, &err)) {
+            !makeCrowd(spec, *sim_.drivingV2()->model(), onFoot, carSpaces, params_.seed, made, &err)) {
             LOG_WARN << "[citysim] crowd " << params_.crowd << ": " << (code.empty() ? std::string("not found under assets/scripts") : err);
         } else {
             std::string kinds;
@@ -1898,20 +1886,6 @@ driving::HeadShows CityRenderSystem::signalHeadShows(std::size_t head) const {
         return driving::HeadShows{};
     return driving::headAt(*d->roads(), d->rightOfWay(), headJunctions_[head],
                            static_cast<uint32_t>(signalHeads_[head].arm), d->clockSeconds());
-}
-
-int CityRenderSystem::nearestWalkableLink(Vec2 p, Real reach) const {
-    int best = -1;
-    Real bestD = reach;
-    for (std::size_t l = 0; l < nav_.links.size(); ++l) {
-        const engine::NavLink& L = nav_.links[l];
-        if (!L.walkable) continue;
-        const Real away = engine::distToSegment(p, nav_.nodes[static_cast<std::size_t>(L.from)], nav_.nodes[static_cast<std::size_t>(L.to)]);
-        if (away > bestD) continue;
-        bestD = away;
-        best = static_cast<int>(l);
-    }
-    return best;
 }
 
 void CityRenderSystem::tieSignalHeads(World& world) {

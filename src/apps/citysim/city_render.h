@@ -286,10 +286,6 @@ public:
     }
     const PlaceMap& places() const { return places_; }
     const engine::NavGraph& nav() const { return nav_; }
-    // THE NEAREST LINK PEOPLE WALK (NavLink::walkable) within `reach` of `p` (-1: none): where the crowd's places are
-    // asked whether they can be walked to (ADR-0446). Named so a test can set it beside the road model's one answer
-    // (RoadModel::walkJoinOn, ADR-0468, issue #300); it goes with the street map (#306 task 4, pieces 6 and 10).
-    int nearestWalkableLink(engine::Vec2 p, Real reach) const;
     // The height things drawn along a route stand on: link `link`'s surface at `station` (deckYAt), the ground for
     // link -1 (the trip lab's plan line and its destination mark).
     Real surfaceY(int link, Real station, engine::Vec2 p) const { return deckYAt(link, station, p); }

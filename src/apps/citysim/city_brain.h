@@ -74,6 +74,7 @@
 #include "../../rt_math.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -107,6 +108,13 @@ constexpr Real kSpaceReach = 400.0;
 // (64: a crowd's homes share the spaces of their streets, and the ones a car cannot drive from are passed over, ADR-0446;
 // it was 24)
 constexpr std::size_t kSpacesLookedAt = 64;
+// THE KERB SPACES OFFERED FOR A PLACE whose frontage is `f`: of the kSpacesLookedAt nearest it on foot within
+// kSpaceReach (RoadModel::kerbSpacesNear), nearest first, those `keep` keeps (the caller's word that a car can stand
+// there and be driven away). The one list both sides use: the brain offers a car its spaces from it (spacesFor; a
+// household's car at the start takes the first free one), and the crowd maker holds a household's cars' spaces in it
+// as it takes the home (city_render.cpp, makeCrowd's CrowdSpaces), so it never deals a household the brain must refuse.
+std::vector<engine::KerbSpace> kerbSpacesOffered(const engine::RoadModel& model, const engine::RoadFrontage& f,
+                                                 const std::function<bool(const engine::KerbSpace&)>& keep);
 // Where a person stands to get into a car or after getting out: this far out from the car's side, on the kerb side.
 constexpr Real kDoorStandOff = 0.6;
 // A walk has arrived when the person is within this of where it ends.

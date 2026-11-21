@@ -159,11 +159,13 @@ void CitySim::setRoads(std::shared_ptr<const engine::RoadModel> roads, std::stri
     // which side of it the road is and how far its line is from that kerb (a stretch's line is the sidewalk's middle,
     // half its width; a corner's is kWalkFromKerb in, walk_lanes.h)
     walker_ = engine::roads::RouteWalker{};
+    walkParts_ = engine::ReachableParts{};
     walkRoadSide_.clear();
     walkKerbOff_.clear();
     if (roads_ && roads_->built) {
         const engine::LaneGraph& G = roads_->laneLevel;
         walker_ = engine::roads::bindWalker(*roads_, "walker", kWalkSpeed);
+        walkParts_ = engine::reachableWalks(G, walker_.open);
         walkRoadSide_.assign(G.walks.size(), 0);
         walkKerbOff_.assign(G.walks.size(), 0.0f);
         for (uint32_t w = 0; w < G.walks.size(); ++w) {
@@ -191,11 +193,12 @@ void CitySim::setRoads(std::shared_ptr<const engine::RoadModel> roads, std::stri
 
 // ---- THE WALK ROUTE (#306 piece 6, W3): where a walker on its route is, and how a route begins --------------------
 
-bool CitySim::walkJoin(Vec2 p, engine::WalkPoint& out) const {
+bool CitySim::walkJoin(Vec2 p, engine::WalkPoint& out, bool* cutOff) const {
     if (!roads_ || !roads_->built || walker_.open.empty()) return false;
-    const engine::WalkJoin j = roads_->walkJoinNear(p, walker_.open);   // the one fallback, by position
+    const engine::WalkJoin j = roads_->walkJoinNear(p, walker_.open, &walkParts_);   // the one fallback, by position
     if (!j.valid()) return false;
     out = j.at;
+    if (cutOff) *cutOff = j.cutOff;
     return true;
 }
 
@@ -3453,13 +3456,18 @@ void CitySim::computeGaps() {
         }
     }
     // FOLLOWING ACROSS A JOIN: the front walker on a walk (no leader ahead on its own) keeps its gap to whoever is
-    // ahead on the next steps of its route, the same way and file, within kFollowSight route metres.
+    // ahead on the next steps of its route, the same way and file, within kFollowSight route metres. Never a walker
+    // on a crossing: it walks on off the carriageway onto the pavement, beside whoever stands there, and is not held in
+    // the road behind a queue on the far side. (Held there, river_town's crowd locked at one corner: a queue for the
+    // next crosswalk filled the short corner walk, the people crossing to it stood on the first crosswalk behind it,
+    // and the cars that gave way to them stood for good, among them the cars the queue was waiting for a gap in.)
     constexpr Real kFollowSight = 20.0;
     for (int i : kIdx_) {
         const Agent& a = agents_[i];
         if (gaps_[i] != INF) continue;                 // has a leader on its own walk already
         if (a.far()) continue;        // far tier: no following
         if (!onRoute(a)) continue;
+        if (G.walks[a.route.steps[static_cast<std::size_t>(a.leg)].walk.index].modelCrosswalk != engine::kNoIndex) continue;
         const int legN = static_cast<int>(a.route.steps.size());
         Real ahead = legLength(a, a.leg) - a.distOnLeg;  // to the next step's start
         for (int step = 1; a.leg + step < legN && ahead < kFollowSight; ++step) {

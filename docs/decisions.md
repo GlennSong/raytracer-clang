@@ -23885,3 +23885,120 @@ The fix is at the cause, in the roads (the coordinator's option (a)): not a re-p
 river_town's crowd at W3, against its pins (not re-pinned): the most cars on the road 139 at minute 11 -> 113 at minute 10; trips 318 -> 342; parked 209 -> 263; walks blocked 0 -> 2; another place chosen 0 -> 192; plans with no way 0 -> 241; arrivals 730 -> 643; hash 0xa15a1ec8afaff85d -> 0x4fb696326045a7ef. Rings, errors, refused and touching spells still 0. 9 checks fail.
 
 **Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (25 min 18 s, 3.8 GB at its peak); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; level_tests `level_every_lanes_level_hands_the_sim_its_road_model` 1/1; `level_brain_crowd` passes; `near_tier_in_the_crowd_follows_the_player` fails its one walker touch (above); `level_river_town_crowd` fails 9 checks (pending, above).
+
+### river_town slivers — two streets that ran alongside an arterial between the same two junctions are taken out: s8, s9, s10 (by j7-j8) and s169 (by j91-j75)
+
+What it does: river_town's and agent_lab's road files (the same roads) had two places where a second street ran beside an arterial, between the same pair of junctions, at a sliver of an angle. Those streets are taken out of both files (Glenn's decision, 2026-11-21). The arterials run through on their own. The four islands of sidewalk between the pairs are gone, and so are the long junction boxes the slivers made.
+
+Words:
+- **Sliver:** the thin wedge between two roads that leave a junction a few degrees apart. Their kerbs on the inside of it never clear each other, so the junction's box edge stands back (ADR-0471) until it nearly meets the next junction's.
+- **Carry-on:** where a street runs on as another with no junction (`carries_on`).
+- **Island:** a sidewalk that meets nothing at either end, so nobody standing on it can walk anywhere (a part on foot of its own).
+
+**What was wrong** (pictures `out/zz_rt_walks/j7_j8.png`, `j91_j75.png`):
+- **j7 to j8.**
+  - The arterial (s287, s12, s13, s50, Foundry Parkway) runs straight at 14 degrees.
+  - The collector s9, s10, s48 (Sherman Avenue) runs about due east. It forked off the arterial at j7's west point at 7 degrees, ran inside j7 3.5 m from it as s9, and then ran beside it as s10 to j8. The spines are 10.6 m apart at x = -330 and 30 m at j8.
+  - The two carriageways (22 m and 16 m wide) overlap for most of that length. j7 was spread over three points, with the 3.5 m link s8 between two of them.
+  - j8's two points were already joined by s47, square to both roads. So that is the T between the two streets.
+- **j91 to j75.**
+  - The collector s140, s169, s170 runs straight through j75 and on to j91's point A.
+  - The arterial s173, s172 runs straight at 19 degrees and ended on the collector at j75, at 29 degrees.
+  - j91's other point B lies square to the arterial from A, 27.2 m away. s168 joins them, and that is the T between the two.
+- **What it cost.** Each of s10, s13, s169 and s172 kept only about 12 m of sidewalk, in its middle. The inner one of each pair met nothing at either end. Those were walks 15, 18, 290 and 297, where W3's measure found 18 of river_town's 22 stranded people. The boxes stood back to within 8 m of each other, and the places along s10 and s13 were held 25-40 m past their sidewalk's end.
+- A branch at a T was looked at first. It cannot clear: the collector's line is too close to the arterial's everywhere west of j8. The T that would clear is s47 at j8 and s168 at j91, which already exist.
+
+**The change** (both files, by hand; no tool removes a road):
+- **Edges taken out:** s8, s9, s10, s169. The 370 left keep their ids and order.
+- **Streets taken out:** s10, s169.
+- **j7** is now one point, (-383.17, 479.24). Its arms are s13 (0), s11 (1) and s12 (2, new as an arm); through s13 with s12. Its point 1 (where s8, s9 and s10 met) and its west point are gone, and so are its stretches inside (s8, s9, s12).
+- **s12** (30.71 m) is a street from j7 that carries on as s287. s287's start carries on from s12 instead of being j7's arm.
+- **j8** loses its s10 arm, leaving 5 arms; through s50 with s13 and s49 with s44. s48 now starts at j8's point A, fed by s44 and s47.
+- **j91** is now one point, B (152.33, 448.29), with arms s173, s171, s172 and s168 (in, at 27.2); through s173 with s172 and s171 with s168.
+- **s168** (27.2 m, named Twentieth Road as the layout's run naming gives it) is a street from j146 to j91.
+- **j146**, new, at the end of the junction list, at j91's old point A (161.21, 422.58): two arms, s168 (0) and s170 (1); through; "unmarked". There, s170 (Sherman Avenue, 2+2 lanes) runs on as s168 (1+1) round a 63-degree bend. s170 now starts at j146.
+  - As a carry-on, the lanes would have been joined across the bend, up to 5.4 m apart. A junction joins them with connectors instead. One of those, s170.b1 into s168.f0, fits no vehicle (its tightest bend is 1.7 m): the outer lane, which has no lane of its own on s168.
+- **j75 is kept as a junction of two arms:** s172 runs on as s140, through, "unmarked". It is not taken out, for two reasons:
+  - a removed junction would leave the list without an id, and the split tool would then hand out an id that is already in use (below);
+  - a carry-on there, tried and taken back, joined the lanes 2.9-4.8 m apart across the 28-degree bend, with the 3 lanes of s172 into the 2 of s140. A junction joins them with connectors.
+- **agent_lab's controls:** j91 is now "stop" (the local streets s171 and s168 stop) where it was "signal" ("five or more roads meet"); j7 keeps "stop" with its stop sign on s11; j75 and j146 are "unmarked" ("one road running on as another"). These are the lab policy's own answers (`city_plan controls ... rules/lab.lua --layout`). Every other junction is unchanged.
+
+**A tool fault, for #313** (not fixed here): `lanes_tool layout --split-junction` (road_layout.cpp `insertSplitJunctionText`) names the junction it adds `j<count>`, the list's length. That is the next free id only while no junction has ever been taken out. Once one is, the new junction gets an id the list already holds. Until the tool takes the highest id plus one, a road file keeps its junction ids j0 to jN with none missing; that is why j75 stays.
+
+**Checked:**
+- `lanes_tool layout <file> --arm-order`: 0 of 147 junctions differ, in both files.
+- `lanes_tool layout <copy> --write`: "unchanged, byte for byte", in both files.
+- Field by field against HEAD:
+  - edges 374 to 370 (the four named), the rest unchanged and in the same order;
+  - junctions 146 to 147: only j7, j8, j75 and j91 changed, and j146 added at the end;
+  - streets 327: s10 and s169 out, s12 and s168 in, s170 and s287 changed;
+  - every other member unchanged.
+  agent_lab's junctions equal river_town's apart from their controls, why and stop signs.
+- `lanes_tool junctions`, the grouping's own view: j7 and j91 are one point each, as stated now.
+
+**Before and after** (`lanes_tool lanegraph`, the tool's two vehicles, river_town):
+
+| | before | after |
+|---|---|---|
+| Junctions | 146 | 147 |
+| Stated turns; fit no vehicle; with no lane path | 2,252; 165; 10 | 2,223; 145; 0 |
+| Car: largest part / with lane changes / without | 86.6% / 85.4% / 55.8% | 87.6% / 86.4% / 56.8% |
+| Problems in all | 510 | 482 |
+| Walks that meet nothing at either end | 8 | 4 (none on these streets) |
+| Arms too close for their angle (road_model_39) | 26 | 18 |
+| Stop lines with less than the storage between them | 2 | 4 |
+| Walk ends alone, kerb end out (road_model_33) | 22 | 16 |
+| Sidewalks outside the largest part on foot | 10 | 6, in 5 parts |
+
+- **Up, all reported as joined:**
+  - lanes joined across a gap, 51 -> 62, and kinks where paths join, 21 -> 29: from the new carry-on s12 into s287, and the lane counts it changes at s287's far end;
+  - the stop lines: both ends of s168, the 27.2 m street from j91 to j146;
+  - the kerb ends out: j146's inner corner, whose arm 0 kerb end lies 5.7 m from the nearest drawn sidewalk.
+- The 4 islands left (streets 48, 50, 82, 84 of the lane level) were there before and have another cause.
+
+**Bakes** (`rt_bake` under `ulimit -v 30000000`): river_town 2:50, 2.4 GB at its peak; agent_lab 2:48, 2.4 GB. 620 lots each (622 at ADR-0478).
+
+**Re-pinned, old -> new, why in each comment:**
+- `road_model_19`: streets carrying on 22 -> 23, their ends 32 -> 34, junctions listing their points 31 -> 29.
+- `road_model_33`: kerb end out 22 -> 16, sidewalks cut off 10 -> 6.
+- `road_model_39`: arms too close 26 -> 18; stop lines short of the storage + j146:0 and j91:3.
+- `road_model_46`: junctions 146 -> 147 (j146), still j0..jN in order.
+
+**The crowd: does not start.** `level_river_town_crowd_drives_on_the_new_driving` stops before minute 0: "household h433: a car near home_433: no such free kerb parking space within 400 m on foot of the marker".
+- The crowd's places are dealt along the streets (`makeCrowd`), so a change to the streets moves every marker.
+- A home is accepted where 24 drivable kerb spaces lie within reach. That count does not take away the spaces the households before it have taken, so where homes fall close together the last car finds none free.
+- That is the crowd generator's (city_crowd.cpp, city_render.cpp `onFoot`), not the roads'. Not fixed here; reported.
+- brain_crowd (`level_brain_crowd_the_residents_make_their_day`) passes.
+
+**For players:** by Foundry Parkway between j7 and j8, and by Tamarack Avenue between j91 and j75, there is one road where two overlapped. The junctions at their ends are ordinary ones, with sidewalks and crosswalks all round.
+
+**Revisit when** the planner stops laying a second street beside an arterial (#313); when `insertSplitJunctionText` takes the highest id plus one (#313); or when the crowd generator holds a home's spaces for its own households.
+
+### W3b — the crowd maker asks what the brain and the sim ask: a place only where the sim's walks reach it, a home only with its household's kerb spaces free, and held
+
+What it does: the crowd maker (`makeCrowd`, city_crowd.cpp, asked from city_render.cpp) now puts the crowd's places by the same answers the brain and the sim use later. So it never deals a household the brain must refuse, or a place whose people can walk nowhere. Every seed works: river_town's crowd starts again after the sliver streets went (above).
+
+Words:
+- **Kerb spaces offered:** the parking spaces at the kerb the brain offers a car for a place: of the 64 nearest on foot within 400 m of the place's frontage, nearest first, those a car can stand in and drive from (`kerbSpacesOffered`, city_brain.h; the reach and count are the brain's, unchanged).
+- **Held:** a space the crowd maker has kept for a household's cars while it makes the rest of the crowd.
+- **The largest part of the walks:** the walks a walker can get round all of, from any one to any other (`reachableWalks` over the walker's open walks).
+
+**What was wrong** (three counts that disagreed):
+- **Spaces not held.** A home was taken where at least 24 spaces lay within reach, but the spaces the households before it would take were not taken away. Where homes fell close together, a late household's car found none free, and the brain refused the crowd ("household h433: a car near home_433: no such free kerb parking space within 400 m on foot of the marker").
+- **Spaces from another frontage.** The crowd maker counted from where the home's stand fronts by position (`frontageAt`); the brain counts from the marker's stated street, station and kerb (`frontageOn`). By a junction those can be different streets, so the two lists differed.
+- **Walking asked of the street map.** Whether people could walk to a place was asked of the street map's walking network (`nearestWalkableLink`, `stronglyConnected` over its links). Since W3 nobody walks the street map, so places could be put on walks cut off from the rest.
+
+**The fix:**
+- **One list of spaces**, `kerbSpacesOffered(model, frontage, keep)`: the brain's `spacesFor` (keep: the car's class can drive from it) and the crowd maker (keep: every vehicle class can drive from it) both read it, from the marker's stated frontage. The crowd maker's spaces are among those the brain offers each car, in the same order.
+- **A home holds its household's spaces** (`CrowdSpaces`): a home is taken only where as many of its spaces are free (not held by an earlier home) as its household can have cars: the largest car count with a share, never more than its members. It then holds them; a home that cannot is drawn again. The brain puts the households' cars in the same order, each in the first free space of its list, so each finds one of its own household's held spaces or a nearer one. The 24-space floor stays, read from the same list.
+- **A place only where the sim's walks reach it:** its stand joins the walks by the sim's own join (`CitySim::walkJoin`, now handed the walker's parts, `cutOff` when asked) in the largest part.
+- `CityRenderSystem::nearestWalkableLink` is deleted: the crowd maker was its only reader (W3's report wrongly named it the player's boarding look-up).
+
+**Also, found on the way: walkers on a crossing are never held behind a queue past it** (`computeGaps`). On the new river_town a queue for one crosswalk filled the short corner walk before it. People crossing the crosswalk before that stood on it behind the queue, and car 228 gave way to them for 509 s ("give way to people crossing"; 20 people round (-167, 485)). A walker on a crossing now keeps no gap to whoever is beyond its end, so it steps onto the pavement beside them. A/B on river_town: the corner's pile and car 228's stand go (longest stand 509.5 s -> 453.4 s, car 292); arrivals 460 -> 464. brain_crowd and the near crowd give the same counts with or without it (hashes only).
+
+**Moved, with why (old -> new):**
+- **river_town's crowd** (not re-pinned, waiting for the coordinator). Against W3's run and the pins (W3 / pins -> now): arrivals 643 / 730 -> **464**; plans with no way 241 / 0 -> 29; another place chosen 192 / 0 -> 0; walks blocked 2 / 0 -> 0; the longest stand 496 s (car 223) -> 453.4 s (car 292); the most on the road 113 at minute 10 / 139 at minute 11 -> 93 at minute 11; trips 342 / 318 -> 280; parked 263 / 209 -> 229; cars 383 -> 391 (in a household with one 407 -> 413); hash 0x4fb696326045a7ef / 0xa15a1ec8afaff85d -> 0xb15c3ceac0e4a34d. With `RT_WALK_REFUSED=1`: no walk refused. Rings, errors, refused, touching spells 0. **Open:** arrivals are the lowest yet, and about 410 of the 630 are walking at any minute from minute 8 (W3's run: about 360). Why the walks take longer was not dug into.
+- **brain_crowd**, re-pinned (comment in the test): cars 229 -> 209 (in a household with one 246 -> 222: places drawn again draw the seeded stream on, so the households' car counts moved); the most on the road 80 -> 57; busy minutes 8 -> 3; trips 263 -> 201; parked 217 -> 164; arrivals 455 -> 487; hash 0xcb6bf4524e6ee584 -> 0xbacfb8b215f04aa1. Away from a kerb end 4.38% -> 3.24%.
+- **The near crowd**, re-pinned: 11 at minute 8 -> 11 at minute 6; in 81 -> 52; out 71 -> 48; hash 0xb182a398296f4017 -> 0x0fb18ec83c665a00. Its touches on walkers 1 -> 0 and on other things 1 -> 0, so it passes: car 220's day is not in this crowd. Whether a car can still stand off its carriageway as car 220 did is not known.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1512/1512; brain_tests 23/23; `level_brain_crowd` 1/1; `near_tier_in_the_crowd_follows_the_player` 1/1; `level_river_town_crowd` runs to the end and fails 8 pinned counts (above, not re-pinned).

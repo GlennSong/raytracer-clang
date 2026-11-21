@@ -95,6 +95,16 @@ Vec2 unit(Vec2 v, Vec2 otherwise) {
 
 }  // namespace
 
+std::vector<engine::KerbSpace> kerbSpacesOffered(const engine::RoadModel& model, const engine::RoadFrontage& f,
+                                                 const std::function<bool(const engine::KerbSpace&)>& keep) {
+    std::vector<engine::KerbSpace> out;
+    if (!f.street.valid()) return out;
+    engine::KerbSpacePose pose;
+    for (const engine::KerbSpaceNear& found : model.kerbSpacesNear(f, kSpaceReach, kSpacesLookedAt))
+        if (model.kerbSpacePose(found.space, pose) && (!keep || keep(found.space))) out.push_back(found.space);
+    return out;
+}
+
 // ---- Everything the residents need, in one place ---------------------------------------------------------------------
 
 struct CityBrain::Impl {
@@ -397,10 +407,11 @@ struct CityBrain::Impl {
         if (isMarker(door) && markerIndex(door) < markers.size()) frontage = markers[markerIndex(door)].frontage;
         else if (positionOf(door, at)) frontage = model->frontageAt(at);
         if (!frontage.street.valid()) return out;
-        for (const engine::KerbSpaceNear& found : model->kerbSpacesNear(frontage, kSpaceReach, kSpacesLookedAt)) {
-            const PlaceRef place = spaces->placeOf(found.space);
-            if (place.valid() && drivable(place, cls)) out.push_back(place);
-        }
+        for (const engine::KerbSpace& space : kerbSpacesOffered(*model, frontage, [&](const engine::KerbSpace& s) {
+                 const PlaceRef place = spaces->placeOf(s);
+                 return place.valid() && drivable(place, cls);
+             }))
+            out.push_back(spaces->placeOf(space));
         return out;
     }
     // Could `car`, driven by `who` (kNoAgent: by nobody yet), be left in `space` this moment? No other car stands in

@@ -1139,12 +1139,16 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // every driver's stops for them, moved. STILL FAILING, not loosened: one touch on a walker (and one on another
     // thing) -- car 220 stands 1.47 m off its lane on s20, 9.63 m from the centre line, so the car is off its
     // carriageway when it meets the walker on the pavement.
+    // And again (ADR-0480 W3b) from 11 at minute 8, in 81, out 71, 0xb182a398296f4017 to 11 at minute 6, in 52, out 48,
+    // 0x0fb18ec83c665a00: the crowd maker puts places where the sim's walks and the brain's kerb spaces serve them (see
+    // test_brain_crowd), so brain_crowd's households, cars and days are other ones (cars 229 -> 209, the most on the road
+    // 80 -> 57). The touches above went with that day: on walkers 1 -> 0, on other things 1 -> 0.
     CHECK(mostNear == 11);
-    CHECK(mostNearAt == 8);
-    CHECK(c.intoPhysics == 81u);
-    CHECK(c.intoLane == 71u);
+    CHECK(mostNearAt == 6);
+    CHECK(c.intoPhysics == 52u);
+    CHECK(c.intoLane == 48u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xb182a398296f4017ull);
+    CHECK(hash == 0x0fb18ec83c665a00ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

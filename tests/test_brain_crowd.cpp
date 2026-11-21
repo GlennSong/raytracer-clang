@@ -310,24 +310,34 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // 0xb67879f5b6ec7210 -> 0xcb6bf4524e6ee584; rings, no plan, another place, errors, refused still 0. Walkers waiting
     // away from a kerb end 62.68% -> 4.38%, so the under-5% check above passes for the first time. Not pinned, looked
     // at: the longest stand 563 s -> 166 s (car 169).
+    // AND AGAIN when the crowd maker was made to ask what the brain and the sim ask (ADR-0480, W3b): a place is put
+    // only where its stand joins the largest part of the walks (CitySim::walkJoin; it asked the street map, which
+    // nobody walks any more), and a home only where its household's cars have kerb spaces free in the brain's own list
+    // (kerbSpacesOffered, from the marker's stated frontage), which it then holds. Places drawn again draw the seeded
+    // stream on, so the households' car counts moved: cars 229 -> 209 (with one 246 -> 222). The most on the road 80 ->
+    // 57, both at minute 10; busy minutes 8 -> 3; trips 263 -> 201; parked 217 -> 164; arrivals 455 -> 487; hash
+    // 0xcb6bf4524e6ee584 -> 0xbacfb8b215f04aa1 (with walkers on a crossing never held behind a queue past it,
+    // computeGaps; without that, the same counts and 0xe7299b584c61b745). Rings, no plan, another place, blocked,
+    // errors, refused still 0. Away from a kerb end 4.38% -> 3.24%. Not pinned, looked at: the longest stand 166 s ->
+    // 193 s (car 176).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
-        CHECK(b.cars().size() == 229u);
-        CHECK(withCar == 246);
+        CHECK(b.cars().size() == 209u);
+        CHECK(withCar == 222);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 80);
+        CHECK(mostOnRoad == 57);
         CHECK(mostOnRoadAt == 10);
-        CHECK(busyMinutes == 8);
-        CHECK(b.counts().tripsBegun == 263u);
-        CHECK(b.counts().parkedReports == 217u);
+        CHECK(busyMinutes == 3);
+        CHECK(b.counts().tripsBegun == 201u);
+        CHECK(b.counts().parkedReports == 164u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 455u);
+        CHECK(b.machine()->counts().arrivals == 487u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xcb6bf4524e6ee584ull);
+        CHECK(hash == 0xbacfb8b215f04aa1ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

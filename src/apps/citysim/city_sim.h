@@ -831,8 +831,10 @@ public:
         return a.moving && a.route.found && a.leg >= 0 && a.leg < static_cast<int>(a.route.steps.size());
     }
     // WHERE A POINT JOINS THE WALKS for a walker (RoadModel::walkJoinNear over the walker's open walks): false when the
-    // sim holds no road model, or the point joins none.
-    bool walkJoin(engine::Vec2 p, engine::WalkPoint& out) const;
+    // sim holds no road model, or the point joins none. `cutOff`, when asked: the walk joined is outside the largest
+    // part of the walks a walker can get round (reachableWalks), so a walk from there reaches only its own part. The
+    // crowd maker puts places only where this joins the largest part (city_render.cpp, makeCrowd's CrowdUsable).
+    bool walkJoin(engine::Vec2 p, engine::WalkPoint& out, bool* cutOff = nullptr) const;
 
     // Is `pos` inside a junction box (within a junction node's widest incident
     // half-width + `margin`)? The bridge uses this for don't-block-the-box (a
@@ -1367,6 +1369,7 @@ private:
     // (setRoads); and for each walk along a street, which side of it the street runs (+1: its right walked forward;
     // -1: its left; 0: no street beside it), worked out once from the model (RoadModel::frontageAt of its middle).
     engine::roads::RouteWalker walker_;
+    engine::ReachableParts walkParts_;   // the parts of the walks the walker can get round (reachableWalks over walker_.open)
     std::vector<int8_t> walkRoadSide_;
     std::vector<float> walkKerbOff_;   // per walk beside a road: its line's distance from that kerb (m)
     std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick

@@ -31,6 +31,8 @@
 
 namespace engine {
 struct RoadModel;
+struct RoadFrontage;
+struct KerbSpace;
 }
 
 namespace citysim {
@@ -89,17 +91,27 @@ struct CrowdMade {
     int cars = 0;
 };
 
-// WHERE A PERSON CAN BE: the caller's answer for a point beside a street (the middle of its sidewalk), whether people
-// can walk to it and away from it (the city's walking network, which the road model does not know), and when `cars`
-// (a home: households' cars start beside it) whether cars can be parked near it and driven away. A street whose middle
-// it refuses (without cars) has no place on it; a place it refuses is drawn again along its piece, then along the rest
-// of the line, and is left out when none is found.
-using CrowdUsable = std::function<bool(engine::Vec2, bool cars)>;
+// WHERE A PERSON CAN BE: the caller's answer for a point beside a street (the middle of its sidewalk; `f` the frontage
+// it stands at, the one a marker made there states), whether people can walk to it and away from it (the sim's walks:
+// it joins the largest part of them a walker can get round), and when `cars` (a home: households' cars start beside
+// it; a kind people drive to) whether cars can be parked near it and driven away. A street whose middle it refuses
+// (without cars) has no place on it; a place it refuses is drawn again along its piece, then along the rest of the
+// line, and is left out when none is found.
+using CrowdUsable = std::function<bool(engine::Vec2 stand, const engine::RoadFrontage& f, bool cars)>;
+
+// THE KERB SPACES A HOUSEHOLD'S CARS CAN START IN at a home whose frontage is `f`, nearest first on foot: the caller's
+// answer from the brain's own list (city_brain.h kerbSpacesOffered, kept to spaces every vehicle class can drive from,
+// so every car's class finds them among its own). A home is taken only where as many of them as its household can
+// have cars (the most `carsPerHousehold` deals, never more than its members) are not held by an earlier household;
+// the home then holds them. So the brain, putting each household's cars in the first free space of its list in the
+// same order, always finds one (a household with fewer cars leaves the rest for nobody). Empty: nothing is held.
+using CrowdSpaces = std::function<std::vector<engine::KerbSpace>(const engine::RoadFrontage& f)>;
 
 // MAKE THE CROWD on `model`'s streets from `spec`, seeded by `seed`. False, with the reason in `why`, when the data
-// cannot be met (no kind households live at, no street to put places on, a day naming a kind with no places).
-bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const CrowdUsable& usable, uint32_t seed, CrowdMade& out,
-               std::string* why);
+// cannot be met (no kind households live at, no street to put places on, a day naming a kind with no places, no place
+// for a home whose household's cars can all start near it).
+bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const CrowdUsable& usable, const CrowdSpaces& spaces,
+               uint32_t seed, CrowdMade& out, std::string* why);
 
 }  // namespace citysim
 
