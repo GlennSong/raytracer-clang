@@ -941,6 +941,32 @@ watch list for prefabs (which also makes `prefab_lab` rebuild when `crane.lua` c
 Still open: finer tags than one line per library call; a "walk" button (Play already does it); typing and clicking in the pane have been
 checked only by pressing the buttons unattended (`RT_STUDIO_PRESS=copy|lists`), not by a person.
 
+### The studio's next shape: a model or a prefab, play, and an inspector (agreed 2026-11-20, not built)
+
+Glenn's calls, from talking it through:
+
+- **The studio views one of two things.** A MODEL (a recipe script, as now: shape only, nothing to press) or a
+  PREFAB (an entry in `prefabs.lua`: a model plus what makes it a thing in the world). Opening a prefab shows its
+  model's recipe in the script pane, so the recipe is still edited there, by hand, by either of us.
+- **Sound, physics, interactions and behaviour live on the prefab, not the model** (as steps 7 to 9 already say).
+  Each attaches to one of the model's markers or nodes by name. The model only names the places.
+- **Play is the editor's own Play button on the studio's level.** Viewing a prefab, the real prefab is stamped:
+  solid from the model's collision shapes, moving parts as moving bodies, its script running. Viewing a bare model,
+  Play is a walk-around of a solid, still object. An edit while playing rebuilds it (the script watcher already
+  runs in play); the player should keep their place across that rebuild, which is to be checked.
+- **An inspector for the prefab's components.** The editor's existing Inspector dock, not a second one. The tree
+  gains a prefab half (body, script, then step 9's sounds, lights and offers), each row with the marker or node it
+  sits on. Selecting a row shows its fields; each component kind declares its fields as a recipe declares its
+  arguments with `params`, so the form is built from data and a marker field is a list of the model's own markers.
+  A component naming a marker the model lacks is an error on its row. Model rows are read-only facts.
+- **The editor rewrites prefab data only.** An inspector edit rewrites that prefab's entry in `prefabs.lua`
+  (comments and layout inside the entry are not kept) and the watcher restamps. It never rewrites a recipe script.
+- **Overlays** drawn with the engine's debug lines (`engine/debug_draw`): collision shapes, joint axes and limits,
+  markers; later a mark and a reach for each sound, light and offer. In play, live values in the inspector.
+
+Order: (1) the studio opens a prefab entry, body and script as its first components, and Play stamps it; (2) the
+physics overlay; (3) step 9 as prefab components with rows, overlays and attachment checks.
+
 ## The model half, done; what the prefab half starts from
 
 Every part of the model in "The model" above is built: nodes, the rig, markers, collision shapes, uses, levels of
