@@ -25,7 +25,11 @@ struct PrefabUses {
         Real left = 0;      // seconds until it turns itself off (a use with `seconds`)
         Real time = 0;      // seconds it has been on (where a sway is in its swing)
         bool moving = false;   // its `move` parts are still on their way (kept by the step; a `stop` use reads it)
-        Real coasting = 0;  // seconds of slowing down left, after a use with `coast` was turned off
+        Real coasting = 0;
+        // WHAT JUST HAPPENED, for whoever makes it heard (PrefabUseSystem reads and clears these): it was done, it was
+        // undone, its parts stopped moving
+        enum Cue : uint8_t { Done = 1, Undone = 2, Arrived = 4 };
+        uint8_t cues = 0;  // seconds of slowing down left, after a use with `coast` was turned off
     };
     std::vector<Use> uses;
 };

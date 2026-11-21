@@ -49,6 +49,9 @@ namespace engine {
 //   light    a light of this kind (assets/scripts/lights.lua) is lit while the use is on, at the marker `light_at`
 //            (the use's own marker when none is given), aimed the way that marker faces (a lamp switched on; the
 //            light inside a fridge whose door is open)
+//   sound    what it sounds like, a name in assets/scripts/prefab_sounds.lua ("door", "drawer", "motor", "machine",
+//            "click"...): that file says what is heard when the use is done, undone, while its parts move or run,
+//            and when they arrive. Heard at the use's marker
 //   sit      the person sits at the marker (the furniture's Seated: engine/interaction.h), facing the way the
 //            marker faces, and is carried with it if its node moves
 //   lie      the same lying down: the eye low over the marker, looking up and along the way it faces
@@ -85,6 +88,7 @@ struct PrefabUse {
     std::vector<std::pair<std::string, Real>> sway;   // node, how far each way (degrees or metres)
     Real period = 2;
     std::string light, lightAt;
+    std::string sound;
     bool sit = false;
     bool lie = false;
 };

@@ -11,17 +11,38 @@
 // things that are prefabs. When everything placed is a prefab the two become one (docs/model-record-design.md,
 // "One catalog").
 
+#include "../audio/audio_engine.h"
 #include "../system.h"
+
+#include <map>
+#include <string>
+#include <utility>
 
 namespace engine {
 
 class PrefabUseSystem : public System {
 public:
+    void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void fixedUpdate(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;   // the lamps that are on, to the light board (lights/light_board.h)
 
     static constexpr double REACH = 1.8;
+
+private:
+    // WHAT A USE SOUNDS LIKE (assets/scripts/prefab_sounds.lua): a clip for each thing that can happen to it. A
+    // clip is one of the engine's procedural sounds by name (audio/sfx.h), made once.
+    struct Sound {
+        std::string done, undone, arrived, shut, moving, running;
+        float volume = 1.0f, pitch = 1.0f;
+        Real range = 12.0;
+    };
+    void sounds(FrameContext& ctx);
+    AudioClipHandle clip(FrameContext& ctx, const std::string& name);
+    std::map<std::string, Sound> sounds_;
+    std::map<std::string, AudioClipHandle> clips_;
+    std::map<std::pair<uint64_t, std::size_t>, AudioVoiceHandle> loops_;   // (copy, use) -> its looping voice
+    bool soundsRead_ = false;
 };
 
 }  // namespace engine

@@ -1554,13 +1554,30 @@ crazy ... The books on the mobile book rack could have more detail."
 
 The clocks show the GAME's time of day. Whether Glenn meant the computer's time is asked, not assumed.
 
-**Sounds are not built.** Glenn: "are you going to make an audio component pass on all of these? Like a motor
-whirr for the standing desk? Cabinet open and close sounds?" Yes, as the next piece of step 9, and in the shape
-`light` has: a use names a sound for starting, one that lasts while parts move or run, and one for arriving
-(`sound = { start = "latch", moving = "motor_small", stop = "thud_soft" }`), played at the use's marker. The
-sounds themselves should come from the engine's procedural audio (the footstep and vehicle work), as a short list
-of named patches by material and mechanism (wood door, metal door, drawer, small motor, big motor, click, bell,
-water) in one data file, so 130 prefabs share about twenty sounds. The audio system has to be read first.
+**Sounds, built (2026-11-21).** Glenn: "are you going to make an audio component pass on all of these? Like a
+motor whirr for the standing desk? Cabinet open and close sounds?"
+
+- A use says `sound = "<kind>"`. `assets/scripts/prefab_sounds.lua` says, for each kind, what is heard when the
+  use is done, undone, when its parts arrive (and `shut`, when they arrive back at rest), and a loop while they
+  move or while the use runs. Thirteen kinds serve some 130 prefabs: door, heavy, cupboard, drawer, sliding,
+  powered, motor, machine, wheel, winch, click, bell, knock.
+- The engine side says only what happened. `engine/prefab_use.h` sets CUES on a use (done, undone, arrived) and
+  knows nothing of audio; `PrefabUseSystem` reads and clears them each frame and plays the clip at the use's
+  marker, and holds one looping voice for each use that is moving or running. A loop on a part that coasts runs
+  down in pitch and loudness with it.
+- No sound was written for this. Every clip is one of the engine's procedural sounds already there
+  (`audio/sfx.h`): the car panels' latch and shut, the lift's button, chime and motor hum, the grapple's winch,
+  a skateboard's roll, a bicycle's freewheel. So a fridge door shuts with a car door's thunk at a lower pitch.
+  That is a start, not a finish.
+- 156 uses were given a kind by rule from what their parts are (a `door_` part is a door; a `stop` use is a
+  motor; a `run` use is a machine).
+
+Seen: in `prefab_town` the audio system reported a voice playing while a desk rose, another when the washing
+machine was switched on, another while the exercise bike was ridden. **Not heard:** this was checked by asking
+the engine how many voices play, not by ear. Whether a kind sounds right is for Glenn to say.
+
+Owed: sounds of their own for the things that borrow badly (a drawer on runners, a cupboard's soft click, water
+in a washing machine, a toaster's pop, a clock's tick, a creak for a swing); and kinds for `sway`.
 
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 

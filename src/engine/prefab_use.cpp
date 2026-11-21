@@ -161,6 +161,9 @@ bool setPrefabUse(World& world, Entity instance, std::size_t index, bool on) {
     PrefabUses::Use& u = uses->uses[index];
     const bool was = u.on;
     u.on = on;
+    if (on && !was) u.cues |= PrefabUses::Use::Done;
+    if (!on && was) u.cues |= PrefabUses::Use::Undone;
+    if (on && was) u.cues |= PrefabUses::Use::Done;   // done afresh (a button pressed again)
     if (on) { u.coasting = 0; if (!was) u.time = 0; }
     else if (was && u.use.coast > 0 && !u.use.run.empty()) u.coasting = u.use.coast;
     apply(world, instance, u);
@@ -178,6 +181,7 @@ bool doPrefabUse(World& world, Entity instance, std::size_t index) {
     if (u.use.stop && u.moving) {   // stopped part way: the parts stay where they are
         for (const std::pair<std::string, Real>& m : u.use.move) setModelTarget(world, instance, m.first, modelValue(world, instance, m.first), 0);
         world.get<PrefabUses>(instance)->uses[index].moving = false;
+        world.get<PrefabUses>(instance)->uses[index].cues |= PrefabUses::Use::Arrived;
         return true;
     }
     return setPrefabUse(world, instance, index, u.use.back.empty() ? true : !u.on);
@@ -196,6 +200,7 @@ void stepPrefabUses(World& world, Real dt) {
                 bool any = false;
                 for (const std::pair<std::string, Real>& m : u.use.move) any = any || mi->target.values.count(m.first) > 0;
                 u.moving = any;
+                if (!any) u.cues |= PrefabUses::Use::Arrived;
             }
             if (!u.on && u.coasting <= 0) continue;
             // how hard it runs: full while on, then less and less as it coasts

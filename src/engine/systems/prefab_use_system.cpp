@@ -6,7 +6,14 @@
 #include "../lights/light_board.h"
 #include "../lights/light_kinds.h"
 #include "../model_motion.h"
+#include "../audio/sfx.h"
+#include "../../log.h"
 #include "../prefab_use.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "../scripting/model_recipes.h"   // readScriptList
+#endif
+
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <vector>
@@ -41,6 +48,124 @@ bool seatAt(World& world, Entity instance, const std::string& marker, bool lying
 
 void PrefabUseSystem::fixedUpdate(FrameContext& ctx) { stepPrefabUses(ctx.world, ctx.clock.fixedStep()); }
 
+// THE SOUNDS. prefab_sounds.lua names, for each kind of sound a use may have, a clip for each thing that happens.
+void PrefabUseSystem::onStart(FrameContext& ctx) {
+    (void)ctx;
+    sounds_.clear();
+    soundsRead_ = false;
+    loops_.clear();
+#ifdef RT_ENABLE_SCRIPTING
+    nlohmann::json list;
+    std::string why;
+    if (!readScriptList("prefab_sounds.lua", std::string(), list, &why)) {
+        LOG_WARN << "[prefab uses] prefab_sounds.lua: " << why << " (prefabs are silent)";
+        return;
+    }
+    for (nlohmann::json::const_iterator it = list.begin(); it != list.end(); ++it) {
+        if (!it.value().is_object()) continue;
+        const nlohmann::json& j = it.value();
+        Sound s;
+        s.done = j.value("done", std::string());
+        s.undone = j.value("undone", std::string());
+        s.arrived = j.value("arrived", std::string());
+        s.shut = j.value("shut", std::string());
+        s.moving = j.value("moving", std::string());
+        s.running = j.value("running", std::string());
+        s.volume = j.value("volume", 1.0f);
+        s.pitch = j.value("pitch", 1.0f);
+        s.range = j.value("range", 12.0);
+        sounds_[it.key()] = s;
+    }
+    soundsRead_ = true;
+#endif
+}
+
+// One of the engine's procedural sounds by name, made the first time it is asked for.
+AudioClipHandle PrefabUseSystem::clip(FrameContext& ctx, const std::string& name) {
+    const std::map<std::string, AudioClipHandle>::const_iterator had = clips_.find(name);
+    if (had != clips_.end()) return had->second;
+    const uint32_t rate = ctx.audio.sampleRate();
+    std::vector<float> pcm;
+    if (name == "latch_open") pcm = sfx::panelOpen(rate, 3);
+    else if (name == "door_shut") pcm = sfx::panelShut(sfx::PanelKind::Door, rate, 3);
+    else if (name == "lid_shut") pcm = sfx::panelShut(sfx::PanelKind::Trunk, rate, 5);
+    else if (name == "heavy_shut") pcm = sfx::panelShut(sfx::PanelKind::Hood, rate, 7);
+    else if (name == "knock") pcm = sfx::impact(rate, 13);
+    else if (name == "tick") pcm = sfx::elevatorButton(rate, 3);
+    else if (name == "ding") pcm = sfx::elevatorDing(true, rate, 7);
+    else if (name == "sliding_doors") pcm = sfx::elevatorDoors(rate, 5);
+    else if (name == "hum") pcm = sfx::elevatorHum(rate, 9);
+    else if (name == "winch") pcm = sfx::reelWinch(rate, 4);
+    else if (name == "roll") pcm = sfx::boardRoll(rate, 6);
+    else if (name == "freewheel") pcm = sfx::freewheel(rate, 2);
+    else LOG_WARN << "[prefab uses] prefab_sounds.lua names the clip '" << name << "', which is not one of the engine's";
+    const AudioClipHandle made = pcm.empty() ? AudioClipHandle() : ctx.audio.createClip(pcm.data(), pcm.size(), 1, rate);
+    clips_[name] = made;
+    return made;
+}
+
+void PrefabUseSystem::sounds(FrameContext& ctx) {
+    if (!soundsRead_ || !ctx.audio.ready()) {
+        ctx.world.each<PrefabUses>([&](Entity, PrefabUses& uses) { for (PrefabUses::Use& u : uses.uses) u.cues = 0; });
+        return;
+    }
+    std::map<std::pair<uint64_t, std::size_t>, bool> wanted;
+    ctx.world.each<PrefabUses>([&](Entity e, PrefabUses& uses) {
+        for (std::size_t i = 0; i < uses.uses.size(); ++i) {
+            PrefabUses::Use& u = uses.uses[i];
+            const uint8_t cues = u.cues;
+            u.cues = 0;
+            if (u.use.sound.empty()) continue;
+            const std::map<std::string, Sound>::const_iterator kind = sounds_.find(u.use.sound);
+            if (kind == sounds_.end()) continue;
+            const Sound& s = kind->second;
+            const bool runs = !u.use.run.empty() && (u.on || u.coasting > 0);
+            const bool loop = (u.moving && !s.moving.empty()) || (runs && !s.running.empty());
+            if (cues == 0 && !loop) continue;
+            Vec3 at;
+            Quat turn;
+            if (!modelMarkerWorld(ctx.world, e, u.use.at, at, turn)) continue;
+            auto once = [&](const std::string& name) {
+                if (name.empty()) return;
+                const AudioClipHandle c = clip(ctx, name);
+                if (!c.valid()) return;
+                AudioPlayParams p;
+                p.volume = s.volume;
+                p.pitch = s.pitch;
+                ctx.audio.playAt(c, at, s.range, p);
+            };
+            if (cues & PrefabUses::Use::Done) once(s.done);
+            if (cues & PrefabUses::Use::Undone) once(s.undone);
+            if (cues & PrefabUses::Use::Arrived) once(u.on ? s.arrived : (s.shut.empty() ? s.arrived : s.shut));
+            if (!loop) continue;
+            const std::pair<uint64_t, std::size_t> key{(uint64_t(e.index) << 32) | e.generation, i};
+            wanted[key] = true;
+            std::map<std::pair<uint64_t, std::size_t>, AudioVoiceHandle>::iterator voice = loops_.find(key);
+            if (voice == loops_.end() || !ctx.audio.isPlaying(voice->second)) {
+                const AudioClipHandle c = clip(ctx, u.moving && !s.moving.empty() ? s.moving : s.running);
+                if (!c.valid()) continue;
+                AudioPlayParams p;
+                p.volume = s.volume;
+                p.pitch = s.pitch;
+                p.loop = true;
+                loops_[key] = ctx.audio.playAt(c, at, s.range, p);
+            } else {
+                ctx.audio.setVoicePosition(voice->second, at);
+                // a part that is coasting to a stop runs down in pitch and loudness with it
+                const float drive = runs && !u.on && u.use.coast > 0 ? static_cast<float>(u.coasting / u.use.coast) : 1.0f;
+                ctx.audio.setVoiceVolume(voice->second, s.volume * drive);
+                ctx.audio.setVoicePitch(voice->second, s.pitch * (0.5f + 0.5f * drive));
+            }
+        }
+    });
+    // a loop whose use no longer moves or runs (or whose copy has gone) stops
+    for (std::map<std::pair<uint64_t, std::size_t>, AudioVoiceHandle>::iterator it = loops_.begin(); it != loops_.end();) {
+        if (wanted.count(it->first) > 0) { ++it; continue; }
+        ctx.audio.stop(it->second);
+        it = loops_.erase(it);
+    }
+}
+
 // THE LAMPS THAT ARE ON: each use with a `light` that is on publishes one candidate on the board's Prefabs channel,
 // rebuilt every frame. LightSystem picks and lights them with every other light (ADR-0362); nothing here draws.
 void PrefabUseSystem::render(FrameContext& ctx) {
@@ -63,6 +188,7 @@ void PrefabUseSystem::render(FrameContext& ctx) {
 }
 
 void PrefabUseSystem::update(FrameContext& ctx) {
+    sounds(ctx);
     Entity player;
     Vec3 pos;
     Real feetDrop = 0.7;
