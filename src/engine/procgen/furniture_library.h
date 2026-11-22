@@ -164,8 +164,8 @@ public:
     static FurnitureLibrary& global();
 
 private:
-    std::array<FurnitureAsset, kPieceCount> assets_{};
-    std::array<bool, kPieceCount> has_{};
+    std::array<FurnitureAsset, kPieceMax> assets_{};   // the kit's pieces and the prefab pieces after them
+    std::array<bool, kPieceMax> has_{};
     std::vector<RoomProgram> programs_;
 };
 

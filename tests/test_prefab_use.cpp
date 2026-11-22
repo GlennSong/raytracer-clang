@@ -5,6 +5,9 @@
 #include "../src/engine/model_motion.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/prefab_use.h"
+#include "../src/engine/procgen/furniture_kit.h"
+#include "../src/engine/procgen/furniture_library.h"
+#include "../src/engine/scripting/furniture_library_lua.h"
 #include "../src/engine/scripting/prefab_list.h"
 
 #include <nlohmann/json.hpp>
@@ -387,4 +390,36 @@ TEST_CASE(what_stands_on_a_desk_rises_with_it_whether_a_copy_in_a_batch_or_a_thi
     CHECK(setModelTarget(world, e, "top", 0.0, 0));
     CHECK((world.get<Transform>(mug)->position - (mugAt.position + Vec3(0, rise, 0))).length() < 1e-9);
     CHECK(g->transforms[1].transformPoint(Vec3(0, 0, 0)).y < onDesk.position.y + rise - 0.1);          // the copy went down
+}
+
+TEST_CASE(a_prefab_is_a_piece_the_floor_planner_can_place) {
+    // The furniture library names some prefabs as pieces (furniture_library.lua, "PREFAB PIECES"): to the planner a
+    // piece like any other, with a footprint, a family and tags; nothing of the kit's to draw.
+    CHECK(ensureFurnitureLibraryLoaded());
+    Piece dish = Piece::Count, desk = Piece::Count;
+    CHECK(furniturePieceByName("dishwasher", dish));
+    CHECK(furniturePieceByName("desk", desk));
+    CHECK(pieceIsPrefab(dish) && !pieceIsPrefab(desk) && !pieceIsPrefab(Piece::Count));
+    CHECK(static_cast<int>(dish) > kPieceCount && static_cast<int>(dish) < kPieceMax);
+    CHECK(std::string(furniturePieceName(dish)) == "dishwasher");
+    const FurniturePiece& fp = furniturePiece(dish, 0);
+    CHECK_APPROX(fp.size.x, 0.60, 1e-9);
+    CHECK_APPROX(fp.size.y, 0.85, 1e-9);
+    CHECK(!fp.solid);
+    for (const RenderMesh& m : fp.mesh) CHECK(m.vertices.empty());
+    const FurnitureAsset* a = FurnitureLibrary::global().find(dish);
+    CHECK(a != nullptr && a->family == "appliance" && a->verbs.empty());
+    // It is a line in prefabs.lua of the same name: what is stood where the planner places it.
+    Prefab p;
+    CHECK(findPrefab("dishwasher", p));
+    // A kit piece's name cannot be taken for a prefab piece, and a name once given keeps its number.
+    CHECK(registerPrefabPiece("desk", Vec3(1, 1, 1)) == Piece::Count);
+    CHECK(registerPrefabPiece("dishwasher", fp.size) == dish);
+    // A kitchen's program asks for one by name.
+    const RoomProgram* kitchen = FurnitureLibrary::global().program("kitchen");
+    CHECK(kitchen != nullptr);
+    bool asked = false;
+    if (kitchen != nullptr)
+        for (const FurnStep& st : kitchen->steps) asked = asked || st.pick.piece == dish;
+    CHECK(asked);
 }

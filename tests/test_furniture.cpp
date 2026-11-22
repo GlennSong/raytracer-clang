@@ -361,7 +361,7 @@ TEST_CASE(room_programs_furnish_every_home_and_office_room) {
         {{{0, 0}, {26, 0}, {26, 15}, {0, 15}}, true, false, 1},
         {{{0, 0}, {30, 0}, {30, 10.5}, {0, 10.5}}, true, false, 1},
     };
-    std::array<int, kPieceCount> with{}, bare{};
+    std::array<int, kPieceMax> with{}, bare{};
     int plans = 0;
     for (const Case& c : cases)
         for (uint32_t seed = 1; seed <= 6; ++seed)
@@ -391,7 +391,7 @@ TEST_CASE(room_programs_furnish_every_home_and_office_room) {
                 }
             }
     FurnitureLibrary::global() = saved;
-    auto n = [&](const std::array<int, kPieceCount>& t, Piece pc) { return t[static_cast<std::size_t>(pc)]; };
+    auto n = [&](const std::array<int, kPieceMax>& t, Piece pc) { return t[static_cast<std::size_t>(pc)]; };
     std::printf("    [programs] %d floors: desks %d, office chairs %d, beds %d, nightstands %d, wardrobes %d, sofas %d, "
                 "sinks %d, toilets %d, pods %d, cubicles %d, meeting tables %d\n", plans, n(with, Piece::Desk),
                 n(with, Piece::OfficeChair), n(with, Piece::Bed), n(with, Piece::Nightstand), n(with, Piece::Wardrobe),
@@ -450,7 +450,7 @@ TEST_CASE(campus_buildings_have_their_rooms_and_furniture) {
     UseShippedFurniture shipped;
     const Poly2 plans[3] = {{{0, 0}, {52, 0}, {52, 22}, {0, 22}}, {{0, 0}, {40, 0}, {40, 24}, {0, 24}},
                             {{0, 0}, {54, 0}, {54, 15}, {0, 15}}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     std::array<int, 32> kinds{};
     for (int campus = 1; campus <= 3; ++campus)
         for (int storey : {0, 1, 2}) {
@@ -1664,7 +1664,7 @@ TEST_CASE(ceiling_lights_never_overlap) {
 TEST_CASE(workplaces_are_furnished_as_offices) {
     UseShippedFurniture shipped;
     const Real sizes[][2] = {{48, 34}, {36, 24}, {30, 20}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     int workplaces = 0, floors = 0, hotelBeds = 0;
     for (int ri = 0; ri < architectRecipeCount(); ++ri) {
         const std::string rn = architectRecipeName(ri);
@@ -1713,7 +1713,7 @@ TEST_CASE(civic_buildings_have_their_own_rooms) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"school", "library", "museum", "university"};
     const Real sizes[][2] = {{36, 24}, {30, 20}, {48, 30}};
-    std::map<std::string, std::array<int, kPieceCount>> by;
+    std::map<std::string, std::array<int, kPieceMax>> by;
     for (const char* rn : recipes)
         for (uint32_t seed = 1; seed <= 3; ++seed)
             for (const auto& sz : sizes) {
@@ -1788,7 +1788,7 @@ TEST_CASE(chamfered_office_floors_take_the_office_floor) {
 TEST_CASE(the_hospital_has_wards_a_lobby_and_examination_rooms) {
     UseShippedFurniture shipped;
     const Real sizes[][2] = {{48, 34}, {40, 28}, {36, 24}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     int hospitals = 0, wardFloors = 0, stations = 0, lobbies = 0, blocked = 0;
     for (uint32_t seed = 1; seed <= 4; ++seed)
         for (const auto& sz : sizes) {
@@ -1843,7 +1843,7 @@ TEST_CASE(civic_halls_are_furnished_for_what_they_are) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"church", "cinema", "market_hall", "police", "courthouse", "capitol"};
     const Real sizes[][2] = {{36, 24}, {30, 20}, {44, 28}};
-    std::map<std::string, std::array<int, kPieceCount>> by;
+    std::map<std::string, std::array<int, kPieceMax>> by;
     for (const char* rn : recipes)
         for (uint32_t seed = 1; seed <= 3; ++seed)
             for (const auto& sz : sizes) {

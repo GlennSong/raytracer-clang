@@ -1666,6 +1666,56 @@ Not done: slots do not say what they accept (the kit's anchors do: "books", "dri
 picked up (a monitor is not yet a thing to carry); a thing knocked off does not fall. The desk's own "raise" was
 checked again from where a person stands at it in the real building, and is offered.
 
+### The floor planner places prefabs (2026-11-22)
+
+Glenn, told that the real buildings showed 15 of 201 prefabs: "We should fix that. I want to see new prefabs used
+and integrated."
+
+**A prefab can be a piece.** The planner places PIECES: a number into the kit's list, with a footprint, a family
+and tags from the furniture library. A PREFAB PIECE (`furniture_kit.h`) is a further piece, numbered after the
+kit's, that the kit does not model: it is a line in `prefabs.lua` of the same name. The furniture library says
+which prefabs are pieces and gives each what the planner needs:
+
+```lua
+furniture_library.dishwasher = prefab({ 0.60, 0.85, 0.66 }, "appliance", { "dishwasher" }, 0.9)   -- size, family, tags, clear floor
+```
+
+To the planner it is a piece like any other, so a room program asks for it by name, or by family and tags, with
+no new kind of step. Where one is placed, `BuildingInteriorSystem` stands a copy of the prefab, for every level,
+with no list to opt in to (a prefab piece has nothing else to be). Everything that walks placed pieces was
+already safe: a prefab piece has a size and no mesh, is not solid to the planner (its bodies are the prefab's
+own), and has no kit verbs.
+
+**Rooms that ask** (`furniture_rooms.lua`, "PREFAB PIECES IN ROOMS"): a kitchen for a dishwasher and a pedal bin;
+a bath and a studio flat for a washing machine; a living room for a tall clock and, if it is wide, a piano; a
+copy room for a shredder; a meeting room for a flip chart; a waiting room for a queue-ticket stand and a vending
+machine; a hotel lobby for a cash machine and a luggage cart; a hotel room for a safe; a ward for drip stands; an
+exam room for a lamp. Each step is added at the END of its program, so what a room held before is placed first
+and stands where it stood.
+
+Seen in `prefab_street`: walking up to twelve places, 23 kinds of prefab stood in the interiors that were built
+(eight kinds a day earlier), with no error or warning. In an old-town house: the piano on a living room wall
+beside the armchair, the tall clock in the corner; in its kitchen the dishwasher beside the fridge, offering
+"open". Tests: `a_prefab_is_a_piece_the_floor_planner_can_place`; the furniture suite's tallies widened to
+`kPieceMax`.
+
+**This changes every city.** A kitchen anywhere now has a dishwasher if a wall is free. Each is a full entity
+while its building's interior is built (the nearest building, a few storeys). Nothing is baked from it: interiors
+are grown when streamed.
+
+Not done:
+
+- **19 of the 201 are pieces.** The rest need a room that would hold them. Many need a KIND OF PLACE first (a gym
+  for its machines, a laundromat, a station hall with gates): that is city data on the parent branch.
+- **A dishwasher stands beside the counter, not in it.** The kitchen's counter run is its own step with fixed
+  module kinds (base, sink, hob, tall, wall); a prefab module in the run is the next change there.
+- **Things that hang** (a wall clock, a school bell, a fire hose cabinet, curtains at a window) are not placed:
+  the `hang` step and the window openings need to give a height and a size.
+- **Small things on surfaces** (a toaster, a microwave, a record player) are not placed: the library's anchors
+  accept kit goods by tag, and prefab goods are not among them yet.
+- The swap list (`prefab_swaps.lua`) is still by name and still opt-in; it goes when the kit pieces it names are
+  themselves retired for their prefabs.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

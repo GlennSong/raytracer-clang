@@ -453,3 +453,34 @@ do
     end
   end
 end
+
+-- PREFAB PIECES (#191, "One catalog": the floor planner places prefabs; Glenn, 2026-11-22: "I want to see new
+-- prefabs used and integrated"). Each is a line in prefabs.lua of the same name, NOT a kit piece: it has moving
+-- parts and things a person can do to it, and where a room program places one a copy of the prefab is stood
+-- (BuildingInteriorSystem). Here it is given what the planner needs to place it: `size` (its footprint box: across,
+-- up, out from the wall), a family, tags, and the floor kept free in front of it.
+--
+-- The tags are each piece's own, so no room program that asks by family and tags gets one of these by surprise:
+-- a program names the piece (furniture_rooms.lua, "PREFAB PIECES IN ROOMS").
+local function prefab(size, family, tags, front)
+  return { prefab = true, size = size, family = family, tags = tags, clearance = { front = front or 0.7 } }
+end
+furniture_library.dishwasher        = prefab({ 0.60, 0.85, 0.66 }, "appliance", { "dishwasher" }, 0.9)
+furniture_library.washing_machine   = prefab({ 0.60, 0.85, 0.68 }, "appliance", { "laundry" }, 0.8)
+furniture_library.dryer             = prefab({ 0.60, 0.85, 0.68 }, "appliance", { "laundry", "dryer" }, 0.8)
+furniture_library.pedal_bin         = prefab({ 0.31, 0.46, 0.39 }, "fixture", { "bin" }, 0.4)
+furniture_library.shower            = prefab({ 0.90, 2.11, 0.92 }, "fixture", { "shower" }, 0.7)
+furniture_library.grandfather_clock = prefab({ 0.52, 2.07, 0.31 }, "decor", { "clock" }, 0.4)
+furniture_library.upright_piano     = prefab({ 1.49, 1.22, 0.61 }, "decor", { "piano" }, 0.9)
+furniture_library.rocking_chair     = prefab({ 0.62, 1.13, 1.25 }, "seating", { "rocking" }, 0.3)
+furniture_library.toy_chest         = prefab({ 0.82, 0.47, 0.44 }, "storage", { "toys" }, 0.6)
+furniture_library.shredder          = prefab({ 0.38, 0.92, 0.31 }, "appliance", { "shredder" }, 0.6)
+furniture_library.server_rack       = prefab({ 0.60, 2.00, 0.93 }, "appliance", { "server" }, 1.0)
+furniture_library.flip_chart        = prefab({ 0.80, 1.86, 0.77 }, "decor", { "flip_chart" }, 0.8)
+furniture_library.ticket_dispenser  = prefab({ 0.36, 1.50, 0.36 }, "fixture", { "queue" }, 0.6)
+furniture_library.vending_machine   = prefab({ 1.00, 1.83, 0.70 }, "appliance", { "vending" }, 0.9)
+furniture_library.atm               = prefab({ 0.64, 1.64, 0.65 }, "appliance", { "atm" }, 0.9)
+furniture_library.luggage_cart      = prefab({ 0.60, 1.74, 1.10 }, "decor", { "luggage" }, 0.5)
+furniture_library.room_safe         = prefab({ 0.42, 0.30, 0.43 }, "storage", { "safe" }, 0.5)
+furniture_library.iv_stand          = prefab({ 0.50, 1.70, 0.55 }, "fixture", { "drip" }, 0.2)
+furniture_library.exam_lamp         = prefab({ 0.54, 1.81, 1.04 }, "fixture", { "exam_lamp" }, 0.3)

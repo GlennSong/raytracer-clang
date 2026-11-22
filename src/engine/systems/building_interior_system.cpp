@@ -462,7 +462,9 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         std::string surface;
     };
     std::vector<OnTop> onTop;
-    if (!swaps_.empty() && !bm.furniture.empty()) {
+    bool prefabPieces = false;   // (a room program asked for a prefab piece: stood as that prefab, list or no list)
+    for (const PlacedPiece& pp : bm.furniture) prefabPieces = prefabPieces || pieceIsPrefab(static_cast<Piece>(pp.piece));
+    if ((!swaps_.empty() || prefabPieces) && !bm.furniture.empty()) {
         if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
         // where a kit piece's prefab stands: its back where the piece's was, turned as the piece was
         auto placeOf = [](const PlacedPiece& pp, Real back) {
@@ -482,20 +484,27 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         std::vector<PlacedPiece> kept, rest;
         std::size_t stood = 0, riding = 0;
         for (const PlacedPiece& pp : bm.furniture) {
-            const std::map<std::string, Swap>::const_iterator swap = swaps_.find(furniturePieceName(static_cast<Piece>(pp.piece)));
-            if (swap == swaps_.end()) { rest.push_back(pp); continue; }
+            // which prefab stands here: the piece's own (a prefab piece), or the one the level's list names for it
+            const std::string kitName = furniturePieceName(static_cast<Piece>(pp.piece));
+            Swap what;
+            if (pieceIsPrefab(static_cast<Piece>(pp.piece))) what.prefab = kitName;
+            else {
+                const std::map<std::string, Swap>::const_iterator swap = swaps_.find(kitName);
+                if (swap == swaps_.end()) { rest.push_back(pp); continue; }
+                what = swap->second;
+            }
             const Vec3 size = furniturePiece(static_cast<Piece>(pp.piece), pp.variant).size;
             std::string why;
-            const Entity e = stampPrefab(world, dresser_.get(), swap->second.prefab, placeOf(pp, swap->second.back >= 0 ? swap->second.back : size.z * Real(0.5)),
+            const Entity e = stampPrefab(world, dresser_.get(), what.prefab, placeOf(pp, what.back >= 0 ? what.back : size.z * Real(0.5)),
                                          std::string(), &why);
             if (!e.valid()) {
-                LOG_WARN << "[interior] prefab swap for '" << swap->first << "': " << why << " (the kit piece stays)";
-                rest.push_back(pp);
+                LOG_WARN << "[interior] the prefab for '" << kitName << "': " << why << (pieceIsPrefab(static_cast<Piece>(pp.piece)) ? " (nothing stands there)" : " (the kit piece stays)");
+                if (!pieceIsPrefab(static_cast<Piece>(pp.piece))) rest.push_back(pp);
                 continue;
             }
             res.prefabs.push_back(e);
             ++stood;
-            if (!swap->second.surface.empty()) owners.push_back(Stood{e, pp.xform.inverse(), size, swap->second.surface});
+            if (!what.surface.empty()) owners.push_back(Stood{e, pp.xform.inverse(), size, what.surface});
         }
         // WHAT STOOD ON A SWAPPED PIECE. A swapped piece that itself stood on another (a desk lamp on a desk) is
         // tied to the prefab's surface marker here. A kit piece that stood on one (a monitor, a mug) stays the

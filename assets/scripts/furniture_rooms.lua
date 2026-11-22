@@ -582,3 +582,60 @@ furniture_rooms.dorm = {
 }
 -- (a DORM is its own room kind and program, apart from a home's bedroom: its pieces are picked by the "dorm" tag --
 -- singles, not the double; a wardrobe each -- so the two can change independently)
+
+-- PREFAB PIECES IN ROOMS (#191, "One catalog"; Glenn, 2026-11-22: "I want to see new prefabs used and integrated").
+-- Steps added to the programs above, each naming a prefab piece (furniture_library.lua, "PREFAB PIECES"): a thing
+-- with moving parts that a person can use, stood as a prefab where the planner places it. They are added at the
+-- END of each program, so everything a room held before is placed first and stands where it stood; a prefab piece
+-- takes a wall that is still clear, or is left out of a room with none.
+local function also(room, steps)
+  for _, step in ipairs(steps) do table.insert(furniture_rooms[room], step) end
+end
+local ANY = { 1, 3, 2, 0 }
+also("kitchen", {
+  { wall = { 0.60, 0.66 }, sides = "long", clear = 0.9, pick = "dishwasher" },
+  { wall = { 0.34, 0.40 }, sides = ANY, pick = "pedal_bin" },
+})
+also("flat", {
+  { wall = { 0.60, 0.68 }, sides = ANY, clear = 0.8, pick = "washing_machine" },
+})
+also("bath", {
+  { wall = { 0.60, 0.68 }, sides = ANY, clear = 0.6, pick = "washing_machine" },
+  { wall = { 0.34, 0.40 }, sides = ANY, pick = "pedal_bin" },
+})
+also("restroom", {
+  { wall = { 0.34, 0.40 }, sides = { 1, 3 }, pick = "pedal_bin" },
+})
+also("living", {
+  { wall = { 0.56, 0.32 }, sides = ANY, tall = true, clear = 0.4, pick = "grandfather_clock" },
+  { wall = { 1.50, 0.62 }, sides = ANY, clear = 0.9, min_w = 5.0, pick = "upright_piano" },
+})
+also("bedroom", {
+  { wall = { 0.84, 0.46 }, sides = ANY, clear = 0.6, min_w = 4.2, pick = "toy_chest" },
+})
+also("copy_room", {
+  { wall = { 0.40, 0.32 }, sides = ANY, clear = 0.6, pick = "shredder" },
+})
+also("meeting", {
+  { wall = { 0.82, 0.78 }, sides = { 1, 3 }, clear = 0.8, pick = "flip_chart" },
+})
+also("waiting", {
+  { wall = { 0.40, 0.40 }, sides = { 1, 3, 0 }, clear = 0.6, pick = "ticket_dispenser" },
+  { wall = { 1.02, 0.72 }, sides = { 3, 1, 0 }, tall = true, clear = 0.9, pick = "vending_machine" },
+})
+also("foyer", {
+  { wall = { 1.02, 0.72 }, sides = { 3, 1, 2 }, tall = true, clear = 0.9, pick = "vending_machine" },
+})
+also("hotel_lobby", {
+  { wall = { 0.66, 0.66 }, sides = ANY, tall = true, clear = 0.9, pick = "atm" },
+  { wall = { 0.64, 1.12 }, sides = ANY, clear = 0.5, pick = "luggage_cart" },
+})
+also("hotel_room", {
+  { wall = { 0.44, 0.44 }, sides = ANY, clear = 0.5, pick = "room_safe" },
+})
+also("ward", {
+  { wall = { 0.52, 0.56 }, sides = ANY, count = { per = 4.0, min = 1, max = 3 }, pick = "iv_stand" },
+})
+also("exam", {
+  { wall = { 0.56, 1.06 }, sides = ANY, pick = "exam_lamp" },
+})
