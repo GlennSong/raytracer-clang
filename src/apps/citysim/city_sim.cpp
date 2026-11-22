@@ -1,5 +1,6 @@
 #include "city_sim.h"
-#include "city_car.h"     // the new driving's cars are entities (startDrivingV2)
+#include "city_car.h"
+#include "../../log.h"     // the new driving's cars are entities (startDrivingV2)
 #include "../../hash.h"   // lowbias32
 
 #include "../../profile.h"
@@ -410,6 +411,65 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
         world.add<CityCarLink>(e, CityCarLink{});
         world.add<CityCarRoams>(e);
     }
+    // THE BUSES ON THE ROAD FILE'S LINES (ADR-0483): each line as many buses as its round trip (the bus's own routes
+    // from stop to stop, at the free-flow speed, and every stop's wait) needs for the headway the service file asks
+    // (city_driving.h busService), at most its cap; spread evenly round the line, each starting at its own stop. Drawn as
+    // the fleet's bus (the slot whose class is "bus"). The hand-over runs them (DrivingHost).
+    const engine::RoadModel* model = drivingV2_->model();
+    const int busClass = drivingV2_->vehicleClasses().indexOf("bus");
+    int busSlot = -1;
+    for (std::size_t s = 0; s < classOfSlot.size() && busSlot < 0; ++s)
+        if (classOfSlot[s] == busClass) busSlot = static_cast<int>(s);
+    const BusService& service = busService();
+    uint32_t buses = 0;
+    if (model && !model->busLines.empty() && busClass >= 0 && busSlot >= 0 && service.usable) {
+        for (uint32_t li = 0; li < model->busLines.size(); ++li) {
+            const engine::ModelBusLine& line = model->busLines[li];
+            const std::size_t n = line.stops.size();
+            Real loop = 0;
+            bool drivable = true;
+            for (std::size_t k = 0; k < n && drivable; ++k) {
+                const engine::KerbLanePlace a = model->busStopLane(line.stops[k]), b = model->busStopLane(line.stops[(k + 1) % n]);
+                driving::PathPoint pa, pb;
+                pa.path = a.path;
+                pa.along = a.along;
+                pb.path = b.path;
+                pb.along = b.along;
+                const engine::roads::Route r = a.valid() && b.valid() ? drivingV2_->routeBetween(static_cast<uint32_t>(busClass), pa, pb)
+                                                                      : engine::roads::Route();
+                drivable = r.found;
+                loop += r.seconds + service.dwellSeconds;
+            }
+            if (!drivable) continue;   // (said at load: Driving::busLineProblems)
+            const int count = std::clamp(static_cast<int>(std::ceil(loop / (service.headwayMinutes * 60.0))), 1, service.mostBusesPerLine);
+            for (int k = 0; k < count; ++k) {
+                CityCarBody body;
+                body.id = nextCarNumber(world);
+                body.slot = busSlot;
+                const VehicleBody& fleet = fleetBody(busSlot);
+                body.type = fleet.type;
+                body.length = fleet.length;
+                body.width = fleet.width;
+                body.height = fleet.height;
+                body.vehicleClass = static_cast<uint32_t>(busClass);
+                const engine::Entity e = world.create();
+                world.add<engine::Transform>(e);
+                world.add<engine::PrevTransform>(e);
+                world.add<CityCarBody>(e, body);
+                world.add<CityCarLink>(e, CityCarLink{});
+                world.add<CityCarRoams>(e);
+                CityBusRuns runs;
+                runs.line = li;
+                runs.stop = static_cast<uint32_t>((static_cast<std::size_t>(k) * n) / static_cast<std::size_t>(count));
+                world.add<CityBusRuns>(e, runs);
+                ++buses;
+            }
+        }
+    } else if (model && !model->busLines.empty()) {
+        LOG_WARN << "[buses] " << model->busLines.size() << " lines stated and no bus runs: "
+                 << (busClass < 0 ? "the fleet has no \"bus\" class" : busSlot < 0 ? "no fleet slot is a bus" : "the service file is not usable");
+    }
+    if (buses) LOG_INFO << "[buses] " << buses << " buses on " << model->busLines.size() << " lines";
     const std::string line = drivingHost_.begin(*drivingV2_, world, seed_);
     if (report) *report = line;
     return true;

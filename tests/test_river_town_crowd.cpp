@@ -155,6 +155,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                     sim.drivingHost().cost().modelMs / std::max<uint64_t>(1, sim.drivingHost().cost().ticks),
                     sim.drivingHost().cost().modelWorstMs, stepMsSum / (minute * ticksPerMinute), stepWorst, residentMb());
     }
+    // THE BUSES ON THEIR LINES (ADR-0483): how many run, and the stops they have called at
+    std::printf("    [river] buses %u on %zu lines; %llu stops called at\n", sim.drivingHost().counts().buses, d.model()->busLines.size(),
+                static_cast<unsigned long long>(sim.drivingHost().counts().busCalls));
     // WHAT THE PLANS PUT ON THE FREEWAY (#306 sweep bug 4): legs by car priced and chosen, and those with metres on it
     {
         const citysim::brain::PlanRoadCounts rc = b.planRoadCounts();
@@ -263,19 +266,22 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // at (ADR-0480, the sweep's bugs, 4; it was priced along the sidewalks): the most on the road 102 -> 111 (still
     // minute 11); parked 245 -> 229; arrivals 675 -> 663; trips the same, 316. 566 car legs priced, none on the freeway:
     // river_town's trips never pay for its ramps (brain_crowd checks a drive that does).
+    // RE-PINNED when the buses drive their lines (ADR-0483): 6 buses on the 3 lines of its road file, each driving to
+    // its next stop, standing there 20 s, and on. The most on the road 111 -> 120 (still minute 11: the buses among
+    // them); arrivals 663 -> 665; trips and parked the same (316, 229). Nobody rides them yet (step 4).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 111);
+        CHECK(mostOnRoad == 120);
         CHECK(mostOnRoadAt == 11);
         CHECK(b.counts().tripsBegun == 316u);
         CHECK(b.counts().parkedReports == 229u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 663u);
+        CHECK(b.machine()->counts().arrivals == 665u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -295,6 +301,11 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // each kerb -- so the walkers' obstacles (the poles and the furniture) stand elsewhere: the counts above.
         // 0xf9c704ff73207220 -> 0x12277ea4937a87e4 (every crosswalk's walk signal walks in some phase): the counts above.
         // 0x12277ea4937a87e4 -> 0x331264b35e85398b (a drive priced by the driving's router): the counts above.
-        CHECK(hash == 0x331264b35e85398bull);
+        // 0x331264b35e85398b -> 0x96738d598af1e6e2 (ADR-0483: the buses drive their lines): the counts above.
+        CHECK(hash == 0x96738d598af1e6e2ull);
+        // THE BUSES (ADR-0483): 6 on the 3 lines (the service file's headway over each round trip), calling at 72 stops
+        // in the 30 minutes
+        CHECK(sim.drivingHost().counts().buses == 6u);
+        CHECK(sim.drivingHost().counts().busCalls == 72u);
     }
 }

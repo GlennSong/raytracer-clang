@@ -24248,3 +24248,25 @@ Words:
 **Tests:** `bus_planner_lays_loops_with_stops_along_them_that_can_be_driven` (run_tests): on the jittered grid town, 6 hubs, 3 lines, coverage 92.6%, street share 49.0%. Every stop is beside a sidewalk and none crowd together. Written into the road file and built again, the lines are held, the driving finds no fault, and the bake key is unchanged. `level_river_town_crowd` now checks that its 3 lines and 38 stops are held and can be driven by the fleet's bus.
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1487/1487 (the planner's test new); lanes_tests 156/156 (`road_model_19` holds river_town's file with its lines in: rewriting the layout or the lane rules moves nothing, since the lines are written before both); `level_river_town_crowd` 1/1, its hash the same (the lines are data nothing drives yet).
+
+## ADR-0483 — Buses drive their lines on the new driving: each a car of the hand-over's, put down at a stop, driving stop to stop, standing at each (buses plan, step 3)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: on a level whose road file states bus lines (ADR-0481), the sim now runs buses on them. Each line gets as many buses as its headway needs, spread evenly round it. A bus drives to its next stop, pulls in beside it, stands there with its doors open, and drives on, round its line for ever. Nobody rides yet (step 4).
+
+Words:
+- **Headway:** the minutes between one bus and the next at a stop. **Dwell:** how long a bus stands at a stop. **Round trip:** a line's driving time from each stop to the next at the free-flow speed, plus a dwell at every stop.
+- **The hand-over** (`DrivingHost`, city_driving.h): the city's side of the driving. It puts its own cars down, sends them on trips and copies where the driving has each car into its entity.
+
+**What changed:**
+- **The service is data** (`assets/data/bus_service.json`, read once by `busService()`): headway 8 minutes, at most 6 buses a line, 20 s at each stop. These are sourced estimates, marked to tune. A missing file or number runs no buses, and the log says why.
+- **The buses are made** with the level's roaming cars (`CitySim::startDrivingV2`). For each line, the round trip is timed with the driving's own routes for the fleet's `bus` class; the line gets the round trip divided by the headway, rounded up, at least 1 and at most the cap. Bus k of n starts at stop k·stops/n. A bus is drawn as the fleet slot whose class is `bus`, and is numbered after the roaming cars.
+- **A bus is one of the hand-over's own cars** (`CityCarRoams`, as the roaming cars are) with a `CityBusRuns` (city_car.h): its line, the stop it is bound for, whether it is standing, how long it has left there, and the stops it has called at. The hand-over's branches:
+  - **put down** at its starting stop's kerb lane (`busStopLane`) when there is a standstill gap's room there (`roomFor`). The room asked of a car dropped anywhere into moving traffic (70 m) is not asked of it: at load one stop had a car on it, and every try after asked for 70 m, so that bus was never put down.
+  - **sent** to its next stop's kerb lane (`beginTrip`).
+  - **on arriving** (the driving's `Parked`), it stands for the dwell, then is sent on to the stop after.
+- `DrivingCounts` holds `buses` and `busCalls`; the river_town crowd test prints and holds them.
+
+**river_town** (3 lines, 38 stops; ADR-0482): 6 buses (2 a line), 72 stops called at in 30 minutes, about one every 2.5 minutes a bus with the lights and the waits. No ring of waits. Re-pinned: the most on the road 111 -> 120 (still minute 11, the buses among them); arrivals 663 -> 665; trips and parked the same (316, 229); hash 0x331264b35e85398b -> 0x96738d598af1e6e2. Levels whose road files state no line (brain_crowd, the near crowd's) run no bus and are unchanged.
+
+**Suites, all with RT_TEST_FILTER:** `level_river_town_crowd` 1/1, re-pinned (above); `level_brain_crowd` 1/1 and `near_tier_in_the_crowd_follows_the_player` (its known open checks only) with their hashes unchanged (no line on their roads); run_tests 1487/1487.

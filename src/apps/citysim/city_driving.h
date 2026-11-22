@@ -58,6 +58,16 @@ constexpr uint32_t kPlaceTries = 64;
 // accelerator, and always when it is held at rest.
 constexpr Real kBrakeLampDecel = 0.5;
 
+// HOW THE BUSES RUN THEIR LINES (ADR-0483): assets/data/bus_service.json, read once (its comment says what each number
+// is and where it came from). `usable` false: the file is missing or lacks a number, and no bus runs (the log says why).
+struct BusService {
+    bool usable = false;
+    Real headwayMinutes = 0;
+    int mostBusesPerLine = 0;
+    Real dwellSeconds = 0;
+};
+const BusService& busService();
+
 // WHAT THE HAND-OVER HAS DONE SO FAR.
 struct DrivingCounts {
     uint32_t drivers = 0;          // cars that drive round for ever (CityCarRoams), the hand-over's own to send
@@ -68,6 +78,8 @@ struct DrivingCounts {
     uint64_t routesNotFound = 0;   // destinations refused for want of a route (each picked again)
     uint64_t noTripYet = 0;        // times a car found no destination within kPlaceTries picks (tried again next tick)
     uint64_t noRoomYet = 0;        // times a car found no room to be put down within kPlaceTries picks
+    uint32_t buses = 0;            // of the drivers, buses on their lines (CityBusRuns)
+    uint64_t busCalls = 0;         // stops the buses have called at
 };
 
 class DrivingHost {

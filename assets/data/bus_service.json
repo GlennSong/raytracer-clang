@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "HOW THE BUSES RUN THEIR LINES (ADR-0483; the lines themselves are the road file's \"bus_lines\", ADR-0481). Read once",
+    "by the city sim (city_driving.h busService). No copy in C++: a missing file or a missing number runs no buses, and",
+    "the log says why.",
+    "  headway_minutes      the minutes between one bus and the next at a stop: a line gets as many buses as its round",
+    "                       trip (driving time at the free-flow speed and every stop's wait) divided by this, rounded up;",
+    "  most_buses_per_line  ...but never more than this many;",
+    "  dwell_seconds        how long a bus stands at each stop with its doors open.",
+    "Sources: [~] a city bus every 6-10 minutes is a frequent service (TCRP Report 165, Transit Capacity and Quality of",
+    "Service Manual, 3rd ed., level of service A-B by headway); 15-30 s at a stop is a common dwell for a few riders",
+    "(same manual, chapter 6). Guesses to tune by watching."
+  ],
+  "headway_minutes": 8.0,
+  "most_buses_per_line": 6,
+  "dwell_seconds": 20.0
+}

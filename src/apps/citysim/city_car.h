@@ -142,6 +142,18 @@ struct CityCarRoams {
     uint32_t tripDraws = 0;    // ...and destinations picked
 };
 
+// A BUS ON ITS LINE (ADR-0483): one of the hand-over's own cars (it has a CityCarRoams too) whose trips are not picked
+// at random: it is put down at a stop of its line (the road model's busStopLane) and drives to the next, stands there
+// `dwell` seconds with its doors open, and drives on, round its line for ever. `line` indexes the road model's
+// busLines; `stop` is the stop it is driving to (or standing at, while `standing`).
+struct CityBusRuns {
+    uint32_t line = 0;
+    uint32_t stop = 0;
+    bool standing = false;   // at `stop`, its doors open
+    Real dwellLeft = 0;      // seconds left standing there
+    uint64_t calls = 0;      // stops called at since it was put down
+};
+
 // A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.
 bool carNowhere(engine::World& world, engine::Entity e);
 // The car entity numbered `id` (CityCarBody::id), whoever's it is; none when there is no such car.
