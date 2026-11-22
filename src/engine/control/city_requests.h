@@ -32,6 +32,13 @@ inline void describeProperties(TrainBoardRequest& r, PropertyVisitor& v) {
     v.field(FieldMeta("car"), r.car);
 }
 
+// BusBoardRequest: put the player aboard a bus (its car number, as `buses?` gives it), standing inside its first door
+// (a probe's way in; on foot you walk in through a door while it stands at a stop). BusRideSystem hears it (ADR-0486).
+struct BusBoardRequest {
+    int bus = 0;
+};
+inline void describeProperties(BusBoardRequest& r, PropertyVisitor& v) { v.field(FieldMeta("bus"), r.bus); }
+
 // KnockRequest: throw the walker nearest the player down, as a car would (the socket's `knock`, for trying the
 // ragdolls without driving into someone). CityWalkerSystem hears it; `knock?` answers.
 struct KnockRequest {};

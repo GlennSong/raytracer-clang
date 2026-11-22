@@ -239,6 +239,19 @@ public:
     // yet), or its model has no driver's seat.
     bool carEntitySeatsOf(engine::World& world, engine::Entity car, engine::Mat4* pose,
                           std::vector<engine::Vec3>* seats) const;
+    // A BUS's CABIN (ADR-0486: the player rides), body frame: its passenger seats (hip points) and the way each faces,
+    // its doors (floor points just inside the kerb-side wall), the driver's seat, and the body's half width and half
+    // length. `drawn`: where the bus is drawn this bake (not drawn: where its body is this step). False: not a bus with a
+    // saloon, or it has no pose yet.
+    struct BusCabin {
+        std::vector<engine::Vec3> seats, facing, doors;
+        engine::Vec3 driverSeat{0, 0, 0};
+        engine::Real halfWidth = 0, halfLength = 0;
+        const char* frame = "";   // where the frame came from: "drawn", "step" (its pose) or "physics"
+    };
+    bool busCabinOf(engine::World& world, engine::Entity bus, BusCabin& cabin, engine::Mat4* drawn) const;
+    // The seat the player sits in on bus `bus` (-1: none): the riders drawn aboard leave it (ADR-0486)
+    void setPlayerBusSeat(engine::Entity bus, int seat) { playerBus_ = bus; playerBusSeat_ = seat; }
     // The model (variant) a household car is drawn as: its fleet slot, and its kind's (a bus, a cab, a fire engine).
     int carEntityVariant(int slot, VehicleType type) const { return parkedVariant(slot, type); }
     // The key of each car instance this bake (parallel to each carGroup's transforms): the car entity's driver's
@@ -639,6 +652,9 @@ private:
     engine::Entity busRiderGroup_{};
     std::vector<std::vector<engine::Vec3>> carPassengerSeats_;
     std::vector<std::vector<engine::Vec3>> carPassengerFacing_;   // beside each seat: the way its rider faces
+    std::vector<std::vector<engine::Vec3>> carDoors_;             // per slot: its doors' floor points (a bus's)
+    engine::Entity playerBus_{};
+    int playerBusSeat_ = -1;
     std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
     // THE DRAW CACHE (bytes per agent; Glenn: "Why do you keep putting off this work?"): what the drawers keep per
     // drawn thing -- a car entity's speed for the brake-light test (by entityCarKey), a far walker's ground height --

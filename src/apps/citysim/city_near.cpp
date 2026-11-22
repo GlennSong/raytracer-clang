@@ -540,6 +540,7 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     world.each<CityNearCar, engine::Transform>([&](Entity e, CityNearCar&, engine::Transform& t) {
         const Real away = (flat(t.position) - centre).length();
         if (away > rules_.leave) out.push_back({away, e});
+        else if (world.has<CityCarCarriesPlayer>(e)) out.push_back({1e9, e});   // (the player's bus: back first)
     });
     std::sort(out.begin(), out.end(), [](const std::pair<Real, Entity>& a, const std::pair<Real, Entity>& b) {
         return a.first > b.first;
@@ -555,7 +556,7 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     std::vector<std::pair<Real, Entity>> in;
     world.each<CityCarBody, CityCarLink, CityCarOnLane, engine::Transform>(
         [&](Entity e, CityCarBody&, CityCarLink& link, CityCarOnLane& lane, engine::Transform& t) {
-            if (link.away || !lane.driven || world.has<engine::Vehicle>(e)) return;
+            if (link.away || !lane.driven || world.has<engine::Vehicle>(e) || world.has<CityCarCarriesPlayer>(e)) return;
             const Real away = (flat(t.position) - centre).length();
             if (away < rules_.enter) in.push_back({away, e});
         });

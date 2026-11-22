@@ -972,6 +972,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carRearHip_.clear();
     carPassengerSeats_.clear();
     carPassengerFacing_.clear();
+    carDoors_.clear();
     carHasRear_.clear();
     carHasDriver_.clear();
     {
@@ -995,7 +996,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
             bool hasRear = false;
             bool hasDriver = false;
-            std::vector<Vec3> passengerSeats, passengerFacing;
+            std::vector<Vec3> passengerSeats, passengerFacing, doors;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
@@ -1038,6 +1039,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         rearHip = recipe.rearHip;
                         passengerSeats = recipe.seats;
                         passengerFacing = recipe.seatFacing;
+                        doors = recipe.doors;
                         hasRear = recipe.hasRearHip;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
@@ -1128,6 +1130,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carRearHip_.push_back(rearHip);
                 carPassengerSeats_.push_back(std::move(passengerSeats));
                 carPassengerFacing_.push_back(std::move(passengerFacing));
+                carDoors_.push_back(std::move(doors));
                 carHasRear_.push_back(hasRear ? 1 : 0);
                 carHasDriver_.push_back(hasDriver ? 1 : 0);
             }
@@ -1906,6 +1909,41 @@ void CityRenderSystem::makeBusBoards(engine::FrameContext& ctx) {
 // dest_sign_side in the kerb-side pane, stop_display behind the cab; each board faces +Z, so the back one is turned
 // round, the side one turned to face out, and the two inside ones are half the front's width), named for the renderer's
 // interpolation like the bodies.
+bool CityRenderSystem::busCabinOf(World& world, Entity bus, BusCabin& cabin, Mat4* drawn) const {
+    const CityCarBody* body = world.get<CityCarBody>(bus);
+    const CityCarLink* link = world.get<CityCarLink>(bus);
+    if (!body || !link || !world.has<CityBusRuns>(bus)) return false;
+    const int v = parkedVariant(body->slot, body->type);
+    if (v < 0 || v >= static_cast<int>(carPassengerSeats_.size()) || v >= static_cast<int>(carDoors_.size())) return false;
+    const std::size_t k = static_cast<std::size_t>(v);
+    if (carPassengerSeats_[k].empty() || carDoors_[k].empty()) return false;
+    // ITS FRAME: where its body is this step (CityCarPose: what it is drawn from, set every step whether drawn or not,
+    // ADR-0454 -- not a lookup among the drawn instances, whose keys are a draw's, not a car's); a bus the near tier has
+    // made a physical car (engine::Vehicle, no pose) where physics has it, as the driver's own seat takes its car
+    // (VehicleSystem::stepSeat)
+    const Mat4* at = nullptr;
+    cabin.frame = "step";
+    if (const CityCarPose* pose = world.get<CityCarPose>(bus)) at = &pose->body;
+    Mat4 physical;
+    const engine::Transform* bt = world.get<engine::Transform>(bus);
+    if (!at && bt && world.has<engine::Vehicle>(bus)) {
+        physical = bt->matrix();
+        at = &physical;
+        cabin.frame = "physics";
+    }
+    if (!at) return false;
+    cabin.seats = carPassengerSeats_[k];
+    cabin.facing = carPassengerFacing_[k];
+    cabin.doors = carDoors_[k];
+    cabin.driverSeat = k < carDriverSeat_.size() ? carDriverSeat_[k] : Vec3(0, 0, 0);
+    const std::vector<Vec3> he = carGroupHalfExtents();
+    const Vec3 h = k < he.size() ? he[k] : Vec3(body->width * 0.5, body->height * 0.5, body->length * 0.5);
+    cabin.halfWidth = h.x;
+    cabin.halfLength = h.z;
+    if (drawn) *drawn = *at;
+    return true;
+}
+
 // Where a car entity's body is DRAWN this bake (its instance in its slot's group, by its draw key; ADR-0485: what the
 // boards and the riders ride, as the cabin and the glass do). Null: not drawn.
 const Mat4* CityRenderSystem::drawnBody(World& world, int slot, int key) const {
@@ -1934,6 +1972,27 @@ void CityRenderSystem::syncBusBoards(World& world) {
         const BusRiders::Counts& rc = sim_.buses().counts();
         std::string out = std::to_string(rows.size()) + " buses; riders: " + std::to_string(rc.waits) + " waits, " +
                           std::to_string(rc.boardings) + " boardings, " + std::to_string(rc.alightings) + " got off";
+        if (playerBus_.valid())
+            if (const CityCarBody* pb = world.get<CityCarBody>(playerBus_))
+            {
+                out += "; you: aboard bus " + std::to_string(pb->id) + (playerBusSeat_ >= 0 ? ", seat " + std::to_string(playerBusSeat_) : ", standing");
+                // ...and where your body is, in the bus as drawn and in the world (a probe's drift check)
+                Entity me;
+                world.each<engine::Transform, engine::ControlledBy>([&](Entity e, engine::Transform&, engine::ControlledBy&) {
+                    if (!me.valid()) me = e;
+                });
+                BusCabin cab;
+                Mat4 drawnAt;
+                const engine::Transform* mt = me.valid() ? world.get<engine::Transform>(me) : nullptr;
+                if (mt && busCabinOf(world, playerBus_, cab, &drawnAt)) {
+                    const Vec3 l = drawnAt.inverse().transformPoint(mt->position);
+                    char b[160];
+                    std::snprintf(b, sizeof b, " at %.4f %.4f %.4f in the bus (%.2f %.2f %.2f; its %s frame; physical %d)", l.x, l.y,
+                                  l.z, mt->position.x, mt->position.y, mt->position.z, cab.frame,
+                                  world.has<engine::Vehicle>(playerBus_) ? 1 : 0);
+                    out += b;
+                }
+            }
         out += "; " + std::to_string(busBoardsDrawn_) + " boards drawn, " + std::to_string(busRidersDrawn_) + " riders drawn" +
                (busRiderGroup_.valid() ? "" : " (no rider group: no slot has seats)") + busRiderNote_;
         for (const std::pair<uint32_t, std::string>& r : rows) out += r.second;
@@ -2002,7 +2061,10 @@ void CityRenderSystem::syncBusBoards(World& world) {
             std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
                 return std::fabs(seats[static_cast<std::size_t>(a)].z) < std::fabs(seats[static_cast<std::size_t>(b)].z);
             });
-            for (int i = 0; i < n; ++i) {
+            // (the player's seat, when they sit on this bus, is left to them: the order skips it)
+            if (e == playerBus_ && playerBusSeat_ >= 0)
+                order.erase(std::remove(order.begin(), order.end(), playerBusSeat_), order.end());
+            for (int i = 0; i < n && i < static_cast<int>(order.size()); ++i) {
                 const std::size_t k = static_cast<std::size_t>(order[static_cast<std::size_t>(i)]);
                 const Vec3& s = seats[k];
                 // turned to face the way its seat faces (a wall bench: the aisle); the figure faces +Z

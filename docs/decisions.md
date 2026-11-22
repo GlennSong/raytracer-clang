@@ -24323,3 +24323,42 @@ Words:
 **Seen:** ~/Pictures/Raytracer/buses/ (stop_top, stop_yaw0: the stop; bus1_yaw0: CLOCKWISE on the front; riders_s1_y180: NEXT ROWAN PARKWAY inside and 3 CLOCKWISE on the side; riders_s-1_y0: the riders and their shins).
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1489/1489 (with the new street-props case and the regenerated web/engine/commands.json). level_river_town_crowd and the furniture gate pass. level_brain_crowd is unchanged. level_river_town_streets_are_drivable_grades fails as it did at HEAD before these steps.
+
+## ADR-0486 — The player rides a bus again: on through a door, the aisle and the seats, off at a stop (buses plan, the passenger seat ADR-0459 deleted)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: you can ride the new buses.
+- Walk into an open doorway of a bus standing at its stop and you are aboard.
+- Aboard, the move keys walk the aisle and the door wells, in the bus's own frame, so the bus can turn and brake without you sliding about.
+- Every seat within reach is an E offer. Seated, you face the way the seat faces, and E stands you up again.
+- Walk out through a doorway while the bus stands at a stop, and you are on the pavement.
+- `bus_board <bus>` puts you aboard bus `<bus>` (its number, as `buses?` gives it), a probe's way in.
+
+Words:
+- **Carrier:** the vehicle a rider is carried in. engine/riding.h (ADR-0243) keeps a rider at a point in the carrier's frame each step and draws them on it between steps, as the renderer draws the vehicle. Each vehicle's owner keeps its own rules (who boards where, the aisle, the doors). The trains do it this way too.
+- **Near tier:** the few cars closest to the player become physical cars (a Jolt vehicle) so you can bump into them.
+
+**What changed:**
+- **The bus's rules** (`city_bus_cabin.cpp`, plain functions so they can be tested; in libcitysim): the aisle (from the middle to the nearest seat's edge; wide between a standing-room bus's wall benches), the saloon's length (behind the driver's partition to the last seat), the door wells, a doorway's mouth on the pavement (gets you on), and past the wall in a doorway (gets you off).
+- **The owner** (`BusRideSystem`, `city_bus_ride.cpp`, beside the train's in the viewer) carries the player using `rideStep`. The cabin comes from the bus's recipe through `CityRenderSystem::busCabinOf`: seats, which way each faces, doors, driver's seat and size. The recipe's door points are kept again (`carDoors_`).
+- **The carrier is the bus's pose this step** (`CityCarPose`, set every step whether drawn or not, ADR-0454). Two tries before it were wrong:
+  - Looking the bus up among the drawn car instances by its draw key: it sometimes landed on another car, and the player jumped 200 m.
+  - The drawn instance alone: a bus far from the camera is not drawn, and the rider was left behind.
+- **The near tier leaves your bus alone:** a bus you ride is marked `CityCarCarriesPlayer` and is never made a physical car, and is handed back to the driving if it was one. As a physical car its solid body pushed the passenger's capsule out: 0.7 m sideways and 0.4 m up, seen in the probe.
+- **One rider eye height for every owner:** `kRiderStandingEye` (1.62 m) and `kRiderSeatedEye` (0.74 m) are in engine/riding.h; the train's own copies now name them.
+- The NPC riders drawn aboard leave your seat free. `buses?` adds "you: aboard bus N, seat S / standing at x y z in the bus".
+
+**Checked:**
+- run_tests: `bus_ride_the_aisle_and_the_door_wells_are_walkable_the_seats_are_not`, `bus_ride_you_get_on_from_a_doorway_and_off_through_one`, `bus_ride_a_standing_room_bus_has_a_wide_aisle_between_its_wall_benches`.
+- In the viewer on river_town (a probe, not a test):
+  - Placed at a standing bus's middle door, the player got on.
+  - Rode 215 m, 80 s, through a stop and a hill.
+  - Your place in the bus stayed put: the same to 0.0001 m while it stood, no jumps while it drove.
+  - The small shift seen on a slope is the capsule hanging straight down in the world under an eye set along the bus's own up (riderCentre, by design).
+
+**Not done:**
+- A level test that boards and rides (the deleted `a_bus_passenger_rides_in_the_bus_frame`): it needs a test harness with the player, physics and the city's driving on a level, which no level test has yet.
+- The door leaves: the new buses draw none (ADR-0460 took them), so a doorway always looks open, and you can only walk out of it while the bus stands.
+- Seated NPC riders' shins through the side panel (an old problem; Glenn: not now).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1492/1492 (the three bus_ride cases and the regenerated web/engine/commands.json); level_river_town_crowd passes unchanged; the near crowd fails the same four checks with the same state hash as before (bug 2).

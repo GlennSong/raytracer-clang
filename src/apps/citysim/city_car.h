@@ -156,6 +156,11 @@ struct CityBusRuns {
     Real freeFlow = 0;       // ...and the leg's time at the free-flow speed (its route's), for the timetable's measure
 };
 
+// THE PLAYER RIDES IN IT (ADR-0486): a bus with the player aboard as a passenger (BusRideSystem sets and clears it). The
+// near tier leaves it on the driving -- never a physical car, which would push the passenger's capsule out of its solid
+// body -- and hands it back if it was one.
+struct CityCarCarriesPlayer {};
+
 // A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.
 bool carNowhere(engine::World& world, engine::Entity e);
 // The car entity numbered `id` (CityCarBody::id), whoever's it is; none when there is no such car.

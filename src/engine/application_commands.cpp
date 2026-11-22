@@ -640,6 +640,17 @@ void Application::registerPlayerVerbs() {
         return publishRequest(eventBus, r, "train_board", "ok staged");
     });
 
+    // `bus_board <bus>`: aboard a bus, standing inside its first door (ADR-0486)
+    commandTable.add("bus_board", "bus_board <bus>",
+                     "Put the player aboard a bus (its number, as buses? gives it), standing inside its first door.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        BusBoardRequest r;
+        double v;
+        if (cmd.args.size() != 1 || !num(cmd.args[0], v) || v < 0) return "err usage: bus_board <bus>";
+        r.bus = static_cast<int>(v);
+        return publishRequest(eventBus, r, "bus_board", "ok staged");
+    });
+
     commandTable.add("interact?", "interact?",
                      "What the interaction focus is on.",
                      unanswered("an InteractBrokerSystem: play mode"));

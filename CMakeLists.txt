@@ -618,6 +618,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_walk_points.cpp   # the sim's walk points: places on the road model's walks (the street map's nodes were)
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
     src/apps/citysim/city_buses.cpp   # the people on the buses (ADR-0484)
+    src/apps/citysim/city_bus_cabin.cpp   # the bus's rules for a rider (ADR-0486)
     src/apps/citysim/city_car.cpp       # a household's car as one entity: its components (ADR-0444)
     src/apps/citysim/city_poses.cpp     # where the city's bodies are each fixed step: cars and walkers (ADR-0454)
     src/apps/citysim/city_render.cpp
@@ -991,6 +992,7 @@ add_executable(run_tests
     tests/test_road_spec.cpp
     tests/test_street_furniture.cpp
     tests/test_bus_lines.cpp
+    tests/test_bus_ride.cpp
     tests/test_street_signs.cpp
     tests/test_editable_curve.cpp
     tests/test_curve.cpp
@@ -1236,6 +1238,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
         src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
+        src/apps/citysim/city_bus_ride.cpp   # the player aboard a bus (ADR-0486)
         src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )

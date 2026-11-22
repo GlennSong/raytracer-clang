@@ -42,6 +42,12 @@
   "usage": "bundle?"
  },
  {
+  "name": "bus_board",
+  "owner": "engine",
+  "summary": "Put the player aboard a bus (its number, as buses? gives it), standing inside its first door.",
+  "usage": "bus_board <bus>"
+ },
+ {
   "name": "buses?",
   "owner": "engine",
   "summary": "The buses on the road file's lines (ADR-0485): each bus's number, line, the stop it is going to (or standing at), where it is, and the riders' counts.",
