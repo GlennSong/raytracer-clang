@@ -29,7 +29,7 @@ return {
   kitchen_hob    = { prefab = "oven" },
   toilet         = { prefab = "toilet_lidded" },
   -- shops and bars
-  bar_stool      = { prefab = "bar_stool_swivel", turn = 180 },   -- (the kit's stool faces its counter; the prefab's back is its -z)
+  bar_stool      = { prefab = "bar_stool_swivel", turn = 180, back = 0.24 },   -- (the kit's stool faces its counter; the prefab's back is its -z)
   -- schools and clinics
   school_desk    = { prefab = "flip_desk" },
   hospital_bed   = { prefab = "care_bed" },
