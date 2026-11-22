@@ -639,3 +639,19 @@ also("ward", {
 also("exam", {
   { wall = { 0.56, 1.06 }, sides = ANY, pick = "exam_lamp" },
 })
+
+-- A CHILD'S ROOM (furniture.cpp: the smaller bedroom of a home with two or more, in about two homes in three). A
+-- bunk bed or a single bed, a building at a time, its head to a wall; a desk; the toy shelf and the toy chest; a
+-- play mat by the wall opposite; a dollhouse or an easel where there is room. Every piece is a prefab.
+furniture_rooms.child_room = {
+  { one_of = {
+      { wall = { 1.12, 2.0 }, sides = "long", ring_sides = { 1, 3, 0 }, tall = true, pick = "bunk_bed" },
+      { wall = { 0.98, 1.84 }, sides = "long", ring_sides = { 1, 3, 0 }, pick = "kids_bed" },
+    } },
+  { wall = { 0.92, 0.92 }, sides = { 1, 3, 2, 0 }, clear = 0.3, pick = "kids_desk" },
+  { wall = { 1.22, 0.34 }, sides = ANY, clear = 0.5, pick = "toy_shelf" },
+  { wall = { 0.84, 0.46 }, sides = ANY, clear = 0.5, pick = "toy_chest" },
+  { wall = { 2.02, 1.42 }, sides = { 2, 0, 1, 3 }, min_w = 3.0, pick = "play_mat" },
+  { wall = { 0.92, 0.48 }, sides = ANY, clear = 0.4, min_w = 3.4, pick = "dollhouse" },
+  { wall = { 0.68, 0.52 }, sides = ANY, clear = 0.4, min_w = 3.8, pick = "kids_easel" },
+}

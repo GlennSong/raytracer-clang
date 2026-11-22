@@ -135,6 +135,10 @@ struct Room {
     RoomKind kind = RoomKind::Office;
     uint8_t style = 0;      // a shop's trade
     Poly2 frame;         // a curved room's rectangle for the furniture: inside the polygon, along the arc's chord
+    // WHICH HOME on its storey it is a room of (a flat's rooms share one number; 0: not known -- on a floor that is
+    // one dwelling, every room is the one home). The furniture reads it to tell a home's bedrooms from its
+    // neighbour's: the smaller of two is a child's room (furniture.cpp).
+    uint16_t home = 0;
 };
 
 // AN OPENING IN AN OUTSIDE WALL (Glenn, 2026-10-13: "a tv sitting in front of the front doorway ... a shelf in a store

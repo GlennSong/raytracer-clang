@@ -484,3 +484,12 @@ furniture_library.luggage_cart      = prefab({ 0.60, 1.74, 1.10 }, "decor", { "l
 furniture_library.room_safe         = prefab({ 0.42, 0.30, 0.43 }, "storage", { "safe" }, 0.5)
 furniture_library.iv_stand          = prefab({ 0.50, 1.70, 0.55 }, "fixture", { "drip" }, 0.2)
 furniture_library.exam_lamp         = prefab({ 0.54, 1.81, 1.04 }, "fixture", { "exam_lamp" }, 0.3)
+
+-- A CHILD'S ROOM's pieces (kids_room.lua), which the `child_room` program places (furniture_rooms.lua)
+furniture_library.kids_bed   = prefab({ 0.96, 0.75, 1.80 }, "sleeping", { "child" }, 0.5)
+furniture_library.bunk_bed   = prefab({ 1.10, 1.75, 1.97 }, "sleeping", { "child", "bunk" }, 0.6)
+furniture_library.kids_desk  = prefab({ 0.90, 1.25, 0.90 }, "surface", { "child" }, 0.4)
+furniture_library.toy_shelf  = prefab({ 1.20, 0.80, 0.32 }, "storage", { "child", "toys" }, 0.6)
+furniture_library.play_mat   = prefab({ 2.00, 0.07, 1.40 }, "decor", { "child" }, 0.0)
+furniture_library.dollhouse  = prefab({ 0.90, 1.02, 0.46 }, "decor", { "child", "toys" }, 0.5)
+furniture_library.kids_easel = prefab({ 0.66, 1.20, 0.50 }, "decor", { "child" }, 0.4)

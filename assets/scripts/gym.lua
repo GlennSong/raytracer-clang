@@ -6,13 +6,20 @@
 --   punch_bag        a heavy bag hung from a stand; it swings (`bag`)
 --   treadmill        its deck tilts up at the front (`deck`), and marks on its belt run back along it
 --                    (`mark_1` ..., each sliding one mark's spacing and jumping back: model_moves `loop`)
+--   dumbbell_rack    two sloping shelves of dumbbells in pairs, light to heavy
+--   bench_press      a padded bench under a barbell on its uprights (marker `lie`, role "lie")
+--   yoga_mats        three mats rolled out side by side, a rolled one and an exercise ball beside them
+--   mirror_wall      a tall wall mirror with a ballet rail across it (its back to -z; `width`)
+--   gym_bench        a slatted changing-room bench (markers `seat_1`, `seat_2`)
 --
 -- Each stands on y = 0 at its own origin; whoever uses it faces +z.
 local kit = require "model_kit"
 local V = kit.V
 
 local a = params{
-  kind  = { "exercise_bike", "rowing_machine", "weight_machine", "punch_bag", "treadmill" },
+  kind  = { "exercise_bike", "rowing_machine", "weight_machine", "punch_bag", "treadmill", "dumbbell_rack", "bench_press", "yoga_mats",
+            "mirror_wall", "gym_bench" },
+  width = { 3.0, min = 1.0, max = 8.0 },       -- mirror_wall (metres)
   paint = { "red", "blue", "yellow", "green", "orange" },
 }
 local paint = kit.paint[a.paint]
@@ -24,7 +31,67 @@ local function wheel(r, thick, segs)           -- a disc about +x
   return mesh.rotate_z(mesh.lathe{ profile = { { 0, -thick / 2 }, { r, -thick / 2 }, { r, thick / 2 }, { 0, thick / 2 } }, segments = segs or 20 }, math.pi / 2)
 end
 
-if a.kind == "exercise_bike" then
+local function plate(x, y, z, r, t, col) c.mesh("rubber", mesh.translate(wheel(r, t, 12), { x, y, z }), col) end
+if a.kind == "dumbbell_rack" then
+  for _, x in ipairs{ -0.9, 0.9 } do
+    c.box("metal", V(x, 0.45, 0), V(0.05, 0.9, 0.5), 0.004, DARK, 1)
+    c.box("metal", V(x, 0.02, 0), V(0.08, 0.04, 0.6), 0.004, DARK, 1)
+  end
+  for row, y in ipairs{ 0.35, 0.75 } do
+    c.tilted("metal", V(0, y, 0.02), V(1.8, 0.03, 0.34), 0.004, 0.25, GREY)
+    for i = 1, 5 do
+      local x, r = -0.9 + i * 0.3, 0.05 + (i + (row - 1) * 5) * 0.006
+      c.rod("metal", V(x - 0.09, y + 0.07, 0.02), V(x + 0.09, y + 0.07, 0.02), 0.014, GREY, 6)
+      for _, s in ipairs{ -1, 1 } do plate(x + s * 0.08, y + 0.07, 0.02, r, 0.05, DARK) end
+    end
+  end
+  kit.put(m, m, c)
+  m:shape("rack", { box = { 1.9, 0.95, 0.6 }, pos = { 0, 0.47, 0 } })
+  return m
+elseif a.kind == "bench_press" then
+  c.box("metal", V(0, 0.2, 0.1), V(0.08, 0.4, 1.1), 0.004, DARK, 1)
+  for _, z in ipairs{ -0.4, 0.6 } do c.box("metal", V(0, 0.02, z), V(0.5, 0.04, 0.08), 0.004, DARK, 1) end
+  c.cushion("fabric", V(0, 0.44, 0.1), V(0.3, 0.07, 1.2), kit.BLACK * 2, { r = 0.04 })
+  for _, x in ipairs{ -0.5, 0.5 } do
+    c.box("metal", V(x, 0.55, -0.4), V(0.06, 1.1, 0.06), 0.004, DARK, 1)
+    c.box("metal", V(x, 0.02, -0.4), V(0.08, 0.04, 0.6), 0.004, DARK, 1)
+    c.box("metal", V(x, 1.0, -0.36), V(0.06, 0.1, 0.08), 0.004, GREY, 1)
+    for i, r in ipairs{ 0.22, 0.22, 0.16 } do plate(x + (x < 0 and -1 or 1) * (0.28 + i * 0.045), 1.06, -0.34, r, 0.04, i == 3 and paint or DARK) end
+  end
+  c.rod("metal", V(-1.05, 1.06, -0.34), V(1.05, 1.06, -0.34), 0.015, GREY, 8)
+  kit.put(m, m, c)
+  m:marker("lie", { pos = { 0, 0.48, 0.2 }, turn = { 0, 180, 0 }, role = "lie", size = 1.2 })
+  m:shape("bench", { box = { 0.3, 0.48, 1.2 }, pos = { 0, 0.24, 0.1 } })
+  m:shape("uprights", { box = { 1.1, 1.1, 0.1 }, pos = { 0, 0.55, -0.4 } })
+  return m
+elseif a.kind == "yoga_mats" then
+  for i, col in ipairs{ kit.paint.blue, kit.paint.green, kit.paint.orange } do c.box("rubber", V((i - 2) * 0.75, 0.004, 0), V(0.62, 0.008, 1.8), 0.0, col, 1) end
+  c.mesh("rubber", mesh.translate(mesh.rotate_x(mesh.lathe{ profile = { { 0, -0.31 }, { 0.07, -0.31 }, { 0.07, 0.31 }, { 0, 0.31 } }, segments = 12 }, 0), { 1.35, 0.31, -0.7 }), kit.paint.red)
+  c.mesh("rubber", mesh.translate(kit.ball(0.32, 14), { 1.45, 0.32, 0.4 }), paint)
+  kit.put(m, m, c)
+  return m
+elseif a.kind == "mirror_wall" then
+  local W = a.width
+  c.box("screen", V(0, 1.1, 0.01), V(W, 2.0, 0.006), 0.0, V(0.75, 0.82, 0.85), 1)
+  c.box("metal", V(0, 2.11, 0.012), V(W + 0.02, 0.02, 0.02), 0.0, GREY, 1); c.box("metal", V(0, 0.09, 0.012), V(W + 0.02, 0.02, 0.02), 0.0, GREY, 1)
+  c.rod("wood", V(-W / 2 + 0.1, 1.0, 0.2), V(W / 2 - 0.1, 1.0, 0.2), 0.02, kit.wood("oak"), 8)
+  for i = 0, math.max(1, math.floor(W / 1.5)) do
+    local x = -W / 2 + 0.2 + i * (W - 0.4) / math.max(1, math.floor(W / 1.5))
+    c.rod("metal", V(x, 1.0, 0.02), V(x, 1.0, 0.2), 0.012, GREY, 6)
+  end
+  kit.put(m, m, c)
+  m:shape("mirror", { box = { W, 2.1, 0.06 }, pos = { 0, 1.05, 0.03 } })
+  return m
+elseif a.kind == "gym_bench" then
+  for i = 0, 3 do c.box("wood", V(0, 0.44, -0.15 + i * 0.1), V(1.6, 0.03, 0.08), 0.006, kit.wood("beech"), 1) end
+  for _, x in ipairs{ -0.65, 0.65 } do
+    c.box("metal", V(x, 0.21, 0), V(0.04, 0.42, 0.36), 0.004, DARK, 1); c.box("metal", V(x, 0.02, 0), V(0.06, 0.04, 0.44), 0.004, DARK, 1)
+  end
+  kit.put(m, m, c)
+  for i, x in ipairs{ -0.4, 0.4 } do m:marker("seat_" .. i, { pos = { x, 0.46, 0 }, role = "seat", size = 0.4 }) end
+  m:shape("bench", { box = { 1.6, 0.46, 0.4 }, pos = { 0, 0.23, 0 } })
+  return m
+elseif a.kind == "exercise_bike" then
   for _, z in ipairs{ -0.45, 0.45 } do c.box("paint", V(0, 0.03, z), V(0.5, 0.05, 0.07), 0.015, DARK, 2) end
   c.pipe("paint", { { 0, 0.05, -0.45 }, { 0, 0.3, -0.1 }, { 0, 0.35, 0.3 }, { 0, 0.05, 0.45 } }, 0.03, paint, { bend = 0.08 })
   c.pipe("paint", { { 0, 0.3, -0.1 }, { 0, 0.92, -0.26 } }, 0.022, paint)                                   -- the seat post

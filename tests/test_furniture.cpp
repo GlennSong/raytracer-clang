@@ -219,7 +219,9 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         emitFurniture(placed, &col, rp, 20.0, p.seed);
         int pbeds = 0, shelves = 0, pictures = 0;
         for (const PlacedPiece& pp : placed) {
-            if (pp.piece == static_cast<uint8_t>(Piece::Bed)) ++pbeds;
+            // (a bed is the kit's, or a child's room's own: its bunk bed or small bed, which are prefab pieces)
+            const std::string name = furniturePieceName(static_cast<Piece>(pp.piece));
+            if (pp.piece == static_cast<uint8_t>(Piece::Bed) || name == "kids_bed" || name == "bunk_bed") ++pbeds;
             if (pp.piece == static_cast<uint8_t>(Piece::Shelving)) ++shelves;
             if (pp.piece == static_cast<uint8_t>(Piece::Picture)) ++pictures;
         }

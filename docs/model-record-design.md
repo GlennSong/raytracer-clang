@@ -1812,6 +1812,33 @@ round the school with chain-link cages, a wall along the street, and floodlights
   citysim (`places.lua`, `roles.lua`); `civicRoomsFor` naming recipes in C++ is a kind in code and wants to be data.
 - The small school is still the old `school` recipe, a block east of the hospital. It has no grounds of its own yet.
 
+### A child's room, a barber's, more of a gym (2026-11-22)
+
+Glenn asked what there was for a gym, a barber's shop and children's rooms. There were loose prefabs (five gym
+machines, four nursery pieces, a barber's pole) and no room of any of the three.
+
+**A child's room is now a room homes have.** In a home with two bedrooms or more, the smallest is a child's room
+in about two homes in three (the home's own dice), furnished by the `child_room` program in `furniture_rooms.lua`:
+a bunk bed or a single bed a building at a time, a desk with a pinboard, a toy shelf, the toy chest, a play mat,
+a dollhouse or an easel where there is room. All of it is prefabs (`kids_room.lua`, nine pieces).
+
+- *How a home's bedrooms are told from its neighbour's.* `Room::home` numbers the rooms of one flat (the zoned
+  floor's flats set it); on a floor that is one dwelling, every room is the one home. It is load-time: no bake.
+- *Owed.* The walk-up planner's flats do not number their rooms yet, so a walk-up has no child's rooms. Nobody
+  lives in the room as a child: the citysim has no children.
+
+**A barber's and a gym are pieces and a walk-in room each, not yet places.** `barber_shop.lua` (the chair that
+pumps up and reclines, a mirror station with a drawer, a backwash chair, waiting seats, a hood dryer, a trolley,
+a towel shelf) and five more gym pieces in `gym.lua` (dumbbell rack, bench press, yoga mats, a mirror wall, a
+changing bench). `prefab_town` has a barber's, a second gym room of free weights and mats, and a playroom.
+
+- *Why they are not in cities yet.* A shop unit is a business of a TRADE (`trades.lua`), and the trades decide the
+  baked facades and signs: a new trade with a weight re-deals every street. So a barber's and a gym as trades are
+  a lots re-bake, and Glenn's decision. The konbini's way round it (taking a share of one existing trade's units)
+  would keep the streets but still re-signs those units.
+- Shop rooms are still furnished in C++ by trade (`furniture.cpp`); a barber's and a gym want to be room programs
+  in `furniture_rooms.lua` from the start, placing these prefabs.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

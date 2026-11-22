@@ -81,6 +81,17 @@ ROOMS = [
         P("lockers", 4.6, 1.2, 270), P("lockers", 4.6, 2.5, 270), P("stand_fan", 2.2, 3.3, 200),
         P("drinking_fountain", -4.5, 3.4, 90), P("wall_clock", 0, B + 0.09, 0, 2.4), P("turnstile", 1.6, 2.6),
     ]),
+    dict(name="gym: free weights and mats", w=9, yaw=0, door=1.02, floor="wood", things=[
+        P("door", 0, F), P("mirror_wall", -1.2, B + 0.08), P("dumbbell_rack", -3.0, B + 0.75), P("bench_press", -0.6, -1.6),
+        P("bench_press", 1.4, -1.6), P("yoga_mats", -2.4, 1.6), P("gym_bench", 3.4, 2.6, 270), P("lockers", 3.9, -0.4, 270),
+        P("lockers", 3.9, -1.7, 270), P("punch_bag", 2.6, 0.8, 270), P("towel_shelf", 3.4, B + 0.02, 0, 1.2),
+    ]),
+    dict(name="barber", w=9, yaw=0, door=1.02, floor="tile", things=[
+        P("door_glass", 0, F), *row("barber_station", [-3.2, -1.4, 0.4], B + 0.02), *row("barber_chair", [-3.2, 0.4], -2.3, 180),
+        P("barber_chair_oxblood", -1.4, -2.3, 180), P("backwash_chair", 3.4, -2.8), P("towel_shelf", 2.2, B + 0.02, 0, 1.2),
+        P("salon_trolley", -2.3, -2.6), P("hood_dryer", 3.6, -0.6, 270), P("waiting_seats", -2.6, 3.3, 180), P("barber_pole", 1.4, F + 0.25),
+        P("cash_register", 3.4, 2.4, 270, TOP["worktop"]), P("shop_counter", 3.4, 2.4, 270), P("wall_clock", -0.5, B + 0.09, 0, 2.5),
+    ]),
     dict(name="station hall", w=14, yaw=0, door=3.24, floor="tile", things=[
         P("automatic_doors", 0, F), *row("flap_gate", [-2.2, 0, 2.2], -0.5), P("turnstile_full", -4.6, -0.5),
         P("queue_posts", 4.4, -0.5), P("departure_board", 0, B + 0.1, 0, 1.6), P("ticket_machine", -6.5, 1.8, 90),
@@ -110,9 +121,14 @@ ROOMS = [
         P("washing_machine", 1.6, 3.6, 180), P("dryer", 2.3, 3.6, 180), P("wall_clock", -2.6, 3.9, 180, 2.3),
     ]),
     dict(name="flat: child's room", w=6, yaw=180, door=1.02, floor="carpet", things=[
-        P("door", 0, F), P("single_bed", -2.2, B + 1.05), P("cradle", 0.2, -2.6), P("baby_mobile", 0.2, -2.6, 0, 2.0),
-        P("toy_chest", 2.2, B + 0.3), P("rocking_horse", 1.4, 0.6, 210), P("flip_desk", -2.0, 2.0, 90), P("school_chair", -1.45, 2.0, 270),
-        P("desk_pedestal", 2.6, 2.2, 270), P("roller_blind", 0.2, B + 0.1, 0, 2.6), P("globe", 2.6, 2.2, 270, 0.62),
+        P("door", 0, F), P("bunk_bed", -2.3, B + 1.05), P("toy_shelf", 0.2, B + 0.2), P("toy_chest", 2.2, B + 0.3),
+        P("kids_desk", 2.4, 0.6, 270), P("play_mat", -0.4, 0.6), P("toy_blocks", -0.9, 1.1), P("rocking_horse", 1.0, 2.4, 210),
+        P("dollhouse", -2.4, 2.6, 90), P("roller_blind", 0.2, B + 0.1, 0, 2.6),
+    ]),
+    dict(name="playroom and nursery", w=7, yaw=180, door=1.02, floor="carpet", things=[
+        P("door", 0, F), P("cradle", -2.6, -2.6), P("baby_mobile", -2.6, -2.6, 0, 2.0), P("kids_bed_red", 2.6, B + 1.0),
+        P("play_table", 0.2, 0.4), P("kids_easel", -2.6, 1.8, 90), P("toy_shelf", 0.0, B + 0.2), P("play_mat", 1.6, -1.0),
+        P("rocking_chair", -1.2, -2.2, 30), P("toy_chest", 2.8, 2.2, 270),
     ]),
     dict(name="clinic", w=9, yaw=180, door=1.02, floor="tile", things=[
         P("door", 0, F), P("care_bed", -3.2, -2.8), P("care_bed", -0.6, -2.8), P("iv_stand", -2.4, -3.4), P("iv_stand", 0.3, -3.4),
@@ -153,14 +169,14 @@ SITES = [
         P("parking_barrier", 0, -2.0, 90), *row("rising_bollard", [0.0], 1.0), P("rising_bollard", 0, 2.0), P("rising_bollard", 0, 3.0),
         P("parked_sedan", 6, 2.6, 90), P("parked_pickup", 13, -2.6, 270),
     ]),
-    dict(name="playground", x=40, z=18, yaw=0, things=[
+    dict(name="playground", x=60, z=18, yaw=0, things=[
         P("playground_swing", -4, -4), P("playground_seesaw", 3.5, -4.5), P("playground_roundabout", -4.5, 3),
         P("playground_slide", 3.5, 2.5), P("park_bench", 0, -8.5), P("park_bench", -8.6, 0, 90), P("litter_bin", 1.8, -8.5),
         P("drinking_fountain", -8.5, -6), P("park_sculpture", 8, -8), P("oak", 8.5, 7.5), P("oak", -8.5, 8), P("boulder", 7, 7),
         P("garden_gate", -10, -9.5, 90), P("picnic_table", 0, 8), P("bbq", 2.2, 8.4), P("porch_swing", 8.2, 0.5, 270),
         P("rotary_dryer", -1.5, -0.5), P("weathervane", 9.5, -4.5), P("wind_chime", -9.2, 4.5),
     ]),
-    dict(name="square", x=40, z=-18, yaw=0, things=[
+    dict(name="square", x=60, z=-18, yaw=0, things=[
         P("fountain_plaza", 0, 0), P("flagpole", -8, 7), *row("park_bench", [-4, 4], 5.5, 180), P("escalator_up", -7, -4.5, 90),
         P("revolving_door", 7.5, 5), P("lift_doors", 5, 9.6, 180), P("garage_door", 10.2, 1.5, 270), P("roller_shutter", 10.2, -4.5, 270), P("ballot_box", 4, -4), P("street_lamp", -9, -8), P("street_lamp", 9, 8),
         # a wall of windows and screens along the square's far edge, each standing free
@@ -171,7 +187,7 @@ SITES = [
     ]),
 ]
 
-GROUNDS = [dict(x=40, z=18, w=22, d=22, kind="grass"), dict(x=40, z=-18, w=22, d=22, kind="paving")]
+GROUNDS = [dict(x=60, z=18, w=22, d=22, kind="grass"), dict(x=60, z=-18, w=22, d=22, kind="paving")]
 
 
 def prefab_names():
@@ -199,7 +215,7 @@ def build(busy):
         rooms.append(r)
     east = max(cursor.values())
     entities = [
-        {"id": 1, "name": "ground", "shape": "box", "position": [8, -0.2, 0], "size": [140, 0.4, 110],
+        {"id": 1, "name": "ground", "shape": "box", "position": [18, -0.2, 0], "size": [160, 0.4, 110],
          "material": {"albedo": [0.42, 0.44, 0.4], "metallic": 0.0, "roughness": 1.0, "opacity": 1.0, "emission": [0, 0, 0], "checkerboard": False},
          "physics": {"motion": "static", "friction": 0.9, "restitution": 0.0}},
         {"id": 2, "name": "the place", "shape": "script", "file": "prefab_town.lua", "seed": 1,
