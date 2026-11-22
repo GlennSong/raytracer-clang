@@ -1,372 +1,934 @@
 {
-  "_note": "PREFAB STREET (#191): four hand-drawn blocks either side of a street and a cross street, grown by the city's own lot and building machinery (citysim.blocks), one quarter of each kind. The buildings, their rooms, stairs and furniture are the city's. Four more blocks to the east are each named a recipe (citysim.recipeAt): a hospital, a school, a mall, and a block of ranch houses lot by lot. The test bed for placing prefabs in real interiors (docs/model-record-design.md, \"One catalog\").",
-  "citysim": {
-    "blocks": [
-      [
-        [
-          -6,
-          -9
-        ],
-        [
-          -70,
-          -9
-        ],
-        [
-          -70,
-          -52
-        ],
-        [
-          -6,
-          -52
-        ]
-      ],
-      [
-        [
-          70,
-          -9
-        ],
-        [
-          6,
-          -9
-        ],
-        [
-          6,
-          -52
-        ],
-        [
-          70,
-          -52
-        ]
-      ],
-      [
-        [
-          -6,
-          52
-        ],
-        [
-          -70,
-          52
-        ],
-        [
-          -70,
-          9
-        ],
-        [
-          -6,
-          9
-        ]
-      ],
-      [
-        [
-          70,
-          52
-        ],
-        [
-          6,
-          52
-        ],
-        [
-          6,
-          9
-        ],
-        [
-          70,
-          9
-        ]
-      ],
-      [
-        [
-          150,
-          -9
-        ],
-        [
-          86,
-          -9
-        ],
-        [
-          86,
-          -62
-        ],
-        [
-          150,
-          -62
-        ]
-      ],
-      [
-        [
-          150,
-          62
-        ],
-        [
-          86,
-          62
-        ],
-        [
-          86,
-          9
-        ],
-        [
-          150,
-          9
-        ]
-      ],
-      [
-        [
-          272,
-          -9
-        ],
-        [
-          162,
-          -9
-        ],
-        [
-          162,
-          -92
-        ],
-        [
-          272,
-          -92
-        ]
-      ],
-      [
-        [
-          272,
-          62
-        ],
-        [
-          162,
-          62
-        ],
-        [
-          162,
-          9
-        ],
-        [
-          272,
-          9
-        ]
-      ]
+ "_note": "PREFAB STREET (#191): four hand-drawn blocks either side of a street and a cross street, grown by the city's own lot and building machinery (citysim.blocks), one quarter of each kind. The buildings, their rooms, stairs and furniture are the city's. Four more blocks to the east are each named a recipe (citysim.recipeAt): a hospital, a school, a mall, and a block of ranch houses lot by lot. The test bed for placing prefabs in real interiors (docs/model-record-design.md, \"One catalog\"). West of the buildings: a playground and a park laid out by hand from prefabs (swings, slides, a roundabout, seesaws; a fountain, benches, picnic tables).",
+ "citysim": {
+  "blocks": [
+   [
+    [
+     -6,
+     -9
     ],
-    "buildLots": true,
-    "cars": 0,
-    "districts": {
-      "hubRadius": 40,
-      "hubs": [
-        {
-          "at": [
-            -38,
-            -30
-          ],
-          "kind": "commercial"
-        },
-        {
-          "at": [
-            38,
-            -30
-          ],
-          "kind": "oldtown"
-        },
-        {
-          "at": [
-            -38,
-            30
-          ],
-          "kind": "residential"
-        },
-        {
-          "at": [
-            38,
-            30
-          ],
-          "kind": "financial"
-        },
-        {
-          "at": [
-            118,
-            -35
-          ],
-          "kind": "commercial"
-        },
-        {
-          "at": [
-            118,
-            35
-          ],
-          "kind": "residential"
-        },
-        {
-          "at": [
-            217,
-            -50
-          ],
-          "kind": "commercial"
-        },
-        {
-          "at": [
-            217,
-            35
-          ],
-          "kind": "residential"
-        }
-      ]
-    },
-    "pedestrians": 0,
-    "prefabDoors": "building_doors.lua",
-    "prefabSwaps": "prefab_swaps.lua",
-    "recipeAt": [
-      {
-        "at": [
-          118,
-          -35
-        ],
-        "recipe": "hospital",
-        "whole": true
-      },
-      {
-        "at": [
-          118,
-          35
-        ],
-        "recipe": "school",
-        "whole": true
-      },
-      {
-        "at": [
-          217,
-          -50
-        ],
-        "recipe": "mall_complex",
-        "whole": true
-      },
-      {
-        "at": [
-          217,
-          35
-        ],
-        "recipe": "ranch_house",
-        "whole": false
-      }
+    [
+     -70,
+     -9
     ],
-    "seed": 11,
-    "sidewalk": 0.0
-  },
-  "entities": [
-    {
-      "id": 1,
-      "material": {
-        "albedo": [
-          0.42,
-          0.44,
-          0.4
-        ],
-        "checkerboard": false,
-        "emission": [
-          0,
-          0,
-          0
-        ],
-        "metallic": 0.0,
-        "opacity": 1.0,
-        "roughness": 1.0
-      },
-      "name": "ground",
-      "physics": {
-        "friction": 0.9,
-        "motion": "static",
-        "restitution": 0.0
-      },
-      "position": [
-        100,
-        -0.2,
-        -10
-      ],
-      "shape": "box",
-      "size": [
-        420,
-        0.4,
-        240
-      ]
-    },
-    {
-      "file": "prefab_town.lua",
-      "id": 2,
-      "name": "the streets",
-      "opts": {
-        "grounds": [
-          {
-            "d": 112,
-            "kind": "paving",
-            "w": 8,
-            "x": 0,
-            "z": 0
-          },
-          {
-            "d": 132,
-            "kind": "paving",
-            "w": 8,
-            "x": 78,
-            "z": 0
-          },
-          {
-            "d": 172,
-            "kind": "paving",
-            "w": 8,
-            "x": 156,
-            "z": -10
-          }
-        ],
-        "rooms": [],
-        "street": {
-          "half": 4,
-          "walk": 4,
-          "x0": -74,
-          "x1": 276
-        },
-        "style": "stucco"
-      },
-      "seed": 1,
-      "shape": "script"
-    }
+    [
+     -70,
+     -52
+    ],
+    [
+     -6,
+     -52
+    ]
+   ],
+   [
+    [
+     70,
+     -9
+    ],
+    [
+     6,
+     -9
+    ],
+    [
+     6,
+     -52
+    ],
+    [
+     70,
+     -52
+    ]
+   ],
+   [
+    [
+     -6,
+     52
+    ],
+    [
+     -70,
+     52
+    ],
+    [
+     -70,
+     9
+    ],
+    [
+     -6,
+     9
+    ]
+   ],
+   [
+    [
+     70,
+     52
+    ],
+    [
+     6,
+     52
+    ],
+    [
+     6,
+     9
+    ],
+    [
+     70,
+     9
+    ]
+   ],
+   [
+    [
+     150,
+     -9
+    ],
+    [
+     86,
+     -9
+    ],
+    [
+     86,
+     -62
+    ],
+    [
+     150,
+     -62
+    ]
+   ],
+   [
+    [
+     150,
+     62
+    ],
+    [
+     86,
+     62
+    ],
+    [
+     86,
+     9
+    ],
+    [
+     150,
+     9
+    ]
+   ],
+   [
+    [
+     272,
+     -9
+    ],
+    [
+     162,
+     -9
+    ],
+    [
+     162,
+     -92
+    ],
+    [
+     272,
+     -92
+    ]
+   ],
+   [
+    [
+     272,
+     62
+    ],
+    [
+     162,
+     62
+    ],
+    [
+     162,
+     9
+    ],
+    [
+     272,
+     9
+    ]
+   ]
   ],
-  "environment": {
-    "skyColor": [
-      0.55,
-      0.68,
-      0.86
-    ]
-  },
-  "lighting": {
-    "ambientMultiplier": 0.7,
-    "exposure": 0.7,
-    "sun": {
-      "castsShadow": true,
-      "color": [
-        1,
-        0.98,
-        0.94
-      ],
-      "direction": [
-        0.4,
-        0.72,
-        -0.32
-      ],
-      "intensity": 6.0
-    }
-  },
-  "name": "prefab_street",
-  "player": {
-    "collider": {
-      "halfHeight": 0.6,
-      "radius": 0.3,
-      "shape": "capsule"
+  "buildLots": true,
+  "cars": 0,
+  "districts": {
+   "hubRadius": 40,
+   "hubs": [
+    {
+     "at": [
+      -38,
+      -30
+     ],
+     "kind": "commercial"
     },
-    "friction": 0.5,
-    "position": [
-      0,
-      1.2,
-      0
-    ]
+    {
+     "at": [
+      38,
+      -30
+     ],
+     "kind": "oldtown"
+    },
+    {
+     "at": [
+      -38,
+      30
+     ],
+     "kind": "residential"
+    },
+    {
+     "at": [
+      38,
+      30
+     ],
+     "kind": "financial"
+    },
+    {
+     "at": [
+      118,
+      -35
+     ],
+     "kind": "commercial"
+    },
+    {
+     "at": [
+      118,
+      35
+     ],
+     "kind": "residential"
+    },
+    {
+     "at": [
+      217,
+      -50
+     ],
+     "kind": "commercial"
+    },
+    {
+     "at": [
+      217,
+      35
+     ],
+     "kind": "residential"
+    }
+   ]
   },
-  "version": 1,
-  "watch_scripts": true
+  "pedestrians": 0,
+  "prefabDoors": "building_doors.lua",
+  "prefabSwaps": "prefab_swaps.lua",
+  "recipeAt": [
+   {
+    "at": [
+     118,
+     -35
+    ],
+    "recipe": "hospital",
+    "whole": true
+   },
+   {
+    "at": [
+     118,
+     35
+    ],
+    "recipe": "school",
+    "whole": true
+   },
+   {
+    "at": [
+     217,
+     -50
+    ],
+    "recipe": "mall_complex",
+    "whole": true
+   },
+   {
+    "at": [
+     217,
+     35
+    ],
+    "recipe": "ranch_house",
+    "whole": false
+   }
+  ],
+  "seed": 11,
+  "sidewalk": 0.0
+ },
+ "entities": [
+  {
+   "id": 1,
+   "material": {
+    "albedo": [
+     0.42,
+     0.44,
+     0.4
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 1.0
+   },
+   "name": "ground",
+   "physics": {
+    "friction": 0.9,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    80,
+    -0.2,
+    -10
+   ],
+   "shape": "box",
+   "size": [
+    460,
+    0.4,
+    240
+   ]
+  },
+  {
+   "file": "prefab_town.lua",
+   "id": 2,
+   "name": "the streets",
+   "opts": {
+    "grounds": [
+     {
+      "d": 112,
+      "kind": "paving",
+      "w": 8,
+      "x": 0,
+      "z": 0
+     },
+     {
+      "d": 132,
+      "kind": "paving",
+      "w": 8,
+      "x": 78,
+      "z": 0
+     },
+     {
+      "d": 172,
+      "kind": "paving",
+      "w": 8,
+      "x": 156,
+      "z": -10
+     },
+     {
+      "x": -98,
+      "z": -27,
+      "w": 40,
+      "d": 36,
+      "kind": "grass"
+     },
+     {
+      "x": -98,
+      "z": 30.5,
+      "w": 40,
+      "d": 43,
+      "kind": "grass"
+     },
+     {
+      "x": -98,
+      "z": 30,
+      "w": 3,
+      "d": 43,
+      "kind": "paving"
+     },
+     {
+      "x": -98,
+      "z": 30,
+      "w": 40,
+      "d": 3,
+      "kind": "paving"
+     },
+     {
+      "x": -98,
+      "z": 30,
+      "w": 12,
+      "d": 12,
+      "kind": "paving"
+     },
+     {
+      "x": -74,
+      "z": 0,
+      "w": 8,
+      "d": 112,
+      "kind": "paving"
+     }
+    ],
+    "rooms": [],
+    "street": {
+     "half": 4,
+     "walk": 4,
+     "x0": -122,
+     "x1": 276
+    },
+    "style": "stucco"
+   },
+   "seed": 1,
+   "shape": "script"
+  },
+  {
+   "id": 3,
+   "name": "playground / playground_swing_four 3",
+   "shape": "prefab",
+   "prefab": "playground_swing_four",
+   "position": [
+    -108,
+    0.03,
+    -36
+   ]
+  },
+  {
+   "id": 4,
+   "name": "playground / playground_swing 4",
+   "shape": "prefab",
+   "prefab": "playground_swing",
+   "position": [
+    -108,
+    0.03,
+    -22
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 5,
+   "name": "playground / playground_slide_tall 5",
+   "shape": "prefab",
+   "prefab": "playground_slide_tall",
+   "position": [
+    -96,
+    0.03,
+    -38
+   ]
+  },
+  {
+   "id": 6,
+   "name": "playground / playground_slide 6",
+   "shape": "prefab",
+   "prefab": "playground_slide",
+   "position": [
+    -88,
+    0.03,
+    -38
+   ]
+  },
+  {
+   "id": 7,
+   "name": "playground / playground_roundabout 7",
+   "shape": "prefab",
+   "prefab": "playground_roundabout",
+   "position": [
+    -97,
+    0.03,
+    -26
+   ]
+  },
+  {
+   "id": 8,
+   "name": "playground / playground_seesaw 8",
+   "shape": "prefab",
+   "prefab": "playground_seesaw",
+   "position": [
+    -88,
+    0.03,
+    -27
+   ]
+  },
+  {
+   "id": 9,
+   "name": "playground / playground_seesaw 9",
+   "shape": "prefab",
+   "prefab": "playground_seesaw",
+   "position": [
+    -88,
+    0.03,
+    -22
+   ]
+  },
+  {
+   "id": 10,
+   "name": "playground / rocking_horse 10",
+   "shape": "prefab",
+   "prefab": "rocking_horse",
+   "position": [
+    -101,
+    0.03,
+    -17
+   ]
+  },
+  {
+   "id": 11,
+   "name": "playground / rocking_horse 11",
+   "shape": "prefab",
+   "prefab": "rocking_horse",
+   "position": [
+    -99,
+    0.03,
+    -17
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 12,
+   "name": "playground / park_bench 12",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -104,
+    0.03,
+    -11.5
+   ]
+  },
+  {
+   "id": 13,
+   "name": "playground / park_bench 13",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -94,
+    0.03,
+    -11.5
+   ]
+  },
+  {
+   "id": 14,
+   "name": "playground / park_bench 14",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -84,
+    0.03,
+    -11.5
+   ]
+  },
+  {
+   "id": 15,
+   "name": "playground / litter_bin 15",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -99,
+    0.03,
+    -11.5
+   ]
+  },
+  {
+   "id": 16,
+   "name": "playground / drinking_fountain 16",
+   "shape": "prefab",
+   "prefab": "drinking_fountain",
+   "position": [
+    -80.5,
+    0.03,
+    -14
+   ]
+  },
+  {
+   "id": 17,
+   "name": "playground / bike_rack 17",
+   "shape": "prefab",
+   "prefab": "bike_rack",
+   "position": [
+    -80.5,
+    0.03,
+    -20
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 18,
+   "name": "playground / street_lamp 18",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -112,
+    0.03,
+    -11
+   ]
+  },
+  {
+   "id": 19,
+   "name": "playground / street_lamp 19",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -80,
+    0.03,
+    -11
+   ]
+  },
+  {
+   "id": 20,
+   "name": "playground / garden_gate 20",
+   "shape": "prefab",
+   "prefab": "garden_gate",
+   "position": [
+    -98,
+    0.03,
+    -9.2
+   ]
+  },
+  {
+   "id": 21,
+   "name": "park / fountain_plaza 21",
+   "shape": "prefab",
+   "prefab": "fountain_plaza",
+   "position": [
+    -98,
+    0.03,
+    30
+   ]
+  },
+  {
+   "id": 22,
+   "name": "park / park_bench 22",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -98,
+    0.03,
+    22
+   ]
+  },
+  {
+   "id": 23,
+   "name": "park / park_bench 23",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -98,
+    0.03,
+    38
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 24,
+   "name": "park / park_bench 24",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -106,
+    0.03,
+    30
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 25,
+   "name": "park / park_bench 25",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -90,
+    0.03,
+    30
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 26,
+   "name": "park / picnic_table 26",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -110,
+    0.03,
+    44
+   ]
+  },
+  {
+   "id": 27,
+   "name": "park / picnic_table 27",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -104,
+    0.03,
+    46
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 30
+   }
+  },
+  {
+   "id": 28,
+   "name": "park / picnic_table 28",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -88,
+    0.03,
+    44
+   ]
+  },
+  {
+   "id": 29,
+   "name": "park / bbq 29",
+   "shape": "prefab",
+   "prefab": "bbq",
+   "position": [
+    -84,
+    0.03,
+    46
+   ]
+  },
+  {
+   "id": 30,
+   "name": "park / porch_swing 30",
+   "shape": "prefab",
+   "prefab": "porch_swing",
+   "position": [
+    -112,
+    0.03,
+    18
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 31,
+   "name": "park / fountain 31",
+   "shape": "prefab",
+   "prefab": "fountain",
+   "position": [
+    -84,
+    0.03,
+    16
+   ]
+  },
+  {
+   "id": 32,
+   "name": "park / drinking_fountain 32",
+   "shape": "prefab",
+   "prefab": "drinking_fountain",
+   "position": [
+    -92,
+    0.03,
+    11.5
+   ]
+  },
+  {
+   "id": 33,
+   "name": "park / litter_bin 33",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -102,
+    0.03,
+    11.5
+   ]
+  },
+  {
+   "id": 34,
+   "name": "park / litter_bin 34",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -86,
+    0.03,
+    40
+   ]
+  },
+  {
+   "id": 35,
+   "name": "park / bike_rack 35",
+   "shape": "prefab",
+   "prefab": "bike_rack",
+   "position": [
+    -80.5,
+    0.03,
+    24
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 36,
+   "name": "park / street_lamp 36",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -112,
+    0.03,
+    11
+   ]
+  },
+  {
+   "id": 37,
+   "name": "park / street_lamp 37",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -80,
+    0.03,
+    11
+   ]
+  },
+  {
+   "id": 38,
+   "name": "park / street_lamp 38",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -106,
+    0.03,
+    36
+   ]
+  },
+  {
+   "id": 39,
+   "name": "park / street_lamp 39",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -90,
+    0.03,
+    24
+   ]
+  },
+  {
+   "id": 40,
+   "name": "park / sandwich_board 40",
+   "shape": "prefab",
+   "prefab": "sandwich_board",
+   "position": [
+    -95,
+    0.03,
+    11.5
+   ]
+  },
+  {
+   "id": 41,
+   "name": "park / mailbox 41",
+   "shape": "prefab",
+   "prefab": "mailbox",
+   "position": [
+    -82,
+    0.03,
+    10.5
+   ]
+  },
+  {
+   "id": 42,
+   "name": "park / garden_gate 42",
+   "shape": "prefab",
+   "prefab": "garden_gate",
+   "position": [
+    -98,
+    0.03,
+    9.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  }
+ ],
+ "environment": {
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.7,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "prefab_street",
+ "player": {
+  "collider": {
+   "halfHeight": 0.6,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0,
+   1.2,
+   0
+  ]
+ },
+ "version": 1,
+ "watch_scripts": true
 }
