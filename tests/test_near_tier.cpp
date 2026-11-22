@@ -1153,12 +1153,17 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // meet stands elsewhere): in 120 -> 113, out 90 -> 77, 0xed4281eb889d8e9b -> 0x3c4be4561e729e50 (the most near the
     // same, 20 at minute 12). WORSE, on the known-bugs list, not loosened: contacts 0 -> 7, hits on parked cars 0 -> 1,
     // on walkers 0 -> 5, on other things 0 -> 14, the longest off its lane 14.8 s -> 18.7 s (car 1, 1.95 m off).
+    // And again (ADR-0480, the sweep's bugs, 1: every crosswalk's walk signal walks in some phase; a near turn no longer
+    // holds its green through every phase) from out 77, 0x3c4be4561e729e50 to out 82, 0x73ed4bc5b6d8b7fd (the most near
+    // 20 at minute 12 and in 113 the same): the lights' phases moved, so every driver's day did. Contacts 7 -> 0, hits on
+    // parked cars 1 -> 0, on walkers 5 -> 0, on other things 14 -> 0. STILL FAILING, not loosened: the longest off its
+    // lane 18.7 s -> 5.6 s (car 191, 0.94 m off), against kOffLaneKnownWorst's 5 s.
     CHECK(mostNear == 20);
     CHECK(mostNearAt == 12);
     CHECK(c.intoPhysics == 113u);
-    CHECK(c.intoLane == 77u);
+    CHECK(c.intoLane == 82u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x3c4be4561e729e50ull);
+    CHECK(hash == 0x73ed4bc5b6d8b7fdull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

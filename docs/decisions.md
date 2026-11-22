@@ -24086,3 +24086,32 @@ Words:
 **Suites, all with RT_TEST_FILTER:** the whole tree builds; run_tests 1483/1483 (1510 less the street map's and the router's own tests, the furniture's link tests, the knot-merge test, plus the furniture's new ones); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` runs to the end and passes, re-pinned; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, failing only their known bugs (above).
 
 **Try it:** in the worktree, `cmake --build build-viewer --target viewer`, then `./build-viewer/viewer assets/levels/river_town.json --play`; the city debug panel's "Nav graph" box draws the walk points.
+
+### The sweep's bugs, 1 — every crosswalk's walk signal walks in some phase (river_town's missing arrivals)
+
+What it does: at a junction with traffic lights, each crosswalk now shows WALK in at least one phase. Before, 14 of river_town's 432 lit crosswalks showed DON'T WALK all the time. Only the few jaywalkers crossed them, and the people whose routes crossed there queued behind the kerb for the whole run. That was why river_town's arrivals fell after the sweep (known bug 1).
+
+Words:
+- **Phase:** one step of a junction's signal cycle: which movements have green (`buildPhases`, right_of_way.cpp).
+- **Single-turn fill:** the step in `buildPhases` that, after whole approaches are given phases, adds every remaining turn to each phase where it meets no car that has green.
+- **Near turn:** the turn to the kerb side (to the left here, where cars drive on the left). It crosses no other traffic.
+- **Walk-only phase:** a phase in which every movement is red and every crosswalk walks (a pedestrian phase).
+
+**How it was found:** a temporary measure in the crowd test timed each resident's walk. Walks still under way at minute 30 were 862 s old on average, and they had stood still for 551 s of it, half at lit kerbs and half queued behind them. The waits sat on a few crosswalks; crosswalk 36 at junction 8 held about 15 people all run. Sampling each lit crosswalk's walk signal over 600 s found 14 that never showed WALK. The phase builder's dump for them showed the same thing every time: a turn that leaves across the crosswalk's own arm was green in every phase. Usually it was the near turn. It meets no car, so the single-turn fill had added it to every phase.
+
+**What changed** (`right_of_way.cpp`, `signal_programme.cpp`):
+- The crosswalks people reach at a lit junction, and the connectors that cross each one, are worked out once, before the phases are built (`JunctionWork::walkIds`, `walkCrosses`, `walkYields`; the model's `crossersOf`, as before). The walk signals are read from that same table. A connector **yields** to a crosswalk when it turns into the crosswalk's arm from another arm, is not straight on, and is not a protected turn: the rule as it was.
+- The single-turn fill does not add a turn to a phase when that would take away the last phase its crosswalk walks in.
+- Where a crosswalk still walks in no phase, arrow phases included, a walk-only phase is added. The case is a lit two-arm bend, whose one phase is all green: the four corners of the driving tests' 3 by 3 grid (`walks_1_...`, which now fails without it). river_town and brain_lab have none, so no walk-only phase is added there.
+- `checkSignalProgrammes` also reports a walk signal that shows WALK in none of its phases. Before, it checked only that walking was safe. `RightOfWayCounts::walksNever` counts such signals.
+
+**Tried and corrected:** at first the walk-only phase was decided before the arrow phases were built. On brain_lab, every crosswalk that walked in no main phase did walk during an arrow phase whose arrows do not cross it, so the extra phase was not needed there. It changed the timings and set off a pile-up in the near crowd: a ring of waits, 4 contacts and 11 hits on walkers. Deciding it after the arrows leaves brain_lab without one.
+
+**Numbers, old -> new:**
+- **river_town's crowd** (re-pinned): arrivals 475 -> **675** (730 before the sweep); trips 290 -> 316; parked 237 -> 245; the most on the road 99 -> 102 (still minute 11); walking at minute 30 416 -> 369; hash 0xf9c704ff73207220 -> 0x12277ea4937a87e4. Walkers standing still fell from about 190 at any moment to about 95. Those queued behind someone at a kerb fell from 162,786 to 24,245 person-seconds. Most of those still walking at minute 30 are on the crowd's 900 m-plus walks to work. No plan, blocked, another place, rings, touching spells: still 0. The longest stand is the same, 450.2 s (car 20). New checks: no walk signal that never walks, no signal problems.
+- **brain_crowd** (re-pinned): trips 313 -> 315; parked 234 -> 237; arrivals 472 -> 476; away from a kerb end 1.95% -> 2.06%; hash 0xec0a6a6e55e90ddc -> 0xd88b08b351744711. The ring of waits and the longest stand (1,247.6 s, car 109) are the same (known bug 3).
+- **The near crowd** (re-pinned): out 77 -> 82; hash 0x3c4be4561e729e50 -> 0x73ed4bc5b6d8b7fd. Contacts 7 -> 0, hits on parked cars 1 -> 0, on walkers 5 -> 0, on other things 14 -> 0. Still failing, not loosened: the longest a car stood off its lane is 18.7 s -> 5.6 s (car 191, 0.94 m off), against the 5 s allowed. Known bug 2 is now only that.
+
+**Found red, and red at HEAD too (checked by building HEAD's two driving files):** `level_brain_lab_six_residents_in_three_households` (1 check: Fay's walk 4.6 min is now 4.8) and `level_brain_lab_whoever_reaches_the_household_car_first_takes_it` (13 checks); `level_river_town_streets_are_drivable_grades` (the steepest grade is over the 0.70 ratchet). None of these reads the signals. Not fixed here.
+
+**Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, each failing only its known bug (above); run_tests 1483/1483.

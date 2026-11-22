@@ -118,7 +118,19 @@ struct JunctionWork {
     std::vector<uint8_t> faces;       // approaches * approaches: the two face each other (approachesFace, the stated pair)
     std::vector<uint8_t> meet;        // n * n: a cross or a join between the two
     std::vector<uint8_t> prot;        // per connector: 1 where it is a protected turn here (protected_when)
+    // THE CROSSWALKS people reach here (the road model's ids, in the junction's order) and, per crosswalk, per connector:
+    // crosses it, and would give way to people on it on a plain green (a turn into its arm from another arm, not protected)
+    std::vector<uint32_t> walkIds;
+    std::vector<std::vector<uint8_t>> walkCrosses, walkYields;
     uint32_t n = 0;
+
+    // Does green `g` (one flag per connector) keep crosswalk `c` from walking: something green crosses it that does not
+    // give way to people on it (in an arrow phase everything green crosses unyielding: `arrow`)?
+    bool blocksWalk(uint32_t c, const std::vector<uint8_t>& g, bool arrow) const {
+        for (uint32_t k = 0; k < n; ++k)
+            if (walkCrosses[c][k] && g[k] && (arrow || !walkYields[c][k])) return true;
+        return false;
+    }
 
     bool meets(uint32_t i, uint32_t k) const { return meet[i * n + k] != 0; }
     // Do the approaches of turns i and k face each other?
@@ -200,15 +212,28 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
     }
     std::vector<std::vector<uint8_t>> main(colours, std::vector<uint8_t>(n, 0));
     for (uint32_t i = 0; i < n; ++i) main[colour[w.app[i]]][i] = 1;
-    // Then single turns: any turn that conflicts with nothing green in a phase joins it.
-    for (std::vector<uint8_t>& green : main)
+    // Then single turns: any turn that conflicts with nothing green in a phase joins it -- unless it would take away
+    // the last phase a crosswalk walks in. (A near turn out of an arm meets no car, so it fitted every phase, and the
+    // crosswalk across that arm, which it leaves across, never walked: river_town's lit crosswalk 36 stood 15 people
+    // all day, and 14 of its 432 lit crosswalks never showed WALK.)
+    const uint32_t walkCount = static_cast<uint32_t>(w.walkIds.size());
+    for (std::size_t p = 0; p < main.size(); ++p) {
+        std::vector<uint8_t>& green = main[p];
         for (uint32_t i = 0; i < n; ++i) {
             if (green[i]) continue;
             bool ok = true;
             for (uint32_t k = 0; k < n && ok; ++k)
                 if (green[k] && conflict(w, ck, i, k)) ok = false;
+            for (uint32_t c = 0; c < walkCount && ok; ++c) {
+                if (!w.walkCrosses[c][i] || w.walkYields[c][i] || w.blocksWalk(c, green, false)) continue;
+                bool walksElsewhere = false;
+                for (std::size_t q = 0; q < main.size() && !walksElsewhere; ++q)
+                    walksElsewhere = q != p && !w.blocksWalk(c, main[q], false);
+                if (!walksElsewhere) ok = false;
+            }
             if (ok) green[i] = 1;
         }
+    }
     // Arrows: before each phase, the arrow movements that would there share their green with what they meet from the
     // approach facing them get phases of their own (coloured among themselves by the same test).
     std::vector<std::pair<bool, std::vector<uint8_t>>> out;
@@ -243,6 +268,16 @@ std::vector<std::pair<bool, std::vector<uint8_t>>> buildPhases(const JunctionWor
         }
         for (const std::vector<uint8_t>& a : arrows) out.push_back({true, a});
         out.push_back({false, green});
+    }
+    // A WALK-ONLY PHASE where some crosswalk walks in none of the phases, arrows included (something that never gives
+    // way to people crosses it in every one: a lit two-arm bend, whose one phase is all green): every movement red,
+    // every crosswalk walking.
+    for (uint32_t c = 0; c < walkCount; ++c) {
+        bool walks = false;
+        for (std::size_t q = 0; q < out.size() && !walks; ++q) walks = !w.blocksWalk(c, out[q].second, out[q].first);
+        if (walks) continue;
+        out.push_back({false, std::vector<uint8_t>(n, 0)});
+        break;
     }
     return out;
 }
@@ -506,6 +541,27 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
         // would give way to.
         w.prot.assign(w.n, 0);
         for (uint32_t i = 0; i < w.n; ++i) w.prot[i] = protectedTurn(w, ck, i) ? 1 : 0;
+        // THE CROSSWALKS people reach here, and which connectors cross each (the model's answer, crossersOf): the walk
+        // signals below are read off them, and the phases keep each one a phase it walks in
+        for (uint32_t lw = jn.crosswalks.first; lw < jn.crosswalks.end() && lw < roads.crosswalks.size(); ++lw) {
+            const uint32_t id = model.crosswalkOfLane(lw);
+            const engine::ModelCrosswalk* cw = model.crosswalk(id);
+            if (!cw || !cw->pavements) continue;
+            std::vector<uint8_t> crosses(w.n, 0);
+            std::vector<uint8_t> yields(w.n, 0);
+            for (const engine::CrosswalkCrosser& x : model.crossersOf(id)) {
+                if (x.path.index >= out.paths.size() || roads.paths[x.path.index].kind != engine::PathKind::Connector ||
+                    roads.paths[x.path.index].junction.index != j)
+                    continue;
+                const uint32_t k = out.paths[x.path.index].indexInJunction;
+                if (k >= w.n || crosses[k]) continue;
+                crosses[k] = 1;
+                yields[k] = !leavesAcross(model, w.conn[k], *cw) && w.mov[k] != Movement::Straight && !w.prot[k];
+            }
+            w.walkIds.push_back(id);
+            w.walkCrosses.push_back(std::move(crosses));
+            w.walkYields.push_back(std::move(yields));
+        }
         const std::vector<std::pair<bool, std::vector<uint8_t>>> phases = buildPhases(w, ck);
         jr.phases.first = static_cast<uint32_t>(out.phases.size());
         for (const std::pair<bool, std::vector<uint8_t>>& ph : phases) {
@@ -527,40 +583,27 @@ RightOfWay buildRightOfWay(const engine::RoadModel& model, const RuleSet& rules,
         // the connectors that cross it are the model's answer (crossersOf); it may walk in a phase where everything green
         // across it is a turn into its arm from another arm, on a plain green
         jr.walks.first = static_cast<uint32_t>(out.walks.size());
-        for (uint32_t lw = jn.crosswalks.first; lw < jn.crosswalks.end() && lw < roads.crosswalks.size(); ++lw) {
-            const uint32_t id = model.crosswalkOfLane(lw);
-            const engine::ModelCrosswalk* cw = model.crosswalk(id);
-            if (!cw || !cw->pavements) continue;
+        for (uint32_t c = 0; c < w.walkIds.size(); ++c) {
+            const uint32_t id = w.walkIds[c];
             WalkSignalRules wc;
             wc.junction = j;
             wc.crosswalk = id;
             wc.crossedBy.first = static_cast<uint32_t>(out.walkCrossers.size());
-            std::vector<uint8_t> crosses(w.n, 0);
-            std::vector<uint8_t> yields(w.n, 0);
-            for (const engine::CrosswalkCrosser& x : model.crossersOf(id)) {
-                if (x.path.index >= out.paths.size() || roads.paths[x.path.index].kind != engine::PathKind::Connector ||
-                    roads.paths[x.path.index].junction.index != j)
-                    continue;
-                const uint32_t k = out.paths[x.path.index].indexInJunction;
-                if (k >= w.n || crosses[k]) continue;
-                crosses[k] = 1;
-                out.walkCrossers.push_back(w.conn[k]);
-                yields[k] = !leavesAcross(model, w.conn[k], *cw) && w.mov[k] != Movement::Straight && !w.prot[k];
+            for (uint32_t k = 0; k < w.n; ++k)
+                if (w.walkCrosses[c][k]) out.walkCrossers.push_back(w.conn[k]);
+            wc.crossedBy.count = static_cast<uint32_t>(out.walkCrossers.size()) - wc.crossedBy.first;
+            wc.phases.first = static_cast<uint32_t>(out.walkPhases.size());
+            bool walksAtAll = false;
+            for (uint32_t ph = 0; ph < phases.size(); ++ph) {
+                const bool walks = !w.blocksWalk(c, phases[ph].second, phases[ph].first);
+                walksAtAll = walksAtAll || walks;
+                out.walkPhases.push_back(walks ? 1 : 0);
             }
-            {
-                wc.crossedBy.count = static_cast<uint32_t>(out.walkCrossers.size()) - wc.crossedBy.first;
-                wc.phases.first = static_cast<uint32_t>(out.walkPhases.size());
-                for (uint32_t ph = 0; ph < phases.size(); ++ph) {
-                    bool walks = true;
-                    for (uint32_t k = 0; k < w.n && walks; ++k)
-                        if (crosses[k] && phases[ph].second[k] && (phases[ph].first || !yields[k])) walks = false;
-                    out.walkPhases.push_back(walks ? 1 : 0);
-                }
-                wc.phases.count = static_cast<uint32_t>(phases.size());
-                if (id >= out.walkOfCrosswalk.size()) out.walkOfCrosswalk.resize(model.crosswalks.size(), engine::kNoIndex);
-                out.walkOfCrosswalk[id] = static_cast<uint32_t>(out.walks.size());
-                out.walks.push_back(wc);
-            }
+            wc.phases.count = static_cast<uint32_t>(phases.size());
+            out.counts.walksNever += walksAtAll ? 0 : 1;
+            if (id >= out.walkOfCrosswalk.size()) out.walkOfCrosswalk.resize(model.crosswalks.size(), engine::kNoIndex);
+            out.walkOfCrosswalk[id] = static_cast<uint32_t>(out.walks.size());
+            out.walks.push_back(wc);
         }
         jr.walks.count = static_cast<uint32_t>(out.walks.size()) - jr.walks.first;
         out.counts.walks += jr.walks.count;

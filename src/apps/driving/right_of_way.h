@@ -210,6 +210,7 @@ struct RightOfWayCounts {
     uint32_t phases = 0;               // over the junctions with lights
     uint32_t protectedTurns = 0;       // turns going only on their own green arrow (rule_set.h ArrowWarrant)
     uint32_t walks = 0;                // crosswalks with their own signal (ADR-0452)
+    uint32_t walksNever = 0;           // ... of which walk in no phase (a junction whose phases leave none clear of them)
     uint32_t meetings = 0;             // path-to-path crossing records answered
     uint32_t settledAtLoad = 0;        // ... where one gives way, at every phase
     uint32_t askWhileDriving = 0;      // ... asked while driving at some phase

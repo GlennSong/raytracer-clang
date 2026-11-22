@@ -200,6 +200,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
 
     // NO RING OF WAITS AT ANY MINUTE
     CHECK(ringsSeen == 0);
+    // EVERY WALK SIGNAL WALKS in some phase (a crosswalk that never shows WALK strands its walkers behind the kerb)
+    CHECK(d.rightOfWay().counts.walksNever == 0u);
+    CHECK(d.signalProblems().empty());
     CHECK(b.machine()->counts().errors == 0u);
     CHECK(b.machine()->counts().refused == 0u);
 
@@ -229,19 +232,27 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // trips 318 -> 292; parked 209 -> 240; ARRIVALS 730 -> 472 (on the known-bugs list: about 410 of the 630 are
     // walking at any minute from minute 8, and why the walks take longer is not known); the longest stand 734.7 s
     // (car 19) -> 450.2 s (car 20). No plan, blocked, another place, rings, touching spells: 0.
+    // (At the sweep's second half: the most on the road 99 at minute 11, trips 290, parked 237, arrivals 475.)
+    // RE-PINNED when every walk signal got a phase to walk in (ADR-0480, the sweep's bugs, 1): 14 of the 432 lit
+    // crosswalks showed WALK in no phase -- a near turn out of their arm meets no car, so the phase builder's single-turn
+    // fill made it green in every phase -- and only jaywalkers crossed them; queues stood behind their kerbs all run
+    // (crosswalk 36 at junction 8 held about 15 people). Walkers standing still fell from about 190 at any moment to about
+    // 95. ARRIVALS 475 -> 675; trips 290 -> 316; parked 237 -> 245; the most on the road 99 -> 102 (still minute 11).
+    // Walking at minute 30 416 -> 369 (most of them on 900 m-plus walks to work: the crowd's days). No plan, blocked,
+    // another place, rings, touching spells: still 0. The longest stand is the same, 450.2 s (car 20).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 99);   // (98 at minute 10 -> 99 at minute 11 with the furniture on the model, below)
+        CHECK(mostOnRoad == 102);
         CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 290u);       // (292 -> 290, the same)
-        CHECK(b.counts().parkedReports == 237u);    // (240 -> 237, the same)
+        CHECK(b.counts().tripsBegun == 316u);
+        CHECK(b.counts().parkedReports == 245u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 475u);   // (472 -> 475, the same)
+        CHECK(b.machine()->counts().arrivals == 675u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -259,6 +270,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x9362ecbc934c82cf -> 0xf9c704ff73207220 (#306, its second half): the street furniture planned on the road
         // model -- one signal pole per arriving arm, a sidewalk's width back from its mouth; lamps and kerb life along
         // each kerb -- so the walkers' obstacles (the poles and the furniture) stand elsewhere: the counts above.
-        CHECK(hash == 0xf9c704ff73207220ull);
+        // 0xf9c704ff73207220 -> 0x12277ea4937a87e4 (every crosswalk's walk signal walks in some phase): the counts above.
+        CHECK(hash == 0x12277ea4937a87e4ull);
     }
 }

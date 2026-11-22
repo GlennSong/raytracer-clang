@@ -332,6 +332,10 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // elsewhere): the most on the road 87 at minute 9 -> 89 at minute 10; parked 238 -> 234; arrivals 470 -> 472; hash
     // 0xf0e62a8d7fffa45b -> 0xec0a6a6e55e90ddc; away from a kerb end 1.93% -> 1.95%. The ring of waits and the longest
     // stand (1247.6 s, car 109) are the same.
+    // RE-PINNED (ADR-0480, the sweep's bugs, 1: every crosswalk's walk signal walks in some phase): trips 313 -> 315,
+    // parked 234 -> 237, arrivals 472 -> 476, hash 0xec0a6a6e55e90ddc -> 0xd88b08b351744711; away from a kerb end 1.95% ->
+    // 2.06%; the most on the road (89 at minute 10) and busy minutes (16) the same. The ring of waits and the longest
+    // stand (1247.6 s, car 109) are the same (the next bug on the list).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
@@ -341,15 +345,15 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(mostOnRoad == 89);
         CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 16);
-        CHECK(b.counts().tripsBegun == 313u);
-        CHECK(b.counts().parkedReports == 234u);
+        CHECK(b.counts().tripsBegun == 315u);
+        CHECK(b.counts().parkedReports == 237u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 472u);
+        CHECK(b.machine()->counts().arrivals == 476u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xec0a6a6e55e90ddcull);
+        CHECK(hash == 0xd88b08b351744711ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

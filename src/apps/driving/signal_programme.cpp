@@ -534,6 +534,16 @@ std::vector<std::string> checkSignalProgrammes(const engine::RoadModel& model, c
             }
             phaseStart += p.length();
         }
+        // AND EVERY WALK WALKS: a crosswalk whose signal shows WALK in no phase strands everyone who must cross there
+        // behind its kerb (only a jaywalker goes)
+        for (uint32_t k = jr.walks.first; k < jr.walks.end() && k < row.walks.size(); ++k) {
+            const WalkSignalRules& wc = row.walks[k];
+            bool walks = false;
+            for (uint32_t ph = 0; ph < wc.phases.count && !walks; ++ph) walks = row.walkPhases[wc.phases.first + ph] != 0;
+            if (!walks)
+                out.push_back("junction " + std::to_string(j) + ": the walk across crosswalk " + std::to_string(wc.crosswalk) +
+                              " shows WALK in none of its " + std::to_string(wc.phases.count) + " phases");
+        }
     }
     return out;
 }
