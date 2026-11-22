@@ -568,6 +568,10 @@ struct RoadModel {
     // THE WALKWAYS (ADR-0475): the paths for people on foot beside no street, as their drawer stated them, in the order
     // stated. Supplied by stateWalkways (below), which lays them in the lane level. Empty until something states one.
     std::vector<ModelWalkway> walkways;
+    // THE BUS LINES (the buses plan, step 1): the road file's, each stop's street resolved (plannedRoadModel). A line
+    // a stop of which names no street of the model, lies off its street or states no kerb is not held: a problem
+    // names it. Read through busStopLane / busStopWalk.
+    std::vector<ModelBusLine> busLines;
     std::vector<std::string> notStated;  // the parts of the design nothing states yet, in words
     std::vector<std::string> problems;    // where the build does not match what was stated, each with its place
     // the road file states that its junctions' arms are listed in their ring ("arms_in_ring", ADR-0427): the readers of the
@@ -726,6 +730,15 @@ struct RoadModel {
     // it and the kerb it lies toward: frontageOnLine), whatever other road is nearer -- one drawn over or under it on a
     // deck included. Not valid: no such street, or it has no centre line.
     RoadFrontage frontageOnStreet(ModelStreetId street, const Vec2& p) const;
+
+    // ---- BUS STOPS (the buses plan, step 1) --------------------------------------------------------------------------------
+    // WHERE A STOP'S BUS PULLS IN: the kerb lane beside it, for the traffic the stop's kerb serves (kerbLaneAt). Not
+    // valid: the street has no such lane there (or the model has no lane level).
+    KerbLanePlace busStopLane(const ModelBusStop& stop) const {
+        return stop.street.valid() ? kerbLaneAt(stop.street, stop.kerb, stop.station) : KerbLanePlace();
+    }
+    // WHERE PEOPLE WAIT AT A STOP: where the stop joins the walks, on its own kerb (walkJoinOn its frontage).
+    WalkJoin busStopWalk(const ModelBusStop& stop, const std::vector<uint8_t>& openWalks = {}) const;
 
     // ---- HEIGHTS ON THE ROADS: the drawn deck's, read from the lane level (built layer only) ----------------------------
     // THE HEIGHT OF A STREET'S ROAD level with `p`: the mean of its kerb lanes' heights there, each way it is driven
@@ -975,7 +988,8 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 18;   // 18: the walkways; a walk may be a walkway's (LGRF 17, ADR-0475)
+constexpr uint32_t kRoadModelFormat = 19;   // 19: the bus lines (the buses plan, step 1)
+                                            // 18: the walkways; a walk may be a walkway's (LGRF 17, ADR-0475)
                                             // 17: the lane level's walks and their joins (LGRF 16, ADR-0466)
                                             // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)
                                             // 15: the corners, the dead ends, a street's sidewalk per kerb (ADR-0464)

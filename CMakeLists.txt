@@ -988,6 +988,7 @@ add_executable(run_tests
     tests/test_road_weld.cpp
     tests/test_road_spec.cpp
     tests/test_street_furniture.cpp
+    tests/test_bus_lines.cpp
     tests/test_street_signs.cpp
     tests/test_editable_curve.cpp
     tests/test_curve.cpp

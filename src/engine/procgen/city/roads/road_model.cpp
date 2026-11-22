@@ -554,6 +554,37 @@ RoadModel plannedRoadModel(const RoadLabGraph& g) {
     m.junctions = g.junctions;
     m.streets = g.streets;
     m.armsInRing = g.armsInRing;
+    // ---- the bus lines (the buses plan, step 1): each stop's street by its id; a line with a stop that cannot stand is
+    // not held, and is named ----------------------------------------------------------------------------------------------
+    {
+        std::map<std::string, uint32_t> streetById;
+        for (uint32_t i = 0; i < m.streets.size(); ++i) streetById[m.streets[i].id] = i;
+        std::set<std::string> lineIds, stopIds;
+        for (ModelBusLine line : g.busLines) {
+            std::string why;
+            if (!lineIds.insert(line.id).second) why = "its id is another line's too";
+            if (why.empty() && line.stops.size() < 2) why = "it has fewer than two stops";
+            for (ModelBusStop& stop : line.stops) {
+                if (!why.empty()) break;
+                const std::map<std::string, uint32_t>::const_iterator it = streetById.find(stop.streetId);
+                if (!stopIds.insert(stop.id).second) why = "stop " + stop.id + ": its id is another stop's too";
+                else if (it == streetById.end()) why = "stop " + stop.id + ": no street " + stop.streetId;
+                else if (stop.kerb != 1 && stop.kerb != -1) why = "stop " + stop.id + ": its kerb is +1 or -1, not " + std::to_string(stop.kerb);
+                else {
+                    const ModelStreet& S = m.streets[it->second];
+                    if (strictlyBefore(stop.station, S.from, kWrittenStation) || strictlyPast(stop.station, S.to, kWrittenStation))
+                        why = fmt("stop %s: station %.2f lies off street %s (%.2f to %.2f)", stop.id.c_str(), stop.station,
+                                  S.id.c_str(), S.from, S.to);
+                    else stop.street = ModelStreetId(it->second);
+                }
+            }
+            if (!why.empty()) {
+                m.problems.push_back("bus line " + line.id + " is not held: " + why);
+                continue;
+            }
+            m.busLines.push_back(std::move(line));
+        }
+    }
     if (!g.junctions.empty() && !g.armsInRing)
         m.problems.push_back("the road file does not state that its junctions' arms are listed in their ring (\"arms_in_ring\"): run `" +
                              std::string(roads::lanes::kArmOrderCommand) + "`");
@@ -1330,6 +1361,11 @@ RoadFrontage RoadModel::frontageOnStreet(ModelStreetId street, const Vec2& p) co
     f.dir = lf.dir;
     f.towards = lf.towards;
     return f;
+}
+
+WalkJoin RoadModel::busStopWalk(const ModelBusStop& stop, const std::vector<uint8_t>& openWalks) const {
+    if (!stop.street.valid()) return WalkJoin();
+    return walkJoinOn(frontageOn(stop.street, stop.station, stop.kerb), openWalks);
 }
 
 bool RoadModel::streetHeightAt(ModelStreetId street, const Vec2& p, Real& out) const {
@@ -2147,7 +2183,8 @@ template <class T> constexpr bool isRecord() {
            std::is_same<T, ModelNode>::value || std::is_same<T, ModelNodePoint>::value || std::is_same<T, ModelTurn>::value ||
            std::is_same<T, ModelRegulation>::value || std::is_same<T, ModelKerbRun>::value || std::is_same<T, ModelCrosswalk>::value ||
            std::is_same<T, ModelCorner>::value || std::is_same<T, ModelDeadEnd>::value || std::is_same<T, StatedFrontage>::value ||
-           std::is_same<T, WalkwayEnd>::value || std::is_same<T, ModelWalkway>::value;
+           std::is_same<T, WalkwayEnd>::value || std::is_same<T, ModelWalkway>::value || std::is_same<T, ModelBusStop>::value ||
+           std::is_same<T, ModelBusLine>::value;
 }
 
 struct Writer {
@@ -2247,6 +2284,10 @@ template <class IO, class E> void fields(IO& io, E& e, WalkwayEnd*) { io(e.meets
 template <class IO, class W> void fields(IO& io, W& w, ModelWalkway*) {
     io(w.id); io(w.kind); io(w.width); io(w.line); io(w.heights); io(w.ends);
 }
+template <class IO, class S> void fields(IO& io, S& s, ModelBusStop*) {
+    io(s.id); io(s.name); io(s.streetId); io(s.street); io(s.station); io(s.kerb);
+}
+template <class IO, class L> void fields(IO& io, L& l, ModelBusLine*) { io(l.id); io(l.name); io(l.stops); }
 template <class IO, class S> void fields(IO& io, S& s, ModelLaneSpan*) { io(s.street); io(s.from); io(s.to); }
 template <class IO, class L> void fields(IO& io, L& l, ModelLane*) {
     io(l.id); io(l.kind); io(l.edge); io(l.dir); io(l.slot); io(l.width); io(l.curve); io(l.spineFrom); io(l.spineTo); io(l.streets);
@@ -2285,7 +2326,7 @@ template <class IO, class M> void modelFields(IO& io, M& m) {
     m.curves = std::move(curves);
     io(m.heights); io(m.spineStations); io(m.linePoints); io(m.lineStations); io(m.attachments); io(m.regulations); io(m.kerbRuns);
     io(m.crosswalks);
-    io(m.corners); io(m.deadEnds); io(m.walks); io(m.walkways);
+    io(m.corners); io(m.deadEnds); io(m.walks); io(m.walkways); io(m.busLines);
     io(m.notStated);
     io(m.problems); io(m.armsInRing);
 }

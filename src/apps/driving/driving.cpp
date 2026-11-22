@@ -1047,6 +1047,39 @@ Route Driving::routeBetween(uint32_t vehicleClass, const PathPoint& from, const 
     return findRoute(*model_, routeBounds_, routeClass(vehicleClass), from, to);
 }
 
+std::vector<std::string> Driving::busLineProblems(uint32_t vehicleClass) const {
+    std::vector<std::string> out;
+    if (!model_) return out;
+    for (const engine::ModelBusLine& line : model_->busLines) {
+        std::vector<PathPoint> at(line.stops.size());
+        bool placed = true;
+        for (std::size_t i = 0; i < line.stops.size(); ++i) {
+            const engine::ModelBusStop& stop = line.stops[i];
+            const engine::KerbLanePlace k = model_->busStopLane(stop);
+            if (!k.valid()) {
+                out.push_back("bus line " + line.id + ", stop " + stop.id + ": no kerb lane beside it for its bus to pull into");
+                placed = false;
+                continue;
+            }
+            at[i].path = k.path;
+            at[i].along = k.along;
+            if (!model_->busStopWalk(stop).valid())
+                out.push_back("bus line " + line.id + ", stop " + stop.id + ": no walk beside it for its people to wait on");
+        }
+        if (!placed) continue;
+        // the legs: each stop to the next, and the last round to the first
+        std::vector<std::pair<std::size_t, std::size_t>> legs;
+        for (std::size_t i = 0; i < line.stops.size(); ++i) legs.push_back({i, (i + 1) % line.stops.size()});
+        for (const std::pair<std::size_t, std::size_t>& leg : legs) {
+            const Route r = routeBetween(vehicleClass, at[leg.first], at[leg.second]);
+            if (!r.found)
+                out.push_back("bus line " + line.id + ": no route for its buses from stop " + line.stops[leg.first].id + " to stop " +
+                              line.stops[leg.second].id + " (" + r.whyWords + ")");
+        }
+    }
+    return out;
+}
+
 void Driving::queueEvent(EventKind kind, CarId car, TripId trip, PersonId person) {
     Event e;
     e.kind = kind;

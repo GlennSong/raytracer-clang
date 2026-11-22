@@ -530,6 +530,23 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             g.junctions.push_back(pj);
         }
     }
+    if (spec.contains("bus_lines") && spec["bus_lines"].is_array()) {
+        for (const nlohmann::json& lj : spec["bus_lines"]) {
+            ModelBusLine line;
+            line.id = lj.at("id").get<std::string>();
+            line.name = lj.value("name", std::string());
+            for (const nlohmann::json& sj : lj.at("stops")) {
+                ModelBusStop stop;
+                stop.id = sj.at("id").get<std::string>();
+                stop.name = sj.value("name", std::string());
+                stop.streetId = sj.at("street").get<std::string>();
+                stop.station = sj.at("station").get<double>();
+                stop.kerb = sj.value("kerb", 1);
+                line.stops.push_back(stop);
+            }
+            g.busLines.push_back(line);
+        }
+    }
     if (spec.contains("streets")) {
         // THE STREETS (ModelStreet): read as written; the road must exist, the stretch run forwards, and each end name a
         // junction of the list (or none)

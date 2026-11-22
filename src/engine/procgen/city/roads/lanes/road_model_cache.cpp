@@ -333,8 +333,9 @@ void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts
         }
         // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the tables the
         // turns are stated by (ADR-0426), the kerb parking spaces are laid by (ADR-0439) and the dead ends are joined by
-        // (ADR-0464)
-        out.key = roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec),
+        // (ADR-0464); and the bus lines the model holds (busLinesKey: the lane level does not read them, so they ride in
+        // beside its facts, not in them)
+        out.key = roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec) ^ (busLinesKey(spec) * 0x9E3779B97F4A7C15ull),
                                     roadModelTablesHash(laneTurnRules().hash, kerbParkingRules().hash, pathUsers().hash), opts);
     }
 

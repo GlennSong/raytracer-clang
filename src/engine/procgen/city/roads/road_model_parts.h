@@ -366,6 +366,28 @@ struct ModelStreet {
     std::vector<ModelLaneId> lanes;  // its lanes, forward then backward, each by slot from the centre line (built layer)
 };
 
+// A BUS STOP (the buses plan, step 1; ~/.claude/plans/buses-on-road-model.md): where a bus pulls in to the kerb and
+// people get on and off. STATED in the road file, as a door's frontage is (ADR-0474): a street by its id, the station
+// along its road's spine and the kerb (+1: the kerb of the traffic running along the spine, so a bus running that way
+// serves it; -1: the other) -- never worked out from a position. The road model answers where its bus pulls in
+// (RoadModel::busStopLane) and where people wait (RoadModel::busStopWalk).
+struct ModelBusStop {
+    std::string id;                  // unique in the road file ("R1-03")
+    std::string name;                // what the sign says ("Mill Street"); may be empty
+    std::string streetId;            // the street as the road file names it
+    ModelStreetId street;            // ...resolved by the model (none: not resolved)
+    Real station = 0;                // metres along the street's road's spine
+    int kerb = 1;                    // +1 or -1
+};
+// A BUS LINE: its stops in the order a bus calls at them, round and round: from the last it drives on to the first. A
+// line that goes there and back is a loop too, its way back calling at stops on the other kerb (a stop serves the
+// traffic on its own kerb only).
+struct ModelBusLine {
+    std::string id;                  // unique in the road file ("R1")
+    std::string name;                // "River Loop"
+    std::vector<ModelBusStop> stops;
+};
+
 }  // namespace engine
 
 #endif

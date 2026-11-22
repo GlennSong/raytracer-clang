@@ -602,6 +602,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             }
         }
         sim_.setRoads(model, line);
+        // THE BUS LINES THE ROAD FILE STATES (the buses plan, step 1), checked for the fleet's bus class: every stop has a
+        // kerb lane and a walk, every leg can be driven. Said here, so a line no bus could drive is found at load.
+        if (const driving::Driving* d2 = sim_.drivingV2(); d2 && model && !model->busLines.empty()) {
+            const int bus = d2->vehicleClasses().indexOf("bus");
+            if (bus < 0) {
+                LOG_WARN << "[citysim] bus lines: " << model->busLines.size() << " stated, and the fleet has no \"bus\" class to check them for";
+            } else {
+                const std::vector<std::string> problems = d2->busLineProblems(static_cast<uint32_t>(bus));
+                std::size_t stops = 0;
+                for (const engine::ModelBusLine& bl : model->busLines) stops += bl.stops.size();
+                LOG_INFO << "[citysim] bus lines: " << model->busLines.size() << " (" << stops << " stops), " << problems.size()
+                         << " faults";
+                for (const std::string& p : problems) LOG_WARN << "[citysim] " << p;
+            }
+        }
     }
     // (The fire stations' engines, parked in their bays as rows of the old sim's vehicle list, went with the old driving:
     // ADR-0461. A fire engine comes back as a parked car entity. The garages' stalls, the old driving's bays, went with

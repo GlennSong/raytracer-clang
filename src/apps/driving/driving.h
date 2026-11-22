@@ -422,6 +422,12 @@ public:
     // A ROUTE FOR A CAR OF `vehicleClass` from `from` to `to` (routeClass: as its trips are routed), with no car on the
     // road: what a trip planner prices a drive by before the car sets off.
     Route routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const;
+    // THE BUS LINES THE ROAD MODEL HOLDS, CHECKED FOR A CLASS (the buses plan, step 1): each stop has a kerb lane for its
+    // bus to pull into and a walk for its people to wait on, and every leg -- each stop to the next, and the last round
+    // to the first -- routes for a car of `vehicleClass`. Each fault in words, naming
+    // the line and the stops (a leg needing a U-turn nothing states, or a turn too tight for the class, has no route).
+    // Empty: every line can be driven.
+    std::vector<std::string> busLineProblems(uint32_t vehicleClass) const;
     // THE CLASS'S VEHICLE TAGS on the road (route.h RouteClass::tags): which crossing points concern its cars
     // (CrossingPoint::concerns, ADR-0412). Every record concerns a class the road has not bound.
     engine::TagMask tagsOf(uint32_t vehicleClass) const {

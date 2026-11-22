@@ -112,7 +112,7 @@ std::string insertLayoutText(const std::string& text, const RoadLayout& layout, 
 // layout written again into a file that has not changed gives the same bytes (ADR-0435).
 std::string stripLayoutText(const std::string& text, bool keepNodes = false);
 // WHAT THE CITY'S BAKE KEY HASHES (city_producer.cpp): the file with its "streets", "divided", "junctions",
-// "arms_in_ring" and "lane_rules" members taken out whole -- the junctions with their controls and signs too (ADR-0421;
+// "arms_in_ring", "lane_rules" and "bus_lines" members taken out whole -- the junctions with their controls and signs too (ADR-0421;
 // the lane graph, which reads them, keys them itself, laneLevelKey, ADR-0426) -- and then what the paint reads of the
 // stated junctions (ADR-0428: each junction's arms by road, station and way, in an order of their own, and its stretches
 // inside), appended: a change to where a junction's arms stand re-bakes; its control, signs, names or arm order do not.
@@ -122,6 +122,10 @@ std::string keyedRoadFileText(const std::string& text);
 // members, as dumped; 0
 // for a file with none. Mixed into the lane graph's cache key.
 uint64_t laneLevelKey(const nlohmann::json& spec);
+// THE BUS LINES A ROAD FILE STATES (the buses plan, step 1), hashed: its "bus_lines" member, as dumped; 0 for a file with
+// none. The city's bake key leaves them out (keyedRoadFileText) and the lane level does not read them; the saved road
+// model holds them, so its key mixes this in (road_model_cache.cpp).
+uint64_t busLinesKey(const nlohmann::json& spec);
 // WRITES THE LANE LEVEL'S RULES INTO A ROAD FILE'S TEXT IN PLACE (ADR-0426): a "lane_rules" member,
 // {"solid_before_stop_line": metres}, where the layout writer leaves it -- before the file's "streets" (or "divided"),
 // after its last member where it has neither -- so the layout written again moves nothing (ADR-0437). Nothing else

@@ -24189,3 +24189,32 @@ Words:
 **Tests:** `probe_sites_line_the_streets` (run_tests) now holds each site at the model's drawn road height plus its rule height, with the caller's ground put 2 m off it, so the test tells the two apart (it held them at the ground's).
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; lanes_tests 156/156; `level_river_town_street_furniture_and_probes_stand_on_the_drawn_road` 1/1 (new).
+
+## ADR-0481 — Buses come back on the road model: a bus line is stated in the road file, its stops by street, station and kerb, and the road model holds it (buses plan, step 1)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: the first step of putting buses back (the plan: `~/.claude/plans/buses-on-road-model.md`; Glenn's answers 2026-11-21). No bus has run since ADR-0460 deleted the old driving's buses. A road file can now state bus lines, and the road model holds them. It answers where each stop's bus pulls in and where its people wait. The driving checks that every line can be driven. Nothing drives a line yet (step 3), and no level states one yet (step 2's planner writes them).
+
+Words:
+- **Bus line:** one bus route: its stops in the order a bus calls at them, round and round. From the last stop it drives on to the first.
+- **Bus stop:** a place on a street's kerb where a bus pulls in and people get on and off. It is stated as a street (by its id), a **station** (metres along the street's centre line) and a **kerb** (+1: the kerb of the traffic running along the centre line, so a bus running that way serves it; -1: the other). That is how a door's frontage is stated (ADR-0474), so a stop is never worked out from a position.
+- **Leg:** the drive from one stop to the next.
+- **Kerb lane:** the lane nearest the kerb, where a bus pulls in (`RoadModel::kerbLaneAt`).
+
+**Decided, with Glenn (2026-11-21):** lines are road-file data that the planner writes and anyone can edit, never made at load; river_town is the first test bed; everyone rides from step 4; the island's intercity lines are re-routed now, for the map only.
+
+**What changed:**
+- **The road file** may state `"bus_lines": [{"id", "name", "stops": [{"id", "name", "street", "station", "kerb"}]}]` (`road_graph_spec.cpp`, read as written into `RoadLabGraph::busLines`).
+- **The road model** (`ModelBusLine`, `ModelBusStop` in `road_model_parts.h`; `RoadModel::busLines`) holds each line, with each stop's street resolved by its id (`plannedRoadModel`). A line is not held, and a problem names it, when a stop names no street, lies off its street, states a kerb that is not ±1, or has an id another stop has; or when the line has fewer than two stops or an id another line has. It answers `busStopLane(stop)`, the kerb lane beside the stop for its kerb's traffic, and `busStopWalk(stop)`, where the stop joins the walks on its own kerb.
+- **Every line is a loop.** A line that goes there and back calls at stops on the other kerb on its way back: a stop serves only the traffic on its own kerb. An out-and-back flag was tried and dropped, since its way back would have served no stop.
+- **The driving checks the lines** (`Driving::busLineProblems(class)`): each stop has a kerb lane and a walk, and every leg (each stop to the next, the last round to the first) routes for the class. Since no car turns round anywhere (ADR-0480, the sweep's bugs, 4), a leg back along a dead-end street has no route and is named. The city host checks the level's lines for the fleet's `bus` class at load and logs each fault.
+- **The keys:** the city's bake key leaves `bus_lines` out (`keyedRoadFileText`), so editing a line never re-bakes the meshes or the lots. The saved road model holds the lines, so its key mixes them in (`busLinesKey`), and its format is 19 (every saved model is made again once).
+
+**Tests** (`tests/test_bus_lines.cpp`, run_tests, new):
+- `bus_line_stated_in_the_road_file_is_held_with_its_stops_on_the_roads`: a two-stop line on a 3 by 3 grid is held. Each stop's bus pulls in on the street's kerb lane level with the stop, and its people wait on the stop's own kerb, 6.8 m across from where the bus stands.
+- `bus_line_with_a_stop_that_cannot_stand_is_not_held_and_is_named`: a stop on a street that does not exist, and one 50 m past its street's end, each keep their line out, named ("no street no_such_street"; "station 250.00 lies off street r0 (0.00 to 200.00)"). A good line beside them is held.
+- `bus_line_legs_are_checked_by_the_driving_round_a_block_and_not_past_a_dead_end`: on the grid the line can be driven (back round a block); the same line on a street that ends at a T one end and nowhere the other is refused at its leg back ("no route for its buses from stop D1-2 to stop D1-1").
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1486/1486 (1483 and the three new); lanes_tests 156/156; `level_river_town_crowd` 1/1, its hash the same (0x331264b35e85398b): no level states a line yet.
+
+**Next** (step 2): a planner step that lays each town's loops over the road model and writes them into the road file, river_town first; and the island's intercity lines routed over the island's roads, for the map.

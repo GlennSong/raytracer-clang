@@ -326,6 +326,11 @@ struct RoadLabGraph {
     };
     LaneRules laneRules;
     bool statesLaneRules = false;
+    // THE BUS LINES (the buses plan, step 1), stated at the graph's top level, "bus_lines": [{"id", "name",
+    // "stops": [{"id", "name", "street", "station", "kerb"}]}], read as written (their streets by id; the road model
+    // resolves and checks them: plannedRoadModel). The city's bake key leaves them out (keyedRoadFileText): no mesh or
+    // lot reads them.
+    std::vector<ModelBusLine> busLines;
     bool designed() const;               // every road with a spine carries its planned profile
     std::map<std::string, int> index;    // edge id -> position in edges
     // the planned crossing of edges a and b nearest p (within `within` m), or null

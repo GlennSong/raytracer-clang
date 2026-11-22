@@ -24,7 +24,8 @@
 //     bake: the lanes tag (kLanesBuildTag), the road graph file's bytes, its terrain file, the level's sidewalk
 //     override;
 //   - the road file's LAYOUT AND LANE FACTS, which the city's bake key does not see (road_layout.h laneLevelKey): its
-//     junctions (arms, through pairs, controls, signs), streets, divided pairs and "lane_rules" (ADR-0426);
+//     junctions (arms, through pairs, controls, signs), streets, divided pairs and "lane_rules" (ADR-0426), and its
+//     "bus_lines" (road_layout.h busLinesKey; the buses plan, step 1);
 //   - the TURN TABLE's own hash (assets/data/lane_turns.json, lane_turns.h);
 //   - the VEHICLES the turns were checked against, in order: each tag, its tightest turning radius, its width and its
 //     length;

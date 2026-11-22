@@ -488,7 +488,7 @@ std::string keyedRoadFileText(const std::string& text) {
     // an order of its own (the arms' list order, their controls, signs, names and points move no paint).
     for (std::size_t k = 0; k < top.size(); ++k)
         if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules" ||
-            top[k].key == "arms_in_ring")
+            top[k].key == "arms_in_ring" || top[k].key == "bus_lines")
             cut.push_back(removal(top, k));
     std::string out = cutText(text, cut);
     if (const Member* listed = memberNamed(top, "junctions")) {
@@ -525,6 +525,11 @@ uint64_t laneLevelKey(const nlohmann::json& spec) {
         text += std::string(key) + "|" + member.dump() + "|";
     }
     return text.empty() ? 0 : bundle::fnv1aStr(text);
+}
+
+uint64_t busLinesKey(const nlohmann::json& spec) {
+    if (!spec.is_object() || !spec.contains("bus_lines")) return 0;
+    return bundle::fnv1aStr("bus_lines|" + spec["bus_lines"].dump());
 }
 
 std::string insertLaneRulesText(const std::string& text, double solidBeforeStopLine, std::string* err) {
