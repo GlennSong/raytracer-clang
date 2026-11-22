@@ -73,6 +73,12 @@ M.finishes = {
   rubber  = { "rubber", { roughness = 0.95, metallic = 0.0 } },
   screen  = { "screen", { roughness = 0.1, metallic = 0.0 } },
   paint   = { "paint", { roughness = 0.42, metallic = 0.25 } },
+  -- for things that stand outdoors: brick, stone or concrete, leaves, soil, and a wire mesh that is seen through
+  masonry = { "masonry", { surface = "brick", roughness = 0.9 } },
+  stone   = { "stone", { surface = "concrete", roughness = 0.85 } },
+  leaf    = { "leaf", { roughness = 1.0 } },
+  soil    = { "soil", { roughness = 1.0 } },
+  mesh    = { "wire_mesh", { roughness = 0.6, metallic = 0.6, opacity = 0.35 } },
 }
 local made = {}
 local function material_of(m, part)

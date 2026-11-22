@@ -276,13 +276,13 @@
     "restitution": 0.0
    },
    "position": [
-    80,
+    60,
     -0.2,
     -10
    ],
    "shape": "box",
    "size": [
-    460,
+    500,
     0.4,
     240
    ]
@@ -315,38 +315,122 @@
       "z": -10
      },
      {
-      "x": -98,
-      "z": 30,
+      "x": -74,
+      "z": 0,
+      "w": 8,
+      "d": 112,
+      "kind": "paving"
+     },
+     {
+      "x": -122,
+      "z": 0,
+      "w": 8,
+      "d": 112,
+      "kind": "paving"
+     },
+     {
+      "x": -98.0,
+      "z": 30.0,
       "w": 12,
       "d": 12,
       "kind": "paving"
      },
      {
-      "x": -98,
+      "x": -98.0,
       "z": 16.5,
-      "w": 3,
+      "w": 3.0,
       "d": 15,
       "kind": "paving"
      },
      {
-      "x": -98,
-      "z": 44,
-      "w": 3,
+      "x": -98.0,
+      "z": 44.0,
+      "w": 3.0,
       "d": 16,
       "kind": "paving"
      },
      {
-      "x": -111,
-      "z": 30,
+      "x": -111.0,
+      "z": 30.0,
       "w": 14,
+      "d": 3.0,
+      "kind": "paving"
+     },
+     {
+      "x": -85.0,
+      "z": 30.0,
+      "w": 14,
+      "d": 3.0,
+      "kind": "paving"
+     },
+     {
+      "x": -143.0,
+      "z": -24.5,
+      "w": 1.6000000000000227,
+      "d": 31,
+      "kind": "paving"
+     },
+     {
+      "x": -143.0,
+      "z": 16.0,
+      "w": 3.0,
+      "d": 14,
+      "kind": "paving"
+     },
+     {
+      "x": -143.0,
+      "z": 45.0,
+      "w": 3.0,
+      "d": 14,
+      "kind": "paving"
+     },
+     {
+      "x": -143.0,
+      "z": 24.5,
+      "w": 15.0,
       "d": 3,
       "kind": "paving"
      },
      {
-      "x": -85,
-      "z": 30,
-      "w": 14,
+      "x": -143.0,
+      "z": 36.5,
+      "w": 15.0,
       "d": 3,
+      "kind": "paving"
+     },
+     {
+      "x": -149.0,
+      "z": 30.5,
+      "w": 3.0,
+      "d": 9,
+      "kind": "paving"
+     },
+     {
+      "x": -137.0,
+      "z": 30.5,
+      "w": 3.0,
+      "d": 9,
+      "kind": "paving"
+     },
+     {
+      "x": -155.25,
+      "z": 30.5,
+      "w": 9.5,
+      "d": 3,
+      "kind": "paving"
+     },
+     {
+      "x": -130.75,
+      "z": 30.5,
+      "w": 9.5,
+      "d": 3,
+      "kind": "paving"
+     },
+     {
+      "x": -120,
+      "z": 74,
+      "w": 84,
+      "d": 24,
       "kind": "paving"
      }
     ],
@@ -354,7 +438,7 @@
     "street": {
      "half": 4,
      "walk": 4,
-     "x0": -122,
+     "x0": -166,
      "x1": 276
     },
     "style": "stucco"
@@ -363,19 +447,71 @@
    "shape": "script"
   },
   {
-   "id": 3,
-   "name": "playground / playground_swing_four 3",
+   "name": "site / playground / fence (iron)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -20.0,
+       18.0
+      ],
+      [
+       20.0,
+       18.0
+      ],
+      [
+       20.0,
+       -18.0
+      ],
+      [
+       -20.0,
+       -18.0
+      ]
+     ],
+     "style": "iron",
+     "gates": [
+      {
+       "at": 20,
+       "width": 1.2
+      }
+     ],
+     "closed": true,
+     "height": 1.1
+    }
+   },
+   "position": [
+    -98.0,
+    0.03,
+    -27.0
+   ],
+   "id": 3
+  },
+  {
+   "name": "site / playground / garden_gate",
+   "shape": "prefab",
+   "prefab": "garden_gate",
+   "position": [
+    -98,
+    0.03,
+    -9
+   ],
+   "id": 4
+  },
+  {
+   "name": "site / playground / playground_swing_four",
    "shape": "prefab",
    "prefab": "playground_swing_four",
    "position": [
     -108,
     0.03,
     -36
-   ]
+   ],
+   "id": 5
   },
   {
-   "id": 4,
-   "name": "playground / playground_swing 4",
+   "name": "site / playground / playground_swing",
    "shape": "prefab",
    "prefab": "playground_swing",
    "position": [
@@ -390,77 +526,77 @@
      0
     ],
     "angleDeg": 90
-   }
+   },
+   "id": 6
   },
   {
-   "id": 5,
-   "name": "playground / playground_slide_tall 5",
+   "name": "site / playground / playground_slide_tall",
    "shape": "prefab",
    "prefab": "playground_slide_tall",
    "position": [
     -96,
     0.03,
     -38
-   ]
+   ],
+   "id": 7
   },
   {
-   "id": 6,
-   "name": "playground / playground_slide 6",
+   "name": "site / playground / playground_slide",
    "shape": "prefab",
    "prefab": "playground_slide",
    "position": [
     -88,
     0.03,
     -38
-   ]
+   ],
+   "id": 8
   },
   {
-   "id": 7,
-   "name": "playground / playground_roundabout 7",
+   "name": "site / playground / playground_roundabout",
    "shape": "prefab",
    "prefab": "playground_roundabout",
    "position": [
     -97,
     0.03,
     -26
-   ]
+   ],
+   "id": 9
   },
   {
-   "id": 8,
-   "name": "playground / playground_seesaw 8",
+   "name": "site / playground / playground_seesaw",
    "shape": "prefab",
    "prefab": "playground_seesaw",
    "position": [
     -88,
     0.03,
     -27
-   ]
+   ],
+   "id": 10
   },
   {
-   "id": 9,
-   "name": "playground / playground_seesaw 9",
+   "name": "site / playground / playground_seesaw",
    "shape": "prefab",
    "prefab": "playground_seesaw",
    "position": [
     -88,
     0.03,
     -22
-   ]
+   ],
+   "id": 11
   },
   {
-   "id": 10,
-   "name": "playground / rocking_horse 10",
+   "name": "site / playground / rocking_horse",
    "shape": "prefab",
    "prefab": "rocking_horse",
    "position": [
     -101,
     0.03,
     -17
-   ]
+   ],
+   "id": 12
   },
   {
-   "id": 11,
-   "name": "playground / rocking_horse 11",
+   "name": "site / playground / rocking_horse",
    "shape": "prefab",
    "prefab": "rocking_horse",
    "position": [
@@ -475,70 +611,94 @@
      0
     ],
     "angleDeg": 180
-   }
+   },
+   "id": 13
   },
   {
-   "id": 12,
-   "name": "playground / park_bench 12",
+   "name": "site / playground / park_bench",
    "shape": "prefab",
    "prefab": "park_bench",
    "position": [
-    -104,
+    -106,
     0.03,
-    -11.5
-   ]
+    -11
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 14
   },
   {
-   "id": 13,
-   "name": "playground / park_bench 13",
+   "name": "site / playground / park_bench",
    "shape": "prefab",
    "prefab": "park_bench",
    "position": [
-    -94,
+    -90,
     0.03,
-    -11.5
-   ]
+    -11
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 15
   },
   {
-   "id": 14,
-   "name": "playground / park_bench 14",
+   "name": "site / playground / park_bench",
    "shape": "prefab",
    "prefab": "park_bench",
    "position": [
-    -84,
+    -116.5,
     0.03,
-    -11.5
-   ]
+    -30
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 16
   },
   {
-   "id": 15,
-   "name": "playground / litter_bin 15",
+   "name": "site / playground / litter_bin",
    "shape": "prefab",
    "prefab": "litter_bin",
    "position": [
-    -99,
+    -100.5,
     0.03,
-    -11.5
-   ]
+    -10.5
+   ],
+   "id": 17
   },
   {
-   "id": 16,
-   "name": "playground / drinking_fountain 16",
+   "name": "site / playground / drinking_fountain",
    "shape": "prefab",
    "prefab": "drinking_fountain",
    "position": [
-    -80.5,
+    -80,
     0.03,
     -14
-   ]
+   ],
+   "id": 18
   },
   {
-   "id": 17,
-   "name": "playground / bike_rack 17",
+   "name": "site / playground / bike_rack",
    "shape": "prefab",
    "prefab": "bike_rack",
    "position": [
-    -80.5,
+    -80,
     0.03,
     -20
    ],
@@ -549,91 +709,136 @@
      0
     ],
     "angleDeg": 90
-   }
+   },
+   "id": 19
   },
   {
-   "id": 18,
-   "name": "playground / street_lamp 18",
+   "name": "site / playground / globe_lamp",
    "shape": "prefab",
-   "prefab": "street_lamp",
+   "prefab": "globe_lamp",
    "position": [
-    -112,
+    -116,
     0.03,
     -11
-   ]
+   ],
+   "id": 20
   },
   {
-   "id": 19,
-   "name": "playground / street_lamp 19",
+   "name": "site / playground / globe_lamp",
    "shape": "prefab",
-   "prefab": "street_lamp",
+   "prefab": "globe_lamp",
+   "position": [
+    -80,
+    0.03,
+    -43
+   ],
+   "id": 21
+  },
+  {
+   "name": "site / playground / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -116,
+    0.03,
+    -43
+   ],
+   "id": 22
+  },
+  {
+   "name": "site / playground / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
    "position": [
     -80,
     0.03,
     -11
-   ]
+   ],
+   "id": 23
   },
   {
-   "id": 20,
-   "name": "playground / garden_gate 20",
+   "name": "site / playground / notice_board",
    "shape": "prefab",
-   "prefab": "garden_gate",
+   "prefab": "notice_board",
    "position": [
-    -98,
+    -95,
     0.03,
-    -9.2
-   ]
+    -10.2
+   ],
+   "id": 24
   },
   {
-   "id": 21,
-   "name": "park / fountain_plaza 21",
+   "name": "site / park / fence (iron)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -20.0,
+       -21.5
+      ],
+      [
+       20.0,
+       -21.5
+      ],
+      [
+       20.0,
+       21.5
+      ],
+      [
+       -20.0,
+       21.5
+      ]
+     ],
+     "style": "iron",
+     "gates": [
+      {
+       "at": 20,
+       "width": 3.0
+      },
+      {
+       "at": 61,
+       "width": 3.0
+      },
+      {
+       "at": 103,
+       "width": 3.0
+      },
+      {
+       "at": 145,
+       "width": 3.0
+      }
+     ],
+     "closed": true
+    }
+   },
+   "position": [
+    -98.0,
+    0.03,
+    30.5
+   ],
+   "id": 25
+  },
+  {
+   "name": "site / park / fountain_plaza",
    "shape": "prefab",
    "prefab": "fountain_plaza",
    "position": [
     -98,
     0.03,
     30
-   ]
-  },
-  {
-   "id": 22,
-   "name": "park / park_bench 22",
-   "shape": "prefab",
-   "prefab": "park_bench",
-   "position": [
-    -98,
-    0.03,
-    22
-   ]
-  },
-  {
-   "id": 23,
-   "name": "park / park_bench 23",
-   "shape": "prefab",
-   "prefab": "park_bench",
-   "position": [
-    -98,
-    0.03,
-    38
    ],
-   "orientation": {
-    "axis": [
-     0,
-     1,
-     0
-    ],
-    "angleDeg": 180
-   }
+   "id": 26
   },
   {
-   "id": 24,
-   "name": "park / park_bench 24",
+   "name": "site / park / park_bench",
    "shape": "prefab",
    "prefab": "park_bench",
    "position": [
-    -106,
+    -100.4,
     0.03,
-    30
+    14
    ],
    "orientation": {
     "axis": [
@@ -642,17 +847,17 @@
      0
     ],
     "angleDeg": 90
-   }
+   },
+   "id": 27
   },
   {
-   "id": 25,
-   "name": "park / park_bench 25",
+   "name": "site / park / park_bench",
    "shape": "prefab",
    "prefab": "park_bench",
    "position": [
-    -90,
+    -95.6,
     0.03,
-    30
+    14
    ],
    "orientation": {
     "axis": [
@@ -661,26 +866,91 @@
      0
     ],
     "angleDeg": 270
-   }
+   },
+   "id": 28
   },
   {
-   "id": 26,
-   "name": "park / picnic_table 26",
+   "name": "site / park / park_bench",
    "shape": "prefab",
-   "prefab": "picnic_table",
+   "prefab": "park_bench",
    "position": [
-    -110,
+    -100.4,
     0.03,
-    44
-   ]
+    19
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 29
   },
   {
-   "id": 27,
-   "name": "park / picnic_table 27",
+   "name": "site / park / park_bench",
    "shape": "prefab",
-   "prefab": "picnic_table",
+   "prefab": "park_bench",
    "position": [
-    -104,
+    -95.6,
+    0.03,
+    19
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 30
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -100.4,
+    0.03,
+    41
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 31
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -95.6,
+    0.03,
+    41
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 32
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -100.4,
     0.03,
     46
    ],
@@ -690,40 +960,18 @@
      1,
      0
     ],
-    "angleDeg": 30
-   }
+    "angleDeg": 90
+   },
+   "id": 33
   },
   {
-   "id": 28,
-   "name": "park / picnic_table 28",
+   "name": "site / park / park_bench",
    "shape": "prefab",
-   "prefab": "picnic_table",
+   "prefab": "park_bench",
    "position": [
-    -88,
-    0.03,
-    44
-   ]
-  },
-  {
-   "id": 29,
-   "name": "park / bbq 29",
-   "shape": "prefab",
-   "prefab": "bbq",
-   "position": [
-    -84,
+    -95.6,
     0.03,
     46
-   ]
-  },
-  {
-   "id": 30,
-   "name": "park / porch_swing 30",
-   "shape": "prefab",
-   "prefab": "porch_swing",
-   "position": [
-    -112,
-    0.03,
-    18
    ],
    "orientation": {
     "axis": [
@@ -731,147 +979,29 @@
      1,
      0
     ],
-    "angleDeg": 90
-   }
+    "angleDeg": 270
+   },
+   "id": 34
   },
   {
-   "id": 31,
-   "name": "park / fountain 31",
+   "name": "site / park / park_bench",
    "shape": "prefab",
-   "prefab": "fountain",
-   "position": [
-    -84,
-    0.03,
-    16
-   ]
-  },
-  {
-   "id": 32,
-   "name": "park / drinking_fountain 32",
-   "shape": "prefab",
-   "prefab": "drinking_fountain",
-   "position": [
-    -92,
-    0.03,
-    11.5
-   ]
-  },
-  {
-   "id": 33,
-   "name": "park / litter_bin 33",
-   "shape": "prefab",
-   "prefab": "litter_bin",
-   "position": [
-    -102,
-    0.03,
-    11.5
-   ]
-  },
-  {
-   "id": 34,
-   "name": "park / litter_bin 34",
-   "shape": "prefab",
-   "prefab": "litter_bin",
-   "position": [
-    -86,
-    0.03,
-    40
-   ]
-  },
-  {
-   "id": 35,
-   "name": "park / bike_rack 35",
-   "shape": "prefab",
-   "prefab": "bike_rack",
-   "position": [
-    -80.5,
-    0.03,
-    24
-   ],
-   "orientation": {
-    "axis": [
-     0,
-     1,
-     0
-    ],
-    "angleDeg": 90
-   }
-  },
-  {
-   "id": 36,
-   "name": "park / street_lamp 36",
-   "shape": "prefab",
-   "prefab": "street_lamp",
+   "prefab": "park_bench",
    "position": [
     -112,
     0.03,
-    11
-   ]
+    27.6
+   ],
+   "id": 35
   },
   {
-   "id": 37,
-   "name": "park / street_lamp 37",
+   "name": "site / park / park_bench",
    "shape": "prefab",
-   "prefab": "street_lamp",
+   "prefab": "park_bench",
    "position": [
-    -80,
+    -112,
     0.03,
-    11
-   ]
-  },
-  {
-   "id": 38,
-   "name": "park / street_lamp 38",
-   "shape": "prefab",
-   "prefab": "street_lamp",
-   "position": [
-    -106,
-    0.03,
-    36
-   ]
-  },
-  {
-   "id": 39,
-   "name": "park / street_lamp 39",
-   "shape": "prefab",
-   "prefab": "street_lamp",
-   "position": [
-    -90,
-    0.03,
-    24
-   ]
-  },
-  {
-   "id": 40,
-   "name": "park / sandwich_board 40",
-   "shape": "prefab",
-   "prefab": "sandwich_board",
-   "position": [
-    -95,
-    0.03,
-    11.5
-   ]
-  },
-  {
-   "id": 41,
-   "name": "park / mailbox 41",
-   "shape": "prefab",
-   "prefab": "mailbox",
-   "position": [
-    -82,
-    0.03,
-    10.5
-   ]
-  },
-  {
-   "id": 42,
-   "name": "park / garden_gate 42",
-   "shape": "prefab",
-   "prefab": "garden_gate",
-   "position": [
-    -98,
-    0.03,
-    9.2
+    32.4
    ],
    "orientation": {
     "axis": [
@@ -880,7 +1010,1768 @@
      0
     ],
     "angleDeg": 180
-   }
+   },
+   "id": 36
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -108,
+    0.03,
+    27.6
+   ],
+   "id": 37
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -108,
+    0.03,
+    32.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 38
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -88,
+    0.03,
+    27.6
+   ],
+   "id": 39
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -88,
+    0.03,
+    32.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 40
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -84,
+    0.03,
+    27.6
+   ],
+   "id": 41
+  },
+  {
+   "name": "site / park / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -84,
+    0.03,
+    32.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 42
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -100.2,
+    0.03,
+    10.5
+   ],
+   "id": 43
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -95.8,
+    0.03,
+    10.5
+   ],
+   "id": 44
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -100.2,
+    0.03,
+    50.5
+   ],
+   "id": 45
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -95.8,
+    0.03,
+    50.5
+   ],
+   "id": 46
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -116.5,
+    0.03,
+    27.8
+   ],
+   "id": 47
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -116.5,
+    0.03,
+    32.2
+   ],
+   "id": 48
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -79.5,
+    0.03,
+    27.8
+   ],
+   "id": 49
+  },
+  {
+   "name": "site / park / park_lantern",
+   "shape": "prefab",
+   "prefab": "park_lantern",
+   "position": [
+    -79.5,
+    0.03,
+    32.2
+   ],
+   "id": 50
+  },
+  {
+   "name": "site / park / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -103.5,
+    0.03,
+    24.5
+   ],
+   "id": 51
+  },
+  {
+   "name": "site / park / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -92.5,
+    0.03,
+    24.5
+   ],
+   "id": 52
+  },
+  {
+   "name": "site / park / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -103.5,
+    0.03,
+    35.5
+   ],
+   "id": 53
+  },
+  {
+   "name": "site / park / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -92.5,
+    0.03,
+    35.5
+   ],
+   "id": 54
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -99.9,
+    0.03,
+    16.5
+   ],
+   "id": 55
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -96.1,
+    0.03,
+    16.5
+   ],
+   "id": 56
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -99.9,
+    0.03,
+    21.5
+   ],
+   "id": 57
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -96.1,
+    0.03,
+    21.5
+   ],
+   "id": 58
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -99.9,
+    0.03,
+    38.5
+   ],
+   "id": 59
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -96.1,
+    0.03,
+    38.5
+   ],
+   "id": 60
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -99.9,
+    0.03,
+    43.5
+   ],
+   "id": 61
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -96.1,
+    0.03,
+    43.5
+   ],
+   "id": 62
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -99.9,
+    0.03,
+    48
+   ],
+   "id": 63
+  },
+  {
+   "name": "site / park / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -96.1,
+    0.03,
+    48
+   ],
+   "id": 64
+  },
+  {
+   "name": "site / park / picnic_table",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -110,
+    0.03,
+    44
+   ],
+   "id": 65
+  },
+  {
+   "name": "site / park / picnic_table",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -106,
+    0.03,
+    47
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 30
+   },
+   "id": 66
+  },
+  {
+   "name": "site / park / picnic_table",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -88,
+    0.03,
+    44
+   ],
+   "id": 67
+  },
+  {
+   "name": "site / park / bbq",
+   "shape": "prefab",
+   "prefab": "bbq",
+   "position": [
+    -85,
+    0.03,
+    47
+   ],
+   "id": 68
+  },
+  {
+   "name": "site / park / porch_swing",
+   "shape": "prefab",
+   "prefab": "porch_swing",
+   "position": [
+    -112,
+    0.03,
+    17
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 69
+  },
+  {
+   "name": "site / park / litter_bin",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -100.6,
+    0.03,
+    24.8
+   ],
+   "id": 70
+  },
+  {
+   "name": "site / park / litter_bin",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -86,
+    0.03,
+    41
+   ],
+   "id": 71
+  },
+  {
+   "name": "site / park / drinking_fountain",
+   "shape": "prefab",
+   "prefab": "drinking_fountain",
+   "position": [
+    -95.6,
+    0.03,
+    23.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 72
+  },
+  {
+   "name": "site / park / sundial",
+   "shape": "prefab",
+   "prefab": "sundial",
+   "position": [
+    -110,
+    0.03,
+    20
+   ],
+   "id": 73
+  },
+  {
+   "name": "site / park / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -86,
+    0.03,
+    18
+   ],
+   "id": 74
+  },
+  {
+   "name": "site / park / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -84,
+    0.03,
+    20
+   ],
+   "id": 75
+  },
+  {
+   "name": "site / park / park_sculpture",
+   "shape": "prefab",
+   "prefab": "park_sculpture",
+   "position": [
+    -87,
+    0.03,
+    38
+   ],
+   "id": 76
+  },
+  {
+   "name": "site / park / bike_rack",
+   "shape": "prefab",
+   "prefab": "bike_rack",
+   "position": [
+    -93.5,
+    0.03,
+    10.3
+   ],
+   "id": 77
+  },
+  {
+   "name": "site / park / clock_post",
+   "shape": "prefab",
+   "prefab": "clock_post",
+   "position": [
+    -91.5,
+    0.03,
+    30
+   ],
+   "id": 78
+  },
+  {
+   "name": "site / garden / fence (picket)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -17.0,
+       18.0
+      ],
+      [
+       17.0,
+       18.0
+      ],
+      [
+       17.0,
+       -18.0
+      ],
+      [
+       -17.0,
+       -18.0
+      ]
+     ],
+     "style": "picket",
+     "gates": [
+      {
+       "at": 17,
+       "width": 1.2
+      }
+     ],
+     "closed": true,
+     "paint": "white"
+    }
+   },
+   "position": [
+    -143.0,
+    0.03,
+    -27.0
+   ],
+   "id": 79
+  },
+  {
+   "name": "site / garden / garden_gate",
+   "shape": "prefab",
+   "prefab": "garden_gate",
+   "position": [
+    -143,
+    0.03,
+    -9
+   ],
+   "id": 80
+  },
+  {
+   "name": "site / garden / raised_bed_cabbage",
+   "shape": "prefab",
+   "prefab": "raised_bed_cabbage",
+   "position": [
+    -153.5,
+    0.03,
+    -14.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 81
+  },
+  {
+   "name": "site / garden / raised_bed_carrot",
+   "shape": "prefab",
+   "prefab": "raised_bed_carrot",
+   "position": [
+    -149.5,
+    0.03,
+    -14.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 82
+  },
+  {
+   "name": "site / garden / raised_bed_tomato",
+   "shape": "prefab",
+   "prefab": "raised_bed_tomato",
+   "position": [
+    -136.5,
+    0.03,
+    -14.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 83
+  },
+  {
+   "name": "site / garden / raised_bed_lettuce",
+   "shape": "prefab",
+   "prefab": "raised_bed_lettuce",
+   "position": [
+    -132.5,
+    0.03,
+    -14.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 84
+  },
+  {
+   "name": "site / garden / raised_bed_lettuce",
+   "shape": "prefab",
+   "prefab": "raised_bed_lettuce",
+   "position": [
+    -153.5,
+    0.03,
+    -19.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 85
+  },
+  {
+   "name": "site / garden / raised_bed_tomato",
+   "shape": "prefab",
+   "prefab": "raised_bed_tomato",
+   "position": [
+    -149.5,
+    0.03,
+    -19.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 86
+  },
+  {
+   "name": "site / garden / raised_bed_cabbage",
+   "shape": "prefab",
+   "prefab": "raised_bed_cabbage",
+   "position": [
+    -136.5,
+    0.03,
+    -19.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 87
+  },
+  {
+   "name": "site / garden / raised_bed_tomato",
+   "shape": "prefab",
+   "prefab": "raised_bed_tomato",
+   "position": [
+    -132.5,
+    0.03,
+    -19.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 88
+  },
+  {
+   "name": "site / garden / raised_bed_lettuce",
+   "shape": "prefab",
+   "prefab": "raised_bed_lettuce",
+   "position": [
+    -153.5,
+    0.03,
+    -24.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 89
+  },
+  {
+   "name": "site / garden / raised_bed_cabbage",
+   "shape": "prefab",
+   "prefab": "raised_bed_cabbage",
+   "position": [
+    -149.5,
+    0.03,
+    -24.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 90
+  },
+  {
+   "name": "site / garden / raised_bed_carrot",
+   "shape": "prefab",
+   "prefab": "raised_bed_carrot",
+   "position": [
+    -136.5,
+    0.03,
+    -24.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 91
+  },
+  {
+   "name": "site / garden / raised_bed_cabbage",
+   "shape": "prefab",
+   "prefab": "raised_bed_cabbage",
+   "position": [
+    -132.5,
+    0.03,
+    -24.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 92
+  },
+  {
+   "name": "site / garden / raised_bed_tomato",
+   "shape": "prefab",
+   "prefab": "raised_bed_tomato",
+   "position": [
+    -153.5,
+    0.03,
+    -29.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 93
+  },
+  {
+   "name": "site / garden / raised_bed_carrot",
+   "shape": "prefab",
+   "prefab": "raised_bed_carrot",
+   "position": [
+    -149.5,
+    0.03,
+    -29.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 94
+  },
+  {
+   "name": "site / garden / raised_bed_carrot",
+   "shape": "prefab",
+   "prefab": "raised_bed_carrot",
+   "position": [
+    -136.5,
+    0.03,
+    -29.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 95
+  },
+  {
+   "name": "site / garden / raised_bed_lettuce",
+   "shape": "prefab",
+   "prefab": "raised_bed_lettuce",
+   "position": [
+    -132.5,
+    0.03,
+    -29.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 96
+  },
+  {
+   "name": "site / garden / tool_shed",
+   "shape": "prefab",
+   "prefab": "tool_shed",
+   "position": [
+    -156,
+    0.03,
+    -41.5
+   ],
+   "id": 97
+  },
+  {
+   "name": "site / garden / greenhouse",
+   "shape": "prefab",
+   "prefab": "greenhouse",
+   "position": [
+    -131,
+    0.03,
+    -40.5
+   ],
+   "id": 98
+  },
+  {
+   "name": "site / garden / compost_bin",
+   "shape": "prefab",
+   "prefab": "compost_bin",
+   "position": [
+    -151,
+    0.03,
+    -42.5
+   ],
+   "id": 99
+  },
+  {
+   "name": "site / garden / compost_bin",
+   "shape": "prefab",
+   "prefab": "compost_bin",
+   "position": [
+    -149.6,
+    0.03,
+    -42.5
+   ],
+   "id": 100
+  },
+  {
+   "name": "site / garden / water_butt",
+   "shape": "prefab",
+   "prefab": "water_butt",
+   "position": [
+    -154.2,
+    0.03,
+    -40.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 101
+  },
+  {
+   "name": "site / garden / wheelbarrow",
+   "shape": "prefab",
+   "prefab": "wheelbarrow",
+   "position": [
+    -146,
+    0.03,
+    -38
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 40
+   },
+   "id": 102
+  },
+  {
+   "name": "site / garden / bean_poles",
+   "shape": "prefab",
+   "prefab": "bean_poles",
+   "position": [
+    -138,
+    0.03,
+    -36.5
+   ],
+   "id": 103
+  },
+  {
+   "name": "site / garden / bean_poles",
+   "shape": "prefab",
+   "prefab": "bean_poles",
+   "position": [
+    -138,
+    0.03,
+    -38.5
+   ],
+   "id": 104
+  },
+  {
+   "name": "site / garden / scarecrow",
+   "shape": "prefab",
+   "prefab": "scarecrow",
+   "position": [
+    -151.5,
+    0.03,
+    -24.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 20
+   },
+   "id": 105
+  },
+  {
+   "name": "site / garden / cold_frame",
+   "shape": "prefab",
+   "prefab": "cold_frame",
+   "position": [
+    -128.3,
+    0.03,
+    -14
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 106
+  },
+  {
+   "name": "site / garden / cold_frame",
+   "shape": "prefab",
+   "prefab": "cold_frame",
+   "position": [
+    -128.3,
+    0.03,
+    -16
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 107
+  },
+  {
+   "name": "site / garden / cold_frame",
+   "shape": "prefab",
+   "prefab": "cold_frame",
+   "position": [
+    -128.3,
+    0.03,
+    -18
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 108
+  },
+  {
+   "name": "site / garden / raised_bed_bare",
+   "shape": "prefab",
+   "prefab": "raised_bed_bare",
+   "position": [
+    -141,
+    0.03,
+    -37
+   ],
+   "id": 109
+  },
+  {
+   "name": "site / garden / park_bench",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -145.2,
+    0.03,
+    -30
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 110
+  },
+  {
+   "name": "site / garden / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -144.3,
+    0.03,
+    -11
+   ],
+   "id": 111
+  },
+  {
+   "name": "site / garden / path_bollard_light",
+   "shape": "prefab",
+   "prefab": "path_bollard_light",
+   "position": [
+    -141.7,
+    0.03,
+    -11
+   ],
+   "id": 112
+  },
+  {
+   "name": "site / garden / wall_lantern",
+   "shape": "prefab",
+   "prefab": "wall_lantern",
+   "position": [
+    -155.6,
+    2.0,
+    -40.7
+   ],
+   "id": 113
+  },
+  {
+   "name": "site / garden / notice_board",
+   "shape": "prefab",
+   "prefab": "notice_board",
+   "position": [
+    -139,
+    0.03,
+    -10.2
+   ],
+   "id": 114
+  },
+  {
+   "name": "site / quad / fence (wall)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -17.0,
+       -21.5
+      ],
+      [
+       17.0,
+       -21.5
+      ],
+      [
+       17.0,
+       21.5
+      ],
+      [
+       -17.0,
+       21.5
+      ]
+     ],
+     "style": "wall",
+     "gates": [
+      {
+       "at": 17,
+       "width": 4.0
+      },
+      {
+       "at": 94,
+       "width": 4.0
+      }
+     ],
+     "closed": true
+    }
+   },
+   "position": [
+    -143.0,
+    0.03,
+    30.5
+   ],
+   "id": 115
+  },
+  {
+   "name": "site / quad / fence (hedge)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -15.6,
+       -18.8
+      ],
+      [
+       -15.6,
+       18.8
+      ],
+      [
+       15.6,
+       18.8
+      ],
+      [
+       15.6,
+       -18.8
+      ]
+     ],
+     "style": "hedge",
+     "height": 1.0
+    }
+   },
+   "position": [
+    -143.0,
+    0.03,
+    31.8
+   ],
+   "id": 116
+  },
+  {
+   "name": "site / quad / statue",
+   "shape": "prefab",
+   "prefab": "statue",
+   "position": [
+    -143,
+    0.03,
+    30.5
+   ],
+   "id": 117
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -143,
+    0.03,
+    22.2
+   ],
+   "id": 118
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -143,
+    0.03,
+    38.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 119
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -151.3,
+    0.03,
+    30.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 120
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -134.7,
+    0.03,
+    30.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 121
+  },
+  {
+   "name": "site / quad / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -151.5,
+    0.03,
+    22
+   ],
+   "id": 122
+  },
+  {
+   "name": "site / quad / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -134.5,
+    0.03,
+    22
+   ],
+   "id": 123
+  },
+  {
+   "name": "site / quad / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -151.5,
+    0.03,
+    39
+   ],
+   "id": 124
+  },
+  {
+   "name": "site / quad / stone_planter",
+   "shape": "prefab",
+   "prefab": "stone_planter",
+   "position": [
+    -134.5,
+    0.03,
+    39
+   ],
+   "id": 125
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -146,
+    0.03,
+    10.5
+   ],
+   "id": 126
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -140,
+    0.03,
+    10.5
+   ],
+   "id": 127
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -146,
+    0.03,
+    50.5
+   ],
+   "id": 128
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -140,
+    0.03,
+    50.5
+   ],
+   "id": 129
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -152,
+    0.03,
+    27
+   ],
+   "id": 130
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -134,
+    0.03,
+    27
+   ],
+   "id": 131
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -152,
+    0.03,
+    34
+   ],
+   "id": 132
+  },
+  {
+   "name": "site / quad / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -134,
+    0.03,
+    34
+   ],
+   "id": 133
+  },
+  {
+   "name": "site / quad / clock_post",
+   "shape": "prefab",
+   "prefab": "clock_post",
+   "position": [
+    -147,
+    0.03,
+    17
+   ],
+   "id": 134
+  },
+  {
+   "name": "site / quad / bike_shelter",
+   "shape": "prefab",
+   "prefab": "bike_shelter",
+   "position": [
+    -133,
+    0.03,
+    13.5
+   ],
+   "id": 135
+  },
+  {
+   "name": "site / quad / notice_board",
+   "shape": "prefab",
+   "prefab": "notice_board",
+   "position": [
+    -139.5,
+    0.03,
+    14
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 136
+  },
+  {
+   "name": "site / quad / flagpole",
+   "shape": "prefab",
+   "prefab": "flagpole",
+   "position": [
+    -139,
+    0.03,
+    44
+   ],
+   "id": 137
+  },
+  {
+   "name": "site / quad / sundial",
+   "shape": "prefab",
+   "prefab": "sundial",
+   "position": [
+    -147,
+    0.03,
+    44
+   ],
+   "id": 138
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -155,
+    0.03,
+    20
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 139
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -155,
+    0.03,
+    41
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 140
+  },
+  {
+   "name": "site / quad / stone_bench",
+   "shape": "prefab",
+   "prefab": "stone_bench",
+   "position": [
+    -131,
+    0.03,
+    41
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   },
+   "id": 141
+  },
+  {
+   "name": "site / quad / litter_bin",
+   "shape": "prefab",
+   "prefab": "litter_bin",
+   "position": [
+    -145,
+    0.03,
+    21
+   ],
+   "id": 142
+  },
+  {
+   "name": "site / roof / roof_access",
+   "shape": "prefab",
+   "prefab": "roof_access",
+   "position": [
+    -155.5,
+    0.03,
+    70
+   ],
+   "id": 143
+  },
+  {
+   "name": "site / roof / roof_hvac",
+   "shape": "prefab",
+   "prefab": "roof_hvac",
+   "position": [
+    -150.25,
+    0.03,
+    70
+   ],
+   "id": 144
+  },
+  {
+   "name": "site / roof / roof_hvac_large",
+   "shape": "prefab",
+   "prefab": "roof_hvac_large",
+   "position": [
+    -144.0,
+    0.03,
+    70
+   ],
+   "id": 145
+  },
+  {
+   "name": "site / roof / roof_condenser",
+   "shape": "prefab",
+   "prefab": "roof_condenser",
+   "position": [
+    -139.5,
+    0.03,
+    70
+   ],
+   "id": 146
+  },
+  {
+   "name": "site / roof / roof_condenser",
+   "shape": "prefab",
+   "prefab": "roof_condenser",
+   "position": [
+    -137.5,
+    0.03,
+    70
+   ],
+   "id": 147
+  },
+  {
+   "name": "site / roof / roof_condenser",
+   "shape": "prefab",
+   "prefab": "roof_condenser",
+   "position": [
+    -135.25,
+    0.03,
+    70
+   ],
+   "id": 148
+  },
+  {
+   "name": "site / roof / roof_cooling_tower",
+   "shape": "prefab",
+   "prefab": "roof_cooling_tower",
+   "position": [
+    -131.5,
+    0.03,
+    70
+   ],
+   "id": 149
+  },
+  {
+   "name": "site / roof / roof_water_tower",
+   "shape": "prefab",
+   "prefab": "roof_water_tower",
+   "position": [
+    -126.25,
+    0.03,
+    70
+   ],
+   "id": 150
+  },
+  {
+   "name": "site / roof / roof_water_tank",
+   "shape": "prefab",
+   "prefab": "roof_water_tank",
+   "position": [
+    -120.75,
+    0.03,
+    70
+   ],
+   "id": 151
+  },
+  {
+   "name": "site / roof / roof_dish",
+   "shape": "prefab",
+   "prefab": "roof_dish",
+   "position": [
+    -116.5,
+    0.03,
+    70
+   ],
+   "id": 152
+  },
+  {
+   "name": "site / roof / roof_antenna",
+   "shape": "prefab",
+   "prefab": "roof_antenna",
+   "position": [
+    -113.5,
+    0.03,
+    70
+   ],
+   "id": 153
+  },
+  {
+   "name": "site / roof / roof_vent",
+   "shape": "prefab",
+   "prefab": "roof_vent",
+   "position": [
+    -111.2,
+    0.03,
+    70
+   ],
+   "id": 154
+  },
+  {
+   "name": "site / roof / roof_vent",
+   "shape": "prefab",
+   "prefab": "roof_vent",
+   "position": [
+    -109.4,
+    0.03,
+    70
+   ],
+   "id": 155
+  },
+  {
+   "name": "site / roof / roof_stack",
+   "shape": "prefab",
+   "prefab": "roof_stack",
+   "position": [
+    -106.9,
+    0.03,
+    70
+   ],
+   "id": 156
+  },
+  {
+   "name": "site / roof / roof_skylight",
+   "shape": "prefab",
+   "prefab": "roof_skylight",
+   "position": [
+    -103.15,
+    0.03,
+    70
+   ],
+   "id": 157
+  },
+  {
+   "name": "site / roof / roof_solar",
+   "shape": "prefab",
+   "prefab": "roof_solar",
+   "position": [
+    -96.9,
+    0.03,
+    70
+   ],
+   "id": 158
+  },
+  {
+   "name": "site / roof / roof_helipad",
+   "shape": "prefab",
+   "prefab": "roof_helipad",
+   "position": [
+    -90,
+    0.03,
+    74
+   ],
+   "id": 159
+  },
+  {
+   "name": "site / roof / car_park_lamp",
+   "shape": "prefab",
+   "prefab": "car_park_lamp",
+   "position": [
+    -120,
+    0.03,
+    82
+   ],
+   "id": 160
+  },
+  {
+   "name": "site / roof / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -104,
+    0.03,
+    84.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 161
   }
  ],
  "environment": {

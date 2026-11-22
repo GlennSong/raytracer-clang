@@ -109,6 +109,7 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
         else world.add<ScriptBehaviour>(entity, behaviour);
     }
 #endif
+    if (!prefab.lights.empty()) world.add<PrefabLamps>(entity, PrefabLamps{prefab.lights});
     {
         std::vector<std::string> skipped;
         addPrefabUses(world, entity, prefab, &skipped);

@@ -17,6 +17,11 @@
 
 namespace engine {
 
+// On a stamped prefab that has lamps (Prefab::lights): PrefabUseSystem publishes one light for each, every frame.
+struct PrefabLamps {
+    std::vector<PrefabLamp> lamps;
+};
+
 // On a stamped prefab that has uses: each use, and whether it is on.
 struct PrefabUses {
     struct Use {

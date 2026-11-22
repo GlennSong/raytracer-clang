@@ -67,12 +67,12 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
     if (!line.is_object()) return fail(where + " is a table: { model = \"...\" }");
 
     std::string stray;
-    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses"}, stray)) {
+    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses", "lights"}, stray)) {
         // What the design note gives a prefab that is not built yet: say so, so a line is never half obeyed.
         const std::vector<std::string> later = {"sounds", "lights", "offers", "particles"};
         if (std::find(later.begin(), later.end(), stray) != later.end())
             return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, step 9)");
-        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses)");
+        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses, lights)");
     }
 
     Prefab p;
@@ -115,6 +115,15 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         if (!line["script"].is_string() || line["script"].get<std::string>().empty()) return fail(where + ": `script` is a script's file name");
         p.script = line["script"].get<std::string>();
         if (loadScriptCode(p.script, levelDir).empty()) return fail(where + ": the script '" + p.script + "' cannot be read");
+    }
+    if (line.contains("lights")) {
+        if (!line["lights"].is_array()) return fail(where + ": `lights` is a list: { { at = \"lamp\", kind = \"park_lantern\" }, ... }");
+        for (const nlohmann::json& l : line["lights"]) {
+            PrefabLamp lamp;
+            if (l.is_object()) { lamp.at = l.value("at", std::string()); lamp.kind = l.value("kind", std::string()); }
+            if (lamp.at.empty() || lamp.kind.empty()) return fail(where + ": a light needs `at` (a marker) and `kind` (a kind in lights.lua)");
+            p.lights.push_back(lamp);
+        }
     }
     if (line.contains("uses")) {
         const nlohmann::json& uses = line["uses"];
@@ -264,6 +273,12 @@ std::string prefabLine(const Prefab& p) {
         out += " }";
     }
     if (!p.script.empty()) out += ", script = " + luaQuoted(p.script);
+    if (!p.lights.empty()) {
+        out += ", lights = { ";
+        for (std::size_t i = 0; i < p.lights.size(); ++i)
+            out += std::string(i ? ", " : "") + "{ at = " + luaQuoted(p.lights[i].at) + ", kind = " + luaQuoted(p.lights[i].kind) + " }";
+        out += " }";
+    }
     if (!p.uses.empty()) {
         out += ", uses = { ";
         for (const PrefabUse& u : p.uses) {

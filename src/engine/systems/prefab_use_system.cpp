@@ -171,6 +171,18 @@ void PrefabUseSystem::sounds(FrameContext& ctx) {
 void PrefabUseSystem::render(FrameContext& ctx) {
     std::vector<LightCandidate>& lamps = ctx.view.lights.channel(LightChannel::Prefabs);
     lamps.clear();
+    ctx.world.each<PrefabLamps>([&](Entity e, PrefabLamps& own) {   // (a lamp post's: always there, its kind rides dusk)
+        for (const PrefabLamp& l : own.lamps) {
+            Vec3 at;
+            Quat turn;
+            LightCandidate c;
+            c.kind = lightKindId(l.kind.c_str());
+            if (c.kind < 0 || !modelMarkerWorld(ctx.world, e, l.at, at, turn)) continue;
+            c.position = at;
+            c.direction = turn.rotate(Vec3(0, 0, 1));
+            lamps.push_back(c);
+        }
+    });
     ctx.world.each<PrefabUses>([&](Entity e, PrefabUses& uses) {
         for (const PrefabUses::Use& u : uses.uses) {
             if (!u.on || u.use.light.empty()) continue;

@@ -91,6 +91,14 @@ return {
     lamp_warm = { candela = 120, type = "point", color = { 1.0, 0.78, 0.5 }, intensity = 5, range = 5 },
     lamp_exam = { candela = 900, type = "spot", color = { 0.97, 0.98, 1.0 }, intensity = 30, range = 6, cone = { 0.35, 0.6 } },
     lamp_cool = { candela = 60, type = "point", color = { 0.85, 0.93, 1.0 }, intensity = 2.5, range = 2.5 },
+    -- LAMP POSTS STOOD AS PREFABS (prefabs.lua `lights`; lamp_posts.lua), each a different pool, all from dusk: a
+    -- park lantern's warm circle on a path, a globe's soft white, a bollard's low pool at its own foot, a car park
+    -- mast's wide white, and a pitch's floodlight bank: a broad cool cone thrown out over the grass
+    park_lantern = { candela = 500, type = "point", color = { 1.0, 0.78, 0.5 }, intensity = 20, range = 14, dusk = true, pool = "street" },
+    globe_lamp = { candela = 400, type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 16, range = 12, dusk = true, pool = "street" },
+    bollard_light = { candela = 60, type = "point", color = { 1.0, 0.82, 0.58 }, intensity = 5, range = 4.5, dusk = true, pool = "street" },
+    car_park_lamp = { candela = 2400, type = "point", color = { 0.93, 0.96, 1.0 }, intensity = 55, range = 40, dusk = true, pool = "street" },
+    floodlight = { candela = 40000, type = "spot", color = { 0.9, 0.95, 1.0 }, intensity = 160, range = 90, cone = { 0.75, 1.05 }, dusk = true, pool = "street" },
     -- an elevator cab's ceiling light
     cab = { candela = 300, type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
     -- city traffic's lamps, from each car's own markers (CityRenderSystem): a short red glow behind the tail lamps,

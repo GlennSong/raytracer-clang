@@ -93,6 +93,14 @@ struct PrefabUse {
     bool lie = false;
 };
 
+// A LAMP A PREFAB HAS (prefabs.lua `lights = { { at = "lamp", kind = "park_lantern" }, ... }`): a light of a kind in
+// lights.lua at one of the model's markers, shining along the marker's +z. It is always there; a kind with
+// `dusk = true` comes on at dusk by itself, which is what a lamp post wants. (A light that a person switches is a
+// use's `light`.)
+struct PrefabLamp {
+    std::string at, kind;
+};
+
 struct Prefab {
     std::string name;
     std::string model;                 // a name in models.lua
@@ -116,6 +124,8 @@ struct Prefab {
     std::string script;
     // uses = { ... }: what a person can do to a copy (PrefabUse, above).
     std::vector<PrefabUse> uses;
+    // lights = { ... }: the lamps every copy has (PrefabLamp, above).
+    std::vector<PrefabLamp> lights;
 };
 
 }  // namespace engine

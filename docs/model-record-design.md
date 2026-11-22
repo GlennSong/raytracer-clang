@@ -1752,6 +1752,43 @@ doors by its own seed.
 holding that point grows that recipe, as one building on the whole block or lot by lot. `prefab_street` uses it for
 a hospital, a school, a mall and a block of ranch houses. It is one of the fields the lots bake is keyed on.
 
+### Fences along a path, lamp posts that light, and things for gardens, grounds and roofs (2026-11-21)
+
+**A fence is one recipe run along a path** (`fence.lua`). A placement gives it `points` on the ground and a
+`style` (picket, rail, board, iron railings, chain link, a low brick wall, a hedge). Straight runs get a post on
+every corner; `curved = true` runs a smooth curve through the points (`mesh.path.spline`) and spaces the posts
+evenly. `closed = true` joins the end to the start. `gates` are gaps, each `{ at = metres along, width }`, and the
+model has a marker `gate_N` at each for a gate prefab to stand on. Each bay has one collision shape. A fence is
+placed in a level as a prefab straight from the recipe: `"prefab": { "recipe": "fence", "args": { ... } }`.
+
+- Give the fence its own origin in the middle of its points. How far away a model is, for its level of detail, is
+  measured from its origin; a fence placed at the world's origin drew its far level everywhere.
+- Far off, an open style (railings, rails, chain link) draws only its rails, so it does not turn into a wall.
+- Owed: following sloping ground; a fence as part of a building's site plan (the grammar's own fences are still
+  its own); a gate stood on the marker by the recipe's caller rather than by hand.
+
+**A prefab can have lamps** (`lights = { { at = "lamp", kind = "park_lantern" } }` on its line). The light is at
+that marker, of a kind in `lights.lua`, always there; a kind marked `dusk` comes on at dusk by itself. This is
+for lamp posts. A light a person switches is still a use's `light`. Six lamp posts come from `lamp_posts.lua`,
+each with a light kind of its own: a park lantern, a globe, a path bollard, a twin-arm car park mast, a pitch
+floodlight, and a lantern for a wall. The old street lamp prefab now lights too.
+
+**New things**, all prefabs: a vegetable garden's (`allotment.lua`: raised beds of four crops, compost bin, tool
+shed, greenhouse, cold frame, water butt, wheelbarrow, bean poles, scarecrow), a quad's or school ground's
+(`campus_things.lua`: statue, sundial, notice board, stone bench, planter, bike shelter, clock post), and a roof's
+(`roof_things.lua`: two sizes of air handler, condenser, cooling tower, timber water tower, steel tank, helipad,
+dish, lattice mast with its red lamp, turbine vent, flues, skylight, solar panels, the stair head with its door).
+
+- The roof units' fans turn by a script on each copy. That is a loop, which the game otherwise avoids; it wants to
+  become a state the many-copies work turns on only for near copies.
+- **Buildings still grow their own roof boxes.** The grammar's roof items (tank, air handler, mast, helipad) are
+  part of the baked building. Putting these prefabs on real roofs means the grammar reporting where each stands
+  and the interior system standing a prefab there, and no longer drawing its own: a lots re-bake, so it waits for
+  Glenn's word.
+
+`tools/prefab_street_sites.py` lays out the test level's five hand-made sites from these: a playground, a park
+(benches beside the walks, facing them), a vegetable garden, a quad, and a row of roof equipment on a deck.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is
