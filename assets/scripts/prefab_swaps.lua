@@ -18,7 +18,7 @@ return {
   office_chair   = { prefab = "office_chair_adjustable" },
   desk           = { prefab = "standing_desk", surface = "surface" },
   filing_cabinet = { prefab = "filing_cabinet" },
-  whiteboard     = { prefab = "whiteboard" },
+  whiteboard     = { prefab = "wall_whiteboard" },   -- (the kit's hangs on a wall; the wheeled one is for a floor)
   desk_lamp      = { prefab = "desk_lamp" },
   copier         = { prefab = "printer" },
   -- homes

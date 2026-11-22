@@ -44,6 +44,7 @@ return {
   monitor_arm = { recipe = "monitor_arm" },
   desk_lamp = { recipe = "desk_lamp" },
   whiteboard = { recipe = "whiteboard" },
+  wall_whiteboard = { recipe = "whiteboard", args = { mount = "wall", width = 1.8, height = 1.03 } },   -- hung, the kit's size
   desk_fan = { recipe = "fan" },
   stand_fan = { recipe = "fan", args = { kind = "stand", size = 0.22, finish = "black" } },
   ceiling_fan = { recipe = "fan", args = { kind = "ceiling", size = 0.6, blades = 4, finish = "walnut" } },

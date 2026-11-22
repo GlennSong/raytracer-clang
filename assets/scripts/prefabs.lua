@@ -83,7 +83,8 @@ return {
   desk_lamp = { model = "desk_lamp", physics = { body = "static" },
     uses = { { at = "switch", say = "switch on", back = "switch off", light = "lamp_warm", light_at = "lamp", sound = "click" } } },
   desk_lamp_in_use = { model = "desk_lamp", physics = { body = "static" }, script = "desk_lamp_nod.lua" },
-  whiteboard = { model = "whiteboard", physics = { body = "static" } },
+  whiteboard = { model = "whiteboard", physics = { body = "static" } },   -- on wheels: for a floor, never a wall
+  wall_whiteboard = { model = "wall_whiteboard", physics = { body = "static" } },
   whiteboard_in_use = { model = "whiteboard", physics = { body = "static" }, script = "whiteboard_flip.lua" },
   desk_fan = { model = "desk_fan", physics = { body = "static" },
     uses = { { at = "switch", say = "raise", back = "lower", move = { head = 50 }, speed = 90, sound = "cupboard" },

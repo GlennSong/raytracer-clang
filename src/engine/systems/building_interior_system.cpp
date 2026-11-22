@@ -551,6 +551,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         std::size_t piece;     // an index into bm.furniture as it is after the swap
         Entity owner;
         std::string surface;
+        Real drop = 0;         // how far it is lowered to rest on that surface
     };
     std::vector<OnTop> onTop;
     bool prefabPieces = false;   // (a room program asked for a prefab piece: stood as that prefab, list or no list)
@@ -576,6 +577,14 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             Mat4 toPiece;        // world -> the kit piece's own space
             Vec3 size;           // the kit piece's
             std::string surface;
+            Real topY = 0;       // the height (world) of the kit piece's top, which what stood on it was placed at
+        };
+        // How far to lower what stood on a kit piece so it rests on the prefab's surface, whose top is seldom at
+        // the kit piece's height (Glenn, 2026-11-21: "the objects are offset from the top of the desk's surface").
+        auto dropOnto = [&](const Stood& o) {
+            Vec3 at;
+            Quat turn;
+            return modelMarkerWorld(world, o.e, o.surface, at, turn) ? o.topY - at.y : Real(0);
         };
         std::vector<Stood> owners;
         std::vector<PlacedPiece> kept, rest;
@@ -601,7 +610,12 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             }
             res.prefabs.push_back(e);
             ++stood;
-            if (!what.surface.empty()) owners.push_back(Stood{e, pp.xform.inverse(), size, what.surface});
+            if (!what.surface.empty()) {
+                Real top = 0;
+                for (const RenderMesh& m : furniturePiece(static_cast<Piece>(pp.piece), pp.variant).mesh)
+                    for (const Vertex& v : m.vertices) top = std::max(top, static_cast<Real>(v.position.y));
+                owners.push_back(Stood{e, pp.xform.inverse(), size, what.surface, pp.xform.transformPoint(Vec3(0, top, 0)).y});
+            }
         }
         // WHAT STOOD ON A SWAPPED PIECE. A swapped piece that itself stood on another (a desk lamp on a desk) is
         // tied to the prefab's surface marker here. A kit piece that stood on one (a monitor, a mug) stays the
@@ -616,14 +630,16 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             return nullptr;
         };
         for (const Entity e : std::vector<Entity>(res.prefabs)) {
-            const Transform* t = world.get<Transform>(e);
+            Transform* t = world.get<Transform>(e);
             const Stood* under = t != nullptr ? ownerUnder(t->position) : nullptr;
-            if (under != nullptr && under->e != e && rideMarker(world, e, under->e, under->surface)) ++riding;
+            if (under == nullptr || under->e == e) continue;
+            t->position.y -= dropOnto(*under);
+            if (rideMarker(world, e, under->e, under->surface)) ++riding;
         }
         kept = rest;
         for (std::size_t i = 0; i < kept.size(); ++i)
             if (const Stood* under = owners.empty() ? nullptr : ownerUnder(kept[i].xform.transformPoint(Vec3(0, 0, 0))))
-                onTop.push_back(OnTop{i, under->e, under->surface});
+                onTop.push_back(OnTop{i, under->e, under->surface, dropOnto(*under)});
         if (stood > 0) LOG_INFO << "[interior] " << stood << " kit pieces stand as prefabs (" << riding << " of them on another), "
                                 << onTop.size() << " kit pieces stand on one, " << kept.size() << " stay the kit's";
         bm.furniture.swap(kept);
@@ -667,7 +683,11 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                                      res.entities, onTop.empty() ? nullptr : &where);
         // a kit piece that stands on a prefab: its one transform in each of its batches follows the prefab's surface
         for (const OnTop& t : onTop)
-            for (const FurnitureDrawn& d : where[t.piece]) rideMarkerInBatch(world, t.owner, t.surface, d.group, d.index);
+            for (const FurnitureDrawn& d : where[t.piece]) {
+                if (InstanceGroup* g = world.get<InstanceGroup>(d.group))
+                    if (d.index < g->transforms.size()) g->transforms[d.index].m[1][3] -= t.drop;
+                rideMarkerInBatch(world, t.owner, t.surface, d.group, d.index);
+            }
     }
 
     // INTERACTIONS (the furniture library, M1): the pieces someone can sit or lie on, as ONE set entity with the
