@@ -1310,6 +1310,46 @@ RoadFrontage RoadModel::frontageOn(ModelStreetId street, Real station, int dir) 
     return f;
 }
 
+RoadFrontage RoadModel::frontageOnStreet(ModelStreetId street, const Vec2& p) const {
+    RoadFrontage f;
+    if (street.index >= streets.size()) return f;
+    const ModelStreet& S = streets[street.index];
+    const StreetLine l = lineOf(*this, S.line);
+    if (l.count < 2) return f;
+    const LineBox box = boxOfLine(l.xy, l.count);
+    const NearestLine n = nearestLine(
+        p, Real(1e30), 1, &box, [&](std::size_t) { return std::pair<const Vec2*, std::size_t>(l.xy, l.count); },
+        [](std::size_t) { return Real(0); }, [](std::size_t) { return true; });
+    if (n.line < 0) return f;
+    const LineFrontage lf = frontageOnLine(l.xy, l.stations, n, p);
+    f.street = street;
+    f.section = &S.section;
+    f.distance = n.distance;
+    f.on = n.on;
+    f.station = lf.station;
+    f.dir = lf.dir;
+    f.towards = lf.towards;
+    return f;
+}
+
+bool RoadModel::streetHeightAt(ModelStreetId street, const Vec2& p, Real& out) const {
+    const RoadFrontage f = frontageOnStreet(street, p);
+    if (!f.valid()) return false;
+    Real sum = 0;
+    int n = 0;
+    for (const int dir : {1, -1}) {
+        const KerbLanePlace k = kerbLaneAt(street, dir, f.station);
+        if (!k.valid() || k.path.index >= laneLevel.paths.size()) continue;
+        const Real h = laneLevel.heightAt(k.path, k.along);
+        if (!std::isfinite(h)) continue;
+        sum += h;
+        ++n;
+    }
+    if (n == 0) return false;
+    out = sum / static_cast<Real>(n);
+    return true;
+}
+
 bool RoadModel::sidewalkBeside(const RoadFrontage& f, Vec2& out) const {
     if (!f.valid() || f.section->sidewalk <= 0) return false;
     out = f.on + f.towards * (f.section->carriagewayHalfWidth() + f.section->sidewalk * Real(0.5));

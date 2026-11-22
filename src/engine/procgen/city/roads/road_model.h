@@ -722,6 +722,15 @@ struct RoadModel {
     RoadFrontage frontageAt(const Vec2& door) const;
     // ...the same answer from stated facts, with no search: a street, a station along its spine and a kerb.
     RoadFrontage frontageOn(ModelStreetId street, Real station, int dir) const;
+    // ...ON A STREET ALREADY KNOWN: where `p` fronts that street's centre line (its nearest point, the station level with
+    // it and the kerb it lies toward: frontageOnLine), whatever other road is nearer -- one drawn over or under it on a
+    // deck included. Not valid: no such street, or it has no centre line.
+    RoadFrontage frontageOnStreet(ModelStreetId street, const Vec2& p) const;
+
+    // ---- HEIGHTS ON THE ROADS: the drawn deck's, read from the lane level (built layer only) ----------------------------
+    // THE HEIGHT OF A STREET'S ROAD level with `p`: the mean of its kerb lanes' heights there, each way it is driven
+    // (kerbLaneAt). False: it has no lane there.
+    bool streetHeightAt(ModelStreetId street, const Vec2& p, Real& out) const;
     // THE NEAREST PLACE TO WALK beside a frontage: the middle of the sidewalk on the point's side of the road, level
     // with it (the centre line moved toward that kerb by the carriageway's half width and half the sidewalk). False:
     // that road has no sidewalk.

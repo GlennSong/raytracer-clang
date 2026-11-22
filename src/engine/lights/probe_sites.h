@@ -41,7 +41,8 @@ using ProbeGroundFn = std::function<double(double, double)>;
 
 // Sites along every street of `map` (a city of the level's road model, LevelRoadModel::cities: each piece of each
 // street's centre line): a piece of length L takes max(1, round(L / spacing)) evenly spaced, merged at junctions, at the
-// height `ground` gives.
+// height the model draws the street's road (RoadModel::streetHeightAt: on a deck, the deck); `ground` only where the
+// model cannot say (no lane level).
 void placeProbeSites(const RoadModel& map, const ProbeGroundFn& ground, const ProbeRules& rules, std::vector<ProbeSite>& out);
 
 // A storey's sites (ADR-0380): its footprint as an oriented box (centre, the two axes, the half extents), its floor and

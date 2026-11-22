@@ -24164,3 +24164,28 @@ Words:
 **Owed, found here:** a car cannot turn round anywhere: a dead end has turn-rounds for people only, so a car whose kerb lane runs into one can leave only by the way it runs. In the 1-minute probe, 16 of 28 pairs of far-apart kerb lanes on brain_crowd had no route at all; not traced.
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (its freeway check new); `near_tier_in_the_crowd_follows_the_player` fails its collision and off-lane checks (bug 2, open, above); `level_brain_lab` the same 14 checks as at HEAD.
+
+### The sweep's bugs, 5 — light probes stand over the road as the road model draws it, decks included; street furniture already did
+
+What it does: each light probe site along a street now takes its height from the road model: the mean of its two kerb lanes' drawn heights level with the site (`RoadModel::streetHeightAt`). Over a bridge or a viaduct that is the deck. Before, the probe system handed the sites the bare terrain's height, so every probe on a deck stood on the ground or water under it.
+
+Words:
+- **Light probe:** a point the renderer captures the surrounding light at, for lighting what is near it (`engine/lights/probe_sites.h`). Sites line every street, a rule height over the road.
+- **Drawn road:** the road surface as the mesher built it (`DrawnRoad`, the road's collider triangles), a producer separate from the road model.
+
+**What changed:**
+- `RoadModel::frontageOnStreet(street, p)`: where a point fronts a street already known, found on that street's own centre line, so a deck over or under it is never answered instead. `RoadModel::streetHeightAt(street, p)`: the mean of the street's kerb lanes' heights (`kerbLaneAt`, `LaneGraph::heightAt`) level with the point.
+- `placeProbeSites` asks it for each site; the `ground` it is given is used only where the model has no lane.
+
+**Street furniture: not changed, and why.** The known-bugs list said furniture on a deck stands at the height `ground` gives. Measured first, against the road as drawn, it does not: the loader's furniture sampler already reads the drawn decks (`RoadDeckField`, plus the kerb). On river_town all 7 signal poles and all 65 street trees on decks stand on them. I tried moving furniture onto the walks' own heights (the same model reading) and measured it worse: 4 poles sunk, 22 trees floating, 1 deck tree 3.3 m off. The walks are laid at the deck's own height, with no kerb. So that change was taken back. **Found:** a walk's height and the drawn sidewalk differ by up to 0.36 m in places, and by 3.3 m at (440.0, 286.5). People on foot stand on the walks' heights. Not traced.
+
+**The gate** (`level_river_town_street_furniture_and_probes_stand_on_the_drawn_road`, level_tests, new): every signal pole foot, street-tree foot and probe site (less its rule height), measured against the highest drawn road surface at or below a metre over it (`DrawnRoad::topAt`), with those standing on a deck (over 2 m above the terrain) counted on their own. It holds that none on a deck is off it, and that some probes stand on a deck.
+
+**Numbers, old -> new** (river_town, the gate):
+- **Light probes:** on the drawn road 728 of 1,182 -> **1,197 of 1,212**. Sunk 56 -> 6 (worst -0.97 m, none on a deck). Floating 46 -> 0 (the worst was +3.63 m). Over no drawn road (under a deck) 352 -> 9. On a deck 0 -> 421, all on it. The old code fails the gate.
+- **Signal poles:** 424 of 432 on the drawn road, 7 on decks, 0 off; the same before and after.
+- **Street trees:** 2,238 of 2,248 on the drawn road, 65 on decks, 0 off; the same before and after.
+
+**Tests:** `probe_sites_line_the_streets` (run_tests) now holds each site at the model's drawn road height plus its rule height, with the caller's ground put 2 m off it, so the test tells the two apart (it held them at the ground's).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; lanes_tests 156/156; `level_river_town_street_furniture_and_probes_stand_on_the_drawn_road` 1/1 (new).

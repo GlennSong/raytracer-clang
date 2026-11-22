@@ -190,10 +190,13 @@ TEST_CASE(lights_lua_gives_every_pool_a_many_light_budget) {
 // the frontages either side.
 TEST_CASE(probe_sites_line_the_streets) {
     // a 4-way cross of 200 m arms, built as a level's roads are (model_scene.h; #306: the street map it was laid along
-    // went), its sites along each street's centre line at the ground's height (the ramp-to-a-deck case went with the
-    // street map's link heights: `ground` is the caller's, the drawn road where it has one)
+    // went), its sites along each street's centre line at the height the model draws the street's road
+    // (RoadModel::streetHeightAt: on a deck, the deck), not the caller's `ground` (2 m here, the drawn road elsewhere)
     const citytest::ModelScene& s = citytest::crossScene(200);
     const ProbeGroundFn ground = [](double, double) { return 2.0; };
+    const double drawn = s.model->laneLevel.heightAt(engine::PathId(0), 0);
+    std::printf("    the road drawn at %.3f m, the ground the caller gives 2 m\n", drawn);
+    CHECK(std::fabs(drawn - 2.0) > 1.0);   // (so the test tells the two apart)
     ProbeRules rules;
     std::vector<ProbeSite> sites;
     placeProbeSites(*s.model, ground, rules, sites);
@@ -201,7 +204,7 @@ TEST_CASE(probe_sites_line_the_streets) {
     for (const ProbeSite& p : sites) {
         CHECK(p.boxMin.x < p.position.x && p.position.x < p.boxMax.x);
         CHECK(p.boxMin.z < p.position.z && p.position.z < p.boxMax.z);
-        CHECK(std::fabs(p.position.y - (2.0 + rules.height)) < 1e-9);   // at grade: the ground's
+        CHECK(std::fabs(p.position.y - (drawn + rules.height)) < 1e-6);   // on the drawn road
     }
     // merged at the junction: no two sites closer than `merge`
     const double merge = std::max(rules.merge, 1.0);

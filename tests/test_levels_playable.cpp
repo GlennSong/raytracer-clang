@@ -29,6 +29,7 @@
 #include "../src/engine/level_params.h"      // readTerrainParams (the island water check)
 #include "../src/engine/procgen/hydrology.h"   // the editor's save (road_signs round trip)
 #include "../src/engine/drawn_road.h"
+#include "../src/engine/lights/probe_sites.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
@@ -2054,6 +2055,77 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
         // metro_lanes with no bus routes at all).
         for (const RoadIntrusion* r : all) CHECK(r->total > 0);
     }
+}
+
+// ============================================================================
+// STREET FURNITURE AND PROBES STAND ON THE DRAWN ROAD (#306 sweep bug 5): a signal pole's foot, a street tree's trunk foot
+// and a light probe's site (less its rule height)
+// at the height of the road surface drawn under it -- on a bridge or a viaduct the deck, not the ground below it. The
+// furniture planner is given the loader's drawn-road sampler; the probes read their street's road height from the road
+// model (RoadModel::streetHeightAt), handed here only the terrain, as the probe system hands them. This measures both
+// against the road as drawn (DrawnRoad::topAt: the highest drawn surface at or below a metre over the foot), a second
+// producer. A foot more than kFootOff off the surface is sunk or floating; one more than kOnADeck over the
+// terrain stands on a deck, and those are counted on their own so the deck case is seen to be measured.
+TEST_CASE(level_river_town_street_furniture_and_probes_stand_on_the_drawn_road) {
+    if (!levelPicked("river_town.json")) return;
+    constexpr double kFootOff = 0.30, kOnADeck = 2.0;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    const engine::DrawnRoad drawn = engine::gatherDrawnRoad(world, true);
+    const TerrainLodConfig* cfg = nullptr;
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    std::unique_ptr<Noise> noise = cfg && !cfg->baked ? std::make_unique<Noise>(cfg->seed) : nullptr;
+    const auto terrain = [&](double x, double z) {
+        if (!cfg) return 0.0;
+        return cfg->baked ? cfg->baked->height(x, z) : terrainHeight(cfg->params, *noise, x, z);
+    };
+    struct Tally { const char* what; int total = 0, onDrawn = 0, sunk = 0, floating = 0, undrawn = 0, onDeck = 0, onDeckOff = 0; double worst = 0; Vec3 worstAt; };
+    Tally poles{"signal poles"}, trees{"street trees"};
+    const auto note = [&](Tally& t, const Vec3& foot) {
+        ++t.total;
+        double y = 0;
+        if (!drawn.topAt(foot.x, foot.z, &y, foot.y + 1.0)) { ++t.undrawn; return; }
+        const double off = foot.y - y;
+        const bool deck = y - terrain(foot.x, foot.z) > kOnADeck;
+        t.onDeck += deck ? 1 : 0;
+        if (std::fabs(off) <= kFootOff) { ++t.onDrawn; return; }
+        (off < 0 ? t.sunk : t.floating) += 1;
+        t.onDeckOff += deck ? 1 : 0;
+        if (std::fabs(off) > std::fabs(t.worst)) { t.worst = off; t.worstAt = foot; }
+    };
+    world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+        for (const engine::StreetFurniture::Signal& sp : sf.signalPoles) note(poles, sp.base);
+        for (const Vec3& b : sf.streetTrees) note(trees, b);
+    });
+    for (const Tally* t : {&poles, &trees})
+        std::printf("    [pavement] %-13s %d: %d on the drawn surface, %d sunk, %d floating (worst %+.2f m at %.1f %.1f %.1f), %d over "
+                    "nothing drawn; on a deck %d (%d of them off it)\n",
+                    t->what, t->total, t->onDrawn, t->sunk, t->floating, t->worst, t->worstAt.x, t->worstAt.y, t->worstAt.z,
+                    t->undrawn, t->onDeck, t->onDeckOff);
+    // ...AND THE LIGHT PROBES over the streets (engine/lights/probe_sites.h): each its rule height over the road drawn
+    // under it, a deck included (they stood at the terrain's height, under every deck)
+    Tally probes{"light probes"};
+    {
+        std::vector<engine::ProbeSite> sites;
+        const engine::ProbeRules rules;
+        world.each<LevelRoadModel>([&](Entity, LevelRoadModel& m) {
+            for (const std::shared_ptr<RoadModel>& c : m.cities)
+                if (c) engine::placeProbeSites(*c, terrain, rules, sites);
+        });
+        for (const engine::ProbeSite& site : sites) note(probes, Vec3(site.position.x, site.position.y - rules.height, site.position.z));
+    }
+    std::printf("    [pavement] %-13s %d: %d on the drawn surface, %d sunk, %d floating (worst %+.2f m at %.1f %.1f %.1f), %d over "
+                "nothing drawn; on a deck %d (%d of them off it)\n",
+                probes.what, probes.total, probes.onDrawn, probes.sunk, probes.floating, probes.worst, probes.worstAt.x,
+                probes.worstAt.y, probes.worstAt.z, probes.undrawn, probes.onDeck, probes.onDeckOff);
+    CHECK(poles.total > 0 && trees.total > 0 && probes.total > 0 && probes.onDeck > 0);
+    for (const Tally* t : {&poles, &trees, &probes}) CHECK(t->onDeckOff == 0);
 }
 
 // ============================================================================

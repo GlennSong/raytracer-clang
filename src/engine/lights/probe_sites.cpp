@@ -30,9 +30,11 @@ void placeProbeSites(const RoadModel& map, const ProbeGroundFn& ground, const Pr
             }
         return false;
     };
-    // the road model's streets, each piece of each centre line once (#306: the street map's links were), on the ground
-    // (`ground`: the caller's, the drawn road's height where it has one)
-    for (const ModelStreet& S : map.streets) {
+    // the road model's streets, each piece of each centre line once (#306: the street map's links were), at the height
+    // the model draws each street's road (RoadModel::streetHeightAt: on a deck, the deck), `ground` only where it cannot
+    // say
+    for (uint32_t si = 0; si < map.streets.size(); ++si) {
+        const ModelStreet& S = map.streets[si];
         if (S.section.footway || S.line.count < 2) continue;
         for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
         const Vec2 pa = map.linePoints[i], pb = map.linePoints[i + 1];
@@ -49,7 +51,9 @@ void placeProbeSites(const RoadModel& map, const ProbeGroundFn& ground, const Pr
         for (int k = 0; k < n; ++k) {
             const double t = (k + 0.5) / n;
             const double x = pa.x + dx * t, z = pa.y + dz * t;
-            const double road = ground(x, z);
+            Real drawn = 0;
+            const double road = map.streetHeightAt(ModelStreetId(si), Vec2(static_cast<Real>(x), static_cast<Real>(z)), drawn)
+                                    ? static_cast<double>(drawn) : ground(x, z);
             ProbeSite s;
             s.position = Vec3(x, road + rules.height, z);
             if (nearOne(s.position)) continue;
