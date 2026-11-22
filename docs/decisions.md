@@ -24313,7 +24313,12 @@ Words:
 - **The boards:** `makeBusBoards` (once there are buses) makes a label per line and per stop's street, using the engine's sign font and board pieces, which outlived ADR-0460's deletion of the old buses' use of them. The line's label is its number and CLOCKWISE or ANTICLOCKWISE as a map shows it; a stop's is NEXT and its street, without the " 2" a second stop on a street carries. `syncBusBoards` sets each bus's boards on its body's markers every bake. The board groups get a town-wide cull sphere: without one they were culled away (the first try showed only the black backing).
 - **`buses?`** (control channel): how many buses, the riders' counts, the boards drawn, then each bus's number, line, the stop it is going to or standing at, where it is and its heading. `lanes_tool buslines --where` prints where each stop's bus stands, to frame a shot.
 
-**Not yet (step 5's second half, for Glenn to look at):** riders drawn seated in the saloon (the seat positions are inside the cabin builder, `mesh.cabin_interior`, and need to come out); the player boarding a bus on the new driving.
+- **Riders seated aboard:** the cabin builder already gave each seat's hip point. It now also gives the way each seat's rider faces (`seat_facing`: forward, or across to the aisle on the standing-room bus's wall benches), passed through vehicle_kit.lua, vehicles.lua and the body reader. `BusRiders::aboardOn(bus)` says how many ride each bus, and the city draws one seated figure per rider on the bus's drawn body. Seats fill from the middle of the bus outward, as people do.
+- **river_town** re-pinned: the stops' posts and benches and the cleared trees moved the walkers' obstacles. Parked 223 -> 225, arrivals 658 -> 660, hash 0x84834e8b10e27894 -> 0xf5c3d679818d2ee3; the riders' counts are the same.
+
+**Not yet:**
+- The seated riders' shins show through the bus's lower side panel from outside. Their hips are where the numbers say (0.8 m above the road, 0.96 m off the middle of a bus 1.27 m half-wide) and they face forward, so it is either a drawing-order or depth problem with the see-into body, or a figure built larger than the seat. For Glenn to look at.
+- The player boarding a bus on the new driving.
 
 **Seen:** ~/Pictures/Raytracer/buses/ (stop_top, stop_yaw0: the stop; bus1_yaw0: CLOCKWISE on the front; riders_s1_y180: NEXT ROWAN PARKWAY inside and 3 CLOCKWISE on the side; riders_s-1_y0: the riders and their shins).
 
