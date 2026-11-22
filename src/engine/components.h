@@ -626,6 +626,12 @@ struct Carryable {
     float mass = 10.0f;    // kg (its body's, once it is put down)
     Vec3 half{0.2, 0.2, 0.2};   // its box's half extents, its own frame
 };
+// A carried thing that has been PUT ON a slot of a stamped prefab (#191): a marker whose role is "slot" (a desk's
+// corner, a shelf). It rides that marker (RidesMarker), has no body, and the slot is taken while it is there.
+struct OnSlot {
+    Entity owner;
+    std::string marker;
+};
 struct CarriedBy {
     Entity holder;
 };

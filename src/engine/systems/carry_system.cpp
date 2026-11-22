@@ -1,4 +1,5 @@
 #include "carry_system.h"
+#include "../model_motion.h"   // rideMarker: a thing put on a prefab's slot
 #include "physics_system.h"
 #include "../carry_stow.h"
 #include "../components.h"
@@ -93,6 +94,10 @@ void CarrySystem::pickUp(FrameContext& ctx, Entity player, Entity e) {
             v->cargo.erase(std::remove(v->cargo.begin(), v->cargo.end(), e), v->cargo.end());
         ctx.world.remove<Stowed>(e);
     }
+    if (ctx.world.has<OnSlot>(e)) {   // off a prefab's slot: it no longer rides it, and the slot is free
+        unrideMarker(ctx.world, e);
+        ctx.world.remove<OnSlot>(e);
+    }
     ctx.world.add<CarriedBy>(e, CarriedBy{player});
     held_ = e;
     const Carryable* c = ctx.world.get<Carryable>(e);
@@ -142,6 +147,62 @@ bool CarrySystem::stow(FrameContext& ctx, Entity car, const Vec3& from) {
     return true;
 }
 
+namespace {
+
+// A SLOT ON A PREFAB (#191; Glenn, 2026-11-21: how much a desk can hold is its slots): a marker of the copy's model
+// whose role is "slot". `slotAt` finds the nearest free one within `reach` of `me`: which copy, which marker, where.
+struct SlotFound {
+    Entity owner;
+    std::string marker;
+    Vec3 at;
+    Quat turn;
+};
+bool slotAt(World& world, const Vec3& me, Real reach, SlotFound& out) {
+    std::vector<std::pair<Entity, std::string>> taken;
+    world.each<OnSlot>([&](Entity, OnSlot& s) { taken.push_back({s.owner, s.marker}); });
+    Real best = reach * reach;
+    bool found = false;
+    world.each<Transform, ModelInstance>([&](Entity e, Transform& t, ModelInstance& mi) {
+        if (mi.model == nullptr || std::fabs(t.position.x - me.x) > 8 || std::fabs(t.position.z - me.z) > 8) return;
+        for (const ProcNode& node : mi.model->nodes)
+            for (const ProcMarker& mk : node.markers) {
+                if (mk.role != "slot") continue;
+                if (std::find(taken.begin(), taken.end(), std::make_pair(e, mk.name)) != taken.end()) continue;
+                Vec3 at;
+                Quat turn;
+                if (!modelMarkerWorld(world, e, mk.name, at, turn)) continue;
+                const Real dx = at.x - me.x, dz = at.z - me.z, d2 = dx * dx + dz * dz;
+                if (d2 >= best || std::fabs(at.y - me.y) > 2.0) continue;
+                best = d2;
+                found = true;
+                out = SlotFound{e, mk.name, at, turn};
+            }
+    });
+    return found;
+}
+
+}  // namespace
+
+// Put what is held on a prefab's slot: it stands on the marker, rides it, and has no body.
+bool CarrySystem::putOnSlot(FrameContext& ctx, Entity owner, const Vec3& from) {
+    const Entity e = held_;
+    const Carryable* c = ctx.world.alive(e) ? ctx.world.get<Carryable>(e) : nullptr;
+    SlotFound slot;
+    if (c == nullptr || !slotAt(ctx.world, from, kReach + 0.4, slot) || slot.owner != owner) return false;
+    Transform* t = ctx.world.get<Transform>(e);
+    if (t == nullptr) return false;
+    held_ = Entity{};
+    ctx.world.remove<CarriedBy>(e);
+    t->position = slot.at + Vec3(0, c->half.y, 0);
+    Vec3 facing = slot.turn.rotate(Vec3(0, 0, 1));
+    t->orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(facing.x, facing.z));
+    if (PrevTransform* pt = ctx.world.get<PrevTransform>(e)) pt->value = *t;
+    rideMarker(ctx.world, e, slot.owner, slot.marker);
+    ctx.world.add<OnSlot>(e, OnSlot{slot.owner, slot.marker});
+    LOG_INFO << "[carry] put the " << c->name << " on the " << slot.marker;
+    return true;
+}
+
 void CarrySystem::update(FrameContext& ctx) {
     Entity player;
     ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform&, ControlledBy&) { if (!player.valid()) player = e; });
@@ -161,7 +222,9 @@ void CarrySystem::update(FrameContext& ctx) {
     if (takeInteractCommand(ctx.world, player, "carry", cmd) && !held_.valid() && ctx.world.alive(cmd.entity))
         pickUp(ctx, player, cmd.entity);
     if (takeInteractCommand(ctx.world, player, "carry_put", cmd) && held_.valid()) {
-        if (cmd.hold || !cmd.entity.valid() || !stow(ctx, cmd.entity, me)) putDown(ctx, Vec3(0, 0, 0));
+        const bool onPrefab = !cmd.hold && cmd.entity.valid() && ctx.world.alive(cmd.entity) && ctx.world.has<ModelInstance>(cmd.entity);
+        if (onPrefab) { if (!putOnSlot(ctx, cmd.entity, me)) putDown(ctx, Vec3(0, 0, 0)); }
+        else if (cmd.hold || !cmd.entity.valid() || !stow(ctx, cmd.entity, me)) putDown(ctx, Vec3(0, 0, 0));
     }
 
     if (held_.valid()) {
@@ -201,6 +264,16 @@ void CarrySystem::update(FrameContext& ctx) {
         o.entity = car;
         o.tap = car.valid() ? "put it in" : "put it down";
         if (car.valid()) o.hold = "put it down";
+        // ...or a free slot on a prefab in reach (a desk's corner): put it on that
+        SlotFound slot;
+        if (!car.valid() && slotAt(ctx.world, me, kReach + 0.4, slot)) {
+            const ModelInstance* mi = ctx.world.get<ModelInstance>(slot.owner);
+            o.entity = slot.owner;
+            o.anchor = slot.at;
+            o.tap = "put it on the " + (mi != nullptr ? mi->prefab : std::string("thing"));
+            for (char& ch : o.tap) if (ch == '_') ch = ' ';
+            o.hold = "put it down";
+        }
         o.exclusive = true;
         offerInteraction(ctx.world, player, o);
         return;

@@ -23,7 +23,12 @@ return {
   wardrobe       = { prefab = "wardrobe" },
   kitchen_tall   = { prefab = "fridge" },
   kitchen_wall   = { prefab = "kitchen_wall_cupboard" },
+  kitchen_base   = { prefab = "kitchen_cupboard" },
+  kitchen_hob    = { prefab = "oven" },
   toilet         = { prefab = "toilet_lidded" },
   -- shops and bars
   bar_stool      = { prefab = "bar_stool_swivel" },
+  -- schools and clinics
+  school_desk    = { prefab = "flip_desk" },
+  hospital_bed   = { prefab = "care_bed" },
 }

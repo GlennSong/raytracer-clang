@@ -58,5 +58,10 @@ kit.far_box(m, top, "wood", { W, 0.03, D }, { 0, 0.705, 0 }, wood, far)
 top:shape("top", { box = { W, 0.03, D }, pos = { 0, 0.705, 0 }, friction = 0.8 })
 top:marker("control", { pos = { CX, 0.682, D / 2 }, role = "press" })
 top:marker("surface", { pos = { 0, 0.72, 0 } })
+-- SLOTS: where a thing someone carries can be put down on it, one each side of where the screen stands. A slot is
+-- a marker whose role is "slot"; a thing put on one rides it, so it rises with the top (systems/carry_system.cpp).
+for _, side in ipairs{ { "left", -1 }, { "right", 1 } } do
+  top:marker("slot_" .. side[1], { pos = { side[2] * (W / 2 - 0.3), 0.72, 0.05 }, role = "slot", size = 0.4 })
+end
 m:marker("work", { pos = { 0, 0, D / 2 + 0.45 }, turn = { 0, 180, 0 }, role = "stand" })
 return m

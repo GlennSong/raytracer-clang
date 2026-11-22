@@ -45,6 +45,11 @@ function builders.furniture()
   -- (engine/prefab_use.h), so the kit's chairs, sofas and beds are used as prefabs from the one description.
   -- The marker is put where the library's eye comes out: a sitter's eye is 0.72 m over the marker and 0.06 m back,
   -- a lier's 0.25 m over it (systems/prefab_use_system.cpp).
+  -- WHERE THINGS GO ON IT: the library's surfaces for the piece (its anchors), each a SLOT marker, so a kit piece
+  -- stamped as a prefab holds what is put on it where the city's own planner stands things.
+  for _, s in ipairs(furniture.anchors{ name = a.name ~= "" and a.name or "office_chair", variant = a.variant }) do
+    m:marker("slot_" .. s.id, { pos = { s.at[1], s.at[2], s.at[3] - d / 2 }, role = "slot", size = math.min(s.w, s.d) })
+  end
   local count = { sit = 0, lie = 0 }
   for _, u in ipairs(furniture.uses{ name = a.name ~= "" and a.name or "office_chair", variant = a.variant }) do
     if count[u.verb] then

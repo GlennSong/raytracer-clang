@@ -2328,6 +2328,35 @@ int l_furniture_uses(lua_State* L) {
     return 1;
 }
 
+// furniture.anchors{ name = "nightstand", variant = 0 } -> { { id = "top", at = {x, y, z}, w = 0.3, d = 0.3 }, ... }: the
+// surfaces of a kit piece that take small things, as the furniture library describes them, in PIECE space. What
+// prop_models.lua turns into a model's SLOT markers, so a kit piece stamped as a prefab holds things where the city's
+// own planner stands them (#191, "One catalog").
+int l_furniture_anchors(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.anchors: unknown piece '%s'", name.c_str());
+    ensureFurnitureLibraryLoaded();
+    lua_newtable(L);
+    const FurnitureAsset* asset = FurnitureLibrary::global().find(pc);
+    if (asset == nullptr) return 1;
+    int n = 0;
+    for (const FurnAnchor& a : asset->anchors) {
+        lua_newtable(L);
+        lua_pushstring(L, a.id.c_str()); lua_setfield(L, -2, "id");
+        lua_newtable(L);
+        lua_pushnumber(L, a.at.x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, a.at.y); lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, a.at.z); lua_rawseti(L, -2, 3);
+        lua_setfield(L, -2, "at");
+        lua_pushnumber(L, a.w); lua_setfield(L, -2, "w");
+        lua_pushnumber(L, a.d); lua_setfield(L, -2, "d");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_furniture_pieces(lua_State* L) {
     lua_newtable(L);
     for (int i = 0; i < kPieceCount; ++i) {
@@ -5973,6 +6002,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"piece", l_furniture_piece},
         {"pieces", l_furniture_pieces},
         {"uses", l_furniture_uses},
+        {"anchors", l_furniture_anchors},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kInteriorFurnitureFns);

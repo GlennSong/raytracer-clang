@@ -1638,12 +1638,33 @@ Seen in `prefab_street`, upstairs in the old-town cafe building: two desks raise
 keyboard, the plant and the mug risen with it. Test:
 `what_stands_on_a_desk_rises_with_it_whether_a_copy_in_a_batch_or_a_thing_of_its_own`.
 
-Not done: SLOTS. Glenn asked how much a desk can hold; the answer agreed is named slots with a size and what they
-accept (the kit's anchors), a count set by the piece's maker, not free packing. Today a thing is tied to the
-surface wherever the planner stood it. Slots as markers, putting a carried thing down on a free one, and a thing
-becoming a loose body when knocked or picked up are the next pieces. The desk's own "raise" could not be reached
-from the chair's side in that room (its control is under the front edge), so the desks were raised through the
-control socket; the use itself is tested.
+**Slots, and putting a thing down on one (2026-11-22).** Glenn asked how much a desk can hold; the answer agreed
+is named slots, a count set by the piece's maker, not free packing.
+
+- A SLOT is a marker whose role is "slot". The standing desk has two (`slot_left`, `slot_right`, on its top). A kit
+  piece stamped as a prefab gets one for each surface the furniture library gives it (`furniture.anchors`, written
+  as markers by `prop_models.lua`): a nightstand's top, a dining table's middle.
+- **The carry system puts a held thing on one.** Holding something within reach of a free slot, the offer is "put
+  it on the standing desk" (hold: put it down). The thing stands on the slot, has no body, and rides the marker
+  (`rideMarker`), so it rises with the desk. `OnSlot` on the thing marks the slot taken. Picking it up lets go.
+  This is the car trunk's pattern (`stow`) for a prefab.
+
+Seen in `prefab_town`: a box carried to a standing desk, put on its left slot, risen with the desk, and offered to
+be picked up again at its new height.
+
+The swap list grew to fifteen (the base cupboard, the hob as an oven, the school desk, the hospital bed).
+
+**Are all the prefabs used? No.** Of 201 prefabs (not counting test rigs), the hand-made `prefab_town` places 187.
+The real buildings of `prefab_street` can show only those that stand in for a kit piece the planner already
+places: fifteen. An oven can replace a hob, but nothing asks for a dishwasher, a washing machine, a vending
+machine or a gym. For those the ROOM PROGRAMS (`furniture_rooms.lua`) must ask for a prefab, and the planner's
+placed piece (`PlacedPiece`, a number into the kit's list) must be able to name one. That is the floor planner
+part of "One catalog": the planner places prefabs by tag. It is the next real step for buildings, and it changes
+what every city's interiors hold, so it is to be agreed before it is started.
+
+Not done: slots do not say what they accept (the kit's anchors do: "books", "drink"); a copy in a batch cannot be
+picked up (a monitor is not yet a thing to carry); a thing knocked off does not fall. The desk's own "raise" was
+checked again from where a person stands at it in the real building, and is offered.
 
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
