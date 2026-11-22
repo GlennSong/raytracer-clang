@@ -106,6 +106,35 @@ bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 fr
     return true;
 }
 
+BusRide bestBusRide(const BusTimetable& tt, Vec2 from, Vec2 to, Real walkPace) {
+    BusRide best;
+    const Real pace = std::max(walkPace, Real(0.1));
+    for (std::size_t L = 0; L < tt.lines.size(); ++L) {
+        const std::vector<BusTimetable::Stop>& st = tt.lines[L];
+        const std::size_t n = st.size();
+        for (std::size_t a = 0; a < n; ++a) {
+            const Real wa = (st[a].wait - from).length();
+            if (wa > tt.walkReach) continue;
+            Real ride = 0;
+            for (std::size_t k = 1; k < n; ++k) {
+                const std::size_t b = (a + k) % n;
+                ride += st[(b + n - 1) % n].toNextSeconds;
+                const Real wb = (st[b].wait - to).length();
+                if (wb > tt.walkReach) continue;
+                const Real est = (wa + wb) / pace + ride;
+                if (!best.found() || est < best.estimate) {
+                    best.line = static_cast<int>(L);
+                    best.board = static_cast<int>(a);
+                    best.alight = static_cast<int>(b);
+                    best.rideSeconds = ride;
+                    best.estimate = est;
+                }
+            }
+        }
+    }
+    return best;
+}
+
 TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRequest& req) {
     TripPlan plan;
     plan.from = req.from;
@@ -151,7 +180,7 @@ TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRe
             Real bestWeighted = 0;
             for (std::size_t f = 0; f < cat.modes.size(); ++f) {
                 const TravelMode& fm = cat.modes[f];
-                if (fm.roads || fm.ownVehicle || !has(fm) || ruledOut(static_cast<int>(f))) continue;
+                if (fm.roads || fm.bus || fm.ownVehicle || !has(fm) || ruledOut(static_cast<int>(f))) continue;
                 TripLeg l;
                 if (!planLeg(nav, cat, static_cast<int>(f), a, b, l) || tooLong(fm, l)) continue;
                 const Real weighted = l.minutes * fm.weight;
@@ -170,12 +199,47 @@ TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRe
             o.why = "needs " + m.needs;
         } else if (ruledOut(mode)) {
             o.why = "ruled out (a leg of it could not be done)";
+        } else if (m.bus && (!nav.buses || nav.buses->lines.empty())) {
+            o.offered = false;   // (no bus anywhere, ADR-0484: not a way anyone weighs, so the plan's reason leaves it out)
+            o.why = "no bus line";
         } else if (inHand && inHand->mode != mode) {
             o.why = "at the wheel of the " + cat.modes[static_cast<std::size_t>(inHand->mode)].name;
         } else if (inHand) {
             o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name, inHand->vehicleClass,
                              inHand->onLane ? &inHand->lane : nullptr) &&
                          footLeg(inHand->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
+        } else if (m.bus) {
+            // BY BUS (ADR-0484): on foot to a stop, the wait (the way's start minutes) and the ride round the line to a
+            // stop, on foot to the door. The stops are picked by an estimate (straight-line walks at the walk's pace, the
+            // timetable's ride); only the best pair's walks are routed.
+            const BusTimetable* tt = nav.buses;
+            const int walkRow = cat.find("walk");
+            const Real pace = walkRow >= 0 ? cat.modes[static_cast<std::size_t>(walkRow)].speed : Real(1.4);
+            const BusRide best = tt ? bestBusRide(*tt, req.from, req.to, pace) : BusRide();
+            const int bestLine = best.line, bestA = best.board, bestB = best.alight;
+            const Real bestRide = best.rideSeconds;
+            if (bestLine < 0) {
+                o.why = "no stop near both ends";
+            } else {
+                const std::vector<BusTimetable::Stop>& st = tt->lines[static_cast<std::size_t>(bestLine)];
+                const Vec2 board = st[static_cast<std::size_t>(bestA)].wait, alight = st[static_cast<std::size_t>(bestB)].wait;
+                o.possible = footLeg(req.from, board, LegEnd::Stop, "no route to the stop");
+                if (o.possible) {
+                    o.legs.back().busLine = bestLine;
+                    o.legs.back().busTo = bestA;
+                    TripLeg ride;
+                    ride.mode = mode;
+                    ride.end = LegEnd::Stop;
+                    ride.from = board;
+                    ride.to = alight;
+                    ride.minutes = m.startMinutes + bestRide / 60.0 + m.endMinutes;
+                    ride.busLine = bestLine;
+                    ride.busFrom = bestA;
+                    ride.busTo = bestB;
+                    o.legs.push_back(ride);
+                    o.possible = footLeg(alight, req.to, LegEnd::Door, "no route from the stop");
+                }
+            }
         } else if (!m.ownVehicle) {
             o.possible = leg(mode, req.from, req.to, LegEnd::Door,
                              "no route on the " + std::string(m.roads ? "roads" : "footpaths"));
@@ -241,6 +305,12 @@ bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, st
         d.way = static_cast<uint8_t>(l.mode);
         d.end = l.end;
         d.seconds = static_cast<uint16_t>(seconds);
+        if (l.end == LegEnd::Stop) {
+            if (l.busLine < 0 || l.busLine > 255 || l.busTo < 0 || l.busTo > 65535)
+                return refuse("leg " + std::to_string(f.count) + " ends at a stop it does not name");
+            d.busLine = static_cast<uint8_t>(l.busLine);
+            d.busStop = static_cast<uint16_t>(l.busTo);
+        }
     }
     out = f;
     return true;

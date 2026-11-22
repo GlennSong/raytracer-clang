@@ -152,6 +152,8 @@ struct CityBusRuns {
     bool standing = false;   // at `stop`, its doors open
     Real dwellLeft = 0;      // seconds left standing there
     uint64_t calls = 0;      // stops called at since it was put down
+    Real driving = 0;        // seconds since it set off for `stop` (the leg's time so far, on the road)
+    Real freeFlow = 0;       // ...and the leg's time at the free-flow speed (its route's), for the timetable's measure
 };
 
 // A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.

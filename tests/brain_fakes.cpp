@@ -1,5 +1,7 @@
 #include "brain_fakes.h"
 
+#include <algorithm>
+
 #include "apps/citysim/brain/scripting/brain_lua.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/scripting/script_vm.h"
@@ -360,7 +362,58 @@ const citytest::ModelScene& longStreet() {
     return citytest::graphScene("brain_long_street", g);
 }
 
-TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get()}; }
+TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get(), &buses}; }
+
+PlaceRef FakeWorld::addStop(uint32_t line, uint32_t stop, Vec2 at) {
+    const PlaceRef p = addDoor(at);
+    stops.push_back({{line, stop}, p.id});
+    return p;
+}
+bool FakeWorld::stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const {
+    for (const auto& s : stops)
+        if (s.first.first == line && s.first.second == stop) {
+            out.id = s.second;
+            return true;
+        }
+    return false;
+}
+
+bool FakeRide::waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) {
+    cancel(who);
+    --cancels;   // (not a cancel the brain asked for)
+    riders.push_back(Rider{who, line, board, alight, false});
+    ++waits;
+    return true;
+}
+bool FakeRide::aboard(AgentId who, uint32_t line, PlaceRef alight) {
+    cancel(who);
+    --cancels;
+    riders.push_back(Rider{who, line, PlaceRef(), alight, true});
+    return true;
+}
+void FakeRide::cancel(AgentId who) {
+    ++cancels;
+    riders.erase(std::remove_if(riders.begin(), riders.end(), [who](const Rider& r) { return r.who == who; }), riders.end());
+}
+void FakeRide::busAt(Machine& machine, uint32_t line, PlaceRef stop) {
+    std::vector<Rider> keep;
+    for (Rider& r : riders) {
+        if (r.line != line) {
+            keep.push_back(r);
+            continue;
+        }
+        if (r.onBoard && r.alight == stop) {
+            machine.post(r.who, alighted_);
+            continue;
+        }
+        if (!r.onBoard && r.board == stop) {
+            r.onBoard = true;
+            machine.post(r.who, boarded_);
+        }
+        keep.push_back(r);
+    }
+    riders = keep;
+}
 
 StreetNet longStreetNet() {
     StreetNet s;
@@ -433,12 +486,14 @@ Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
     }
     walk.reset(new FakeWalk(world, travel, static_cast<EventId>(table.event("arrived"))));
     drive.reset(new FakeDrive(world, static_cast<EventId>(table.event("parked"))));
+    ride.reset(new FakeRide(static_cast<EventId>(table.event("boarded")), static_cast<EventId>(table.event("alighted"))));
     if (skills) {
         world.walk = walk.get();
         world.drive = drive.get();
     }
     planner.reset(new TripPlanner(street.net(), travel, world));
     machine.reset(new Machine(table, world, *planner, skills ? walk.get() : nullptr, skills ? drive.get() : nullptr));
+    if (skills) machine->setRide(ride.get());
     machine->traceTo(&trace);
 }
 

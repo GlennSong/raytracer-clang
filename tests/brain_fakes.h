@@ -33,6 +33,7 @@ constexpr BrainTime kTick = 500;   // the test clock's step, milliseconds
 
 class FakeWalk;
 class FakeDrive;
+class FakeRide;
 
 class FakeWorld : public World {
 public:
@@ -60,6 +61,10 @@ public:
     // no car stands in, other than `taken`. Off, as the world's default: none, and a taken space is "cannot park".
     bool offersNextSpace = false;
     bool nextSpace(PlaceRef door, CarRef car, AgentId who, PlaceRef taken, PlaceRef& out) const override;
+    // BUS STOPS (ADR-0484): a stop of a line is a place, where people wait
+    PlaceRef addStop(uint32_t line, uint32_t stop, Vec2 at);
+    bool stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const override;
+    std::vector<std::pair<std::pair<uint32_t, uint32_t>, uint32_t>> stops;   // (line, stop) -> place id
 
     struct Car {
         PlaceRef standing;
@@ -150,6 +155,7 @@ const citytest::ModelScene& longStreet();
 struct StreetNet {
     engine::roads::RouteWalker walker;
     std::shared_ptr<driving::Driving> driving;   // its router prices the drives (trip_driving.h)
+    BusTimetable buses;                          // empty: no bus (a bus test fills it)
     TripNetwork net() const;
 };
 StreetNet longStreetNet();
@@ -164,6 +170,30 @@ constexpr WayId kWalk = 0, kCar = 1, kSkateboard = 2, kScooter = 3;
 // The shipped brain.lua, read. False (with the reason printed) when it does not read.
 bool shippedBrainSpec(BrainSpec& out);
 
+// RIDING (ADR-0484), stood in for: who is waiting for which line at which stop, and who is aboard; the test says when a
+// bus comes (board) and when it reaches a stop (alight), and the skill posts the reports.
+class FakeRide : public RideSkill {
+public:
+    FakeRide(EventId boarded, EventId alighted) : boarded_(boarded), alighted_(alighted) {}
+    bool waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) override;
+    bool aboard(AgentId who, uint32_t line, PlaceRef alight) override;
+    void cancel(AgentId who) override;
+    // a bus of `line` stands at `stop` (a place): everyone waiting there for it gets on, everyone aboard it for there
+    // gets off
+    void busAt(Machine& machine, uint32_t line, PlaceRef stop);
+    struct Rider {
+        AgentId who = kNoAgent;
+        uint32_t line = 0;
+        PlaceRef board, alight;
+        bool onBoard = false;
+    };
+    std::vector<Rider> riders;
+    int waits = 0, cancels = 0;
+
+private:
+    EventId boarded_, alighted_;
+};
+
 struct Lab {
     StreetNet street;
     TravelCatalog travel;
@@ -172,6 +202,7 @@ struct Lab {
     FakeWorld world;
     std::unique_ptr<FakeWalk> walk;
     std::unique_ptr<FakeDrive> drive;
+    std::unique_ptr<FakeRide> ride;
     std::unique_ptr<TripPlanner> planner;
     std::unique_ptr<Machine> machine;
     std::vector<Transition> trace;

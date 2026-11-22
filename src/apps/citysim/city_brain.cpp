@@ -1,6 +1,7 @@
 #include "city_brain.h"
 
 #include "city_car.h"
+#include "city_driving.h"   // busService: a stop's wait, for the timetable (ADR-0484)
 #include "city_sim.h"
 #include "brain/brain_driving.h"
 #include "brain/brain_planner.h"
@@ -38,6 +39,10 @@ constexpr uint32_t kKindMask = 0xFF000000u;
 constexpr uint32_t kMarkerTag = 0x00000000u;
 constexpr uint32_t kSpaceTag = 0x01000000u;
 constexpr uint32_t kPointTag = 0x02000000u;
+// A BUS STOP (ADR-0484): its line (the next 12 bits up) and its place in the line (the low 12)
+constexpr uint32_t kStopTag = 0x03000000u;
+constexpr uint32_t kStopLineShift = 12;
+constexpr uint32_t kStopIndexMask = 0x00000FFFu;
 constexpr uint32_t kMarkerIndexMask = 0x0000FFFFu;
 constexpr uint32_t kMarkerSpotShift = 16;
 constexpr uint32_t kMarkerSpotMask = 0xFFu;
@@ -184,6 +189,8 @@ struct CityBrain::Impl {
     std::unique_ptr<brain::DrivingSkill> skill;
     std::unique_ptr<brain::LaneRoom> room;   // whether a lane is clear to pull out into
     std::unique_ptr<LabWalk> walk;
+    struct LabRide;
+    std::unique_ptr<LabRide> ride;
     std::unique_ptr<LabDrive> drive;
     std::unique_ptr<brain::Machine> machine;
 
@@ -243,6 +250,19 @@ struct CityBrain::Impl {
             a.heading = carFacing(c);
         }
     }
+    // THE BUSES AS THE PLANNER PRICES THEM (ADR-0484): the sim's (city_buses.h), made with the buses
+    const BusTimetable& busTimetable() const { return sim.buses_.timetable(); }
+    static bool isStop(PlaceRef p) { return p.valid() && (p.id & kKindMask) == kStopTag; }
+    static PlaceRef stopRef(uint32_t line, uint32_t stop) {
+        PlaceRef p;
+        p.id = kStopTag | (line << kStopLineShift) | (stop & kStopIndexMask);
+        return p;
+    }
+    static uint32_t stopLine(PlaceRef p) { return (p.id & ~kKindMask) >> kStopLineShift; }
+    static uint32_t stopIndex(PlaceRef p) { return p.id & kStopIndexMask; }
+    // THE RIDERS' REPORTS (ADR-0484): the sim's riders (city_buses.h) say who of the brain's people got on and off; each
+    // is posted to them as `boarded` or `alighted`
+    void tickRides();
     bool isPerson(int who) const { return who >= 0 && static_cast<std::size_t>(who) < people.size(); }
     int personOfAgent(int agent) const {
         for (std::size_t i = 0; i < people.size(); ++i)
@@ -320,10 +340,19 @@ struct CityBrain::Impl {
             out = points[place.id & ~kKindMask];
             return true;
         }
+        if (isStop(place) && stopLine(place) < busTimetable().lines.size() &&
+            stopIndex(place) < busTimetable().lines[stopLine(place)].size()) {
+            out = busTimetable().lines[stopLine(place)][stopIndex(place)].wait;
+            return true;
+        }
         return false;
     }
     std::string placeName(PlaceRef place) const {
         if (isMarker(place) && markerIndex(place) < markers.size()) return markers[markerIndex(place)].name;
+        if (isStop(place) && model && stopLine(place) < model->busLines.size() &&
+            stopIndex(place) < model->busLines[stopLine(place)].stops.size())
+            return "stop " + model->busLines[stopLine(place)].stops[stopIndex(place)].name + " (line " +
+                   model->busLines[stopLine(place)].id + ")";
         engine::KerbSpace space;
         if (isSpace(place) && spaces->spaceOf(place, space)) return "space " + model->kerbSpaceName(space);
         Vec2 at;
@@ -510,6 +539,11 @@ struct CityBrain::Impl::LabWorld : brain::World {
     BrainTime now() const override { return im.now(); }
     bool positionOf(PlaceRef place, Vec2& out) const override { return im.positionOf(place, out); }
     uint32_t carClass(CarRef car) const override { return im.classOf(car); }
+    bool stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const override {
+        if (line >= im.busTimetable().lines.size() || stop >= im.busTimetable().lines[line].size()) return false;
+        out = Impl::stopRef(line, stop);
+        return true;
+    }
     bool carOnLane(CarRef ref, engine::PathPoint& out) const override {
         const Car c = im.car(ref);
         const driving::Car* dc = c.valid() ? im.d->car(im.idOf(c)) : nullptr;
@@ -632,6 +666,44 @@ struct CityBrain::Impl::LabWorld : brain::World {
 };
 
 // ---- Walking: the sim's own -------------------------------------------------------------------------------------------
+// ---- Riding: the brain's RideSkill, on the buses of the road file's lines (ADR-0484): the sim's riders carry them -------
+struct CityBrain::Impl::LabRide : brain::RideSkill {
+    explicit LabRide(Impl& i) : im(i) {}
+    Impl& im;
+
+    bool waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) override {
+        if (who >= im.people.size() || !Impl::isStop(board) || !Impl::isStop(alight) || Impl::stopLine(board) != line ||
+            Impl::stopLine(alight) != line)
+            return false;
+        if (!im.sim.buses_.wait(im.people[who].agent, line, Impl::stopIndex(board), Impl::stopIndex(alight))) return false;
+        im.agentOf(who).indoors = false;   // (standing at the stop: the walk there left them on its waiting place)
+        ++im.counts.busWaits;
+        return true;
+    }
+    bool aboard(AgentId who, uint32_t line, PlaceRef alight) override {
+        if (who >= im.people.size() || !Impl::isStop(alight) || Impl::stopLine(alight) != line) return false;
+        if (!im.sim.buses_.aboard(im.people[who].agent, line, Impl::stopIndex(alight))) return false;
+        im.agentOf(who).indoors = true;
+        return true;
+    }
+    void cancel(AgentId who) override {
+        if (who < im.people.size()) im.sim.buses_.cancel(im.people[who].agent, im.sim.agents_);
+    }
+};
+
+void CityBrain::Impl::tickRides() {
+    if (sim.brainRideEvents_.empty()) return;
+    const brain::EventId boarded = static_cast<brain::EventId>(table.event("boarded"));
+    const brain::EventId alighted = static_cast<brain::EventId>(table.event("alighted"));
+    for (const BusRiders::Event& e : sim.brainRideEvents_) {
+        const int who = personOfAgent(e.agent);
+        if (who < 0) continue;
+        if (!e.boarded) ++counts.busRides;
+        machine->post(static_cast<AgentId>(who), e.boarded ? boarded : alighted);
+    }
+    sim.brainRideEvents_.clear();
+}
+
 struct CityBrain::Impl::LabWalk : brain::WalkSkill {
     explicit LabWalk(Impl& i) : im(i) {}
     Impl& im;
@@ -1270,7 +1342,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     }
 
     im.world = std::make_unique<Impl::LabWorld>(im);
-    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d}, im.travel, *im.world);
+    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d, &sim.buses_.timetable()},
+                                                       im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
     im.room = std::make_unique<brain::LaneRoom>(*im.d);
 
@@ -1351,6 +1424,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     im.walk = std::make_unique<Impl::LabWalk>(im);
     im.drive = std::make_unique<Impl::LabDrive>(im);
     im.machine = std::make_unique<brain::Machine>(im.table, *im.world, *im.planner, im.walk.get(), im.drive.get());
+    im.ride = std::make_unique<Impl::LabRide>(im);
+    im.machine->setRide(im.ride.get());
     im.machine->traceTo(&im.traceAll);
 
     // THE PEOPLE, each standing on their own spot at their home marker, the brain's to move from now on
@@ -1415,6 +1490,7 @@ void CityBrain::tick(Real dt) {
     for (const driving::Event& e : events)
         if (e.kind == driving::EventKind::Parked) ++im.counts.parkedReports;
     im.skill->report(*im.machine, events);
+    im.tickRides();
     im.tickWalks(dt);
     im.machine->tick();
     im.tickCars(dt);

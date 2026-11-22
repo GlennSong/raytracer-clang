@@ -156,8 +156,19 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                     sim.drivingHost().cost().modelWorstMs, stepMsSum / (minute * ticksPerMinute), stepWorst, residentMb());
     }
     // THE BUSES ON THEIR LINES (ADR-0483): how many run, and the stops they have called at
-    std::printf("    [river] buses %u on %zu lines; %llu stops called at\n", sim.drivingHost().counts().buses, d.model()->busLines.size(),
-                static_cast<unsigned long long>(sim.drivingHost().counts().busCalls));
+    std::printf("    [river] buses %u on %zu lines; %llu stops called at; their legs took %.2f times their free-flow time\n",
+                sim.drivingHost().counts().buses, d.model()->busLines.size(),
+                static_cast<unsigned long long>(sim.drivingHost().counts().busCalls),
+                sim.drivingHost().counts().busFreeFlow > 0 ? sim.drivingHost().counts().busDriven / sim.drivingHost().counts().busFreeFlow : 0.0);
+    // THE PEOPLE ON THE BUSES (ADR-0484): the residents' rides and the sim's own walkers' together
+    {
+        const citysim::BusRiders::Counts& rc = sim.buses().counts();
+        std::printf("    [river] riders: %llu waits, %llu boardings, %llu got off, a full bus left someone %llu times; residents rode "
+                    "%u times (%u waits)\n",
+                    static_cast<unsigned long long>(rc.waits), static_cast<unsigned long long>(rc.boardings),
+                    static_cast<unsigned long long>(rc.alightings), static_cast<unsigned long long>(rc.leftFull), b.counts().busRides,
+                    b.counts().busWaits);
+    }
     // WHAT THE PLANS PUT ON THE FREEWAY (#306 sweep bug 4): legs by car priced and chosen, and those with metres on it
     {
         const citysim::brain::PlanRoadCounts rc = b.planRoadCounts();
@@ -275,13 +286,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 120);
+        CHECK(mostOnRoad == 126);
         CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 316u);
-        CHECK(b.counts().parkedReports == 229u);
+        CHECK(b.counts().tripsBegun == 312u);
+        CHECK(b.counts().parkedReports == 223u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 665u);
+        CHECK(b.machine()->counts().arrivals == 658u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -302,10 +313,20 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0xf9c704ff73207220 -> 0x12277ea4937a87e4 (every crosswalk's walk signal walks in some phase): the counts above.
         // 0x12277ea4937a87e4 -> 0x331264b35e85398b (a drive priced by the driving's router): the counts above.
         // 0x331264b35e85398b -> 0x96738d598af1e6e2 (ADR-0483: the buses drive their lines): the counts above.
-        CHECK(hash == 0x96738d598af1e6e2ull);
-        // THE BUSES (ADR-0483): 6 on the 3 lines (the service file's headway over each round trip), calling at 72 stops
-        // in the 30 minutes
-        CHECK(sim.drivingHost().counts().buses == 6u);
-        CHECK(sim.drivingHost().counts().busCalls == 72u);
+        // 0x96738d598af1e6e2 -> 0x84834e8b10e27894 (ADR-0484: people ride the buses, and the fleet is sized by the
+        // measured traffic factor): most on the road 120 -> 126, trips 316 -> 312, parked 229 -> 223, arrivals 665 -> 658
+        // (a bus trip is a trip the brain counts as one arrival, after a wait and a ride, where a drive was before)
+        CHECK(hash == 0x84834e8b10e27894ull);
+        // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
+        // measured traffic factor), calling at 154 stops in the 30 minutes
+        CHECK(sim.drivingHost().counts().buses == 13u);
+        CHECK(sim.drivingHost().counts().busCalls == 154u);
+        // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
+        {
+            const citysim::BusRiders::Counts& rc = sim.buses().counts();
+            CHECK(rc.waits == 51u && rc.boardings == 41u && rc.alightings == 34u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 42u && b.counts().busRides == 34u);
+            CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
+        }
     }
 }

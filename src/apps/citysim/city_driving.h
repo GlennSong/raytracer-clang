@@ -65,6 +65,8 @@ struct BusService {
     Real headwayMinutes = 0;
     int mostBusesPerLine = 0;
     Real dwellSeconds = 0;
+    Real trafficFactor = 1;   // a bus's leg as driven over the same leg at the free-flow speed (measured)
+    int capacity = 0;         // people aboard one bus at most
 };
 const BusService& busService();
 
@@ -80,6 +82,9 @@ struct DrivingCounts {
     uint64_t noRoomYet = 0;        // times a car found no room to be put down within kPlaceTries picks
     uint32_t buses = 0;            // of the drivers, buses on their lines (CityBusRuns)
     uint64_t busCalls = 0;         // stops the buses have called at
+    // THE BUSES' LEGS AS DRIVEN (ADR-0484): their seconds from one stop to the next on the road, and the same legs at the
+    // free-flow speed (their routes'): what traffic and the lights cost a bus, the service file's `traffic_factor`
+    double busDriven = 0, busFreeFlow = 0;
 };
 
 class DrivingHost {

@@ -7,7 +7,8 @@
 -- its execution where it moves a person differently.
 --
 --   name           what it is called (the plan and the trip? line say it)
---   network        "footpaths" (where walkers go) or "roads" (where cars go)
+--   network        "footpaths" (where walkers go), "roads" (where cars go) or "bus" (the road file's bus lines: on foot
+--                  to a stop, the wait, the ride round the line, on foot from a stop; ADR-0484)
 --   speed_kmh      FOOTPATHS ONLY: average door-to-door speed, crossings included. A way on the roads has none:
 --                  its minutes are the router's own time for the route it takes -- each road class at its speed
 --                  (engine::classSpeed: freeway 100 km/h, arterial 58, collector 43, local 29, ramp 36) and a few
@@ -49,6 +50,13 @@ travel = {
     { name = "scooter", network = "footpaths", speed_kmh = 12.0, start_minutes = 0.0, end_minutes = 0.0,
       own_vehicle = false, requires = "has_scooter", longest_leg_minutes = 20.0, weight = 1.2,
       begins_in = "on_small_wheels", colour = { 0.60, 0.90, 0.95 } },
+    -- BY BUS (ADR-0484): a bus row's minutes are its line's timetable (each leg's driving time and each stop's wait,
+    -- assets/data/bus_service.json `dwell_seconds`), and its start minutes are the mean wait at the stop: HALF THE
+    -- HEADWAY of bus_service.json (8 minutes -> 4; a level test holds the two together). A minute on the bus is minded
+    -- as a plain minute. (ESTIMATES: a frequent city service, its wait the textbook half headway when people do not
+    -- time their arrival; TCRP Report 165, chapter 4.)
+    { name = "bus", network = "bus", start_minutes = 4.0, end_minutes = 0.0, own_vehicle = false, weight = 1.0,
+      begins_in = "waiting", colour = { 0.95, 0.75, 0.15 } },
   },
   -- THE KINDS OF ROAD a drive is told apart by: the plan says each leg's metres on each kind ("420 m streets,
   -- 1,350 m freeway, 2 ramps") and draws each kind's part of the line in its colour (none: the way's own).

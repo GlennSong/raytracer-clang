@@ -6,12 +6,21 @@
     "  headway_minutes      the minutes between one bus and the next at a stop: a line gets as many buses as its round",
     "                       trip (driving time at the free-flow speed and every stop's wait) divided by this, rounded up;",
     "  most_buses_per_line  ...but never more than this many;",
-    "  dwell_seconds        how long a bus stands at each stop with its doors open.",
+    "  dwell_seconds        how long a bus stands at each stop with its doors open;",
+    "  traffic_factor       a bus's leg from one stop to the next as driven, over the same leg at the free-flow speed (its",
+    "                       route's own time): what the lights, the crossings, the traffic and pulling in at the stop cost",
+    "                       it. Used to size each line's fleet and to time the planner's timetable. MEASURED: 4.03 on",
+    "                       river_town (2026-11-22, its 3 lines, 6 buses, 71 legs in 30 minutes; DrivingCounts::busDriven",
+    "                       over busFreeFlow, printed by level_river_town_crowd);",
+    "  capacity             people aboard one bus at most: a full bus leaves the rest at the stop for the next.",
     "Sources: [~] a city bus every 6-10 minutes is a frequent service (TCRP Report 165, Transit Capacity and Quality of",
     "Service Manual, 3rd ed., level of service A-B by headway); 15-30 s at a stop is a common dwell for a few riders",
-    "(same manual, chapter 6). Guesses to tune by watching."
+    "(same manual, chapter 6); about 60 aboard a 12 m city bus, 35 seated and the rest standing (same manual, chapter 6).",
+    "Guesses to tune by watching, but for the traffic factor, which is measured."
   ],
   "headway_minutes": 8.0,
   "most_buses_per_line": 6,
-  "dwell_seconds": 20.0
+  "dwell_seconds": 20.0,
+  "traffic_factor": 4.0,
+  "capacity": 60
 }

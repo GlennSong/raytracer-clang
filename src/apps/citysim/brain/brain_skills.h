@@ -37,6 +37,21 @@ public:
     virtual void cancel(AgentId who) = 0;
 };
 
+// RIDING A BUS (ADR-0484). The person stands at stop `board` (where they wait: the place the leg before ended at) for a
+// bus of `line`, gets on when one stands there, and gets off when it stands at `alight`. The skill's reports come back as
+// the events `boarded` and `alighted`; a bus that never comes is the clock's business, not the skill's.
+class RideSkill {
+public:
+    virtual ~RideSkill() = default;
+    // Wait at `board` for a bus of `line` and ride it to `alight`. False: it cannot be (no such stop).
+    virtual bool waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) = 0;
+    // Already aboard (a person raised from far part-way through the ride): on a bus of `line`, getting off at `alight`.
+    virtual bool aboard(AgentId who, uint32_t line, PlaceRef alight) = 0;
+    // Stop waiting or riding: the person is put down where they are (at the stop, or where the bus is); no report
+    // follows.
+    virtual void cancel(AgentId who) = 0;
+};
+
 // DRIVING. Each call maps onto one call of the driving library's front door (apps/driving/driving.h), named beside it.
 // The driving's reports come back as the events `parked`, `no_route`, `cannot_park`, `missed_turn`, `crashed` and
 // `ended_early`. (`parked` is the driving's word for "stopped at the destination, in the kerb lane beside the space";
@@ -88,6 +103,14 @@ public:
     virtual uint32_t carClass(CarRef car) const {
         (void)car;
         return 0;
+    }
+    // A BUS STOP AS A PLACE (ADR-0484): stop `stop` of line `line` of the roads' bus lines, where people wait for it.
+    // False: the world has no such stop (or no buses).
+    virtual bool stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const {
+        (void)line;
+        (void)stop;
+        (void)out;
+        return false;
     }
     // WHERE A CAR ON THE ROAD IS on its lane (the driving's record: its front's path and how far along it), so a drive
     // planned at the wheel is priced from there. False: it is not on the road (or the world does not say).

@@ -22,7 +22,7 @@
 --   name    what it is called
 --   label   what a person in it is said to be doing, on screen ("getting into the car"); left out: the name
 --   group   for the reader: travelling, transit, at_place, resting, body, held
---   skill   the skill it asks: "walk", "drive", or "none"
+--   skill   the skill it asks: "walk", "drive", "ride", or "none"
 --   ends    "never": only an event ends it.
 --           "skill": for a near person the skill's report ends it; for a far person the clock does.
 --           "clock": the clock ends it for everyone.
@@ -85,6 +85,8 @@ brain = {
     -- what the skills report
     { name = "arrived", otherwise = "refuse" },         -- walking: at the leg's end
     { name = "parked", otherwise = "refuse" },          -- driving: stopped at the destination, beside the space
+    { name = "boarded", otherwise = "refuse" },         -- the bus they waited for stands at their stop: they are on it
+    { name = "alighted", otherwise = "refuse" },        -- the bus stands at the leg's last stop: they are off it
     { name = "no_route", otherwise = "replan_without" },
     { name = "cannot_park", otherwise = "replan_without" },
     -- raised by `parking`: the space is taken and the world named another near the door (ADR-0441)
@@ -130,12 +132,20 @@ brain = {
       clock = "done", where = "leg_end",
       on = { done = "next_leg", space_taken = "driving" } },
 
-    -- USING TRANSIT (NOT BUILT)
-    { name = "waiting", label = "waiting at a stop", group = "transit" },
-    { name = "boarding", label = "boarding", group = "transit" },
-    { name = "riding", label = "riding", group = "transit" },
-    { name = "alighting", label = "getting off", group = "transit" },
-    { name = "hailing", label = "hailing a cab", group = "transit" },
+    -- USING TRANSIT (ADR-0484): a bus leg begins waiting at the stop the walk before it ended at (travel.lua `bus`:
+    -- its start minutes are the mean wait), boards when a bus of the line stands there, and rides to the leg's last
+    -- stop. A new intent while waiting plans again from the stop; one while riding waits until they are off (it is
+    -- delivered again to the walk that follows). Getting on and off are the skill's, inside these two states, so
+    -- `boarding` and `alighting` stay NOT BUILT.
+    { name = "waiting", label = "waiting at a stop", group = "transit", skill = "ride", ends = "skill", clock = "boarded",
+      where = "leg_start",
+      on = { boarded = "riding", new_intent = "replan" } },
+    { name = "riding", label = "riding the bus", group = "transit", skill = "ride", ends = "skill", clock = "alighted",
+      where = "along_leg",
+      on = { alighted = "next_leg" } },
+    { name = "boarding", label = "boarding", group = "transit" },     -- NOT BUILT (inside `waiting`)
+    { name = "alighting", label = "getting off", group = "transit" },   -- NOT BUILT (inside `riding`)
+    { name = "hailing", label = "hailing a cab", group = "transit" },   -- NOT BUILT
 
     -- AT A PLACE
     { name = "indoors", label = "indoors", group = "at_place", on = { new_intent = "replan" } },

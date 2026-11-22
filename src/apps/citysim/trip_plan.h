@@ -45,7 +45,8 @@ constexpr int kMaxTraits = 8;
 // ONE WAY OF TRAVELLING (a row of travel.lua).
 struct TravelMode {
     std::string name;            // "walk", "car"
-    bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)
+    bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)...
+    bool bus = false;            // ...or the bus lines (ADR-0484): walked to a stop, waited for, ridden round the line
     // WHO HAS IT (travel.lua `requires`): the trait a person must have for this row to be priced for them
     // ("has_board"), and its place in TravelCatalog::traits. Empty and -1: anyone.
     std::string needs;
@@ -102,7 +103,7 @@ struct TravelCatalog {
 
 // WHAT A LEG ENDS AT, so a reader that keeps places as handles (the agent brain) knows which handle each leg's end is
 // without comparing points: the door the trip is for, the vehicle where it stands, or where the vehicle is left.
-enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft };
+enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft, Stop };   // Stop: a bus stop (its line and index on the leg)
 
 // One leg: a single way of travelling from one point to another.
 struct TripLeg {
@@ -119,6 +120,9 @@ struct TripLeg {
     // each
     std::vector<Real> kindMetres;
     std::vector<int> kindStretches;
+    // A LEG THAT ENDS AT A BUS STOP (LegEnd::Stop; ADR-0484): the line and the stop's index in it. A bus leg also names
+    // the stop it is boarded at (`busFrom`).
+    int busLine = -1, busTo = -1, busFrom = -1;
 };
 
 // One way of making the whole trip.
@@ -178,6 +182,8 @@ struct FixedLeg {
     uint8_t way = 0;             // row in the catalog
     LegEnd end = LegEnd::Door;
     uint16_t seconds = 0;        // the leg's minutes, in whole seconds
+    uint8_t busLine = 0;         // LegEnd::Stop: the line ...
+    uint16_t busStop = 0;        // ... and the stop the leg ends at
 };
 struct FixedLegs {
     FixedLeg legs[kMaxPlanLegs];
@@ -189,12 +195,37 @@ constexpr long kMaxLegSeconds = 65535;
 // more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
 bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
-// The network a plan is routed on: the road model, the walker on its walks (route.h bindWalker), and the driving, whose
-// router prices a leg on the roads (none: no leg on the roads can be made).
+// THE BUS LINES AS THE PLANNER PRICES THEM (ADR-0484): for each line of the road model, each stop's waiting place (where
+// it joins the walks, RoadModel::busStopWalk) and the seconds from it to the next stop (the bus's route there at the
+// free-flow speed, and its wait at a stop). Made by the host from the road model, the driving and the bus service.
+struct BusTimetable {
+    struct Stop {
+        Vec2 wait;
+        Real toNextSeconds = 0;
+    };
+    std::vector<std::vector<Stop>> lines;
+    Real walkReach = 800;   // a stop is considered only this far (straight line) from where a trip begins or ends
+};
+
+// THE BEST BUS RIDE between two points (ADR-0484): the line and the two stops (each within the timetable's walk reach of
+// its end, in a straight line) whose estimate is least -- the two walks in a straight line at `walkPace`, and the ride
+// round the line by the timetable from the first stop to the second. The wait is not in it (the caller's). What the trip
+// planner and the sim's own walkers choose a bus by. Not found: no line has a stop near both ends.
+struct BusRide {
+    int line = -1, board = -1, alight = -1;
+    Real rideSeconds = 0;   // the timetable's, from `board` to `alight`
+    Real estimate = 0;      // the two walks and the ride
+    bool found() const { return line >= 0; }
+};
+BusRide bestBusRide(const BusTimetable& tt, Vec2 from, Vec2 to, Real walkPace);
+
+// The network a plan is routed on: the road model, the walker on its walks (route.h bindWalker), the driving, whose
+// router prices a leg on the roads (none: no leg on the roads can be made), and the buses' timetable (none: no bus).
 struct TripNetwork {
     const engine::RoadModel* model = nullptr;
     const engine::roads::RouteWalker* walker = nullptr;
     const driving::Driving* driving = nullptr;
+    const BusTimetable* buses = nullptr;
     bool valid() const;
 };
 

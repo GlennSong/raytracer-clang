@@ -412,7 +412,7 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
         world.add<CityCarRoams>(e);
     }
     // THE BUSES ON THE ROAD FILE'S LINES (ADR-0483): each line as many buses as its round trip (the bus's own routes
-    // from stop to stop, at the free-flow speed, and every stop's wait) needs for the headway the service file asks
+    // from stop to stop, at the free-flow speed times the measured traffic factor, and every stop's wait) needs for the headway the service file asks
     // (city_driving.h busService), at most its cap; spread evenly round the line, each starting at its own stop. Drawn as
     // the fleet's bus (the slot whose class is "bus"). The hand-over runs them (DrivingHost).
     const engine::RoadModel* model = drivingV2_->model();
@@ -438,7 +438,7 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
                 const engine::roads::Route r = a.valid() && b.valid() ? drivingV2_->routeBetween(static_cast<uint32_t>(busClass), pa, pb)
                                                                       : engine::roads::Route();
                 drivable = r.found;
-                loop += r.seconds + service.dwellSeconds;
+                loop += r.seconds * service.trafficFactor + service.dwellSeconds;
             }
             if (!drivable) continue;   // (said at load: Driving::busLineProblems)
             const int count = std::clamp(static_cast<int>(std::ceil(loop / (service.headwayMinutes * 60.0))), 1, service.mostBusesPerLine);
@@ -470,6 +470,11 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
                  << (busClass < 0 ? "the fleet has no \"bus\" class" : busSlot < 0 ? "no fleet slot is a bus" : "the service file is not usable");
     }
     if (buses) LOG_INFO << "[buses] " << buses << " buses on " << model->busLines.size() << " lines";
+    // THE PEOPLE ON THEM (ADR-0484): the timetable they are priced by, and who rides
+    buses_.reset();
+    brainRideEvents_.clear();
+    walkerRides_.assign(agents_.size(), WalkerRide{});
+    if (buses && model) buses_.build(*model, *drivingV2_, walker_.open, world);
     const std::string line = drivingHost_.begin(*drivingV2_, world, seed_);
     if (report) *report = line;
     return true;
@@ -567,6 +572,9 @@ void CitySim::build(int pedCount, uint32_t seed) {
         drivingV2_->setVehicleClasses(std::move(classes));
     }
     drivingHost_.reset();
+    buses_.reset();
+    brainRideEvents_.clear();
+    walkerRides_.clear();
     brain_.reset();   // the resident with the agent brain names the old agents too (startBrain makes it again)
     agents_.clear();
     sensed_.clear();
@@ -2998,6 +3006,29 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     if (!walkPoints_.empty() &&origin >= 0 && goal >= 0 && origin < walkPoints_.nodeCount() && goal < walkPoints_.nodeCount())
         r = walkRouteBetween(walkPoints_.nodes[static_cast<std::size_t>(origin)], walkPoints_.nodes[static_cast<std::size_t>(goal)],
                              placeFrontageAt(a, origin), placeFrontageAt(a, goal));
+    // BY BUS (ADR-0484): one of the sim's own walkers (the brain plans its residents') whose walk a bus beats by a clear
+    // margin -- the best ride's walks and ride, and the mean wait (half the headway), under kBusBeatsWalk of the walk --
+    // walks to the stop instead, waits there on arriving (arriveOrChain), and walks on to the goal from the stop it gets
+    // off at (rideEventsForWalkers)
+    if (r.found && !r.steps.empty() && buses_.any() && !a.brainOwned) {
+        const int self = indexOf(a);
+        const Real pace = std::max(Real(0.1), kWalkSpeed * a.speedFactor);
+        const Vec2 from = walkPoints_.nodes[static_cast<std::size_t>(origin)], to = walkPoints_.nodes[static_cast<std::size_t>(goal)];
+        const BusRide ride = bestBusRide(buses_.timetable(), from, to, pace);
+        const Real wait = busService().headwayMinutes * 30.0;
+        engine::WalkPoint stopAt;
+        if (ride.found() && ride.estimate + wait < kBusBeatsWalk * r.metres / pace && self >= 0 &&
+            walkJoin(buses_.timetable().lines[static_cast<std::size_t>(ride.line)][static_cast<std::size_t>(ride.board)].wait, stopAt)) {
+            engine::roads::WalkRoute toStop = engine::roads::findWalkRoute(*roads_, walker_, walkPoints_.at[static_cast<std::size_t>(origin)], stopAt);
+            if (toStop.found && !toStop.steps.empty()) {
+                if (walkerRides_.size() < agents_.size()) walkerRides_.resize(agents_.size());
+                walkerRides_[static_cast<std::size_t>(self)] =
+                    WalkerRide{1, static_cast<uint32_t>(ride.line), static_cast<uint32_t>(ride.board), static_cast<uint32_t>(ride.alight)};
+                beginRoute(a, std::move(toStop));
+                return;
+            }
+        }
+    }
     if (!r.found || r.steps.empty()) {
         // No path: do NOT teleport to the goal (that was the "disappear/reappear"
         // bug). Stay at the ORIGIN so the agent simply doesn't take this
@@ -3009,6 +3040,23 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         return;
     }
     beginRoute(a, std::move(r));
+}
+
+// A WALKER OFF THE BUS (ADR-0484) walks on from the stop to its trip's goal.
+void CitySim::rideEventsForWalkers(const std::vector<BusRiders::Event>& events) {
+    for (const BusRiders::Event& e : events) {
+        if (e.boarded || e.agent < 0 || static_cast<std::size_t>(e.agent) >= agents_.size()) continue;
+        if (static_cast<std::size_t>(e.agent) < walkerRides_.size()) walkerRides_[static_cast<std::size_t>(e.agent)] = WalkerRide{};
+        Agent& a = agents_[static_cast<std::size_t>(e.agent)];
+        const int goal = a.tripGoal;
+        const Activity doing = a.activity;   // (still on its way to work, home or the shop: not an errand's outing)
+        if (goal < 0 || goal >= walkPoints_.nodeCount() || !sendAgentTo(e.agent, walkPoints_.nodes[static_cast<std::size_t>(goal)])) {
+            arriveOrChain(a, 0);   // (no way on from the stop: the day goes on from here)
+            continue;
+        }
+        a.tripGoal = goal;
+        a.activity = doing;
+    }
 }
 
 // WHERE A WALKER ON ITS ROUTE STANDS (W3): on its step's walk at the metres walked (LaneGraph::pointAt), at the walk's
@@ -3194,6 +3242,19 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     (void)vArrive;   // (a chained trip kept it: the old driving's cars, ADR-0463)
     a.moving = false;
     a.speed = 0;
+    // AT THE BUS STOP (ADR-0484): a walker going by bus waits here for its line's bus; the trip is not over
+    {
+        const int self = indexOf(a);
+        if (self >= 0 && static_cast<std::size_t>(self) < walkerRides_.size() && walkerRides_[static_cast<std::size_t>(self)].phase == 1) {
+            WalkerRide& w = walkerRides_[static_cast<std::size_t>(self)];
+            if (buses_.wait(self, w.line, w.board, w.alight)) {
+                w.phase = 2;
+                a.state = Agent::State::Waiting;
+                return;
+            }
+            w = WalkerRide{};   // (no such stop any more: it arrives here, and its day goes on from here)
+        }
+    }
     {
         const int self = indexOf(a);
         {
@@ -3447,6 +3508,17 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         }
         if (drivingHost_.active()) drivingHost_.tick(*drivingV2_, simDt);
         else drivingV2_->tick(simDt);
+    }
+    // THE PEOPLE ON THE BUSES (ADR-0484), after the buses moved: on and off at the stops the buses stand at; the brain's
+    // residents' reports kept for it, the sim's own walkers carried on
+    if (buses_.any()) {
+        std::vector<BusRiders::Event> walkers;
+        for (const BusRiders::Event& e : buses_.tick(agents_)) {
+            const bool brains = e.agent >= 0 && static_cast<std::size_t>(e.agent) < agents_.size() &&
+                                agents_[static_cast<std::size_t>(e.agent)].brainOwned;
+            (brains ? brainRideEvents_ : walkers).push_back(e);
+        }
+        rideEventsForWalkers(walkers);
     }
     // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441), after the driving: its reports are answered and its skills stepped.
     if (brain_) tickBrain(simDt);

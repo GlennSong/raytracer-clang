@@ -297,3 +297,55 @@ TEST_CASE(trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use)
     CHECK(walks.choice()->mode == 0);
     CHECK(walks.reason.find(", car -- the car is in use: walk") != std::string::npos);
 }
+
+// BY BUS (ADR-0484): a bus row prices a trip as on foot to a stop, the wait (its start minutes), the ride round the line
+// by the timetable, and on foot from a stop; the stops near both ends are found by straight-line estimate
+TEST_CASE(trip_plan_prices_a_bus_trip_by_the_timetable) {
+    const Street& s = longStreet();
+    BusTimetable tt;
+    std::vector<BusTimetable::Stop> line;
+    for (const Real x : {200.0, 800.0, 1400.0, 1900.0}) line.push_back(BusTimetable::Stop{Vec2(x, -6), x == 1900.0 ? 300.0 : 100.0});
+    tt.lines = {line};
+    TripNetwork nav = s.net();
+    nav.buses = &tt;
+    TravelCatalog cat = walkAndCar();
+    TravelMode bus;
+    bus.name = "bus";
+    bus.bus = true;
+    bus.speed = 0;
+    bus.startMinutes = 4.0;
+    cat.modes.push_back(bus);
+    // FAR: home at 100 m, the door at 1500 m, no car: the bus from 200 m to 1400 m beats a 1400 m walk
+    TripRequest far;
+    far.from = Vec2(100, -6);
+    far.to = Vec2(1500, -6);
+    const TripPlan p = planTrip(nav, cat, far);
+    std::printf("    %s\n", p.reason.c_str());
+    CHECK(p.valid() && p.choice()->mode == 2);
+    const TripOption& byBus = p.options[2];
+    CHECK(byBus.legs.size() == 3u);
+    if (byBus.legs.size() == 3u) {
+        CHECK(byBus.legs[0].end == LegEnd::Stop && byBus.legs[0].busLine == 0 && byBus.legs[0].busTo == 0);
+        CHECK(byBus.legs[1].mode == 2 && byBus.legs[1].busFrom == 0 && byBus.legs[1].busTo == 2);
+        CHECK(near(byBus.legs[1].minutes, 4.0 + 200.0 / 60.0, 1e-9));   // the wait, and two legs of the timetable
+        CHECK(byBus.legs[2].end == LegEnd::Door);
+        FixedLegs fixed;
+        std::string err;
+        CHECK(fixedLegs(cat, byBus, fixed, &err) && fixed.legs[1].busLine == 0 && fixed.legs[1].busStop == 2 && fixed.legs[0].busStop == 0);
+    }
+    // NEAR: 300 m along the street: walking wins (the wait alone is 4 minutes)
+    TripRequest shortTrip = far;
+    shortTrip.to = Vec2(400, -6);
+    const TripPlan q = planTrip(nav, cat, shortTrip);
+    CHECK(q.valid() && q.choice()->mode == 0);
+    // NO STOP NEAR ONE END: no bus
+    TripRequest offLine = far;
+    offLine.to = Vec2(-900, -6);
+    tt.walkReach = 300;
+    const TripPlan r = planTrip(nav, cat, offLine);
+    CHECK(!r.options[2].possible && r.options[2].why == "no stop near both ends");
+    // NO LINE AT ALL: the bus is not weighed, and the reason does not name it
+    tt.lines.clear();
+    const TripPlan none = planTrip(nav, cat, far);
+    CHECK(!none.options[2].offered && none.reason.find("bus") == std::string::npos);
+}

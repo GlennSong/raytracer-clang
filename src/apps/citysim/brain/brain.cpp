@@ -108,6 +108,7 @@ StepContext Machine::contextFor(AgentId who, BrainTime at) const {
     ctx.world = &world_;
     ctx.walk = walk_;
     ctx.drive = drive_;
+    ctx.ride = ride_;
     ctx.agent = who;
     ctx.now = at;
     ctx.skillsRun = static_cast<Detail>(agents_[who].detail) != Detail::Far;

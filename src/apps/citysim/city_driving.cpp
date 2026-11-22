@@ -119,14 +119,18 @@ const BusService& busService() {
             return b;
         }
         const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false);
-        if (doc.is_discarded() || !doc.contains("headway_minutes") || !doc.contains("most_buses_per_line") || !doc.contains("dwell_seconds")) {
-            LOG_WARN << "[buses] " << path << ": not JSON, or a number is missing (headway_minutes, most_buses_per_line, dwell_seconds): no bus runs";
+        if (doc.is_discarded() || !doc.contains("headway_minutes") || !doc.contains("most_buses_per_line") || !doc.contains("dwell_seconds") ||
+            !doc.contains("traffic_factor") || !doc.contains("capacity")) {
+            LOG_WARN << "[buses] " << path << ": not JSON, or a number is missing (headway_minutes, most_buses_per_line, dwell_seconds, "
+                                              "traffic_factor, capacity): no bus runs";
             return b;
         }
         b.headwayMinutes = doc["headway_minutes"].get<Real>();
         b.mostBusesPerLine = doc["most_buses_per_line"].get<int>();
         b.dwellSeconds = doc["dwell_seconds"].get<Real>();
-        b.usable = b.headwayMinutes > 0 && b.mostBusesPerLine > 0 && b.dwellSeconds >= 0;
+        b.trafficFactor = doc["traffic_factor"].get<Real>();
+        b.capacity = doc["capacity"].get<int>();
+        b.usable = b.headwayMinutes > 0 && b.mostBusesPerLine > 0 && b.dwellSeconds >= 0 && b.trafficFactor >= 1 && b.capacity > 0;
         if (!b.usable) LOG_WARN << "[buses] " << path << ": a number is out of range: no bus runs";
         return b;
     }();
@@ -255,10 +259,17 @@ bool DrivingHost::sendOn(driving::Driving& d, engine::Entity e) {
     if (const CityBusRuns* bus = carWorld_->get<CityBusRuns>(e)) {
         // A BUS drives to the stop it is bound for
         driving::PathPoint to;
-        if (!busStopPoint(d, bus->line, bus->stop, to) || !d.beginTrip(driving::CarId(body.id), driving::PersonId(body.id), to).valid()) {
+        const driving::TripId trip = busStopPoint(d, bus->line, bus->stop, to)
+                                         ? d.beginTrip(driving::CarId(body.id), driving::PersonId(body.id), to)
+                                         : driving::TripId();
+        if (!trip.valid()) {
             ++counts_.routesNotFound;
             return false;
         }
+        CityBusRuns& runs = *carWorld_->get<CityBusRuns>(e);
+        runs.driving = 0;
+        const driving::Route* r = d.route(trip);
+        runs.freeFlow = r ? r->seconds : 0;
         ++counts_.tripsBegun;
         if (CityCarOnLane* lane = carWorld_->get<CityCarOnLane>(e)) lane->driven = true;
         return true;
@@ -403,6 +414,10 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
             bus->dwellLeft = busService().dwellSeconds;
             ++bus->calls;
             ++counts_.busCalls;
+            if (bus->freeFlow > 0) {
+                counts_.busDriven += bus->driving;
+                counts_.busFreeFlow += bus->freeFlow;
+            }
             continue;
         }
         sendOn(d, e);
@@ -410,6 +425,7 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
     for (const std::pair<uint32_t, engine::Entity>& c : own) {
         const driving::CarId car(c.first);
         const engine::Entity e = c.second;
+        if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e); bus && !bus->standing) bus->driving += dt;
         if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e); bus && bus->standing && d.car(car)) {
             bus->dwellLeft -= dt;
             if (bus->dwellLeft > 0) continue;

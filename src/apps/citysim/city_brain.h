@@ -167,6 +167,8 @@ struct CityBrainCounts {
     uint32_t leftAgain = 0;        // times an outsider left one somewhere
     uint32_t putOut = 0;           // drivers stood on the kerb side because their car was taken
     uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
+    uint32_t busWaits = 0;         // times someone near began waiting at a bus stop (ADR-0484)
+    uint32_t busRides = 0;         // ...and got off a bus at their stop
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.

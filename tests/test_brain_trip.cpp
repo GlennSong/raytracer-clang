@@ -702,3 +702,84 @@ TEST_CASE(brain_trip_a_new_intent_on_foot_is_acted_on_at_once) {
     lab.runTo(300000);
     CHECK(lab.traceOf(who) == "walking@0 walking@72000 indoors@144000");
 }
+
+// ---- BY BUS (ADR-0484): walk to a stop, wait for the line's bus, ride it round to a stop near the door, walk on ----------
+namespace {
+// testTravel() with a bus row: the mean wait 4 minutes (its start minutes), nothing at its end
+TravelCatalog withBus() {
+    TravelCatalog c = testTravel();
+    TravelMode bus;
+    bus.name = "bus";
+    bus.bus = true;
+    bus.speed = 0;
+    bus.startMinutes = 4.0;
+    bus.beginsIn = "waiting";
+    c.modes.push_back(bus);
+    return c;
+}
+// One line with stops at 200, 800, 1400 and 1900 m; 100 s from each to the next, 300 s from the last round to the first
+struct BusScene {
+    TravelCatalog travel = withBus();
+    Lab lab;
+    PlaceRef home, door, s200, s800, s1400, s1900;
+    AgentId who = kNoAgent;
+    explicit BusScene(Detail detail) : lab(true, nullptr, &travel) {
+        if (!lab.ok) return;
+        home = lab.door(100);
+        door = lab.door(1500);
+        s200 = lab.world.addStop(0, 0, Vec2(200, 0));
+        s800 = lab.world.addStop(0, 1, Vec2(800, 0));
+        s1400 = lab.world.addStop(0, 2, Vec2(1400, 0));
+        s1900 = lab.world.addStop(0, 3, Vec2(1900, 0));
+        std::vector<BusTimetable::Stop> line;
+        for (const Real x : {200.0, 800.0, 1400.0, 1900.0}) line.push_back(BusTimetable::Stop{Vec2(x, 0), x == 1900.0 ? 300.0 : 100.0});
+        lab.street.buses.lines = {line};
+        who = lab.person(home, 0, CarRef(), detail);
+    }
+};
+}  // namespace
+
+TEST_CASE(brain_trip_by_bus_walk_wait_ride_walk) {
+    // FAR: the clock alone. Walk 100 m to the stop at 200 m (72 s), wait the mean 4 minutes, ride two stops (200 s),
+    // walk 100 m from the stop at 1400 m (72 s): 9.7 minutes against 16.8 on foot
+    {
+        BusScene s(Detail::Far);
+        CHECK(s.lab.ok);
+        if (!s.lab.ok) return;
+        s.lab.machine->setIntent(s.who, 0, s.door);
+        s.lab.tick();
+        std::printf("    [bus] plan %s (%s)\n", s.lab.planOf(s.who).c_str(), s.lab.planner->lastReason().c_str());
+        CHECK(s.lab.planOf(s.who) == "walk>" + std::to_string(s.s200.id) + " bus>" + std::to_string(s.s1400.id) + " walk>" +
+                                         std::to_string(s.door.id));
+        CHECK(s.lab.planner->lastReason() == "walk 16.8 min, car -- no car, bus 9.7 min (1.2 walk + 7.3 bus + 1.2 walk): bus");
+        s.lab.runTo(700000);
+        CHECK(s.lab.traceOf(s.who) == "walking@0 waiting@72000 riding@312000 walking@512000 indoors@584000");
+    }
+    // NEAR: the skills. The ride skill is asked to wait at the 200 m stop for line 0, to get off at 1400 m; nothing moves
+    // until a bus comes; the bus at a stop that is not theirs changes nothing
+    {
+        BusScene s(Detail::Near);
+        if (!s.lab.ok) return;
+        s.lab.machine->setIntent(s.who, 0, s.door);
+        s.lab.runTo(80000);
+        CHECK(s.lab.stateName(s.who) == "waiting");
+        CHECK(s.lab.ride->riders.size() == 1u && s.lab.ride->riders[0].board == s.s200 && s.lab.ride->riders[0].alight == s.s1400 &&
+              s.lab.ride->riders[0].line == 0u);
+        s.lab.ride->busAt(*s.lab.machine, 0, s.s800);   // (not their stop)
+        s.lab.runTo(400000);
+        CHECK(s.lab.stateName(s.who) == "waiting");    // a near person waits for the bus, not the clock
+        s.lab.ride->busAt(*s.lab.machine, 0, s.s200);
+        s.lab.runTo(400500);
+        CHECK(s.lab.stateName(s.who) == "riding");
+        s.lab.ride->busAt(*s.lab.machine, 0, s.s800);   // (still aboard)
+        s.lab.runTo(401000);
+        CHECK(s.lab.stateName(s.who) == "riding");
+        s.lab.ride->busAt(*s.lab.machine, 0, s.s1400);
+        s.lab.runTo(401500);
+        CHECK(s.lab.stateName(s.who) == "walking");
+        s.lab.runTo(500000);
+        CHECK(s.lab.stateName(s.who) == "indoors");
+        CHECK(s.lab.ride->riders.empty() && s.lab.ride->waits == 1 && s.lab.ride->cancels == 0);
+        std::printf("    [bus] near: %s\n", s.lab.traceOf(s.who).c_str());
+    }
+}

@@ -18,6 +18,7 @@
 #include "relationships.h"
 #include "../driving/driving.h"   // the driving (#234; a level that names citysim.drivingRules)
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
+#include "city_buses.h"           // the people on the buses (ADR-0484)
 #include "city_poses.h"           // where the city's bodies are each fixed step (ADR-0454)
 #include <array>
 #include <cstdint>
@@ -369,6 +370,9 @@ driving::VehicleClasses builtInDrivingClasses();
 constexpr Real kBoardReach = 25.0;
 // A walker's speed (m/s) before its own pace and what it rides on (Agent::speedFactor, CitySim::ridePace).
 constexpr Real kWalkSpeed = 1.4;
+// A WALKER TAKES THE BUS (ADR-0484) only when the ride, its walks and the mean wait come under this share of the walk:
+// a clear win, not a coin toss. [~] An estimate.
+constexpr Real kBusBeatsWalk = 0.8;
 // A comfortable speed to come to rest in `dist` metres at `decel`: v = sqrt(2 decel dist), capped to `maxSpeed`; zero
 // at or under the stop point. (A walker easing to a stop at a crosswalk's kerb end.)
 double approachStop(double dist, double decel, double maxSpeed);
@@ -385,6 +389,9 @@ struct SensedGhost {
 
 class CitySim {
 public:
+    // THE PEOPLE ON THE BUSES (ADR-0484)
+    const BusRiders& buses() const { return buses_; }
+
     // `pedCount` agents on foot over the walk points of the road model handed in (setRoads first: city_walk_points.h), seeded by
     // `seed`. Deterministic (ADR-0002). Nobody is built driving: the cars are the driving's car entities (city_car.h;
     // ADR-0461, ADR-0462). No road model, or one with no walks: no spots, nobody.
@@ -1491,6 +1498,17 @@ private:
     std::shared_ptr<const engine::RoadModel> roads_;
     std::string roadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
+    // THE PEOPLE ON THE BUSES (ADR-0484), made with the buses in startDrivingV2; the brain's residents' rides are reported
+    // to it (brainRideEvents_), the sim's own walkers' are its own to carry on from (rideEventsForWalkers)
+    BusRiders buses_;
+    std::vector<BusRiders::Event> brainRideEvents_;
+    void rideEventsForWalkers(const std::vector<BusRiders::Event>& events);
+    // A WALKER'S BUS RIDE (ADR-0484), by agent: 0 none, 1 walking to its stop, 2 waiting or aboard; the line and stops
+    struct WalkerRide {
+        uint8_t phase = 0;
+        uint32_t line = 0, board = 0, alight = 0;
+    };
+    std::vector<WalkerRide> walkerRides_;
     CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
