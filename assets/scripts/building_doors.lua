@@ -20,6 +20,7 @@ return {
   },
   recipes = {
     school        = { front = "school_entrance" },
+    high_school   = { front = "school_entrance" },
     hospital      = { front = "office_entrance" },
     mall_complex  = { front = "office_entrance", inside = {} },   -- (a mall's shop fronts stand open)
     apartment_block = { front = "apartment_entrance" },

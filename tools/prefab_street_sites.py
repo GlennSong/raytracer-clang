@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lay out the hand-made sites of the test level prefab_street (#191): a playground, a park, a vegetable garden,
-a quad and a row of roof equipment, west of the buildings. Every thing is a prefab; every fence is fence.lua run
+a quad, a row of roof equipment and a high school's grounds, west of the buildings. Every thing is a prefab; every fence is fence.lua run
 along a path. Run it again after changing a layout: it replaces only the entities whose names begin "site / ".
 
     python3 tools/prefab_street_sites.py
@@ -117,7 +117,40 @@ for prefab, w in [("roof_access", 5), ("roof_hvac", 5.5), ("roof_hvac_large", 7)
 put(S, "roof_helipad", -90, 74)
 put("roof", "car_park_lamp", -120, 82); put("roof", "pitch_floodlight", -104, 84.5, "-z")
 
+# ---- THE HIGH SCHOOL (west of the quad): the building is the grammar's (`high_school`, a courtyard block the level
+# names below); its grounds are these. South of the street: the school, two tennis courts in a tall chain-link
+# cage, the pool, a running track. North: the baseball diamond, a basketball court, the soccer pitch with bleachers.
+S = "high school"
+HS_BLOCK = [(-172, 82), (-250, 82), (-250, 12), (-172, 12)]
+put(S, "tennis_court", -283, 31); put(S, "tennis_court", -263.5, 31)
+fence(S, "chain_link", [(-293, 12), (-253.5, 12), (-253.5, 50), (-293, 50)], gates=[(10, 1.4)], closed=True, height=3.2)
+put(S, "swimming_pool", -273, 72)
+fence(S, "chain_link", [(-286, 53), (-260, 53), (-260, 95), (-286, 95)], gates=[(26 + 42 + 13, 4.2)], closed=True, height=1.8)
+put(S, "running_track", -346, 50, "+x")
+put(S, "bleachers", -346, 78, "-z"); put(S, "scoreboard", -394, 50, "+x")
+put(S, "baseball_diamond_school", -217, -100)
+put(S, "bleachers", -234, -106, 45); put(S, "scoreboard", -217, -12.5, "-z")
+put(S, "basketball_court", -292, -40)
+put(S, "soccer_pitch_school", -352, -55, "+x")
+for x in (-366, -352, -338): put(S, "bleachers", x, -85.5, "+z")
+put(S, "scoreboard", -398, -55, "+x")
+for x, z, face in [(-394, -84, 45), (-310, -84, 315), (-394, -26, 135), (-310, -26, 225), (-262, -104, 45), (-172, -104, 315)]:
+    put(S, "pitch_floodlight", x, z, face)
+fence(S, "wall", [(-420, -9), (-168, -9)], gates=[(60, 5.0), (200, 5.0)], height=1.1)        # the grounds' wall along the street
+fence(S, "chain_link", [(-420, -9), (-420, -112), (-168, -112), (-168, -9)], height=2.4)      # and their back fence
+fence(S, "wall", [(-420, 9), (-296, 9)], gates=[(75, 5.0)], height=1.1)
+for x in (-250, -211, -172): put(S, "globe_lamp", x, 10.5)
+put(S, "flagpole", -205, 10.8); put(S, "clock_post", -216, 10.8); put(S, "notice_board", -222, 10.6); put(S, "bike_shelter", -240, 10.8)
+for x in (-380, -340, -300): put(S, "car_park_lamp", x, 12)
+
 d = json.load(open(LEVEL))
+# the school's own block and what grows on it (the fifth and later blocks are the named ones: see citysim.recipeAt)
+cs = d["citysim"]
+block = [[x, z] for x, z in HS_BLOCK]
+if block not in cs["blocks"]: cs["blocks"].append(block)
+if not any(r["recipe"] == "high_school" for r in cs["recipeAt"]):
+    cs["recipeAt"].append({"at": [-211, 47], "recipe": "high_school", "whole": True})
+    cs["districts"]["hubs"].append({"at": [-211, 47], "kind": "residential"})
 keep = [e for e in d["entities"] if not str(e.get("name", "")).startswith(("site / ", "park / ", "playground / "))]
 nid = max(e.get("id", 0) for e in keep) + 1
 for e in ents:
@@ -126,10 +159,11 @@ d["entities"] = keep + ents
 for e in d["entities"]:
     if e.get("shape") == "script":
         o = e["opts"]
-        o["street"]["x0"] = -166
+        o["street"]["x0"] = -424
         o["grounds"] = [g for g in o["grounds"] if g["x"] >= 0] + [{"x": -74, "z": 0, "w": 8, "d": 112, "kind": "paving"},
-                                                                    {"x": -122, "z": 0, "w": 8, "d": 112, "kind": "paving"}] + grounds
+                                                                    {"x": -122, "z": 0, "w": 8, "d": 112, "kind": "paving"},
+                                                                    {"x": -164, "z": 0, "w": 8, "d": 112, "kind": "paving"}] + grounds
     if e.get("name") == "ground":
-        e["position"] = [60, -0.2, -10]; e["size"] = [500, 0.4, 240]
+        e["position"] = [-60, -0.2, -10]; e["size"] = [760, 0.4, 290]
 json.dump(d, open(LEVEL, "w"), indent=1)
 print("%d site entities, %d paths" % (len(ents), len(grounds)))

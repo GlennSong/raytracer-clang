@@ -1789,6 +1789,29 @@ dish, lattice mast with its red lamp, turbine vent, flues, skylight, solar panel
 `tools/prefab_street_sites.py` lays out the test level's five hand-made sites from these: a playground, a park
 (benches beside the walks, facing them), a vegetable garden, a quad, and a row of roof equipment on a deck.
 
+### A high school and its grounds (2026-11-21)
+
+Glenn asked for a Japanese-style high school on a large lot: a courtyard, pitches for baseball, soccer and tennis,
+a pool. It is in two halves, and they are different kinds of thing.
+
+**The building is the grammar's.** `high_school` is a recipe (`architect.cpp`): three or four storeys of pale
+concrete round an open court, using the courtyard shape the grammar already had (the complex's courtyard preset,
+with wings one classroom and a corridor deep). Its rooms are the school's (classrooms), its use is civic, its
+street doors are the school entrance. **No table rolls it**: a level names its block (`citysim.recipeAt`), and the
+test that every recipe is heard somewhere lists it as placed by hand. So no city changed and nothing was re-baked.
+
+**The grounds are prefabs** (`sports_ground.lua`): a soccer pitch with goals and nets, a baseball diamond with its
+backstop and outfield fence, a tennis court, a basketball court, a 25 m pool with lanes, blocks and ladders, a
+running track, bleachers, a scoreboard. Each ground is one flat piece with its lines. `prefab_street` lays them
+round the school with chain-link cages, a wall along the street, and floodlights.
+
+- The pool stands RAISED, its deck 1.5 m up with steps, because a prefab cannot cut a hole in the ground.
+- Owed, to make it a place and not a set: the landmark planner finding a block this size in a real city (then it
+  is rolled, and that is a re-bake); the grounds as the school's own site plan, laid by the recipe and not by a
+  level tool; a gym hall; shoe lockers at the entrance and a roof you can reach; teachers and pupils in the
+  citysim (`places.lua`, `roles.lua`); `civicRoomsFor` naming recipes in C++ is a kind in code and wants to be data.
+- The small school is still the old `school` recipe, a block east of the hospital. It has no grounds of its own yet.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

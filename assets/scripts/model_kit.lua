@@ -79,6 +79,10 @@ M.finishes = {
   leaf    = { "leaf", { roughness = 1.0 } },
   soil    = { "soil", { roughness = 1.0 } },
   mesh    = { "wire_mesh", { roughness = 0.6, metallic = 0.6, opacity = 0.35 } },
+  -- a sports ground's: mown grass, a hard court, a pool's water
+  turf    = { "turf", { roughness = 1.0 } },
+  court   = { "court", { surface = "concrete", roughness = 0.8 } },
+  water   = { "pool_water", { roughness = 0.05, opacity = 0.75 } },
 }
 local made = {}
 local function material_of(m, part)

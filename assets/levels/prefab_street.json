@@ -145,6 +145,24 @@
      272,
      9
     ]
+   ],
+   [
+    [
+     -172,
+     82
+    ],
+    [
+     -250,
+     82
+    ],
+    [
+     -250,
+     12
+    ],
+    [
+     -172,
+     12
+    ]
    ]
   ],
   "buildLots": true,
@@ -207,6 +225,13 @@
       35
      ],
      "kind": "residential"
+    },
+    {
+     "at": [
+      -211,
+      47
+     ],
+     "kind": "residential"
     }
    ]
   },
@@ -245,6 +270,14 @@
     ],
     "recipe": "ranch_house",
     "whole": false
+   },
+   {
+    "at": [
+     -211,
+     47
+    ],
+    "recipe": "high_school",
+    "whole": true
    }
   ],
   "seed": 11,
@@ -276,15 +309,15 @@
     "restitution": 0.0
    },
    "position": [
-    60,
+    -60,
     -0.2,
     -10
    ],
    "shape": "box",
    "size": [
-    500,
+    760,
     0.4,
-    240
+    290
    ]
   },
   {
@@ -323,6 +356,13 @@
      },
      {
       "x": -122,
+      "z": 0,
+      "w": 8,
+      "d": 112,
+      "kind": "paving"
+     },
+     {
+      "x": -164,
       "z": 0,
       "w": 8,
       "d": 112,
@@ -438,7 +478,7 @@
     "street": {
      "half": 4,
      "walk": 4,
-     "x0": -166,
+     "x0": -424,
      "x1": 276
     },
     "style": "stucco"
@@ -2772,6 +2812,640 @@
     "angleDeg": 180
    },
    "id": 161
+  },
+  {
+   "name": "site / high school / tennis_court",
+   "shape": "prefab",
+   "prefab": "tennis_court",
+   "position": [
+    -283,
+    0.03,
+    31
+   ],
+   "id": 162
+  },
+  {
+   "name": "site / high school / tennis_court",
+   "shape": "prefab",
+   "prefab": "tennis_court",
+   "position": [
+    -263.5,
+    0.03,
+    31
+   ],
+   "id": 163
+  },
+  {
+   "name": "site / high school / fence (chain_link)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -19.75,
+       -19.0
+      ],
+      [
+       19.75,
+       -19.0
+      ],
+      [
+       19.75,
+       19.0
+      ],
+      [
+       -19.75,
+       19.0
+      ]
+     ],
+     "style": "chain_link",
+     "gates": [
+      {
+       "at": 10,
+       "width": 1.4
+      }
+     ],
+     "closed": true,
+     "height": 3.2
+    }
+   },
+   "position": [
+    -273.25,
+    0.03,
+    31.0
+   ],
+   "id": 164
+  },
+  {
+   "name": "site / high school / swimming_pool",
+   "shape": "prefab",
+   "prefab": "swimming_pool",
+   "position": [
+    -273,
+    0.03,
+    72
+   ],
+   "id": 165
+  },
+  {
+   "name": "site / high school / fence (chain_link)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -13.0,
+       -21.0
+      ],
+      [
+       13.0,
+       -21.0
+      ],
+      [
+       13.0,
+       21.0
+      ],
+      [
+       -13.0,
+       21.0
+      ]
+     ],
+     "style": "chain_link",
+     "gates": [
+      {
+       "at": 81,
+       "width": 4.2
+      }
+     ],
+     "closed": true,
+     "height": 1.8
+    }
+   },
+   "position": [
+    -273.0,
+    0.03,
+    74.0
+   ],
+   "id": 166
+  },
+  {
+   "name": "site / high school / running_track",
+   "shape": "prefab",
+   "prefab": "running_track",
+   "position": [
+    -346,
+    0.03,
+    50
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 167
+  },
+  {
+   "name": "site / high school / bleachers",
+   "shape": "prefab",
+   "prefab": "bleachers",
+   "position": [
+    -346,
+    0.03,
+    78
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 168
+  },
+  {
+   "name": "site / high school / scoreboard",
+   "shape": "prefab",
+   "prefab": "scoreboard",
+   "position": [
+    -394,
+    0.03,
+    50
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 169
+  },
+  {
+   "name": "site / high school / baseball_diamond_school",
+   "shape": "prefab",
+   "prefab": "baseball_diamond_school",
+   "position": [
+    -217,
+    0.03,
+    -100
+   ],
+   "id": 170
+  },
+  {
+   "name": "site / high school / bleachers",
+   "shape": "prefab",
+   "prefab": "bleachers",
+   "position": [
+    -234,
+    0.03,
+    -106
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 45
+   },
+   "id": 171
+  },
+  {
+   "name": "site / high school / scoreboard",
+   "shape": "prefab",
+   "prefab": "scoreboard",
+   "position": [
+    -217,
+    0.03,
+    -12.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   },
+   "id": 172
+  },
+  {
+   "name": "site / high school / basketball_court",
+   "shape": "prefab",
+   "prefab": "basketball_court",
+   "position": [
+    -292,
+    0.03,
+    -40
+   ],
+   "id": 173
+  },
+  {
+   "name": "site / high school / soccer_pitch_school",
+   "shape": "prefab",
+   "prefab": "soccer_pitch_school",
+   "position": [
+    -352,
+    0.03,
+    -55
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 174
+  },
+  {
+   "name": "site / high school / bleachers",
+   "shape": "prefab",
+   "prefab": "bleachers",
+   "position": [
+    -366,
+    0.03,
+    -85.5
+   ],
+   "id": 175
+  },
+  {
+   "name": "site / high school / bleachers",
+   "shape": "prefab",
+   "prefab": "bleachers",
+   "position": [
+    -352,
+    0.03,
+    -85.5
+   ],
+   "id": 176
+  },
+  {
+   "name": "site / high school / bleachers",
+   "shape": "prefab",
+   "prefab": "bleachers",
+   "position": [
+    -338,
+    0.03,
+    -85.5
+   ],
+   "id": 177
+  },
+  {
+   "name": "site / high school / scoreboard",
+   "shape": "prefab",
+   "prefab": "scoreboard",
+   "position": [
+    -398,
+    0.03,
+    -55
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   },
+   "id": 178
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -394,
+    0.03,
+    -84
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 45
+   },
+   "id": 179
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -310,
+    0.03,
+    -84
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 315
+   },
+   "id": 180
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -394,
+    0.03,
+    -26
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 135
+   },
+   "id": 181
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -310,
+    0.03,
+    -26
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 225
+   },
+   "id": 182
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -262,
+    0.03,
+    -104
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 45
+   },
+   "id": 183
+  },
+  {
+   "name": "site / high school / pitch_floodlight",
+   "shape": "prefab",
+   "prefab": "pitch_floodlight",
+   "position": [
+    -172,
+    0.03,
+    -104
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 315
+   },
+   "id": 184
+  },
+  {
+   "name": "site / high school / fence (wall)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -126.0,
+       0.0
+      ],
+      [
+       126.0,
+       0.0
+      ]
+     ],
+     "style": "wall",
+     "gates": [
+      {
+       "at": 60,
+       "width": 5.0
+      },
+      {
+       "at": 200,
+       "width": 5.0
+      }
+     ],
+     "height": 1.1
+    }
+   },
+   "position": [
+    -294.0,
+    0.03,
+    -9.0
+   ],
+   "id": 185
+  },
+  {
+   "name": "site / high school / fence (chain_link)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -126.0,
+       51.5
+      ],
+      [
+       -126.0,
+       -51.5
+      ],
+      [
+       126.0,
+       -51.5
+      ],
+      [
+       126.0,
+       51.5
+      ]
+     ],
+     "style": "chain_link",
+     "height": 2.4
+    }
+   },
+   "position": [
+    -294.0,
+    0.03,
+    -60.5
+   ],
+   "id": 186
+  },
+  {
+   "name": "site / high school / fence (wall)",
+   "shape": "prefab",
+   "prefab": {
+    "recipe": "fence",
+    "args": {
+     "points": [
+      [
+       -62.0,
+       0.0
+      ],
+      [
+       62.0,
+       0.0
+      ]
+     ],
+     "style": "wall",
+     "gates": [
+      {
+       "at": 75,
+       "width": 5.0
+      }
+     ],
+     "height": 1.1
+    }
+   },
+   "position": [
+    -358.0,
+    0.03,
+    9.0
+   ],
+   "id": 187
+  },
+  {
+   "name": "site / high school / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -250,
+    0.03,
+    10.5
+   ],
+   "id": 188
+  },
+  {
+   "name": "site / high school / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -211,
+    0.03,
+    10.5
+   ],
+   "id": 189
+  },
+  {
+   "name": "site / high school / globe_lamp",
+   "shape": "prefab",
+   "prefab": "globe_lamp",
+   "position": [
+    -172,
+    0.03,
+    10.5
+   ],
+   "id": 190
+  },
+  {
+   "name": "site / high school / flagpole",
+   "shape": "prefab",
+   "prefab": "flagpole",
+   "position": [
+    -205,
+    0.03,
+    10.8
+   ],
+   "id": 191
+  },
+  {
+   "name": "site / high school / clock_post",
+   "shape": "prefab",
+   "prefab": "clock_post",
+   "position": [
+    -216,
+    0.03,
+    10.8
+   ],
+   "id": 192
+  },
+  {
+   "name": "site / high school / notice_board",
+   "shape": "prefab",
+   "prefab": "notice_board",
+   "position": [
+    -222,
+    0.03,
+    10.6
+   ],
+   "id": 193
+  },
+  {
+   "name": "site / high school / bike_shelter",
+   "shape": "prefab",
+   "prefab": "bike_shelter",
+   "position": [
+    -240,
+    0.03,
+    10.8
+   ],
+   "id": 194
+  },
+  {
+   "name": "site / high school / car_park_lamp",
+   "shape": "prefab",
+   "prefab": "car_park_lamp",
+   "position": [
+    -380,
+    0.03,
+    12
+   ],
+   "id": 195
+  },
+  {
+   "name": "site / high school / car_park_lamp",
+   "shape": "prefab",
+   "prefab": "car_park_lamp",
+   "position": [
+    -340,
+    0.03,
+    12
+   ],
+   "id": 196
+  },
+  {
+   "name": "site / high school / car_park_lamp",
+   "shape": "prefab",
+   "prefab": "car_park_lamp",
+   "position": [
+    -300,
+    0.03,
+    12
+   ],
+   "id": 197
   }
  ],
  "environment": {

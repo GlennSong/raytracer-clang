@@ -152,7 +152,7 @@ uint8_t civicRoomsFor(const std::string& recipe) {
     if (recipe == "university") return 1;
     if (recipe == "library") return 2;
     if (recipe == "museum") return 4;
-    if (recipe == "school") return 5;
+    if (recipe == "school" || recipe == "high_school") return 5;
     if (recipe == "hospital") return 6;
     if (recipe == "church") return 7;
     if (recipe == "cinema") return 8;
@@ -1400,6 +1400,31 @@ void recipeSchool(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     out.name = "school";
 }
 
+// The HIGH SCHOOL (Glenn, 2026-11-21: "one of those japanese high schools ... a large lot ... a courtyard"): three
+// or four storeys of pale concrete round an open court, long bands of classroom windows, a flat roof. It takes a
+// whole block (the complex's courtyard preset, wings one classroom and a corridor deep); its pitches, pool and
+// courts are the site round it. A level names the block (LotParams::recipeAt); no table rolls it yet.
+void recipeHighSchool(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.between(3, 4);
+    p.groundRetail = false;
+    dress(p, rng.next() < 0.7 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    p.wallColor = rng.next() < 0.5 ? Vec3(0.9, 0.88, 0.8) : Vec3(0.86, 0.87, 0.85);   // cream, or a cool white
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.window.lightsX = 3;
+    p.window.lightsY = 2;
+    p.quoins = false;
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Courtyard;
+    out.complex.depth = rng.in(11.0, 12.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 2.2;
+    out.placeType = "civic";
+    out.name = "high_school";
+}
+
 // The HOSPITAL: a near-white concrete slab; the courtyard carve gives wings.
 void recipeHospital(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
@@ -1791,6 +1816,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"rowhouses", recipeRowhouses},
     {"duplex", recipeDuplex},
     {"mixed_use", recipeMixedUse},
+    {"high_school", recipeHighSchool},
 };
 constexpr int kRecipeRegistryCount =
     static_cast<int>(sizeof(kRecipeRegistry) / sizeof(kRecipeRegistry[0]));

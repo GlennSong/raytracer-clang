@@ -609,4 +609,15 @@ return {
   roof_skylight = { model = "roof_skylight", physics = { body = "static" } },
   roof_solar = { model = "roof_solar", physics = { body = "static" }, draw = { class = "structure" } },
   roof_access = { model = "roof_access", physics = { body = "static" }, draw = { class = "structure" }, lights = { { at = "lamp", kind = "bollard_light" } }, uses = { { at = "handle", say = "open", back = "close", move = { door = 105 }, speed = 120, sound = "heavy" } } },
+  -- sports grounds: each one flat piece with its lines and what stands on it (sports_ground.lua)
+  soccer_pitch = { model = "soccer_pitch", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  soccer_pitch_school = { model = "soccer_pitch_school", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  baseball_diamond = { model = "baseball_diamond", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  baseball_diamond_school = { model = "baseball_diamond_school", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  tennis_court = { model = "tennis_court", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  basketball_court = { model = "basketball_court", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  swimming_pool = { model = "swimming_pool", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  running_track = { model = "running_track", physics = { body = "static" }, draw = { class = "structure", distance = 600 } },
+  bleachers = { model = "bleachers", physics = { body = "static" }, draw = { class = "structure" } },
+  scoreboard = { model = "scoreboard", physics = { body = "static" }, draw = { class = "structure" } },
 }

@@ -274,4 +274,15 @@ return {
   roof_skylight = { recipe = "roof_things", args = { kind = "skylight" } },
   roof_solar = { recipe = "roof_things", args = { kind = "solar", count = 6 } },
   roof_access = { recipe = "roof_things", args = { kind = "access" } },
+  -- sports grounds (sports_ground.lua)
+  soccer_pitch = { recipe = "sports_ground", args = { kind = "soccer_pitch" } },
+  soccer_pitch_school = { recipe = "sports_ground", args = { kind = "soccer_pitch", width = 45, length = 75 } },
+  baseball_diamond = { recipe = "sports_ground", args = { kind = "baseball_diamond" } },
+  baseball_diamond_school = { recipe = "sports_ground", args = { kind = "baseball_diamond", length = 58 } },
+  tennis_court = { recipe = "sports_ground", args = { kind = "tennis_court" } },
+  basketball_court = { recipe = "sports_ground", args = { kind = "basketball_court" } },
+  swimming_pool = { recipe = "sports_ground", args = { kind = "pool" } },
+  running_track = { recipe = "sports_ground", args = { kind = "running_track" } },
+  bleachers = { recipe = "sports_ground", args = { kind = "bleachers", length = 12 } },
+  scoreboard = { recipe = "sports_ground", args = { kind = "scoreboard" } },
 }
