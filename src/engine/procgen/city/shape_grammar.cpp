@@ -1,3 +1,4 @@
+#include "space_graph.h"   // cellUseName: a room kind's name (RT_ROOMS_DEBUG)
 #include "shape_grammar.h"
 #include "roads/lanes/geom2d.h"   // the Clipper offsets (tierArmsOk)
 #include "../../../proc_rng.h"
@@ -17,6 +18,7 @@
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
 #include "../noise.h"             // emitSoftBox's lumps
+#include <map>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -5406,6 +5408,13 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // (RT_FURNITURE_BLIND_OPENINGS=1: the A/B -- furnished as before the outside doors and windows were known)
         static const bool blindOpenings = std::getenv("RT_FURNITURE_BLIND_OPENINGS") != nullptr;
         if (!blindOpenings) rp.openings = storeyOpenings(spk.plan, params, ki, baseY + spk.y0, spk.h, entranceEdge);
+        if (std::getenv("RT_ROOMS_DEBUG")) {   // what this storey was laid as: its rooms by kind
+            std::map<std::string, int> kinds;
+            for (const Room& room : rp.rooms) ++kinds[cellUseName(room.kind)];
+            std::string line;
+            for (const std::pair<const std::string, int>& kn : kinds) line += " " + std::to_string(kn.second) + " " + kn.first + ",";
+            std::fprintf(stderr, "[rooms] civic %d storey %d: %zu rooms:%s %zu walls\n", params.civicRooms, ki, rp.rooms.size(), line.c_str(), rp.walls.size());
+        }
         if (rp.walls.empty() && rp.rooms.empty()) continue;   // (rooms without walls -- an open office's zones -- are furnished)
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));

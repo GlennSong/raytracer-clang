@@ -5,7 +5,8 @@
 --   baseball_diamond  a dirt infield and grass outfield, the bases, the mound, foul lines, a backstop fence behind home
 --   tennis_court      a hard court with its lines and a net between two posts (a doubles court, 10.97 x 23.77 m, in its run-off)
 --   basketball_court  a hard court with its lines and a hoop on a post at each end
---   pool              a 25 m pool sunk in a tiled deck: water, lane ropes, starting blocks, ladders (`lanes`)
+--   pool              a 25 m pool, 2 m deep, in a raised tiled deck with steps up: water to swim in, lane ropes,
+--                     starting blocks, ladders (`lanes`; marker `water` at the surface's middle)
 --   running_track     a 200 m oval of red lanes round a grass infield
 --   bleachers         a bank of bench seats on a steel frame (`rows`, `length`; markers seat_N)
 --   scoreboard        a board on two posts
@@ -60,16 +61,22 @@ if a.kind == "soccer_pitch" then
     box_lines(-20.16, 20.16, math.min(z, z - s * 16.5), math.max(z, z - s * 16.5), 0.12)
     box_lines(-9.16, 9.16, math.min(z, z - s * 5.5), math.max(z, z - s * 5.5), 0.12)
     c.box("paint", V(0, T + 0.002, z - s * 11), V(0.24, 0.004, 0.24), 0.0, WHITE, 1)
-    -- the goal: 7.32 x 2.44 m, a frame with a net behind it
+    -- the goal: 7.32 x 2.44 m. A box net: the roof runs level back from the crossbar to two rear posts, the back
+    -- hangs straight down from them, and each side is a plain rectangle
+    local B, NET = 1.6, V(0.95, 0.95, 0.95)            -- how far back the net goes
     for _, x in ipairs{ -3.66, 3.66 } do
       c.rod("metal", V(x, 0, z), V(x, 2.44, z), 0.06, WHITE, 8)
-      c.rod("metal", V(x, 2.44, z), V(x, 0, z + s * 2), 0.03, WHITE, 6)
+      c.rod("metal", V(x, 0, z + s * B), V(x, 2.44, z + s * B), 0.025, WHITE, 6)
+      c.rod("metal", V(x, 2.44, z), V(x, 2.44, z + s * B), 0.025, WHITE, 6)
+      c.rod("metal", V(x, 0.03, z), V(x, 0.03, z + s * B), 0.025, WHITE, 6)
+      c.box("mesh", V(x, 1.22, z + s * B / 2), V(0.004, 2.4, B), 0.0, NET, 1)
     end
     c.rod("metal", V(-3.72, 2.44, z), V(3.72, 2.44, z), 0.06, WHITE, 8)
-    c.rod("metal", V(-3.66, 0.03, z + s * 2), V(3.66, 0.03, z + s * 2), 0.03, WHITE, 6)
-    c.mesh("mesh", mesh.translate(mesh.rotate_x(mesh.box{ 7.3, 0.004, 3.15 }, s * math.atan(2.44, 2)), { 0, 1.22, z + s * 1 }), V(0.95, 0.95, 0.95))
-    for _, x in ipairs{ -3.66, 3.66 } do c.box("mesh", V(x, 0.8, z + s * 0.7), V(0.004, 1.5, 1.3), 0.0, V(0.95, 0.95, 0.95), 1) end
-    m:shape("goal_" .. (s < 0 and "south" or "north"), { box = { 7.4, 2.5, 0.3 }, pos = { 0, 1.25, z + s * 1.9 } })
+    c.rod("metal", V(-3.66, 2.44, z + s * B), V(3.66, 2.44, z + s * B), 0.025, WHITE, 6)
+    c.rod("metal", V(-3.66, 0.03, z + s * B), V(3.66, 0.03, z + s * B), 0.025, WHITE, 6)
+    c.box("mesh", V(0, 2.44, z + s * B / 2), V(7.3, 0.004, B), 0.0, NET, 1)
+    c.box("mesh", V(0, 1.22, z + s * B), V(7.3, 2.4, 0.004), 0.0, NET, 1)
+    m:shape("goal_" .. (s < 0 and "south" or "north"), { box = { 7.4, 2.5, 0.2 }, pos = { 0, 1.25, z + s * B } })
   end
 elseif a.kind == "baseball_diamond" then
   local R = a.length > 0 and a.length or 75        -- home plate to the outfield fence
@@ -135,7 +142,7 @@ elseif a.kind == "basketball_court" then
   end
 elseif a.kind == "pool" then
   local lanes = math.floor(a.lanes + 0.5)
-  local W, L, DK, DEPTH = lanes * 2.5, 25, 4, 1.4
+  local W, L, DK, DEPTH = lanes * 2.5, 25, 4, 2.0
   -- the deck is a frame round the basin; the basin's floor and walls are below y = 0 (the level's ground must have
   -- a hole there, or the pool stands raised: this one is RAISED, its deck `DEPTH` up, with steps to it)
   local Y = DEPTH + 0.1
@@ -157,18 +164,19 @@ elseif a.kind == "pool" then
   for _, p in ipairs{ { -W / 2, -L / 2 + 2 }, { W / 2, -L / 2 + 2 }, { -W / 2, L / 2 - 2 }, { W / 2, L / 2 - 2 } } do   -- the ladders
     local s = p[1] < 0 and 1 or -1
     for _, dz in ipairs{ -0.25, 0.25 } do
-      c.pipe("metal", { V(p[1] - s * 0.5, Y, p[2] + dz), V(p[1] - s * 0.5, Y + 0.9, p[2] + dz), V(p[1] + s * 0.15, Y + 0.9, p[2] + dz), V(p[1] + s * 0.15, Y - 1.0, p[2] + dz) }, 0.02, kit.CHROME, { bend = 0.12, sides = 6 })
+      c.pipe("metal", { V(p[1] - s * 0.5, Y, p[2] + dz), V(p[1] - s * 0.5, Y + 0.9, p[2] + dz), V(p[1] + s * 0.15, Y + 0.9, p[2] + dz), V(p[1] + s * 0.15, Y - 1.4, p[2] + dz) }, 0.02, kit.CHROME, { bend = 0.12, sides = 6 })
     end
-    for k = 1, 3 do c.rod("metal", V(p[1] + s * 0.15, Y - k * 0.3, p[2] - 0.25), V(p[1] + s * 0.15, Y - k * 0.3, p[2] + 0.25), 0.015, kit.CHROME, 6) end
+    for k = 1, 4 do c.rod("metal", V(p[1] + s * 0.15, Y - k * 0.3, p[2] - 0.25), V(p[1] + s * 0.15, Y - k * 0.3, p[2] + 0.25), 0.015, kit.CHROME, 6) end
   end
-  for k = 0, 6 do c.box("court", V(0, (k + 0.5) * Y / 7, L / 2 + DK + 0.3 * (7 - k) - 0.15), V(4, Y / 7, 0.3), 0.0, V(0.72, 0.74, 0.74), 1) end   -- the steps up
+  for k = 0, 9 do c.box("court", V(0, (k + 0.5) * Y / 10, L / 2 + DK + 0.3 * (10 - k) - 0.15), V(4, Y / 10, 0.3), 0.0, V(0.72, 0.74, 0.74), 1) end   -- the steps up
   for _, s in ipairs{ -1, 1 } do
     m:shape("deck_side_" .. (s < 0 and "west" or "east"), { box = { DK, Y, L + 2 * DK }, pos = { s * (W / 2 + DK / 2), Y / 2, 0 } })
     m:shape("deck_end_" .. (s < 0 and "south" or "north"), { box = { W, Y, DK }, pos = { 0, Y / 2, s * (L / 2 + DK / 2) } })
   end
   m:shape("floor", { box = { W, 0.1, L }, pos = { 0, 0.05, 0 } })
-  for k = 0, 6 do m:shape("step_" .. k, { box = { 4, Y / 7, 0.3 }, pos = { 0, (k + 0.5) * Y / 7, L / 2 + DK + 0.3 * (7 - k) - 0.15 } }) end
-  m:marker("water", { pos = { 0, Y - 0.2, 0 }, role = "stand", size = W })
+  for k = 0, 9 do m:shape("step_" .. k, { box = { 4, Y / 10, 0.3 }, pos = { 0, (k + 0.5) * Y / 10, L / 2 + DK + 0.3 * (10 - k) - 0.15 } }) end
+  -- where its water is, for a swimmer: the prefab's line gives the marker a pool of water this wide and long
+  m:marker("water", { pos = { 0, Y - 0.2, 0 }, role = "water" })
 elseif a.kind == "running_track" then
   local R, S, LN = 18, 43, 4                       -- the bends' inner radius, the straights' length, lanes
   local TW = LN * 1.22

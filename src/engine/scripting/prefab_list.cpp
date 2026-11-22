@@ -67,12 +67,12 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
     if (!line.is_object()) return fail(where + " is a table: { model = \"...\" }");
 
     std::string stray;
-    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses", "lights"}, stray)) {
+    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses", "lights", "water"}, stray)) {
         // What the design note gives a prefab that is not built yet: say so, so a line is never half obeyed.
         const std::vector<std::string> later = {"sounds", "lights", "offers", "particles"};
         if (std::find(later.begin(), later.end(), stray) != later.end())
             return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, step 9)");
-        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses, lights)");
+        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses, lights, water)");
     }
 
     Prefab p;
@@ -115,6 +115,14 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         if (!line["script"].is_string() || line["script"].get<std::string>().empty()) return fail(where + ": `script` is a script's file name");
         p.script = line["script"].get<std::string>();
         if (loadScriptCode(p.script, levelDir).empty()) return fail(where + ": the script '" + p.script + "' cannot be read");
+    }
+    if (line.contains("water")) {
+        const nlohmann::json& w = line["water"];
+        if (!w.is_object() || !w.contains("size") || !w["size"].is_array() || w["size"].size() != 2 || w.value("at", std::string()).empty())
+            return fail(where + ": `water` is { at = \"a marker\", size = { width, length } }");
+        p.waterAt = w["at"].get<std::string>();
+        p.waterW = w["size"][0].get<double>();
+        p.waterL = w["size"][1].get<double>();
     }
     if (line.contains("lights")) {
         if (!line["lights"].is_array()) return fail(where + ": `lights` is a list: { { at = \"lamp\", kind = \"park_lantern\" }, ... }");
@@ -273,6 +281,7 @@ std::string prefabLine(const Prefab& p) {
         out += " }";
     }
     if (!p.script.empty()) out += ", script = " + luaQuoted(p.script);
+    if (!p.waterAt.empty()) out += ", water = { at = " + luaQuoted(p.waterAt) + ", size = { " + plainNumber(p.waterW) + ", " + plainNumber(p.waterL) + " } }";
     if (!p.lights.empty()) {
         out += ", lights = { ";
         for (std::size_t i = 0; i < p.lights.size(); ++i)

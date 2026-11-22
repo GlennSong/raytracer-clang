@@ -405,6 +405,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
         prog.residential = boolField(L, pt, "residential", false);
         prog.workplace = boolField(L, pt, "workplace", true);
+        prog.ground = boolField(L, pt, "ground", false);
         if (std::string d; !readDepartments(L, pt, prog.departments, d)) return bad(where + ": unknown department (trade) '" + d + "'");
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");

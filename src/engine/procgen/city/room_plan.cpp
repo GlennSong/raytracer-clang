@@ -2275,7 +2275,8 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     }
     // A USE WITH A PROGRAM OF ITS OWN (building_uses.lua: a hotel's rooms): laid as it, round the core or the stair.
     // (Offices and flats have their own branches below: a block of flats' fallbacks, an office's curtain wall.)
-    if (storey >= 1 && !house && use != "office" && use != "apartments" && hasFloorProgram(use)) {
+    if ((storey >= 1 || (hasFloorProgram(use) && floorProgram(use).ground)) && !house && use != "office" && use != "apartments" &&
+        hasFloorProgram(use)) {
         const CorePlan hub = hubFor();
         if (hub.valid) {
             const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
@@ -2332,6 +2333,9 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     }
     const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0) ||
                                (civic == 9 && storey >= 1);   // (the fire crew's quarters: the residence hall's floor)
+    if (std::getenv("RT_CAMPUS_DEBUG") && (params.campus || civicCorridor))
+        std::fprintf(stderr, "[campus] storey %d: civic %d core %d plan %zu well %zu topo %d short %.1f long %.1f\n", storey, civic, core.valid ? 1 : 0,
+                     planIn.size(), stairWell.size(), static_cast<int>(topo), 2 * std::min(plateBox.half[0], plateBox.half[1]), longSide);
     if ((params.campus || civicCorridor) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.

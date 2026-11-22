@@ -116,6 +116,19 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
         for (const std::string& why : skipped) LOG_WARN << "prefab '" << prefab.name << "': use " << why << " (left out)";
     }
     poseModelPieces(world, entity);
+    // ITS WATER (Prefab::waterAt): a pool of still water on the copy itself, so it goes when the copy goes. The pool
+    // is a box square to the world: the marker's rectangle, turned with the copy, and the box round that.
+    if (!prefab.waterAt.empty()) {
+        Vec3 mid;
+        Quat turn;
+        if (modelMarkerWorld(world, entity, prefab.waterAt, mid, turn)) {
+            const Vec3 ax = turn.rotate(Vec3(1, 0, 0)) * (prefab.waterW * Real(0.5)), az = turn.rotate(Vec3(0, 0, 1)) * (prefab.waterL * Real(0.5));
+            const Real hx = std::abs(ax.x) + std::abs(az.x), hz = std::abs(ax.z) + std::abs(az.z);
+            world.add<WaterPool>(entity, WaterPool{mid.x - hx, mid.z - hz, mid.x + hx, mid.z + hz, mid.y});
+        } else {
+            LOG_WARN << "prefab '" << prefab.name << "': its water's marker '" << prefab.waterAt << "' is not in the model (no water)";
+        }
+    }
     // A piece has not moved since the step before: its previous place is its place.
     if (const ModelInstance* mi = world.get<ModelInstance>(entity))
         for (Entity e : mi->pieces)

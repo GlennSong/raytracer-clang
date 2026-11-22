@@ -1528,7 +1528,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     RoomPlan rp;
     rp.topology = prog.residential ? PlateTopology::Apartments : PlateTopology::Ring;
     rp.office = !prog.residential && prog.workplace;
-    if (storey < 1) return rp;
+    if (storey < 1 && !prog.ground) return rp;   // (a ground floor is a lobby or shops, unless the program lays it too)
     Poly2 plan = plate;
     ensureCCW(plan);
     // the building's habit may cut the plate its own way (a budget hotel's narrow rooms)

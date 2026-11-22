@@ -124,6 +124,10 @@ struct Prefab {
     std::string script;
     // uses = { ... }: what a person can do to a copy (PrefabUse, above).
     std::vector<PrefabUse> uses;
+    // water = { at = "water", size = { width, length } }: still water to swim in, its surface at that marker, that
+    // wide along the marker's x and long along its z (a pool's). Every copy gets a WaterPool (components.h).
+    std::string waterAt;
+    Real waterW = 0, waterL = 0;
     // lights = { ... }: the lamps every copy has (PrefabLamp, above).
     std::vector<PrefabLamp> lights;
 };

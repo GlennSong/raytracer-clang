@@ -136,6 +136,9 @@ struct FloorProgram {
     bool residential = false;
     // NO WORKPLACE (a hotel's rooms): the floor is not lit as offices, and its baths are bathrooms, not restrooms
     bool workplace = true;
+    // ground = true: the ground floor is laid by this program too (a school's classrooms start at the street);
+    // else the ground floor is the building's lobby or shops, as ever.
+    bool ground = false;
     // A SHOP FLOOR (a department store's): the department each storey is, by turns from the first storey over the
     // ground (trade ids, trades.h) -- every room on it takes its trade as its style, and rules can keep to departments
     std::vector<uint8_t> departments;
