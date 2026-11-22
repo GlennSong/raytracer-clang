@@ -560,6 +560,28 @@ StreetFurniturePlan planStreetFurniture(
     for (const StreetFurnitureParams::KerbKind& kk : p.kerbKinds) kinds.push_back(Spaced{std::max(kk.every, Real(8)), {}});
     for (std::size_t ki = 0; ki < p.kerbKinds.size(); ++ki) {
         const StreetFurnitureParams::KerbKind& kk = p.kerbKinds[ki];
+        if (kk.atBusStops) {
+            // AT EACH BUS STOP (ADR-0485): on the stop's own kerb, level with it, `verge` out from the kerb line, facing the
+            // pavement (+Z from the kerb to the buildings), as the stop states it (ADR-0481) -- never marched
+            for (const FurnitureCity& fc : cities) {
+                if (!fc.model || !fc.model->built) continue;
+                for (const ModelBusLine& line : fc.model->busLines)
+                    for (const ModelBusStop& stop : line.stops) {
+                        if (!stop.street.valid()) continue;
+                        const RoadFrontage f = fc.model->frontageOn(stop.street, stop.station, stop.kerb);
+                        if (!f.valid()) continue;
+                        const Vec2 sp = f.on + f.towards * (f.section->carriagewayHalfWidth() + kk.verge);
+                        // (a stop keeps its spot clear: a street tree planted there gives way to it)
+                        constexpr Real kStopClear = 3.0;   // m: the post, the bench and room to stand. [~] An estimate.
+                        out.trees.erase(std::remove_if(out.trees.begin(), out.trees.end(),
+                                                       [&](const StreetTree& t) { return (Vec2(t.base.x, t.base.z) - sp).length() < kStopClear; }),
+                                        out.trees.end());
+                        out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), f.towards, static_cast<uint8_t>(KerbProp::kFirstDataKind + ki)});
+                        add(kinds[ki], sp, f.towards);
+                    }
+            }
+            continue;
+        }
         for (const StreetPiece& K : pieces) {
             if (!streetWithPavement(K) || (kk.mainOnly && K.klass == RoadClass::Local)) continue;
             const Real len = (K.b - K.a).length();

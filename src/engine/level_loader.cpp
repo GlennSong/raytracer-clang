@@ -8207,7 +8207,8 @@ bool LevelLoader::load(const std::string& path,
 #ifdef RT_ENABLE_SCRIPTING
             {
                 std::string err;
-                if (!engine::loadStreetProps(levelDir, streetProps, &err)) LOG_WARN << "[street] " << err;
+                // (a kind whose mesh() fails is left out and the others kept: still said, so it is never silently gone)
+                if (!engine::loadStreetProps(levelDir, streetProps, &err) || !err.empty()) LOG_WARN << "[street] " << err;
                 if (const std::string sp = resolveScriptPath("street_props.lua", levelDir); !sp.empty())
                     g_loadedScriptFiles.push_back(sp);
             }
@@ -8224,7 +8225,7 @@ bool LevelLoader::load(const std::string& path,
                 [&] {
                     engine::StreetFurnitureParams fp;
                     for (const engine::StreetPropKind& k : streetProps.kinds)
-                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly});
+                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly, k.atBusStops});
                     fp.controlsStated = modelFurniture;
 #ifdef RT_ROADS_LANES
                     if (modelFurniture) {

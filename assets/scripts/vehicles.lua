@@ -609,6 +609,7 @@ local function kit_car(spec, color)
     driver_seat = car.driver_seat,
     rear_hip = car.rear_hip,
     seats = car.seats,
+    seat_facing = car.seat_facing,   -- beside each seat, the way its rider faces (ADR-0485)
     doors = car.doors,
     bus_doors = #busDoors > 0 and busDoors or nil,
   }

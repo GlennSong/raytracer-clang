@@ -153,6 +153,7 @@ struct StreetFurnitureParams {
         Real verge = 0.55;
         Real junction = 6.0;
         bool mainOnly = false;
+        bool atBusStops = false;   // one at each bus stop of the roads' lines (ADR-0485), on the stop's kerb, `verge` out
     };
     std::vector<KerbKind> kerbKinds;
     // A key the same along one stated street run (the trees' "same street": LevelRoadModel::runKey), 0: none (the

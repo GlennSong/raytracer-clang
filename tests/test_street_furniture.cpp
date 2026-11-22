@@ -11,6 +11,7 @@
 
 #include "model_scene.h"
 #include "../src/engine/procgen/city/street_furniture.h"
+#include "../src/engine/scripting/street_props_spec.h"
 
 using namespace engine;
 
@@ -173,3 +174,24 @@ TEST_CASE(streets_are_planted_by_their_character) {
     CHECK(west < east / 3);
     CHECK(eastKinds.size() == 1);
 }
+
+#ifdef RT_ENABLE_SCRIPTING
+// THE KERB PROPS THAT ARE DATA (street_props.lua) all build: a kind whose mesh() fails is left out of the level with
+// only a warning, so every kind is checked here -- the bus stop (ADR-0485) once went missing that way (mesh.box takes
+// one table). The bus stop is placed at the stops, not marched.
+TEST_CASE(street_props_lua_builds_every_kind_and_the_bus_stop_stands_at_the_stops) {
+    engine::StreetPropsSpec spec;
+    std::string err;
+    CHECK(engine::loadStreetProps("assets/levels", spec, &err));
+    if (!err.empty()) std::printf("    %s\n", err.c_str());
+    CHECK(err.empty());
+    bool hydrant = false, busStop = false;
+    for (const engine::StreetPropKind& k : spec.kinds) {
+        CHECK(k.mesh && !k.mesh->indices.empty());
+        if (k.name == "hydrant") hydrant = !k.atBusStops;
+        if (k.name == "bus_stop") busStop = k.atBusStops;
+    }
+    CHECK(hydrant);
+    CHECK(busStop);
+}
+#endif

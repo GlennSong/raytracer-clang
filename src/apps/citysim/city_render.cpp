@@ -970,6 +970,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     nearSwap_.clear();
     carDriverSeat_.clear();
     carRearHip_.clear();
+    carPassengerSeats_.clear();
+    carPassengerFacing_.clear();
     carHasRear_.clear();
     carHasDriver_.clear();
     {
@@ -993,6 +995,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
             bool hasRear = false;
             bool hasDriver = false;
+            std::vector<Vec3> passengerSeats, passengerFacing;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
@@ -1033,6 +1036,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         driverSeat = recipe.driverSeat;
                         hasDriver = recipe.hasDriverSeat;
                         rearHip = recipe.rearHip;
+                        passengerSeats = recipe.seats;
+                        passengerFacing = recipe.seatFacing;
                         hasRear = recipe.hasRearHip;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
@@ -1121,6 +1126,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carOpenSeat_.push_back(openSeat ? 1 : 0);
                 carDriverSeat_.push_back(driverSeat);
                 carRearHip_.push_back(rearHip);
+                carPassengerSeats_.push_back(std::move(passengerSeats));
+                carPassengerFacing_.push_back(std::move(passengerFacing));
                 carHasRear_.push_back(hasRear ? 1 : 0);
                 carHasDriver_.push_back(hasDriver ? 1 : 0);
             }
@@ -1158,8 +1165,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // the player's driver, at a bus's seat height. Only built when some
         // slot publishes seats, so ordinary cities pay nothing.
         busDriverGroup_ = Entity{};
+        busRiderGroup_ = Entity{};
         bool anySeats = false;
         for (char hd : carHasDriver_) anySeats = anySeats || hd;
+        for (const std::vector<Vec3>& ps : carPassengerSeats_) anySeats = anySeats || !ps.empty();   // (a bus's riders)
         if (assets && anySeats) {
             auto person = [&](Vec3 shirt, Vec3 trousers, Vec3 skin, Real arms,
                               const std::string& key) {
@@ -1185,6 +1194,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // navy on the navy moquette vanished into the seat from the kerb.
             busDriverGroup_ = person(Vec3(0.66, 0.76, 0.90), Vec3(0.10, 0.12, 0.20),
                                      Vec3(0.72, 0.54, 0.42), 72.0, "city:busdriver");
+            // ...and the riders (ADR-0485): hands in the lap, in everyday colours
+            busRiderGroup_ = person(Vec3(0.62, 0.30, 0.26), Vec3(0.22, 0.24, 0.30), Vec3(0.80, 0.62, 0.50), 20.0, "city:busrider");
         }
         // RIDERS ASTRIDE (a motorcycle, a moped): a slot whose seat has bars draws its own rider, posed by the
         // player's seat rule (seatedPose: hands on the grips, feet on the pegs, the seat's lean) -- the same body the
@@ -1828,6 +1839,195 @@ void CityRenderSystem::syncCarLamps(World& world) {
     copyMidBodies(world);
 }
 
+// THE BUSES' BOARDS (ADR-0485; the boards themselves are ADR-0351's, engine/procgen/city/shop_signs.h): amber LED dots on
+// a black board, lit day and night. Outside, the line's number and which way round its loop it runs, CLOCKWISE or
+// ANTICLOCKWISE as a map shows it (a loop has no end to name); inside, behind the cab, NEXT and the street of the stop
+// it is going to. The labels are the road file's lines and their stops' names (a stop's " 2" for a second stop on the
+// same street dropped: the street is what a rider reads).
+void CityRenderSystem::makeBusBoards(engine::FrameContext& ctx) {
+    busBoardsTried_ = true;
+    const engine::Font* font = engine::signFont();
+    const engine::RoadModel* model = sim_.roads();
+    if (!font || !assets_ || !model || model->busLines.empty()) return;
+    std::vector<std::string> labels;
+    std::map<std::string, int> rowOf;
+    const auto row = [&](const std::string& l) {
+        const auto it = rowOf.find(l);
+        if (it != rowOf.end()) return it->second;
+        labels.push_back(l);
+        return rowOf[l] = static_cast<int>(labels.size()) - 1;
+    };
+    const auto upper = [](std::string t) {
+        for (char& c : t) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return t;
+    };
+    busLineRow_.assign(model->busLines.size(), -1);
+    busNextRow_.assign(model->busLines.size(), {});
+    for (std::size_t L = 0; L < model->busLines.size(); ++L) {
+        const engine::ModelBusLine& line = model->busLines[L];
+        Real a2 = 0;   // the loop's turn, from its stops (x east, z down the map)
+        for (std::size_t k = 0; k < line.stops.size(); ++k) {
+            const Vec2 p = model->busStopLane(line.stops[k]).at, q = model->busStopLane(line.stops[(k + 1) % line.stops.size()]).at;
+            a2 += p.x * q.y - q.x * p.y;
+        }
+        busLineRow_[L] = row(std::to_string(L + 1) + "|" + (a2 > 0 ? "CLOCKWISE" : "ANTICLOCKWISE"));
+        for (const engine::ModelBusStop& stop : line.stops) {
+            std::string name = stop.name;
+            const std::size_t sp = name.find_last_of(' ');
+            if (sp != std::string::npos && sp + 1 < name.size() &&
+                name.find_first_not_of("0123456789", sp + 1) == std::string::npos)
+                name.resize(sp);
+            busNextRow_[L].push_back(name.empty() ? busLineRow_[L] : row("NEXT|" + upper(name)));
+        }
+    }
+    engine::TextImage day, lit;
+    engine::busSignImages(*font, labels, day, lit);
+    const engine::TextureHandle dayTex = ctx.renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
+    const engine::TextureHandle litTex = ctx.renderer.uploadTexture(lit.w, lit.h, 4, lit.rgba.data());
+    for (int k = 0; k < static_cast<int>(labels.size()); ++k) {
+        InstanceGroup g;
+        g.mesh = assets_->acquireMesh(engine::busSignMesh(k, static_cast<int>(labels.size())), "city:busboard" + std::to_string(k));
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.35f;
+        g.material.albedoMap = dayTex;
+        g.material.emissiveMap = litTex;
+        g.material.emission = Vec3(1, 1, 1) * 2.4;
+        g.material.flags |= engine::RenderMaterial::FLAG_TWO_SIDED;   // (the quad's winding faces in; seen from the saloon too)
+        g.renderLayer = engine::LayerSim;
+        g.drawClass = engine::DrawClass::Furniture;
+        const Entity e = ctx.world.create();
+        ctx.world.add<InstanceGroup>(e, g);
+        busBoardGroups_.push_back(e);
+    }
+    LOG_INFO << "[citysim] bus boards: " << labels.size() << " labels on " << model->busLines.size() << " lines";
+}
+
+// Each bus's boards where its body's markers put them (the kit bus: dest_sign at the front, dest_sign_rear,
+// dest_sign_side in the kerb-side pane, stop_display behind the cab; each board faces +Z, so the back one is turned
+// round, the side one turned to face out, and the two inside ones are half the front's width), named for the renderer's
+// interpolation like the bodies.
+// Where a car entity's body is DRAWN this bake (its instance in its slot's group, by its draw key; ADR-0485: what the
+// boards and the riders ride, as the cabin and the glass do). Null: not drawn.
+const Mat4* CityRenderSystem::drawnBody(World& world, int slot, int key) const {
+    if (slot < 0 || slot >= static_cast<int>(carGroups_.size()) || slot >= static_cast<int>(carAgentIds_.size())) return nullptr;
+    const InstanceGroup* g = world.get<InstanceGroup>(carGroups_[static_cast<std::size_t>(slot)]);
+    if (!g) return nullptr;
+    const std::vector<int>& ids = carAgentIds_[static_cast<std::size_t>(slot)];
+    for (std::size_t k = 0; k < ids.size() && k < g->transforms.size(); ++k)
+        if (ids[k] == key) return &g->transforms[k];
+    return nullptr;
+}
+
+void CityRenderSystem::syncBusBoards(World& world) {
+    // `buses?` (ADR-0485): every bus, its line and stop and where it is, and the riders' counts
+    if (sim_.buses().any()) {
+        std::vector<std::pair<uint32_t, std::string>> rows;
+        world.each<CityBusRuns, CityCarBody, engine::Transform>([&](Entity e, CityBusRuns& runs, CityCarBody& body, engine::Transform& t) {
+            char b[192];
+            const Vec2 h = carHeading(t);
+            std::snprintf(b, sizeof b, " | bus %u line %u %s stop %u at %.1f %.1f %.1f heading %.2f %.2f aboard %d", body.id, runs.line + 1,
+                          runs.standing ? "standing at" : "going to", runs.stop + 1, t.position.x, t.position.y, t.position.z, h.x, h.y,
+                          sim_.buses().aboardOn(e));
+            rows.push_back({body.id, b});
+        });
+        std::sort(rows.begin(), rows.end());
+        const BusRiders::Counts& rc = sim_.buses().counts();
+        std::string out = std::to_string(rows.size()) + " buses; riders: " + std::to_string(rc.waits) + " waits, " +
+                          std::to_string(rc.boardings) + " boardings, " + std::to_string(rc.alightings) + " got off";
+        out += "; " + std::to_string(busBoardsDrawn_) + " boards drawn, " + std::to_string(busRidersDrawn_) + " riders drawn" +
+               (busRiderGroup_.valid() ? "" : " (no rider group: no slot has seats)") + busRiderNote_;
+        for (const std::pair<uint32_t, std::string>& r : rows) out += r.second;
+        answers_.set("buses?", out);
+    }
+    if (busBoardGroups_.empty()) return;
+    std::vector<InstanceGroup*> groups;
+    for (Entity e : busBoardGroups_) {
+        InstanceGroup* g = world.get<InstanceGroup>(e);
+        if (g) g->beginStep();
+        groups.push_back(g);
+    }
+    world.each<CityBusRuns, CityCarBody, CityCarLink>([&](Entity, CityBusRuns& runs, CityCarBody& body, CityCarLink& link) {
+        const int v = parkedVariant(body.slot, body.type);
+        if (v < 0 || v >= static_cast<int>(carLights_.size()) || runs.line >= busLineRow_.size()) return;
+        const Mat4* drawn = drawnBody(world, v, entityCarDrawKey(body, link));
+        if (!drawn) return;
+        const std::vector<int>& next = busNextRow_[runs.line];
+        const uint32_t ahead = runs.standing && !next.empty() ? (runs.stop + 1) % static_cast<uint32_t>(next.size()) : runs.stop;
+        const int lineRow = busLineRow_[runs.line];
+        const int nextRow = ahead < next.size() ? next[ahead] : lineRow;
+        uint64_t b = 0;
+        for (const LampMarker& m : carLights_[static_cast<std::size_t>(v)]) {
+            const Mat4 at = Mat4::translate(m.pos.x, m.pos.y, m.pos.z);
+            Mat4 local;
+            int r = lineRow;
+            if (m.name == "dest_sign") local = at;
+            else if (m.name == "dest_sign_rear") local = at * Mat4::rotateY(engine::PI);
+            else if (m.name == "dest_sign_side") local = at * Mat4::rotateY(m.pos.x >= 0 ? engine::PI * 0.5 : -engine::PI * 0.5) * Mat4::scale(0.5, 1, 1);
+            else if (m.name == "stop_display") {
+                local = at * Mat4::rotateY(engine::PI) * Mat4::scale(0.5, 1, 1);
+                r = nextRow;
+            } else
+                continue;
+            InstanceGroup* g = r >= 0 && r < static_cast<int>(groups.size()) ? groups[static_cast<std::size_t>(r)] : nullptr;
+            if (g) g->push(*drawn * local, (uint64_t(0x6B) << 56) | (uint64_t(body.id) << 8) | b);
+            ++b;
+        }
+    });
+    // THE RIDERS ABOARD (ADR-0485): one seated figure on each seat, in order, for each rider the bus carries
+    if (InstanceGroup* riders = busRiderGroup_.valid() ? world.get<InstanceGroup>(busRiderGroup_) : nullptr) {
+        riders->beginStep();
+        world.each<CityBusRuns, CityCarBody, CityCarLink>([&](Entity e, CityBusRuns&, CityCarBody& body, CityCarLink& link) {
+            const int v = parkedVariant(body.slot, body.type);
+            if (v < 0 || v >= static_cast<int>(carPassengerSeats_.size())) return;
+            const Mat4* drawn = drawnBody(world, v, entityCarDrawKey(body, link));
+            if (!drawn) return;
+            const std::vector<Vec3>& seats = carPassengerSeats_[static_cast<std::size_t>(v)];
+            const std::vector<Vec3>& facing = carPassengerFacing_[static_cast<std::size_t>(v)];
+            const int n = std::min(sim_.buses().aboardOn(e), static_cast<int>(seats.size()));
+            if (n > 0 && busRiderNote_.empty()) {   // (`buses?`: the first seated bus's seats, as placed)
+                char b[400];
+                const Vec3 o = drawn->transformPoint(Vec3(0, 0, 0)), fw = drawn->transformPoint(Vec3(0, 0, 1)) - o;
+                const Vec3 p0 = drawn->transformPoint(seats[0]);
+                std::snprintf(b, sizeof b, "; seats of bus %u (slot %d, %zu seats, %zu facings): seat0 %.2f %.2f %.2f facing %.2f %.2f %.2f; "
+                              "body at %.1f %.1f %.1f forward %.2f %.2f %.2f; seat0 drawn at %.1f %.1f %.1f",
+                              body.id, v, seats.size(), facing.size(), seats[0].x, seats[0].y, seats[0].z,
+                              facing.empty() ? 0.0 : facing[0].x, facing.empty() ? 0.0 : facing[0].y, facing.empty() ? 0.0 : facing[0].z,
+                              o.x, o.y, o.z, fw.x, fw.y, fw.z, p0.x, p0.y, p0.z);
+                busRiderNote_ = b;
+            }
+            // (riders fill a bus from its middle out, as people do: the seats nearest the middle first -- and the front
+            // rows, over the wheel arch and by the door, last)
+            std::vector<int> order(seats.size());
+            for (std::size_t i = 0; i < order.size(); ++i) order[i] = static_cast<int>(i);
+            std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+                return std::fabs(seats[static_cast<std::size_t>(a)].z) < std::fabs(seats[static_cast<std::size_t>(b)].z);
+            });
+            for (int i = 0; i < n; ++i) {
+                const std::size_t k = static_cast<std::size_t>(order[static_cast<std::size_t>(i)]);
+                const Vec3& s = seats[k];
+                // turned to face the way its seat faces (a wall bench: the aisle); the figure faces +Z
+                const Vec3 f = k < facing.size() ? facing[k] : Vec3(0, 0, 1);
+                const Quat turn = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(f.x, f.z));
+                riders->push(*drawn * Mat4::trs(s, turn, Vec3(1, 1, 1)),
+                             (uint64_t(0x6C) << 56) | (uint64_t(body.id) << 12) | static_cast<uint64_t>(k));
+            }
+        });
+        riders->boundsCenter = Vec3(0, 0, 0);
+        riders->boundsRadius = 6000.0;
+        busRidersDrawn_ = riders->transforms.size();
+    }
+    // (a group's cull sphere would otherwise be its transforms' at the last refresh, or none: the boards travel the
+    // town with their buses, so the town's)
+    std::size_t boards = 0;
+    for (InstanceGroup* g : groups)
+        if (g) {
+            g->boundsCenter = Vec3(0, 0, 0);
+            g->boundsRadius = 6000.0;
+            boards += g->transforms.size();
+        }
+    busBoardsDrawn_ = boards;
+}
+
 // The mid-range groups draw the same cars as the near ones: their poses, ids (the renderer's interpolation) and lamp
 // masks, copied after the bake is complete (the mask is written last, syncCarLamps).
 void CityRenderSystem::copyMidBodies(World& world) {
@@ -2308,6 +2508,7 @@ void CityRenderSystem::syncGroups(World& world) {
     sec(4);
     // Car lamps (ADR-0342): each drawn car's lit lamps onto its body instance, and the bus signs. Always baked.
     syncCarLamps(world);
+    syncBusBoards(world);
     sec(5);
     if (syncStats && ++secCalls % 300 == 0) {
         LOG_INFO << "[stats] group sync ms per bake: agents " << secMs[0] / secCalls << ", parked cars " << secMs[1] / secCalls
@@ -2628,7 +2829,7 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     onJitter_ = ctx.events.listen<engine::JitterRequest>([this](const engine::JitterRequest& r) {
         jitterRequests_.push_back(r);
     });
-    for (const char* q : {"traffic?", "opensigns?", "findplace?"})
+    for (const char* q : {"traffic?", "opensigns?", "findplace?", "buses?"})
         answers_.bind(ctx.commands, "CityRenderSystem", q);
     answers_.bind(ctx.commands, "CityRenderSystem", "jitter?", "nothing recorded (ask with `jitter`)");
     answers_.bind(ctx.commands, "CityRenderSystem", "pin?", "none followed");
@@ -3052,6 +3253,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
+    if (built_ && !busBoardsTried_ && sim_.buses().any()) makeBusBoards(ctx);
     ctx.view.lights.channel(engine::LightChannel::Traffic) = trafficLights_;   // (ADR-0362; picked by LightSystem)
     // (The parked fire engines' ladders went with the fire engines, which were rows of the old driving's vehicle list:
     // ADR-0461.)

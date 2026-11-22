@@ -172,7 +172,15 @@ void emitSteeringWheel(RenderMesh& out, const Vec3& hub, const InteriorParams& p
 
 RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
                             Vec3* driverSgrpOut, std::vector<Vec3>* seatsOut,
-                            std::vector<Vec3>* doorsOut) {
+                            std::vector<Vec3>* doorsOut, std::vector<Vec3>* facingOut) {
+    // (the way a rider on a seat faces: against its frame's aft axis, flat)
+    const auto faces = [&](const Scope& s) {
+        if (!facingOut) return;
+        Vec3 f = s.axis[kAft] * Real(-1);
+        f.y = 0;
+        const Real l = f.length();
+        facingOut->push_back(l > Real(1e-6) ? f * (Real(1) / l) : Vec3(0, 0, 1));
+    };
     RenderMesh out;
     const Real len = cabin.frontZ - cabin.rearZ;
     const Real H = cabin.roofY - cabin.floorY;
@@ -255,6 +263,7 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
                 Vec3 hip;
                 emitSeat(bm, insetScope(s, Real(0.02)), bench, &hip);
                 if (seatsOut) seatsOut->push_back(hip);
+                faces(s);
             }
         }
         // a pole every metre down both edges of the standing aisle
@@ -273,6 +282,7 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
                 Vec3 hip;
                 emitSeat(bm, insetScope(seat, Real(0.02)), p, &hip);
                 if (seatsOut) seatsOut->push_back(hip);
+                faces(seat);
             }
         }
         // Stanchions at the aisle edges every other row, floor to ceiling.
@@ -302,6 +312,7 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
             Vec3 hip;
             emitSeat(bm, insetScope(seat, Real(0.02)), p, &hip);
             if (seatsOut) seatsOut->push_back(hip);
+            faces(seat);
         }
     }
     // Ceiling grab rails along both sides of the aisle.
@@ -325,8 +336,8 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
 
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
                             Vec3* sgrpOut, std::vector<Vec3>* seatsOut,
-                            std::vector<Vec3>* doorsOut, std::vector<Vec3>* rearHipOut) {
-    if (p.rows <= 0) return buildBusInterior(cabin, p, sgrpOut, seatsOut, doorsOut);
+                            std::vector<Vec3>* doorsOut, std::vector<Vec3>* rearHipOut, std::vector<Vec3>* seatFacingOut) {
+    if (p.rows <= 0) return buildBusInterior(cabin, p, sgrpOut, seatsOut, doorsOut, seatFacingOut);
     RenderMesh out;
     const Real cabinLen = cabin.frontZ - cabin.rearZ;
     const Real cabinH = cabin.roofY - cabin.floorY;

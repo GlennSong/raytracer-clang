@@ -979,13 +979,22 @@ int main(int argc, char** argv) {
         busClass.laneChanges = false;
         for (int i = 3; i < argc; ++i)
             if (std::strcmp(argv[i], "--lane-changes") == 0) busClass.laneChanges = true;
+        bool where = false;
+        for (int i = 3; i < argc; ++i)
+            if (std::strcmp(argv[i], "--where") == 0) where = true;
         if (busClass.tags == 0) { std::fprintf(stderr, "lanes: the road model knows no vehicle tag \"%s\"\n", bv.tag.c_str()); return 1; }
         const BusPlan plan = planBusLines(model, busClass, bp);
         std::printf("bus lines for %s: %d hubs, %zu lines; coverage %.1f%% of the sidewalk streets within %.0f m of a stop, street share %.1f%%\n",
                     roadFile.c_str(), plan.hubs, plan.lines.size(), plan.coverage * 100.0, bp.reach, plan.streetShare * 100.0);
         for (const ModelBusLine& L : plan.lines) {
             std::printf("  %s \"%s\": %zu stops:", L.id.c_str(), L.name.c_str(), L.stops.size());
-            for (const ModelBusStop& st : L.stops) std::printf(" %s (%s)", st.id.c_str(), st.name.c_str());
+            for (const ModelBusStop& st : L.stops) {
+                std::printf(" %s (%s)", st.id.c_str(), st.name.c_str());
+                if (where) {   // --where: where the bus stands there (x, z), to frame a shot
+                    const KerbLanePlace at = model.busStopLane(st);
+                    if (at.valid()) std::printf(" at %.1f %.1f", at.at.x, at.at.y);
+                }
+            }
             std::printf("\n");
         }
         for (const std::string& n : plan.notes) std::printf("  note: %s\n", n.c_str());
@@ -1288,7 +1297,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
-                             "       lanes_tool buslines <level.json | graph.json> [--write] [--vehicle tag:radius:width[:length] ...] [--lines N] [--spacing M] [--hub-every M] [--lane-changes]   (the town's bus lines laid over the road model, ADR-0482)\n"
+                             "       lanes_tool buslines <level.json | graph.json> [--write] [--vehicle tag:radius:width[:length] ...] [--lines N] [--spacing M] [--hub-every M] [--lane-changes] [--where]   (the town's bus lines laid over the road model, ADR-0482)\n"
                              "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"

@@ -24296,3 +24296,25 @@ Words:
 **Not yet:** riders are out of sight while aboard (step 5 draws them, the stops and the sign); a change of bus; a far rider's clock does not know a full bus; the island's intercity lines carry nobody.
 
 **Suites, all with RT_TEST_FILTER:** brain_tests 24/24, driving_tests 200/200, run_tests all pass. level_river_town_crowd passes. level_brain_crowd is unchanged. level_brain_lab shows the same 14 failures it had at HEAD before this step (not this step's). The near crowd fails the same four checks with the same state hash as before (#306 sweep bug 2, left for later).
+
+## ADR-0485 — A bus stop you can see, the buses' boards back on the new buses, and riders seated aboard (buses plan, step 5)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: each stop of the road file's bus lines now has a post with the stop's flag and a bench beside it, on the stop's own kerb. Each bus shows its line again: the line's number and which way round its loop it runs on the front, back and side boards, and NEXT and the next stop's street on the board inside, behind the cab. A new question, `buses?`, says where every bus is.
+
+Words:
+- **Kerb prop kind:** an entry in `street_props.lua` (ADR-0354) that the street-furniture planner places and the loader draws, collides and breaks. The hydrant is one.
+- **Board:** the amber LED dot board of ADR-0351 (engine/procgen/city/shop_signs.h). One atlas row per label, drawn as an instance group per label.
+- **Marker:** a named point the bus model carries (vehicle_kit.lua): `dest_sign` at the front, `dest_sign_rear`, `dest_sign_side` in the kerb-side pane, `stop_display` behind the cab.
+
+**What changed:**
+- **The stop is data:** `street_props.lua` has a `bus_stop` kind with the new key `at_bus_stops = true`. The planner (`planStreetFurniture`) does not march such a kind along the kerbs. It stands one at each stop the road model's lines state, on that stop's kerb, `verge` metres out from the kerb line, facing the pavement. A stop keeps its spot clear: a street tree within 3 m of it gives way. It is a body like the others (a car stops at it; it does not break). river_town has 38, one per stop.
+- **A kerb prop kind that fails to build is now said:** a kind whose `mesh()` fails was left out with only an error string nobody printed. That is how the first bus stop went missing (`mesh.box` takes one table). The loader now warns. A run_tests case (`street_props_lua_builds_every_kind_and_the_bus_stop_stands_at_the_stops`) builds every kind.
+- **The boards:** `makeBusBoards` (once there are buses) makes a label per line and per stop's street, using the engine's sign font and board pieces, which outlived ADR-0460's deletion of the old buses' use of them. The line's label is its number and CLOCKWISE or ANTICLOCKWISE as a map shows it; a stop's is NEXT and its street, without the " 2" a second stop on a street carries. `syncBusBoards` sets each bus's boards on its body's markers every bake. The board groups get a town-wide cull sphere: without one they were culled away (the first try showed only the black backing).
+- **`buses?`** (control channel): how many buses, the riders' counts, the boards drawn, then each bus's number, line, the stop it is going to or standing at, where it is and its heading. `lanes_tool buslines --where` prints where each stop's bus stands, to frame a shot.
+
+**Not yet (step 5's second half, for Glenn to look at):** riders drawn seated in the saloon (the seat positions are inside the cabin builder, `mesh.cabin_interior`, and need to come out); the player boarding a bus on the new driving.
+
+**Seen:** ~/Pictures/Raytracer/buses/ (stop_top, stop_yaw0: the stop; bus1_yaw0: CLOCKWISE on the front; riders_s1_y180: NEXT ROWAN PARKWAY inside and 3 CLOCKWISE on the side; riders_s-1_y0: the riders and their shins).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1489/1489 (with the new street-props case and the regenerated web/engine/commands.json). level_river_town_crowd and the furniture gate pass. level_brain_crowd is unchanged. level_river_town_streets_are_drivable_grades fails as it did at HEAD before these steps.

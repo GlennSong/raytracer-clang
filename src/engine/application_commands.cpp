@@ -804,6 +804,10 @@ void Application::registerCityVerbs() {
                      "Shops' OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.",
                      unanswered("a CityRenderSystem: play mode on a city level"));
 
+    commandTable.add("buses?", "buses?",
+                     "The buses on the road file's lines (ADR-0485): each bus's number, line, the stop it is going to (or standing at), where it is, and the riders' counts.",
+                     unanswered("a CityRenderSystem: play mode on a city level with bus lines"));
+
     // the trains (citysim train_system): lines, stops, every train's place, speed and doors, and whether you are aboard
     commandTable.add("trains?", "trains?",
                      "The trains: lines, stops, every train's place, speed and doors, and whether you are aboard.",

@@ -289,10 +289,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(mostOnRoad == 126);
         CHECK(mostOnRoadAt == 11);
         CHECK(b.counts().tripsBegun == 312u);
-        CHECK(b.counts().parkedReports == 223u);
+        CHECK(b.counts().parkedReports == 225u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 658u);
+        CHECK(b.machine()->counts().arrivals == 660u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -316,7 +316,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x96738d598af1e6e2 -> 0x84834e8b10e27894 (ADR-0484: people ride the buses, and the fleet is sized by the
         // measured traffic factor): most on the road 120 -> 126, trips 316 -> 312, parked 229 -> 223, arrivals 665 -> 658
         // (a bus trip is a trip the brain counts as one arrival, after a wait and a ride, where a drive was before)
-        CHECK(hash == 0x84834e8b10e27894ull);
+        // 0x84834e8b10e27894 -> 0xf5c3d679818d2ee3 (ADR-0485: a post and a bench at each of the 38 stops, and the
+        // street trees within 3 m of one gone, so the walkers' obstacles moved): parked 223 -> 225, arrivals 658 -> 660;
+        // the riders' counts are the same
+        CHECK(hash == 0xf5c3d679818d2ee3ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);

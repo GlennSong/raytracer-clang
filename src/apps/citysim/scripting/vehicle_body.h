@@ -78,6 +78,7 @@ struct CarBodyRecipe {
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;
+    std::vector<Vec3> seatFacing;   // beside each of `seats`: the way its rider faces (unit; empty: forward, +Z) (ADR-0485)
     std::vector<Vec3> doors;   // floor points a passenger steps off from
     // A BUS's DOOR LEAVES (ADR-0356): drawn apart from the body, each slid by `slide` (body frame) as the bus stands at
     // its stop with its doors open -- its painted leaf and its glass

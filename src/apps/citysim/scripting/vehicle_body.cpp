@@ -277,6 +277,7 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_pop(L, 1);
         };
         readPoints("seats", body.seats);
+        readPoints("seat_facing", body.seatFacing);
         readPoints("doors", body.doors);
         // bus_doors = { { body = Mesh, glass = Mesh, slide = {x,y,z} }, ... } (ADR-0356)
         lua_getfield(L, rec, "bus_doors");

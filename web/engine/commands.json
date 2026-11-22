@@ -42,6 +42,12 @@
   "usage": "bundle?"
  },
  {
+  "name": "buses?",
+  "owner": "engine",
+  "summary": "The buses on the road file's lines (ADR-0485): each bus's number, line, the stop it is going to (or standing at), where it is, and the riders' counts.",
+  "usage": "buses?"
+ },
+ {
   "name": "camera",
   "owner": "engine",
   "summary": "Put the free camera at a pose (detaches it from the player, even in play mode).",

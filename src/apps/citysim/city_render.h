@@ -449,6 +449,11 @@ private:
     // glass, cabin, lamps, a rider... their own small numbers)
     static uint64_t movingId(const Agent& a, uint32_t part) { return (static_cast<uint64_t>(a.uid) << 8) | part; }
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
+    // THE BUSES' BOARDS (ADR-0485): the line on the front, back and side boards, NEXT and the next stop's street inside;
+    // made once there are buses (one atlas row per label), set on each bus's board markers every bake
+    void makeBusBoards(engine::FrameContext& ctx);
+    void syncBusBoards(engine::World& world);
+    const engine::Mat4* drawnBody(engine::World& world, int slot, int key) const;
     // A walker's drawn pose (the sim's walker pose, city_poses.h).
     engine::Mat4 agentPose(const Agent& a) const;
     // Where a placed signal pole stands and which way its head/arm point (the loader's StreetFurniture).
@@ -586,6 +591,15 @@ private:
     // or a synthesized default set for C++ fallback cars. An empty entry => that
     // variant draws no lamps.
     std::vector<std::vector<LampMarker>> carLights_;
+    // THE BUSES' BOARDS (ADR-0485): one instance group per label; per line its label's row, per line and stop the
+    // NEXT row; whether they were made
+    std::vector<engine::Entity> busBoardGroups_;
+    std::vector<int> busLineRow_;
+    std::vector<std::vector<int>> busNextRow_;
+    bool busBoardsTried_ = false;
+    std::size_t busBoardsDrawn_ = 0;   // boards set on the buses at the last bake (`buses?`)
+    std::size_t busRidersDrawn_ = 0;   // riders seated in the buses at the last bake (`buses?`)
+    std::string busRiderNote_;         // the first seated bus's seats as placed (`buses?`)
     // Wheel-less bodies + wheel layouts, one per car variant (indexed like
     // carGroups_). Populated only from Lua fleet recipes that publish a separate
     // wheelset; see carChassisMesh() / carWheels().
@@ -620,6 +634,11 @@ private:
     std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
+    // THE RIDERS ABOARD A BUS (ADR-0485): seated figures, one on each of its seats in order for each rider aboard
+    // (BusRiders::aboardOn); per slot, its recipe's passenger seats (hip points, body frame)
+    engine::Entity busRiderGroup_{};
+    std::vector<std::vector<engine::Vec3>> carPassengerSeats_;
+    std::vector<std::vector<engine::Vec3>> carPassengerFacing_;   // beside each seat: the way its rider faces
     std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
     // THE DRAW CACHE (bytes per agent; Glenn: "Why do you keep putting off this work?"): what the drawers keep per
     // drawn thing -- a car entity's speed for the brake-light test (by entityCarKey), a far walker's ground height --

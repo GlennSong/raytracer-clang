@@ -88,6 +88,12 @@ bool BusRiders::riding(int agent) const {
     return false;
 }
 
+int BusRiders::aboardOn(engine::Entity bus) const {
+    int n = 0;
+    for (const Rider& r : riders_) n += r.onBoard && r.bus == bus ? 1 : 0;
+    return n;
+}
+
 std::vector<BusRiders::Event> BusRiders::tick(std::vector<Agent>& agents) {
     std::vector<Event> out;
     if (!world_ || riders_.empty()) return out;

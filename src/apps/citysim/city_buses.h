@@ -47,6 +47,8 @@ public:
     void cancel(int agent, std::vector<Agent>& agents);
     // Waiting or aboard?
     bool riding(int agent) const;
+    // How many are aboard bus `bus` (ADR-0485: one drawn on each of its seats, in order)
+    int aboardOn(engine::Entity bus) const;
 
     // WHAT A TICK DID: an agent got on (boarded) or off (not boarded), in the order it happened.
     struct Event {
