@@ -1158,12 +1158,16 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // 20 at minute 12 and in 113 the same): the lights' phases moved, so every driver's day did. Contacts 7 -> 0, hits on
     // parked cars 1 -> 0, on walkers 5 -> 0, on other things 14 -> 0. STILL FAILING, not loosened: the longest off its
     // lane 18.7 s -> 5.6 s (car 191, 0.94 m off), against kOffLaneKnownWorst's 5 s.
-    CHECK(mostNear == 20);
+    // And again (ADR-0480, the sweep's bugs, 3: a car following another along a split's stretch can never be put before
+    // it) from 20 at minute 12, in 113, out 82, 0x73ed4bc5b6d8b7fd to 18 at minute 12, in 115, out 85,
+    // 0x53bbbe48fe67229c. Contacts and every kind of hit still 0; the longest off its lane the same (car 191, 5.6 s: the
+    // pursuit's 4 m look-ahead cutting a 7 m turn as it stops in it, left as it is by Glenn's call).
+    CHECK(mostNear == 18);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 113u);
-    CHECK(c.intoLane == 82u);
+    CHECK(c.intoPhysics == 115u);
+    CHECK(c.intoLane == 85u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x73ed4bc5b6d8b7fdull);
+    CHECK(hash == 0x53bbbe48fe67229cull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

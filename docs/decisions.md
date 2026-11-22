@@ -24115,3 +24115,25 @@ Words:
 **Found red, and red at HEAD too (checked by building HEAD's two driving files):** `level_brain_lab_six_residents_in_three_households` (1 check: Fay's walk 4.6 min is now 4.8) and `level_brain_lab_whoever_reaches_the_household_car_first_takes_it` (13 checks); `level_river_town_streets_are_drivable_grades` (the steepest grade is over the 0.70 ratchet). None of these reads the signals. Not fixed here.
 
 **Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, each failing only its known bug (above); run_tests 1483/1483.
+
+### The sweep's bugs, 3 — a car following another along a split's stretch is never put before it (brain_crowd's ring)
+
+What it does: two connectors that leave one lane share a stretch before they part (a **split**; ADR-0400). On that stretch the car behind follows the car ahead, whichever connector each takes (`carAhead`, traffic_state.h, issue #283). The resolver that settles who goes first at each crossing point now knows that too. A car queued behind another on a split's stretch can never be put before it further on.
+
+Words:
+- **Resolver:** `ConflictResolver` (conflict.h). Once a tick it settles who goes first wherever two announced cars meet. A loop in its answers is a **ring**, and it breaks a ring at one of its answers.
+- **Behind arrow:** a pair (the car ahead, the car behind it) handed to the resolver. No answer may turn it round, so a ring through it is broken at an answer, never through the queue.
+
+**The ring:** brain_crowd's one ring, from minute 11 to the end, was two cars at junction 7. Car 102 (far turn from the south, connector 1753) and car 136 (straight on from the south, connector 1752) left the same lane; the two connectors share their first 50 m and cross 60 m further on. Car 102 was ahead and waited inside the junction to give way at that crossing to car 136, which stood behind it on the shared stretch. The behind arrows came only from each path's own list of cars, and the two cars were on different paths, so the resolver never saw that 136 could not get there first. Car 109, the longest stand (1,247.6 s), was waiting for car 102.
+
+**What changed** (`Driving`'s plan step, driving.cpp): after the arrows from each path's list, each driven car's `carAhead` along its own path and that path's split stretches gives one more arrow (that car ahead, this car), unless it is already listed. The car-following code and the resolver now read "the car ahead" from one definition.
+
+**Numbers, old -> new:**
+- **brain_crowd** (re-pinned): rings 1 -> **0**; the longest stand 1,247.6 s (car 109) -> 685.6 s (car 68); trips 315 -> 321; parked 237 -> 257; arrivals 476 -> 490; minutes with 50 or more on the road 16 -> 14 (the most the same, 89 at minute 10); away from a kerb end 2.06% -> 2.31%; hash 0xd88b08b351744711 -> 0x108c0a6b2babd46b. Its ring check passes for the first time since the sweep.
+- **Car 68's 685.6 s is not a ring.** It stands on junction 7's north arm, and each green it loses to something else: a give-way to car 169, a walker on the crosswalk ahead, no room beyond behind car 169. Then the light goes red. A busy junction's throughput; not chased here.
+- **The near crowd** (re-pinned): the most near 20 -> 18 (still minute 12); in 113 -> 115; out 82 -> 85; hash 0x73ed4bc5b6d8b7fd -> 0x53bbbe48fe67229c. Contacts and every kind of hit still 0. The off-lane check still fails the same way (car 191, 5.6 s; bug 2, left by Glenn's call: the pursuit's 4 m look-ahead cuts a 7 m turn).
+- **river_town's crowd:** unchanged, hash 0x12277ea4937a87e4.
+
+**Not added:** a driving unit test on a lab scene with a split; brain_crowd's ring check is what covers it.
+
+**Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (passes in full for the first time since the sweep); `near_tier_in_the_crowd_follows_the_player` fails only its off-lane check (bug 2, left); run_tests 1483/1483.

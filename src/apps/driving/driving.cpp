@@ -532,6 +532,22 @@ void Driving::announce() {
             if (list[k].car != list[k + 1].car && list[k].why != OnPath::Beside && list[k + 1].why != OnPath::Beside)
                 behind_.push_back({list[k + 1].car.index, list[k].car.index});
     }
+    // ... and a car following another along a split's stretch (two paths leaving one lane: the car behind follows the car
+    // ahead, whichever path each takes, traffic_state.h carAhead) can never go before it either. Without this arrow a car
+    // ahead on one path could be told to give way, further on, to the car queued behind it on the other: brain_crowd's
+    // car 102 waited inside junction 7 for car 136, which stood behind it, from minute 11 to the end.
+    {
+        std::vector<std::pair<uint64_t, uint64_t>> onOnePath = behind_;
+        std::sort(onOnePath.begin(), onOnePath.end());
+        const std::vector<engine::PathId> noPathsAhead;
+        for (const Car& c : cars_) {
+            if (!c.driven || !c.path.valid() || c.path.index >= roads_->paths.size()) continue;
+            const Neighbour n = carAhead(*roads_, cars_, pathLists_, c.id, noPathsAhead, kNever);
+            if (!n.found()) continue;
+            const std::pair<uint64_t, uint64_t> arrow{n.car.index, c.id.index};
+            if (!std::binary_search(onOnePath.begin(), onOnePath.end(), arrow)) behind_.push_back(arrow);
+        }
+    }
     resolver_.study(*roads_, rightOfWay_, board_, behind_, clockSeconds_);
     addCounts(conflictTotals_, resolver_.counts());
 }

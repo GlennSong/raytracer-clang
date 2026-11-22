@@ -336,6 +336,14 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // parked 234 -> 237, arrivals 472 -> 476, hash 0xec0a6a6e55e90ddc -> 0xd88b08b351744711; away from a kerb end 1.95% ->
     // 2.06%; the most on the road (89 at minute 10) and busy minutes (16) the same. The ring of waits and the longest
     // stand (1247.6 s, car 109) are the same (the next bug on the list).
+    // RE-PINNED (ADR-0480, the sweep's bugs, 3): the ring is gone. Car 102 turning far from the south waited inside
+    // junction 7 to give way, further on, to car 136 going straight on, which stood behind it on the stretch the two
+    // connectors share as they leave one lane; car 109 then waited for car 102. A car following another along a split's
+    // stretch is now an arrow the resolver never turns round. Rings 1 -> 0 (from minute 11); the longest stand 1247.6 s
+    // (car 109) -> 685.6 s (car 68: junction 7's north arm, losing its greens to people crossing, a give-way and no room
+    // beyond -- no ring); trips 315 -> 321; parked 237 -> 257; arrivals 476 -> 490; busy minutes 16 -> 14 (the most on
+    // the road the same, 89 at minute 10); away from a kerb end 2.06% -> 2.31%; hash 0xd88b08b351744711 ->
+    // 0x108c0a6b2babd46b.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
@@ -344,16 +352,16 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(b.markers().size() == 451u);
         CHECK(mostOnRoad == 89);
         CHECK(mostOnRoadAt == 10);
-        CHECK(busyMinutes == 16);
-        CHECK(b.counts().tripsBegun == 315u);
-        CHECK(b.counts().parkedReports == 237u);
+        CHECK(busyMinutes == 14);
+        CHECK(b.counts().tripsBegun == 321u);
+        CHECK(b.counts().parkedReports == 257u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 476u);
+        CHECK(b.machine()->counts().arrivals == 490u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xd88b08b351744711ull);
+        CHECK(hash == 0x108c0a6b2babd46bull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full
