@@ -126,6 +126,10 @@ uint64_t laneLevelKey(const nlohmann::json& spec);
 // none. The city's bake key leaves them out (keyedRoadFileText) and the lane level does not read them; the saved road
 // model holds them, so its key mixes this in (road_model_cache.cpp).
 uint64_t busLinesKey(const nlohmann::json& spec);
+// WRITES A ROAD FILE'S BUS LINES INTO ITS TEXT IN PLACE (ADR-0482): its "bus_lines" member's value replaced, or the member
+// put after the file's last one, one bus line to a line of text. Nothing else moves; the bake key does not see it
+// (checked). Empty (with `err`) when the text is not a JSON object.
+std::string insertBusLinesText(const std::string& text, const nlohmann::json& lines, std::string* err = nullptr);
 // WRITES THE LANE LEVEL'S RULES INTO A ROAD FILE'S TEXT IN PLACE (ADR-0426): a "lane_rules" member,
 // {"solid_before_stop_line": metres}, where the layout writer leaves it -- before the file's "streets" (or "divided"),
 // after its last member where it has neither -- so the layout written again moves nothing (ADR-0437). Nothing else

@@ -44,6 +44,7 @@
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // layout: the road file's junctions and streets (ADR-0417)
 #include "engine/procgen/city/roads/road_model.h"   // model: the one road model (ADR-0417)
+#include "engine/procgen/city/roads/bus_planner.h"   // buslines: a town's bus lines laid over the model (ADR-0482)
 #include "engine/procgen/city/roads/lanes/block_audit.h"
 #include "engine/procgen/city/roads/lanes/city_producer.h"   // regions-lots: the level's city bundle and its products
 #include "engine/procgen/city/roads/lanes/lots_producer.h"   // regions-lots: the lot pass grown again in memory
@@ -888,6 +889,119 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < rep.undeclared.size() && (i < 20 || std::getenv("LANES_ALL_UNDECLARED")); ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
         return 0;
     }
+    if (argc >= 3 && std::strcmp(argv[1], "buslines") == 0) {
+        // THE TOWN'S BUS LINES (ADR-0482): laid over the road model built from the road file, for a bus (the level fleet's:
+        // --vehicle tag:radius:width[:length], default bus:7.3:2.55:11.45, with a car beside it as the level's model is
+        // checked), the report printed; --write puts them into the file as its "bus_lines" (ADR-0481), in place.
+        // --lines N, --spacing M, --hub-every M: the planner's numbers (bus_planner.h BusPlanParams).
+        using engine::roads::BusPlanParams;
+        using engine::roads::BusPlan;
+        using engine::roads::RouteClass;
+        using engine::roads::planBusLines;
+        using engine::roads::busLinesJson;
+        LaneGraphOptions lgo;
+        BusPlanParams bp;
+        bool write = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--write") == 0) write = true;
+            if (i + 1 >= argc) continue;
+            if (std::strcmp(argv[i], "--lines") == 0) bp.lines = std::atoi(argv[i + 1]);
+            if (std::strcmp(argv[i], "--spacing") == 0) bp.spacing = std::atof(argv[i + 1]);
+            if (std::strcmp(argv[i], "--hub-every") == 0) bp.hubEvery = std::atof(argv[i + 1]);
+            if (std::strcmp(argv[i], "--vehicle") == 0) {
+                const std::string spec = argv[i + 1];
+                const std::size_t a = spec.find(':'), b = a == std::string::npos ? a : spec.find(':', a + 1);
+                if (b == std::string::npos) { std::fprintf(stderr, "lanes: --vehicle wants tag:radius:width[:length], not %s\n", spec.c_str()); return 2; }
+                const std::size_t c = spec.find(':', b + 1);
+                VehicleSize v;
+                v.tag = spec.substr(0, a);
+                v.turningRadius = std::atof(spec.substr(a + 1, b - a - 1).c_str());
+                v.width = std::atof(spec.substr(b + 1, c == std::string::npos ? std::string::npos : c - b - 1).c_str());
+                if (c != std::string::npos) v.length = std::atof(spec.substr(c + 1).c_str());
+                lgo.vehicles.push_back(v);
+            }
+        }
+        if (lgo.vehicles.empty()) {
+            VehicleSize car, bus;
+            car.tag = "car";
+            car.turningRadius = 6.15;
+            car.width = 2.05;
+            car.length = 5.57;
+            bus.tag = "bus";
+            bus.turningRadius = 7.30;
+            bus.width = 2.55;
+            bus.length = 11.45;
+            lgo.vehicles = {car, bus};
+        }
+        // A LEVEL (a file with no "edges"): the model the level drives on, exactly (obtainLevelRoadModel: from its cache or
+        // built, its turns checked for the level's own fleet), and the lines written into its first city's road file. A
+        // ROAD FILE: built here, for the vehicles above.
+        std::string roadFile = argv[2];
+        std::shared_ptr<const RoadModel> modelHeld;
+        {
+            std::ifstream probe(argv[2]);
+            nlohmann::json head;
+            try { probe >> head; } catch (const std::exception&) { head = nlohmann::json(); }
+            if (head.is_object() && !head.contains("edges")) {
+                bundle::LevelInputs in;
+                std::string err;
+                if (!bundle::loadLevelInputs(argv[2], in, &err)) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], err.c_str()); return 1; }
+                const std::vector<CityEntity> ents = cityEntities(in.level);
+                if (ents.empty() || ents.front().graphPath.empty()) { std::fprintf(stderr, "lanes_tool: %s has no lane-built city with a road file\n", argv[2]); return 1; }
+                roadFile = ents.front().graphPath;
+                const LevelBuiltRoads built = obtainLevelRoadModel(in, levelRoadModelCacheDir());
+                if (!built.model) { std::fprintf(stderr, "lanes_tool: %s: %s\n", argv[2], built.error.c_str()); return 1; }
+                modelHeld = built.model;
+                bool named = false;
+                for (const VehicleSize& v : built.vehicles.vehicles)
+                    if (v.tag == "bus") { lgo.vehicles = {v}; named = true; }
+                if (!named) { std::fprintf(stderr, "lanes_tool: the level's fleet has no bus\n"); return 1; }
+                std::printf("the level's road model: %s; its road file %s\n", describeLevelRoadModel(built).c_str(), roadFile.c_str());
+            }
+        }
+        if (!modelHeld) {
+            std::unique_ptr<Result> rp;
+            try { rp = build(RoadLabGraph::load(argv[2])); } catch (const std::exception& e) { std::fprintf(stderr, "lanes: %s\n", e.what()); return 1; }
+            LaneGraphBuild lg;
+            modelHeld = std::make_shared<const RoadModel>(assembleRoadModel(*rp, lgo, &lg));
+            if (!lg.error.empty()) { std::fprintf(stderr, "lanes: %s\n", lg.error.c_str()); return 1; }
+        }
+        const RoadModel& model = *modelHeld;
+        // the bus as the router sees it: the tag of the last vehicle named (the bus), its turning circle, a bus's top speed
+        RouteClass busClass;
+        const VehicleSize& bv = lgo.vehicles.back();
+        for (std::size_t t = 0; t < model.laneLevel.vehicleTagNames.size(); ++t)
+            if (model.laneLevel.vehicleTagNames[t] == bv.tag) busClass.tags |= TagMask(1) << t;
+        busClass.tightestTurnRadius = bv.turningRadius;
+        busClass.topSpeed = 28.0;   // (vehicles.lua's bus)
+        // (as the city sim drives: no lane changes yet, city_sim.cpp DrivingSettings::laneChanges; --lane-changes to plan
+        // for a driving that has them)
+        busClass.laneChanges = false;
+        for (int i = 3; i < argc; ++i)
+            if (std::strcmp(argv[i], "--lane-changes") == 0) busClass.laneChanges = true;
+        if (busClass.tags == 0) { std::fprintf(stderr, "lanes: the road model knows no vehicle tag \"%s\"\n", bv.tag.c_str()); return 1; }
+        const BusPlan plan = planBusLines(model, busClass, bp);
+        std::printf("bus lines for %s: %d hubs, %zu lines; coverage %.1f%% of the sidewalk streets within %.0f m of a stop, street share %.1f%%\n",
+                    roadFile.c_str(), plan.hubs, plan.lines.size(), plan.coverage * 100.0, bp.reach, plan.streetShare * 100.0);
+        for (const ModelBusLine& L : plan.lines) {
+            std::printf("  %s \"%s\": %zu stops:", L.id.c_str(), L.name.c_str(), L.stops.size());
+            for (const ModelBusStop& st : L.stops) std::printf(" %s (%s)", st.id.c_str(), st.name.c_str());
+            std::printf("\n");
+        }
+        for (const std::string& n : plan.notes) std::printf("  note: %s\n", n.c_str());
+        if (write) {
+            std::ifstream in(roadFile);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            std::string err;
+            const std::string out = insertBusLinesText(ss.str(), busLinesJson(plan.lines), &err);
+            if (out.empty()) { std::fprintf(stderr, "lanes: %s\n", err.c_str()); return 1; }
+            std::ofstream o(roadFile);
+            o << out;
+            std::printf("written into %s\n", roadFile.c_str());
+        }
+        return plan.lines.empty() ? 1 : 0;
+    }
     if (argc >= 3 && std::strcmp(argv[1], "lanegraph") == 0) {
         // THE LANE GRAPH (#237, #238): the built lanes cut into sections, the junctions and the connectors through them;
         // its text dump, its problems, how much of it a car can get round, and a plan SVG in --out.
@@ -1174,6 +1288,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
+                             "       lanes_tool buslines <level.json | graph.json> [--write] [--vehicle tag:radius:width[:length] ...] [--lines N] [--spacing M] [--hub-every M] [--lane-changes]   (the town's bus lines laid over the road model, ADR-0482)\n"
                              "       lanes_tool lanegraph <graph.json> [--out <dir>] [--vehicle tag:radius:width[:length] ...] [--junction J ...]   (the lane graph: dump, problems, reach, plan SVG; junction close-ups)\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "       lanes_tool landings <graph.json> ...   (each ramp end on a street: on the carriageway going its way? #282)\n"

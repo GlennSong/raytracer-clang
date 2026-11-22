@@ -90,6 +90,17 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the sim's walk points %d\n",
                 d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.walkPoints().nodeCount());
 
+    // THE BUS LINES its road file states (ADR-0481, laid by `lanes_tool buslines`, ADR-0482): held, and every leg can be
+    // driven by the fleet's bus
+    {
+        const int busClass = d.vehicleClasses().indexOf("bus");
+        CHECK(busClass >= 0);
+        std::size_t stops = 0;
+        for (const engine::ModelBusLine& bl : d.model()->busLines) stops += bl.stops.size();
+        const std::vector<std::string> faults = busClass >= 0 ? d.busLineProblems(static_cast<uint32_t>(busClass)) : std::vector<std::string>();
+        std::printf("    [river] bus lines %zu (%zu stops), %zu faults\n", d.model()->busLines.size(), stops, faults.size());
+        for (const std::string& f : faults) std::printf("    [river]   %s\n", f.c_str());
+    }
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
     int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0;

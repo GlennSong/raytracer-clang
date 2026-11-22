@@ -532,11 +532,14 @@ int main(int argc, char** argv) {
                 for (const auto& e : pl.streets.edges)
                     streetSegs.push_back({pl.streets.nodes[static_cast<std::size_t>(e.a)].pos, pl.streets.nodes[static_cast<std::size_t>(e.b)].pos});
             engine::islandInterchanges(w, streetSegs);
-            // BUSES: the intercity lines, each inside a place a straight line from its stop to the place's edge. (The
-            // places' local loops were planned by the city sim's bus network builder over a street map of each place's
-            // plan; both went with #306: no local lines until they are planned on the road model.)
-            engine::planIntercityBuses(w, [&](int, const engine::Vec2& from, const engine::Vec2& to) {
-                return std::vector<engine::Vec2>{from, to};
+            // BUSES: the intercity lines, inside each place the quickest way over its plan's own streets
+            // (PlanGraphRouter, ADR-0482; a straight line since #306 took the street map). The places' local loops are
+            // laid on each place's road model and written into its road file (lanes_tool buslines, ADR-0482), not here.
+            std::vector<std::unique_ptr<engine::plan::PlanGraphRouter>> placeRouters;
+            for (const CityPlan& pl : plans) placeRouters.push_back(std::make_unique<engine::plan::PlanGraphRouter>(pl.streets));
+            engine::planIntercityBuses(w, [&](int site, const engine::Vec2& from, const engine::Vec2& to) {
+                if (site < 0 || static_cast<std::size_t>(site) >= placeRouters.size()) return std::vector<engine::Vec2>{from, to};
+                return placeRouters[static_cast<std::size_t>(site)]->quickestLine(from, to);
             });
             {
                 int local = 0;

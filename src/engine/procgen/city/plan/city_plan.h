@@ -172,6 +172,27 @@ std::vector<PlanChain> chainsOf(const RoadGraph& g);
 // block-cut tree): what generatePlan prunes, for tests to count.
 std::vector<char> hangingLoopEdges(const RoadGraph& g);
 
+// THE QUICKEST WAY OVER A PLAN'S OWN ROAD GRAPH (the street map and its router went with #306): each edge either way at
+// its class's speed (classSpeed), a street edge into a street junction 6 s more (the old router's street-junction wait).
+// A plain Dijkstra, quick over a plan's few thousand nodes. What the plan's score samples commutes by, and what the
+// island's intercity bus lines run inside each place by (ADR-0482).
+class PlanGraphRouter {
+public:
+    explicit PlanGraphRouter(const RoadGraph& g);
+    // The node with an edge nearest `p` (-1: none).
+    int nearestNode(const Vec2& p) const;
+    // The quickest way from node `from` to `to`: its nodes in order (empty: none); `viaFreeway`, when given, whether it
+    // uses a freeway edge.
+    std::vector<int> quickest(int from, int to, bool* viaFreeway = nullptr) const;
+    // ...as a line from `from` to `to`: the way between the nodes nearest each, with the two ends put on (just the two
+    // points when there is no way).
+    std::vector<Vec2> quickestLine(const Vec2& from, const Vec2& to) const;
+
+private:
+    const RoadGraph& g_;
+    std::vector<std::vector<int>> at_;   // per node, its edges
+};
+
 CityPlan generatePlan(const Brief& brief);
 PlanScore evaluatePlan(CityPlan& plan);
 

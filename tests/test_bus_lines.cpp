@@ -12,6 +12,8 @@
 #include "model_scene.h"
 #include "trip_driving.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/roads/bus_planner.h"
+#include "../src/engine/procgen/city/roads/lanes/road_layout.h"
 
 #include <cstdio>
 #include <string>
@@ -136,4 +138,66 @@ TEST_CASE(bus_line_legs_are_checked_by_the_driving_round_a_block_and_not_past_a_
         for (const std::string& p : problems) named = named || p.find("no route") != std::string::npos;
         CHECK(named);
     }
+}
+
+// ---- THE PLANNER (ADR-0482): lays a town's lines over its road model, and they go into the road file and back --------
+
+namespace {
+// The router's class for the scenes' one vehicle (model_scene.h sceneVehicles: a car), standing in for the bus.
+engine::roads::RouteClass sceneBus(const RoadModel& m) {
+    engine::roads::RouteClass c;
+    for (std::size_t t = 0; t < m.laneLevel.vehicleTagNames.size(); ++t)
+        if (m.laneLevel.vehicleTagNames[t] == "car") c.tags |= TagMask(1) << t;
+    c.tightestTurnRadius = 5.0;
+    c.topSpeed = 13.9;
+    return c;
+}
+}  // namespace
+
+TEST_CASE(bus_planner_lays_loops_with_stops_along_them_that_can_be_driven) {
+    const citytest::ModelScene& town = citytest::gridScene(1200.0, 200.0, 7u);
+    const RoadModel& m = *town.model;
+    engine::roads::BusPlanParams bp;
+    bp.hubEvery = 2000;
+    const engine::roads::BusPlan plan = engine::roads::planBusLines(m, sceneBus(m), bp);
+    std::printf("    [planner] %d hubs, %zu lines; coverage %.1f%%, street share %.1f%%\n", plan.hubs, plan.lines.size(), plan.coverage * 100.0,
+                plan.streetShare * 100.0);
+    for (const std::string& n : plan.notes) std::printf("    [planner] note: %s\n", n.c_str());
+    CHECK(plan.hubs >= 3 && !plan.lines.empty());
+    CHECK(plan.coverage > 0.6 && plan.streetShare > 0.2);
+    for (const ModelBusLine& L : plan.lines) {
+        CHECK(L.stops.size() >= 3u);
+        for (std::size_t i = 0; i < L.stops.size(); ++i) {
+            const ModelBusStop& s = L.stops[i];
+            CHECK(m.streets[s.street.index].section.sidewalkOnKerb(s.kerb));   // beside a sidewalk
+            const KerbLanePlace a = m.busStopLane(s), b = m.busStopLane(L.stops[(i + 1) % L.stops.size()]);
+            CHECK(a.valid() && b.valid());
+            if (a.valid() && b.valid()) CHECK((a.at - b.at).length() > 60.0);   // not crowded together
+        }
+    }
+    // INTO THE ROAD FILE AND BACK: the file with the lines written in, built again, holds them; the driving finds no
+    // fault; the city's bake key does not see them
+    nlohmann::json file = citytest::roadFileOf(citytest::gridCity([] {
+                                                   citytest::GridCityParams p;
+                                                   p.extent = 1200.0;
+                                                   p.cellSize = 200.0;
+                                                   p.seed = 7u;
+                                                   return p;
+                                               }()),
+                                               "grid");
+    const std::string text = file.dump(2);
+    std::string err;
+    const std::string written = roads::lanes::insertBusLinesText(text, engine::roads::busLinesJson(plan.lines), &err);
+    CHECK(!written.empty());
+    CHECK(roads::lanes::keyedRoadFileText(written) == roads::lanes::keyedRoadFileText(text));
+    const std::string again = roads::lanes::insertBusLinesText(written, engine::roads::busLinesJson(plan.lines), &err);
+    CHECK(again == written);   // written again: the same bytes
+    const citytest::ModelScene& back = citytest::sceneNamed("buslines_planned_grid", [&written]() {
+        return citytest::modelScene(nlohmann::json::parse(written));
+    });
+    CHECK(back.model->busLines.size() == plan.lines.size());
+    const std::unique_ptr<driving::Driving> d = citytest::tripDriving(*back.model);
+    const std::vector<std::string> problems = d->busLineProblems(0);
+    for (const std::string& p : problems) std::printf("    [planner] fault: %s\n", p.c_str());
+    CHECK(problems.empty());
 }

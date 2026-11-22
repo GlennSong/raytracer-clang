@@ -24218,3 +24218,33 @@ Words:
 **Suites, all with RT_TEST_FILTER:** run_tests 1486/1486 (1483 and the three new); lanes_tests 156/156; `level_river_town_crowd` 1/1, its hash the same (0x331264b35e85398b): no level states a line yet.
 
 **Next** (step 2): a planner step that lays each town's loops over the road model and writes them into the road file, river_town first; and the island's intercity lines routed over the island's roads, for the map.
+
+## ADR-0482 — A town's bus lines are laid by a tool over the level's own road model and written into its road file; the island's intercity lines run along each town's streets (buses plan, step 2)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: `lanes_tool buslines <level.json> --write` lays a town's bus lines and writes them into the level's road file as the stated `bus_lines` of ADR-0481. river_town now has three. The island planner's intercity lines no longer cut straight across each town from the stop to its edge: they follow the town's own streets. No bus drives a line yet (step 3).
+
+Words:
+- **Hub:** a far-apart point of town a line passes through. **Coverage:** the share of the length of the town's streets that have a sidewalk lying within 220 m (straight line) of a stop. **Street share:** the share of that length a bus drives. These were the old network's two numbers that mattered (street share most: "couldn't find a stop").
+- **The part a bus can drive round:** the lanes from which a bus can reach every other lane and come back (`reachableParts`). No car turns round anywhere, so a dead end's lanes, or a stretch a bus can drive into but not out of, lie outside it.
+
+**How the planner lays them** (`roads/bus_planner.{h,cpp}`, `planBusLines`; engine code, so a tool and the tests call the same thing):
+1. **Hubs:** kerb-lane points beside a sidewalk, only in the largest part a bus can drive round. There is one hub for each 2.5 km of sidewalk street, between 3 and 6. The first is nearest the town's middle; each next is the one farthest from those already picked.
+2. **Lines:** each a loop through every hub but one, in their order round the middle; at most 3 lines. Each leg is the route the bus would drive (the one router, for the bus's class). A street already on a line costs the next line's router 4 times its time more (`SectionSeconds`), so the lines spread over the town.
+3. **Stops:** along each loop about every 250 m, at least 25 m from either end of a lane, and only where the bus's route is in the kerb lane beside a sidewalk. The driving cannot change lanes yet (the sim turns `laneChanges` off), so a bus must already be in the lane it pulls in on. Each stop is stated by its street, station and kerb.
+4. **Checked:** every leg between two stops routes for the bus; a stop that breaks its line is left out.
+
+**Two faults found getting there** (both measured on river_town):
+- **Planned on the wrong model.** At first the tool built its own model from the road file, and 2 of 45 legs could not be driven on the level's model, which is built with the level's settings and fleet. The tool now plans on exactly the model the level drives on (`obtainLevelRoadModel`: from the level's cache or built, with its fleet), and writes into that level's road file.
+- **Planned with lane changes.** The sim's driving changes no lane, so every leg must follow lanes that lead into one another. With lane changes allowed, 31 of 62 legs failed at load. The route class's `laneChanges` now decides both the part a bus can drive round and the routes, and the tool sets it as the sim does (`--lane-changes` to plan for a driving that has them).
+- The load-time check (ADR-0481) also ran before the sim turned lane changes off, so it passed legs the buses could not drive. It now runs once the driving has started.
+
+**river_town** (`lanes_tool buslines assets/levels/river_town.json --write`, on the level's cached model): 6 hubs, 3 lines, 38 stops (11, 12, 15); coverage 74.5%, street share 34.4%; the load check finds 0 faults. **Found:** 663 lanes a stop could stand beside lie outside the largest part a bus can drive round, which holds 1,188 paths. A large share of the town is a place a bus could drive into and not out of. That is the missing U-turn (ADR-0480, the sweep's bugs, 4), larger than it looked, and it holds for every car.
+
+**The intercity lines** (`tools/city_plan.cpp`, the island planner): inside each place, the quickest way over the place's plan's own street graph. That search was a lambda inside the plan's commute score; it is now one class, `plan::PlanGraphRouter` (`city_plan.h`), used by both. The score's freeway commute share is the same (0.203). On island 8 (seed 8) the ring line has 8 stops and the high road 3. The longest single segment of either is 96 m, where it was a straight line of several hundred metres from each stop to the town's edge. They are on the map only, as Glenn asked; no bus drives them.
+
+**Writing the file:** `insertBusLinesText` puts the `bus_lines` member in place, one line of text to a bus line, replacing it when the file has one. It refuses if the city's bake key would see the change, so nothing is re-baked. Written twice, the bytes are the same.
+
+**Tests:** `bus_planner_lays_loops_with_stops_along_them_that_can_be_driven` (run_tests): on the jittered grid town, 6 hubs, 3 lines, coverage 92.6%, street share 49.0%. Every stop is beside a sidewalk and none crowd together. Written into the road file and built again, the lines are held, the driving finds no fault, and the bake key is unchanged. `level_river_town_crowd` now checks that its 3 lines and 38 stops are held and can be driven by the fleet's bus.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1487/1487 (the planner's test new); lanes_tests 156/156 (`road_model_19` holds river_town's file with its lines in: rewriting the layout or the lane rules moves nothing, since the lines are written before both); `level_river_town_crowd` 1/1, its hash the same (the lines are data nothing drives yet).
