@@ -463,6 +463,16 @@ void readLotGrowParams(const LotCitysim& cityJson, LotParams& lots) {
     lots.wholeBlocks = cityJson.value("wholeBlocks", lots.wholeBlocks);
     lots.recipe = cityJson.value("recipe", lots.recipe);
     lots.recipeCoreness = cityJson.value("coreness", lots.recipeCoreness);
+    // (block by block: "recipeAt": [ { "at": [x, z], "recipe": "hospital", "whole": true }, ... ])
+    if (cityJson.contains("recipeAt") && cityJson.at("recipeAt").is_array())
+        for (const json& r : cityJson.at("recipeAt")) {
+            if (!r.is_object() || !r.contains("at") || !r.at("at").is_array() || r.at("at").size() < 2) continue;
+            LotParams::RecipeAt named;
+            named.at = Vec2(r.at("at")[0].get<double>(), r.at("at")[1].get<double>());
+            named.recipe = r.value("recipe", std::string());
+            named.whole = r.value("whole", true);
+            if (!named.recipe.empty()) lots.recipeAt.push_back(named);
+        }
     lots.recipeStairs = stairPlaceOf(cityJson.value("stairs", std::string()));
     lots.recipeLifts = liftBanksOf(cityJson.value("lifts", std::string()));
     // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale metros

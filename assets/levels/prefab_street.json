@@ -1,222 +1,372 @@
 {
- "version": 1,
- "watch_scripts": true,
- "name": "prefab_street",
- "_note": "PREFAB STREET (#191): four hand-drawn blocks either side of a street and a cross street, grown by the city's own lot and building machinery (citysim.blocks), one quarter of each kind. The buildings, their rooms, stairs and furniture are the city's. The test bed for placing prefabs in real interiors (docs/model-record-design.md, 'One catalog').",
- "player": {
-  "position": [
-   0,
-   1.2,
-   0
-  ],
-  "collider": {
-   "shape": "capsule",
-   "radius": 0.3,
-   "halfHeight": 0.6
+  "_note": "PREFAB STREET (#191): four hand-drawn blocks either side of a street and a cross street, grown by the city's own lot and building machinery (citysim.blocks), one quarter of each kind. The buildings, their rooms, stairs and furniture are the city's. Four more blocks to the east are each named a recipe (citysim.recipeAt): a hospital, a school, a mall, and a block of ranch houses lot by lot. The test bed for placing prefabs in real interiors (docs/model-record-design.md, \"One catalog\").",
+  "citysim": {
+    "blocks": [
+      [
+        [
+          -6,
+          -9
+        ],
+        [
+          -70,
+          -9
+        ],
+        [
+          -70,
+          -52
+        ],
+        [
+          -6,
+          -52
+        ]
+      ],
+      [
+        [
+          70,
+          -9
+        ],
+        [
+          6,
+          -9
+        ],
+        [
+          6,
+          -52
+        ],
+        [
+          70,
+          -52
+        ]
+      ],
+      [
+        [
+          -6,
+          52
+        ],
+        [
+          -70,
+          52
+        ],
+        [
+          -70,
+          9
+        ],
+        [
+          -6,
+          9
+        ]
+      ],
+      [
+        [
+          70,
+          52
+        ],
+        [
+          6,
+          52
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          70,
+          9
+        ]
+      ],
+      [
+        [
+          150,
+          -9
+        ],
+        [
+          86,
+          -9
+        ],
+        [
+          86,
+          -62
+        ],
+        [
+          150,
+          -62
+        ]
+      ],
+      [
+        [
+          150,
+          62
+        ],
+        [
+          86,
+          62
+        ],
+        [
+          86,
+          9
+        ],
+        [
+          150,
+          9
+        ]
+      ],
+      [
+        [
+          272,
+          -9
+        ],
+        [
+          162,
+          -9
+        ],
+        [
+          162,
+          -92
+        ],
+        [
+          272,
+          -92
+        ]
+      ],
+      [
+        [
+          272,
+          62
+        ],
+        [
+          162,
+          62
+        ],
+        [
+          162,
+          9
+        ],
+        [
+          272,
+          9
+        ]
+      ]
+    ],
+    "buildLots": true,
+    "cars": 0,
+    "districts": {
+      "hubRadius": 40,
+      "hubs": [
+        {
+          "at": [
+            -38,
+            -30
+          ],
+          "kind": "commercial"
+        },
+        {
+          "at": [
+            38,
+            -30
+          ],
+          "kind": "oldtown"
+        },
+        {
+          "at": [
+            -38,
+            30
+          ],
+          "kind": "residential"
+        },
+        {
+          "at": [
+            38,
+            30
+          ],
+          "kind": "financial"
+        },
+        {
+          "at": [
+            118,
+            -35
+          ],
+          "kind": "commercial"
+        },
+        {
+          "at": [
+            118,
+            35
+          ],
+          "kind": "residential"
+        },
+        {
+          "at": [
+            217,
+            -50
+          ],
+          "kind": "commercial"
+        },
+        {
+          "at": [
+            217,
+            35
+          ],
+          "kind": "residential"
+        }
+      ]
+    },
+    "pedestrians": 0,
+    "prefabDoors": "building_doors.lua",
+    "prefabSwaps": "prefab_swaps.lua",
+    "recipeAt": [
+      {
+        "at": [
+          118,
+          -35
+        ],
+        "recipe": "hospital",
+        "whole": true
+      },
+      {
+        "at": [
+          118,
+          35
+        ],
+        "recipe": "school",
+        "whole": true
+      },
+      {
+        "at": [
+          217,
+          -50
+        ],
+        "recipe": "mall_complex",
+        "whole": true
+      },
+      {
+        "at": [
+          217,
+          35
+        ],
+        "recipe": "ranch_house",
+        "whole": false
+      }
+    ],
+    "seed": 11,
+    "sidewalk": 0.0
   },
-  "friction": 0.5
- },
- "environment": {
-  "skyColor": [
-   0.55,
-   0.68,
-   0.86
-  ]
- },
- "lighting": {
-  "ambientMultiplier": 0.7,
-  "exposure": 0.7,
-  "sun": {
-   "castsShadow": true,
-   "color": [
-    1,
-    0.98,
-    0.94
-   ],
-   "direction": [
-    0.4,
-    0.72,
-    -0.32
-   ],
-   "intensity": 6.0
-  }
- },
- "citysim": {
-  "buildLots": true,
-  "seed": 11,
-  "sidewalk": 0.0,
-  "cars": 0,
-  "pedestrians": 0,
-  "blocks": [
-   [
-    [
-     -6,
-     -9
-    ],
-    [
-     -70,
-     -9
-    ],
-    [
-     -70,
-     -52
-    ],
-    [
-     -6,
-     -52
-    ]
-   ],
-   [
-    [
-     70,
-     -9
-    ],
-    [
-     6,
-     -9
-    ],
-    [
-     6,
-     -52
-    ],
-    [
-     70,
-     -52
-    ]
-   ],
-   [
-    [
-     -6,
-     52
-    ],
-    [
-     -70,
-     52
-    ],
-    [
-     -70,
-     9
-    ],
-    [
-     -6,
-     9
-    ]
-   ],
-   [
-    [
-     70,
-     52
-    ],
-    [
-     6,
-     52
-    ],
-    [
-     6,
-     9
-    ],
-    [
-     70,
-     9
-    ]
-   ]
-  ],
-  "districts": {
-   "hubRadius": 40,
-   "hubs": [
+  "entities": [
     {
-     "at": [
-      -38,
-      -30
-     ],
-     "kind": "commercial"
+      "id": 1,
+      "material": {
+        "albedo": [
+          0.42,
+          0.44,
+          0.4
+        ],
+        "checkerboard": false,
+        "emission": [
+          0,
+          0,
+          0
+        ],
+        "metallic": 0.0,
+        "opacity": 1.0,
+        "roughness": 1.0
+      },
+      "name": "ground",
+      "physics": {
+        "friction": 0.9,
+        "motion": "static",
+        "restitution": 0.0
+      },
+      "position": [
+        100,
+        -0.2,
+        -10
+      ],
+      "shape": "box",
+      "size": [
+        420,
+        0.4,
+        240
+      ]
     },
     {
-     "at": [
-      38,
-      -30
-     ],
-     "kind": "oldtown"
-    },
-    {
-     "at": [
-      -38,
-      30
-     ],
-     "kind": "residential"
-    },
-    {
-     "at": [
-      38,
-      30
-     ],
-     "kind": "financial"
+      "file": "prefab_town.lua",
+      "id": 2,
+      "name": "the streets",
+      "opts": {
+        "grounds": [
+          {
+            "d": 112,
+            "kind": "paving",
+            "w": 8,
+            "x": 0,
+            "z": 0
+          },
+          {
+            "d": 132,
+            "kind": "paving",
+            "w": 8,
+            "x": 78,
+            "z": 0
+          },
+          {
+            "d": 172,
+            "kind": "paving",
+            "w": 8,
+            "x": 156,
+            "z": -10
+          }
+        ],
+        "rooms": [],
+        "street": {
+          "half": 4,
+          "walk": 4,
+          "x0": -74,
+          "x1": 276
+        },
+        "style": "stucco"
+      },
+      "seed": 1,
+      "shape": "script"
     }
-   ]
-  },
-  "prefabSwaps": "prefab_swaps.lua"
- },
- "entities": [
-  {
-   "id": 1,
-   "name": "ground",
-   "shape": "box",
-   "position": [
-    0,
-    -0.2,
-    0
-   ],
-   "size": [
-    220,
-    0.4,
-    180
-   ],
-   "material": {
-    "albedo": [
-     0.42,
-     0.44,
-     0.4
-    ],
-    "metallic": 0.0,
-    "roughness": 1.0,
-    "opacity": 1.0,
-    "emission": [
-     0,
-     0,
-     0
-    ],
-    "checkerboard": false
-   },
-   "physics": {
-    "motion": "static",
-    "friction": 0.9,
-    "restitution": 0.0
-   }
-  },
-  {
-   "id": 2,
-   "name": "the streets",
-   "shape": "script",
-   "file": "prefab_town.lua",
-   "seed": 1,
-   "opts": {
-    "rooms": [],
-    "street": {
-     "x0": -74,
-     "x1": 74,
-     "half": 4,
-     "walk": 4
-    },
-    "grounds": [
-     {
-      "x": 0,
-      "z": 0,
-      "w": 8,
-      "d": 112,
-      "kind": "paving"
-     }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
     ]
-   }
-  }
- ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "name": "prefab_street",
+  "player": {
+    "collider": {
+      "halfHeight": 0.6,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0,
+      1.2,
+      0
+    ]
+  },
+  "version": 1,
+  "watch_scripts": true
 }

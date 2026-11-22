@@ -1412,7 +1412,9 @@ TEST_CASE(furniture_keeps_out_of_the_outside_doors_and_off_the_windows) {
                         const FurniturePiece& kit = furniturePiece(pc, pp.variant);
                         const Vec2 c(pp.xform.m[0][3], pp.xform.m[2][3]);
                         const Vec2 X(pp.xform.m[0][0], pp.xform.m[2][0]), Z(pp.xform.m[0][2], pp.xform.m[2][2]);
-                        const Real hw = kit.size.x * 0.5, topY = y + kit.size.y;
+                        // (a piece stands on the finished floor, 5 cm over the storey's level; the planner's rule is about how far a
+                        // piece rises above the floor it stands on, so its top is measured from there)
+                        const Real hw = kit.size.x * 0.5, topY = y - 0.05 + kit.size.y;
                         for (const WallOpening& o : ops) {
                             const Vec2 d = normalize(o.b - o.a);
                             Vec2 in2(-d.y, d.x);   // into the building

@@ -4161,7 +4161,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // ...or a CAR PARK the level asked for here (a beach town's, LotParams::parkingAt): the whole block, paved
             bool parkingHere = false;
             for (const Vec2& q : p.parkingAt) parkingHere = parkingHere || pointInPolygon(foot, q);
-            if ((unfillable || p.wholeBlocks || parkingHere) &&
+            bool namedWhole = false;   // (a level named a recipe for this block, as one site: LotParams::recipeAt)
+            for (const LotParams::RecipeAt& r : p.recipeAt) namedWhole = namedWhole || (r.whole && pointInPolygon(foot, r.at));
+            if ((unfillable || p.wholeBlocks || namedWhole || parkingHere) &&
                 (parkingHere || 2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort) && !padOnCarriageway(foot) &&
                 seatable && hasStreet) {
                 Lot whole;
@@ -5580,16 +5582,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // A LAB'S NAMED RECIPE (LotParams::recipe, citysim.recipe): the architect's own recipe by name on this
             // lot, grown as a lineup grows it (its dice, the slenderness cap on this plan), at the lot's coreness
             // or the one the level asks for. A sculpted site (a store, a depot, a campus, a paseo) keeps its own.
-            if (!p.recipe.empty() && !lot.bigBox && !lot.depot && !lot.campus && !lot.paseo) {
+            std::string recipeHere = p.recipe;   // (...or the one named for this lot's block: LotParams::recipeAt)
+            if (cand.block >= 0)
+                for (const LotParams::RecipeAt& r : p.recipeAt)
+                    if (pointInPolygon(binfos[static_cast<std::size_t>(cand.block)].foot, r.at)) recipeHere = r.recipe;
+            if (!recipeHere.empty() && !lot.bigBox && !lot.depot && !lot.campus && !lot.paseo) {
                 BuildingRecipe named;
                 const Real cz = p.recipeCoreness >= 0 ? std::clamp(p.recipeCoreness, Real(0), Real(1)) : coreness;
-                if (architectRecipeByName(p.recipe, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), cz,
+                if (architectRecipeByName(recipeHere, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), cz,
                                           shortSide, area(site), named)) {
                     rec = std::move(named);
                     if (p.recipeStairs) rec.params.stairPlace = p.recipeStairs;
                     if (p.recipeLifts) rec.params.liftBanks = p.recipeLifts;
                 } else
-                    LOG_ERROR << "[citylots] citysim.recipe '" << p.recipe << "' is not an architect recipe";
+                    LOG_ERROR << "[citylots] citysim.recipe '" << recipeHere << "' is not an architect recipe";
             }
             if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall) dbg->mallAt.push_back(b.site);   // (the recipe it grows)
             // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high

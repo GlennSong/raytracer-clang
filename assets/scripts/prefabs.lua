@@ -556,4 +556,8 @@ return {
     uses = { { at = "handle_*", say = "open", back = "close", move = { ["door_*"] = 100 }, speed = 120, sound = "door" } } },
   civic_entrance = { model = "civic_entrance", physics = { body = "static" }, draw = { class = "structure" },
     uses = { { at = "handle_*", say = "open", back = "close", move = { ["door_*"] = 100 }, speed = 120, sound = "door" } } },
+  kitchen_base_unit = { model = "kitchen_base_unit", physics = { body = "static" },
+    uses = { { at = "handle_*", say = "open", back = "close", move = { ["door_*"] = 110 }, speed = 120, sound = "cupboard" } } },
+  kitchen_wall_unit = { model = "kitchen_wall_unit", physics = { body = "static" },
+    uses = { { at = "handle_*", say = "open", back = "close", move = { ["door_*"] = 110 }, speed = 120, sound = "cupboard" } } },
 }

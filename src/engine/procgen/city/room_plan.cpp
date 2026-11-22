@@ -2150,8 +2150,8 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
         const Vec2 nrm(d.y, -d.x);
         const Real reach = kRoomWallT * 0.5 + kPlayerR;
         Real d0 = -1, d1 = -1;
-        if (w.doorAt >= 0 && L > kRoomDoorW + 0.6) {
-            const Real c = std::min(std::max(w.doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+        if (wallHasDoorway(w.doorAt, L)) {
+            const Real c = doorwayCentre(w.doorAt, L);
             d0 = c - (kRoomDoorW * 0.5 - kPlayerR);
             d1 = c + (kRoomDoorW * 0.5 - kPlayerR);
         }
@@ -2461,8 +2461,8 @@ void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real 
     const Vec3 nA(nn.x, 0, nn.y), nB(-nn.x, 0, -nn.y), nD(d.x, 0, d.y), nDm(-d.x, 0, -d.y);
     const Real yt = y0 + h;
     Real d0 = -1, d1 = -1;
-    if (doorAt >= 0 && L > kRoomDoorW + 0.6) {
-        const Real c = std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+    if (wallHasDoorway(doorAt, L)) {
+        const Real c = doorwayCentre(doorAt, L);
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
@@ -2504,8 +2504,8 @@ void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real
     auto W = [&](Real x, Real y) { const Vec2 p = a + d * x; return Vec3(p.x, y, p.y); };
     const Real yt = y0 + h;
     Real d0 = -1, d1 = -1;
-    if (doorAt >= 0 && L > kRoomDoorW + 0.6) {
-        const Real c = std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+    if (wallHasDoorway(doorAt, L)) {
+        const Real c = doorwayCentre(doorAt, L);
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
@@ -2645,8 +2645,8 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
             wallRun(out.drywall, colliderOut, w.a, w.b, y0, h, kRoomWallT, w.doorAt, ca, &cb);
             const Real L = (w.b - w.a).length();
             Real d0 = -1, d1 = -1;   // (the doorway, as wallRun cuts it)
-            if (w.doorAt >= 0 && L > kRoomDoorW + 0.6) {
-                const Real c = std::min(std::max(w.doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+            if (wallHasDoorway(w.doorAt, L)) {
+                const Real c = doorwayCentre(w.doorAt, L);
                 d0 = c - kRoomDoorW * 0.5;
                 d1 = c + kRoomDoorW * 0.5;
             }

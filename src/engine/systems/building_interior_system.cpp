@@ -21,6 +21,7 @@
 #include "../model_motion.h"     // rideMarker: what stood on a swapped piece rides the prefab
 #ifdef RT_ENABLE_SCRIPTING
 #include "../scripting/model_recipes.h"   // readScriptList
+#include "../scripting/prefab_list.h"     // findPrefab: a door prefab, to run its recipe at an opening's size
 #endif
 #include <nlohmann/json.hpp>
 #include <map>
@@ -148,6 +149,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     world.each<CityBuildings>(
         [&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
     if (cb != nullptr && cb->prefabSwaps != swapsFile_) readSwaps(cb->prefabSwaps);
+    if (cb != nullptr && cb->prefabDoors != doorsFile_) readDoors(cb->prefabDoors);
     if (!cb || cb->records.empty()) {
         // No city: nothing may stay resident (a level change or a city
         // rebuild would strand bodies); still drain the free queue so onStop
@@ -332,6 +334,94 @@ void BuildingInteriorSystem::residentWindow(std::size_t key, int& k0, int& k1) c
     k1 = it->second.k1;
 }
 
+// The doors list a level named (building_doors.lua): { default = {...}, types = { home = {...} }, recipes = {...} },
+// each entry { front = name or { names }, back = ..., inside = ..., inside_glass = ... }.
+void BuildingInteriorSystem::readDoors(const std::string& file) {
+    doorsFile_ = file;
+    doorDefault_ = DoorChoice();
+    doorByType_.clear();
+    doorByRecipe_.clear();
+    doorModels_ = nlohmann::json();
+    if (file.empty()) return;
+#ifdef RT_ENABLE_SCRIPTING
+    nlohmann::json list;
+    std::string why;
+    if (!readScriptList(file, std::string(), list, &why) || !readScriptList("models.lua", std::string(), doorModels_, &why)) {
+        LOG_WARN << "[interior] doors '" << file << "': " << why << " (every doorway stays open)";
+        return;
+    }
+    auto names = [](const nlohmann::json& row, const char* key, std::vector<std::string>& out) {
+        if (!row.is_object() || !row.contains(key)) return;
+        out.clear();
+        if (row[key].is_string()) out.push_back(row[key].get<std::string>());
+        else if (row[key].is_array()) for (const nlohmann::json& n : row[key]) if (n.is_string()) out.push_back(n.get<std::string>());
+    };
+    auto choice = [&](const nlohmann::json& row, DoorChoice base) {
+        names(row, "front", base.front); names(row, "back", base.back);
+        names(row, "inside", base.inside); names(row, "inside_glass", base.insideGlass);
+        return base;
+    };
+    if (list.contains("default")) doorDefault_ = choice(list["default"], DoorChoice());
+    if (list.contains("types") && list["types"].is_object())
+        for (nlohmann::json::const_iterator it = list["types"].begin(); it != list["types"].end(); ++it) doorByType_[it.key()] = choice(it.value(), doorDefault_);
+    // (a recipe's row is laid over its own type's, which only the building knows: kept as written, merged in doorsFor)
+    if (list.contains("recipes") && list["recipes"].is_object())
+        for (nlohmann::json::const_iterator it = list["recipes"].begin(); it != list["recipes"].end(); ++it) {
+            DoorChoice c;
+            // a name of "-" marks a key the row did not state
+            c.front = c.back = c.inside = c.insideGlass = std::vector<std::string>{"-"};
+            doorByRecipe_[it.key()] = choice(it.value(), c);
+        }
+    LOG_INFO << "[interior] doors '" << file << "': " << doorByType_.size() << " kinds of building, " << doorByRecipe_.size() << " recipes";
+#endif
+}
+
+const std::vector<std::string>& BuildingInteriorSystem::doorsFor(const BuildingRecord& r, std::vector<std::string> DoorChoice::* which) const {
+    const std::map<std::string, DoorChoice>::const_iterator byRecipe = doorByRecipe_.find(r.recipe);
+    if (byRecipe != doorByRecipe_.end()) {
+        const std::vector<std::string>& stated = byRecipe->second.*which;
+        if (!(stated.size() == 1 && stated[0] == "-")) return stated;
+    }
+    const std::map<std::string, DoorChoice>::const_iterator byType = doorByType_.find(r.type);
+    return (byType != doorByType_.end() ? byType->second : doorDefault_).*which;
+}
+
+Entity BuildingInteriorSystem::standDoor(World& world, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height) {
+#ifdef RT_ENABLE_SCRIPTING
+    Prefab prefab;
+    std::string why;
+    if (!findPrefab(name, prefab, std::string(), &why)) {
+        LOG_WARN << "[interior] door '" << name << "': " << why;
+        return Entity();
+    }
+    // the prefab's own model, run again with the opening to fill (sizes to the centimetre, so like openings share
+    // one model)
+    if (!prefab.model.empty() && doorModels_.contains(prefab.model) && doorModels_[prefab.model].contains("recipe")) {
+        const nlohmann::json& m = doorModels_[prefab.model];
+        nlohmann::json args = m.contains("args") && m["args"].is_object() ? m["args"] : nlohmann::json::object();
+        args["fill_width"] = std::round(width * 100.0) / 100.0;
+        args["fill_height"] = std::round(height * 100.0) / 100.0;
+        prefab.recipe = m["recipe"].get<std::string>();
+        prefab.recipeArgs = args.dump();
+        prefab.model.clear();
+    }
+    Transform t;
+    t.position = at;
+    t.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(out.x, out.y));
+    // (no body and nothing to press: the doorway is open to walk through and DoorSystem swings the leaves out of
+    // a walker's way, as it did the box leaf this replaces -- ADR-0080's rule that a door can never trap anyone)
+    prefab.body = Prefab::Body::None;
+    prefab.uses.clear();
+    const Entity e = stampPrefab(world, dresser_.get(), prefab, t, std::string(), &why);
+    if (!e.valid()) LOG_WARN << "[interior] door '" << name << "': " << why;
+    else world.add<SwingDoor>(e, SwingDoor{Vec2(at.x, at.z), out, at.y});
+    return e;
+#else
+    (void)world; (void)name; (void)at; (void)out; (void)width; (void)height;
+    return Entity();
+#endif
+}
+
 // The list a level named (prefab_swaps.lua): kit piece = { prefab = "...", back = metres }.
 void BuildingInteriorSystem::readSwaps(const std::string& file) {
     swapsFile_ = file;
@@ -354,6 +444,7 @@ void BuildingInteriorSystem::readSwaps(const std::string& file) {
         s.prefab = it.value().value("prefab", std::string());
         s.back = it.value().value("back", -1.0);
         s.surface = it.value().value("surface", std::string());
+        s.turn = it.value().value("turn", 0.0);
         if (!s.prefab.empty()) swaps_[it.key()] = s;
     }
     LOG_INFO << "[interior] prefab swaps '" << file << "': " << swaps_.size() << " kit pieces stand as prefabs";
@@ -467,11 +558,17 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     if ((!swaps_.empty() || prefabPieces) && !bm.furniture.empty()) {
         if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
         // where a kit piece's prefab stands: its back where the piece's was, turned as the piece was
-        auto placeOf = [](const PlacedPiece& pp, Real back) {
+        // ...and at the height the kit piece's own shape begins: a wall cupboard hangs at 1.45 m in its piece's space,
+        // and its prefab, which stands on y = 0, goes there, not on the floor.
+        auto placeOf = [](const PlacedPiece& pp, Real back, Real turnDeg) {
+            Real foot = 1e9;
+            for (const RenderMesh& m : furniturePiece(static_cast<Piece>(pp.piece), pp.variant).mesh)
+                for (const Vertex& v : m.vertices) foot = std::min(foot, static_cast<Real>(v.position.y));
+            if (foot > 1e8) foot = 0;   // (a prefab piece: nothing of the kit's to measure)
             Transform at;
-            at.position = pp.xform.transformPoint(Vec3(0, 0, back));
-            const Vec3 out = pp.xform.transformPoint(Vec3(0, 0, back + 1)) - at.position;
-            at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(out.x, out.z));
+            at.position = pp.xform.transformPoint(Vec3(0, foot, back));
+            const Vec3 out = pp.xform.transformPoint(Vec3(0, foot, back + 1)) - at.position;
+            at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(out.x, out.z) + turnDeg * Real(3.14159265358979323846 / 180.0));
             return at;
         };
         struct Stood {
@@ -495,7 +592,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             }
             const Vec3 size = furniturePiece(static_cast<Piece>(pp.piece), pp.variant).size;
             std::string why;
-            const Entity e = stampPrefab(world, dresser_.get(), what.prefab, placeOf(pp, what.back >= 0 ? what.back : size.z * Real(0.5)),
+            const Entity e = stampPrefab(world, dresser_.get(), what.prefab, placeOf(pp, what.back >= 0 ? what.back : size.z * Real(0.5), what.turn),
                                          std::string(), &why);
             if (!e.valid()) {
                 LOG_WARN << "[interior] the prefab for '" << kitName << "': " << why << (pieceIsPrefab(static_cast<Piece>(pp.piece)) ? " (nothing stands there)" : " (the kit piece stays)");
@@ -530,6 +627,36 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         if (stood > 0) LOG_INFO << "[interior] " << stood << " kit pieces stand as prefabs (" << riding << " of them on another), "
                                 << onTop.size() << " kit pieces stand on one, " << kept.size() << " stay the kit's";
         bm.furniture.swap(kept);
+    }
+
+    // DOORS IN THE DOORWAYS (#191; a level's citysim.prefabDoors): a door prefab in the street door, the back door
+    // and every doorway between rooms, each fitted to its opening. Which door is the list's (building_doors.lua),
+    // by the building's recipe and kind; one building's doors of a sort are all the same one.
+    if (!doorsFile_.empty()) {
+        if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
+        const std::size_t pick = static_cast<std::size_t>(r.params.seed);   // (the building's own roll)
+        auto one = [&](std::vector<std::string> DoorChoice::* which) {
+            const std::vector<std::string>& names = doorsFor(r, which);
+            return names.empty() ? std::string() : names[pick % names.size()];
+        };
+        std::size_t hung = 0;
+        const Real inset = outsideWallDepth(r.params);
+        for (const DoorSpec& d : r.doors) {
+            if (d.open || d.width < 0.7) continue;
+            const std::string name = one(d.back ? &DoorChoice::back : &DoorChoice::front);
+            if (name.empty()) continue;
+            const Vec2 foot = d.foot - d.normal * (inset * Real(0.5));   // in the middle of the wall's depth
+            const Entity e = standDoor(world, name, Vec3(foot.x, r.baseY + 0.05, foot.y), d.normal, d.width, d.height - Real(0.05));
+            if (e.valid()) { res.prefabs.push_back(e); ++hung; }
+        }
+        for (const Doorway& w : bm.doorways) {
+            const std::string name = one(w.glass ? &DoorChoice::insideGlass : &DoorChoice::inside);
+            if (name.empty()) continue;
+            const Entity e = standDoor(world, name, w.at, Vec2(w.along.y, -w.along.x), w.width, w.height);
+            if (e.valid()) { res.prefabs.push_back(e); ++hung; }
+        }
+        if (hung > 0) LOG_INFO << "[interior] " << hung << " doors hung in a " << r.recipe << " (" << r.type << "): street door '" << one(&DoorChoice::front)
+                               << "', between rooms '" << one(&DoorChoice::inside) << "' in " << bm.doorways.size() << " doorways";
     }
 
     // FURNITURE (buildings M4b): the placed pieces, one INSTANCE GROUP per (piece, variant, finish) -- the kit's

@@ -252,6 +252,13 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
 constexpr Real kRoomDoorW = human::INNER_DOOR_WIDTH;
 constexpr Real kRoomDoorH = human::DOOR_HEIGHT;
 constexpr Real kRoomWallT = 0.12;
+// A WALL'S DOORWAY (RoomWall::doorAt), the one rule its cut, its glass, its collider and its door leaf all read: a
+// wall of length L has one when it names a place for it and is long enough, centred where it asked but never
+// nearer than 0.3 m to the wall's end.
+inline bool wallHasDoorway(Real doorAt, Real L) { return doorAt >= 0 && L > kRoomDoorW + 0.6; }
+inline Real doorwayCentre(Real doorAt, Real L) {
+    return std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+}
 // A masonry plate narrower than this, with no core, is one dwelling a floor.
 constexpr Real kWholeFloorShortSide = 13.0;
 

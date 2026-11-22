@@ -1716,6 +1716,42 @@ Not done:
 - The swap list (`prefab_swaps.lua`) is still by name and still opt-in; it goes when the kit pieces it names are
   themselves retired for their prefabs.
 
+### Walking prefab_street: the floor, the doors, and blocks named a recipe (2026-11-21)
+
+Glenn walked `prefab_street` and listed what was wrong. What each was, and what was done:
+
+- **Everything sank into the floor.** The planner stood furniture at the storey's level, but the finished floor is
+  the top of a slab 5 cm above it. Every piece, the kit's and the prefabs', was 5 cm under. Furniture now stands on
+  the finished floor (`growInterior`, one line). This is load-time, so no bake changes.
+- **Wall cupboards on the stove.** A swapped prefab was stood on the floor wherever its kit piece was. A kit wall
+  cupboard hangs at 1.45 m. A prefab now stands at the height its kit piece's own shape begins.
+- **Cupboards overlapping their neighbours.** The kitchen prefabs were 0.8 m wide and stood in the kit's 0.6 m
+  modules. Two new prefabs, `kitchen_base_unit` and `kitchen_wall_unit`, are the kit's size.
+- **Bar stools facing away.** The stool prefab's back is on its other side. A swap can now say `turn = 180`.
+
+**Doors in the doorways.** A level names a list with `citysim.prefabDoors` (`building_doors.lua`). The list says
+which door prefab hangs in a building's street door, its back door, and the doorways between its rooms, by the
+building's recipe, then its kind (home, shop, office, civic), then a default. A house picks one of three front
+doors by its own seed.
+
+- *Fitting.* Doorways differ in size, so a door is run at the size of its opening: `hinged_door.lua` takes
+  `fill_width` and `fill_height`, shrinks its leaves to a smaller opening, and closes a larger one with a light
+  either side and one over the head. This is the first use of **arguments on a placement**: the prefab's own model
+  is run again with two more arguments, and openings of one size share one model.
+- *Where the doorways come from.* The grammar now reports each doorway between rooms it cut (`BuildingMesh::doorways`),
+  by the same rule the wall's cut uses (`doorwayCentre`, which replaced five copies of that sum).
+- *Opening.* The game already had a door system: a plain box leaf in each street door that swings away from
+  whoever walks through, over a doorway that is always open to walk through (so a door can never trap anyone).
+  That rule is kept and the box is replaced. Where a level hangs door prefabs the door system makes no boxes and
+  swings the prefabs' leaves instead (`SwingDoor` on each door). These doors have no body and nothing to press.
+- *Owed.* Only the player opens them (as before); a mall's shop fronts stand open; a door's sound; sliding and
+  revolving doors in a street doorway; levels other than `prefab_street` name no list yet, so they keep the boxes
+  until the many-copies work says what a tower of doors costs.
+
+**A block can be named a recipe.** `citysim.recipeAt` is a list of `{ at = [x, z], recipe, whole }`: the block
+holding that point grows that recipe, as one building on the whole block or lot by lot. `prefab_street` uses it for
+a hospital, a school, a mall and a block of ranch houses. It is one of the fields the lots bake is keyed on.
+
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 
 Glenn: "If you're on a floor with a ton of desks and chairs then all that stuff should work." And on what is

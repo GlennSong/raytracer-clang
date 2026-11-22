@@ -1081,6 +1081,16 @@ struct AuthoredPlace {
 // cycle seeds its start time/speed. Absent block = cycle runs as before.
 // THE GAME'S CLOCK, where anything can read it (#191: a prefab's clock shows the game's time). One entity carries it;
 // DayNightSystem writes the hour of the game's day each frame. Absent in a level with no cycle.
+// A DOOR THAT SWINGS OUT OF A WALKER'S WAY (#191): on a door prefab stood in a building's doorway
+// (BuildingInteriorSystem). DoorSystem turns its leaves (the model's `door_1`, `door_2`) away from whoever comes
+// through and shuts them behind. The doorway stays open to walk through: the leaf is for show, as the old box leaf was.
+struct SwingDoor {
+    Vec2 foot, normal;        // the sill's middle and the way out (world XZ)
+    Real y = 0;               // the sill's height
+    Real target = 0;          // degrees its leaves were last sent to
+    double clearFor = 1e9;    // seconds since anyone was near
+};
+
 struct GameClock {
     double hour = 12.0;   // 0..24
 };

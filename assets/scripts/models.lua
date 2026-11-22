@@ -225,4 +225,8 @@ return {
   office_entrance = { recipe = "hinged_door", args = { leaves = 2, glazed = "glass", finish = "grey", kind = "push_bar" } },
   school_entrance = { recipe = "hinged_door", args = { leaves = 2, glazed = "window", finish = "red", kind = "push_bar" } },
   civic_entrance = { recipe = "hinged_door", args = { leaves = 2, finish = "wood", wood = "oak" } },
+  -- a kitchen's 0.6 m modules with doors that open, the size of the furniture kit's own (kitchen_base, kitchen_wall),
+  -- so one stands in a kit module's place in a counter run without touching its neighbours (prefab_swaps.lua)
+  kitchen_base_unit = { recipe = "cupboard", args = { width = 0.6, height = 0.9, depth = 0.6, shelves = 1, finish = "white" } },
+  kitchen_wall_unit = { recipe = "cupboard", args = { width = 0.6, height = 0.7, depth = 0.36, shelves = 1, plinth = 0, finish = "white" } },
 }
