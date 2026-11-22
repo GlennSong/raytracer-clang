@@ -1401,15 +1401,17 @@ void recipeSchool(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // The HIGH SCHOOL (Glenn, 2026-11-21: "one of those japanese high schools ... a large lot ... a courtyard"): three
-// or four storeys of pale concrete round an open court, long bands of classroom windows, a flat roof. It takes a
+// or four storeys of pale painted render round an open court, long bands of classroom windows, a flat roof. It takes a
 // whole block (the complex's courtyard preset, wings one classroom and a corridor deep); its pitches, pool and
 // courts are the site round it. A level names the block (LotParams::recipeAt); no table rolls it yet.
 void recipeHighSchool(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     p.floors = rng.between(3, 4);
     p.groundRetail = false;
-    dress(p, rng.next() < 0.7 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    // (painted render, not raw concrete: the concrete part is board-marked and dark, and reads as a fortress)
+    dress(p, rng.next() < 0.7 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.wallColor = rng.next() < 0.5 ? Vec3(0.9, 0.88, 0.8) : Vec3(0.86, 0.87, 0.85);   // cream, or a cool white
+    p.trimColor = Vec3(0.72, 0.72, 0.7);
     p.window.head = OpeningStyle::Head::Flat;
     p.window.hood = OpeningStyle::Hood::Band;
     p.window.lightsX = 3;
