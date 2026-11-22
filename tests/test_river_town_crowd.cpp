@@ -144,6 +144,14 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                     sim.drivingHost().cost().modelMs / std::max<uint64_t>(1, sim.drivingHost().cost().ticks),
                     sim.drivingHost().cost().modelWorstMs, stepMsSum / (minute * ticksPerMinute), stepWorst, residentMb());
     }
+    // WHAT THE PLANS PUT ON THE FREEWAY (#306 sweep bug 4): legs by car priced and chosen, and those with metres on it
+    {
+        const citysim::brain::PlanRoadCounts rc = b.planRoadCounts();
+        std::printf("    [river] legs by car: priced %llu (on the freeway %llu, %.1f km), chosen %llu (on the freeway %llu, %.1f km)\n",
+                    static_cast<unsigned long long>(rc.pricedLegs), static_cast<unsigned long long>(rc.pricedOnFreeway),
+                    rc.pricedFreewayMetres / 1000.0, static_cast<unsigned long long>(rc.chosenLegs),
+                    static_cast<unsigned long long>(rc.chosenOnFreeway), rc.chosenFreewayMetres / 1000.0);
+    }
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdtest::crowdHash(b, sim, world);
     std::printf("    [river] at the end: %zu rings of waits (%u gridlocks, %u deadlocks); the most cars on the road at once %d "
@@ -240,19 +248,23 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // 95. ARRIVALS 475 -> 675; trips 290 -> 316; parked 237 -> 245; the most on the road 99 -> 102 (still minute 11).
     // Walking at minute 30 416 -> 369 (most of them on 900 m-plus walks to work: the crowd's days). No plan, blocked,
     // another place, rings, touching spells: still 0. The longest stand is the same, 450.2 s (car 20).
+    // RE-PINNED when a drive is priced by the driving's router, kerb lane to kerb lane at the limit each road is driven
+    // at (ADR-0480, the sweep's bugs, 4; it was priced along the sidewalks): the most on the road 102 -> 111 (still
+    // minute 11); parked 245 -> 229; arrivals 675 -> 663; trips the same, 316. 566 car legs priced, none on the freeway:
+    // river_town's trips never pay for its ramps (brain_crowd checks a drive that does).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 102);
+        CHECK(mostOnRoad == 111);
         CHECK(mostOnRoadAt == 11);
         CHECK(b.counts().tripsBegun == 316u);
-        CHECK(b.counts().parkedReports == 245u);
+        CHECK(b.counts().parkedReports == 229u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 675u);
+        CHECK(b.machine()->counts().arrivals == 663u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -271,6 +283,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // model -- one signal pole per arriving arm, a sidewalk's width back from its mouth; lamps and kerb life along
         // each kerb -- so the walkers' obstacles (the poles and the furniture) stand elsewhere: the counts above.
         // 0xf9c704ff73207220 -> 0x12277ea4937a87e4 (every crosswalk's walk signal walks in some phase): the counts above.
-        CHECK(hash == 0x12277ea4937a87e4ull);
+        // 0x12277ea4937a87e4 -> 0x331264b35e85398b (a drive priced by the driving's router): the counts above.
+        CHECK(hash == 0x331264b35e85398bull);
     }
 }

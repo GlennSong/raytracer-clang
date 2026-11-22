@@ -325,7 +325,8 @@ bool mayUse(const LaneGraph& roads, const RouteClass& cls, PathId path) {
 
 Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, PathId path) {
     if (!knownPath(model.laneLevel, path)) return 0;
-    const Real limit = model.postedLimit(path);
+    const Real stated = cls.limits && path.index < cls.limits->size() ? (*cls.limits)[path.index] : Real(0);
+    const Real limit = stated > 0 ? stated : model.postedLimit(path);
     if (limit <= 0) return cls.topSpeed;
     return cls.topSpeed > 0 ? std::min(limit, cls.topSpeed) : limit;
 }

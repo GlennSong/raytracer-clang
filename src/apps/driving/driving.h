@@ -419,6 +419,9 @@ public:
     // turnsClosedForRoom). A host that
     // finds places to send cars uses the same, so it never picks a place only a closed turn reaches.
     RouteClass routeClass(uint32_t vehicleClass) const;
+    // A ROUTE FOR A CAR OF `vehicleClass` from `from` to `to` (routeClass: as its trips are routed), with no car on the
+    // road: what a trip planner prices a drive by before the car sets off.
+    Route routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const;
     // THE CLASS'S VEHICLE TAGS on the road (route.h RouteClass::tags): which crossing points concern its cars
     // (CrossingPoint::concerns, ADR-0412). Every record concerns a class the road has not bound.
     engine::TagMask tagsOf(uint32_t vehicleClass) const {

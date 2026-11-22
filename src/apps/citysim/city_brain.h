@@ -68,6 +68,7 @@
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
 #include "brain/brain.h"
+#include "brain/brain_planner.h"   // PlanRoadCounts
 #include "../../engine/world.h"   // engine::Entity: a household's car (ADR-0444)
 #include "../../engine/procgen/city/polygon.h"
 #include "../../engine/procgen/city/roads/road_model.h"
@@ -263,6 +264,8 @@ public:
     const std::vector<brain::Transition>& trace(int who = 0) const;
     const brain::Machine* machine() const;
     const CityBrainCounts& counts() const;
+    // What the plans put on the roads: legs by car priced and chosen, and those on the freeway (brain_planner.h).
+    brain::PlanRoadCounts planRoadCounts() const;
     const CityBrainCost& cost() const;
     brain::BrainTime now() const;
     std::vector<BrainPlanLeg> planLegs(int who = 0) const;

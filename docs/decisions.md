@@ -24137,3 +24137,30 @@ Words:
 **Not added:** a driving unit test on a lab scene with a split; brain_crowd's ring check is what covers it.
 
 **Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (passes in full for the first time since the sweep); `near_tier_in_the_crowd_follows_the_player` fails only its off-lane check (bug 2, left); run_tests 1483/1483.
+
+### The sweep's bugs, 4 — a drive is priced by the driving's router, kerb lane to kerb lane, at the limit each road is driven at
+
+What it does: when the brain chooses between walking and driving, a car leg is now priced by the route the car will drive. That route runs from the kerb lane beside the car to the kerb lane beside where it will be left. It is found by the driving's own router (`Driving::routeBetween`, the router its cars drive by) and timed at the limit each road is driven at. Before, a drive was priced along the sidewalks of the streets it would drive (midpoint 1's simplest port), and no walk runs along a freeway. So no price ever counted a freeway, even though the cars themselves did drive freeways.
+
+Words:
+- **Kerb lane:** the lane nearest the kerb, the one a car pulls out into from a space and parks from (`RoadModel::kerbLaneBeside`).
+- **Free-flow time:** a route's seconds with nothing in the way, each path at the speed the car would drive it.
+
+**What changed:**
+- **The planner** (`trip_plan.h/.cpp`): `TripNetwork` holds the driving. `planLeg` for a way on the roads goes from the kerb lane beside each end (`frontageAt`, `kerbLaneBeside`) and routes between them for the car's own vehicle class (`OwnedVehicle::vehicleClass`, from `World::carClass`). Its metres and minutes are the route's, and its road kinds are read off the route's lanes and turns. A car already on the road is priced from where it is on its lane (`OwnedVehicle::onLane`, from the new `World::carOnLane`), as the driving's `routeFor` routes it. Getting from a space into its kerb lane, and from the kerb lane into a space at the end, is already in the way's start and end minutes (pulling out, parking), so it is not added again. Legs on foot are as they were.
+- **The router times a path at the limit it is driven at** (`RouteClass::limits`; the driving points it at its rules' `RoadRules::limitOfPath`, which is the posted limit, else the rule set's default for the road's class). Before, an unposted path was timed at the car class's top speed (50 m/s). That is every path on brain_crowd's and brain_lab's road file. Both the planner's prices and the cars' own choice of route were timed against speeds no car drove.
+- **Counts:** `brain::TripPlanner::roadCounts()` (`CityBrain::planRoadCounts`) counts the car legs priced and chosen, and those with metres on the freeway. Both crowd tests print it.
+
+**The freeway, measured:** brain_crowd prices 463 car legs (365 chosen) and river_town 566 (350 chosen); none of them is on the freeway, and the planner was not at fault. The lab's two diamonds have ramps 413–444 m long, so getting on and off costs about 850 m at 15.6 m/s, in a town about 1.1 km across. The day's trips never pay for that. Probed by hand: from the street by one diamond to the street by the other, the router takes the freeway every time it is quicker (1,131 m apart: 1,616 m in 82 s, 721 m on the freeway). brain_crowd now checks exactly that through the planner: its farthest on-ramp feeder to off-ramp outlet (1,136 m apart) is a drive of 1,694 m in 1.41 min, 813 m of it on the freeway. By construction this was 0 before.
+
+**The tests' scenes:** a car can drive only the way its kerb lane runs, and nowhere in the road model can a car turn round (there are no U-turn connectors at a dead end). The test streets are dead ends, and their cars stood on the kerb whose lane runs away from their trips. The old pricing over sidewalks never saw that. The trip-plan tests and the brain fakes' street are now mirrored so their places stand on the kerb whose lane runs toward the trips; every walk is the same length, and every hand-worked time is the same. The scale test's crowd now goes east of home, and its lone drivers go 1,100 m (far enough to drive). The test car (`tests/trip_driving.h`) drives at a local street's 8 m/s, since the scenes post no limit and have no rules.
+
+**Numbers, old -> new:**
+- **river_town** (re-pinned): the most on the road 102 -> 111 (still minute 11); parked 245 -> 229; arrivals 675 -> 663; trips the same, 316; hash 0x12277ea4937a87e4 -> 0x331264b35e85398b.
+- **brain_crowd** (re-pinned): the most on the road 89 -> 90 (still minute 10); trips 321 -> 322; parked 257 -> 261; arrivals the same, 490; away from a kerb end 2.31% -> 2.16%; hash 0x108c0a6b2babd46b -> 0xa7a50cd8f2bb2c29. Rings still 0.
+- **The near crowd** (re-pinned): in 115 -> 117, out 85 -> 80, hash 0x53bbbe48fe67229c -> 0x2bad62395eeaee44. **The collisions are back:** contacts 0 -> 3, hits on walkers 0 -> 14, on other things 0 -> 14, the longest off its lane 5.6 s -> 38.0 s (car 10, 0.53 m). Nothing in how the near cars drive changed. The clean runs after bugs 1 and 3 were trajectories that happened to miss, not a fix, and the "Contacts 7 -> 0" claimed there does not stand. Bug 2 is open.
+- **brain_lab:** the same 14 checks as at HEAD fail, and nothing new.
+
+**Owed, found here:** a car cannot turn round anywhere: a dead end has turn-rounds for people only, so a car whose kerb lane runs into one can leave only by the way it runs. In the 1-minute probe, 16 of 28 pairs of far-apart kerb lanes on brain_crowd had no route at all; not traced.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (its freeway check new); `near_tier_in_the_crowd_follows_the_player` fails its collision and off-lane checks (bug 2, open, above); `level_brain_lab` the same 14 checks as at HEAD.

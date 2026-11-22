@@ -89,6 +89,7 @@ void Driving::closeTurnsForRoom() {
 RouteClass Driving::routeClass(uint32_t vehicleClass) const {
     RouteClass cls = vehicleClass < routeClasses_.size() ? routeClasses_[vehicleClass] : RouteClass();
     cls.laneChanges = settings_.laneChanges;
+    if (hasRules_) cls.limits = &roadRules_.limitOfPath;   // timed as its cars drive: the rules' limit on each path
     return cls;
 }
 
@@ -1038,7 +1039,12 @@ Route Driving::routeFor(const Car& c, const PathPoint& to) const {
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    return findRoute(*model_, routeBounds_, routeClass(c.vehicleClass), front, to);
+    return routeBetween(c.vehicleClass, front, to);
+}
+
+Route Driving::routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const {
+    if (!model_) return Route();
+    return findRoute(*model_, routeBounds_, routeClass(vehicleClass), from, to);
 }
 
 void Driving::queueEvent(EventKind kind, CarId car, TripId trip, PersonId person) {

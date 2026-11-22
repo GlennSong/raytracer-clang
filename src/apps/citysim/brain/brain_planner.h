@@ -19,6 +19,15 @@
 namespace citysim {
 namespace brain {
 
+// WHAT THE PLANS PUT ON THE ROADS, counted over every plan made: the legs by a way on the roads in every option priced
+// (whether or not it was chosen), and in the plans chosen; of each, those with metres on the freeway kind of road
+// (travel.lua road_kinds "freeway"), and those metres.
+struct PlanRoadCounts {
+    uint64_t pricedLegs = 0, pricedOnFreeway = 0;
+    uint64_t chosenLegs = 0, chosenOnFreeway = 0;
+    double pricedFreewayMetres = 0, chosenFreewayMetres = 0;
+};
+
 class TripPlanner : public Planner {
 public:
     TripPlanner(const TripNetwork& net, const TravelCatalog& travel, const World& world)
@@ -29,12 +38,14 @@ public:
     // The last plan's one-line reason ("walk 18.0 min, car 8.6 min (...): car"), and, when a plan was refused, why.
     const std::string& lastReason() const { return lastReason_; }
     const std::string& lastError() const { return lastError_; }
+    const PlanRoadCounts& roadCounts() const { return roadCounts_; }
 
 private:
     TripNetwork nav_;   // the road model and the walker every leg is routed on (trip_plan.h)
     const TravelCatalog& travel_;
     const World& world_;
     std::string lastReason_, lastError_;
+    PlanRoadCounts roadCounts_;
 };
 
 }  // namespace brain

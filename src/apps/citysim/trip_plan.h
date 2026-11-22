@@ -27,6 +27,10 @@
 #include <string>
 #include <vector>
 
+namespace driving {
+class Driving;
+}
+
 namespace citysim {
 
 using engine::Real;
@@ -53,8 +57,8 @@ struct TravelMode {
     // not read it; the agent brain does (brain/brain_table.h).
     std::string beginsIn;
     // m/s, door to door, on the FOOTPATHS (the table says km/h). A way on the roads has none: its minutes are the
-    // router's own time for the route (engine::routeSeconds: each road class at its speed, a few seconds a street
-    // junction), the time it chose the route by (ADR-0416).
+    // driving router's own time for the route (Driving::routeBetween: each lane and turn at its free-flow speed), the
+    // time it chose the route by.
     Real speed = 1.4;
     Real startMinutes = 0;       // fixed minutes at the start of a leg of it (unlocking, pulling out)
     Real endMinutes = 0;         // ...and at its end (finding the space, parking, locking)
@@ -105,13 +109,14 @@ struct TripLeg {
     int mode = -1;               // row in the catalog
     LegEnd end = LegEnd::Door;
     Vec2 from, to;
-    engine::roads::WalkRoute route;   // the walks of the leg (not found when from and to join the walks at one point)
-    Real metres = 0;             // the route plus the bits off the network at each end
-    // On foot: metres at the way's speed. On the roads: the router's time for the route (engine::routeSeconds),
-    // the bits off the network at a local street's speed. Plus the way's start and end minutes either way.
+    engine::roads::WalkRoute route;   // the walks of a leg on foot (not found when from and to join the walks at one
+                                      // point, nor for a leg on the roads)
+    Real metres = 0;             // the route (on foot, plus the bits off the walks at each end)
+    // On foot: metres at the way's speed. On the roads: the driving router's time for the route, kerb lane to kerb lane
+    // (into and out of a space is the way's start and end minutes). Plus the way's start and end minutes either way.
     Real minutes = 0;
-    // ON THE ROADS: metres on each of the catalog's road kinds (roadKinds' order; the bits off the network count as
-    // the street they join), and how many separate stretches of each
+    // ON THE ROADS: metres on each of the catalog's road kinds (roadKinds' order), and how many separate stretches of
+    // each
     std::vector<Real> kindMetres;
     std::vector<int> kindStretches;
 };
@@ -152,6 +157,10 @@ struct OwnedVehicle {
     Vec2 leaveAt;
     bool free = true;
     bool inHand = false;
+    uint32_t vehicleClass = 0;   // the driving's class it is driven as (its route is found for that class)
+    // IN HAND ON THE ROAD: where it is on its lane (its drive is priced from there, not from the kerb lane beside `at`)
+    bool onLane = false;
+    engine::PathPoint lane;
 };
 
 struct TripRequest {
@@ -180,16 +189,22 @@ constexpr long kMaxLegSeconds = 65535;
 // more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
 bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
-// The network a plan is routed on: the road model and the walker on its walks (route.h bindWalker).
+// The network a plan is routed on: the road model, the walker on its walks (route.h bindWalker), and the driving, whose
+// router prices a leg on the roads (none: no leg on the roads can be made).
 struct TripNetwork {
     const engine::RoadModel* model = nullptr;
     const engine::roads::RouteWalker* walker = nullptr;
+    const driving::Driving* driving = nullptr;
     bool valid() const;
 };
 
-// One leg by `mode` from `from` to `to`: each end joined to the walks by position (RoadModel::walkJoinNear), routed
-// between them. False (leg untouched) when either end joins no walk or no route leads there.
-bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out);
+// One leg by `mode` from `from` to `to`. ON FOOT: each end joined to the walks by position (RoadModel::walkJoinNear),
+// routed between them by the walker. ON THE ROADS: each end at the kerb lane beside it (frontageAt, kerbLaneBeside),
+// routed between them by the driving's router for a car of `vehicleClass` (Driving::routeBetween): its lanes, its
+// turns and its free-flow time, freeways included; a car already on the road from where it is (`fromLane`). False (leg
+// untouched) when an end joins nothing or no route leads there.
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out,
+             uint32_t vehicleClass = 0, const engine::PathPoint* fromLane = nullptr);
 
 // Every option, and the choice.
 TripPlan planTrip(const TripNetwork& net, const TravelCatalog& cat, const TripRequest& req);

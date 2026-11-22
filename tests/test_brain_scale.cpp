@@ -55,10 +55,18 @@ PlaceRef freeSpaceAt(const Crowd& crowd, int node, int used) {
 
 // The crowd, made the same way every time from hashes of each person's number. `households`: people come in pairs
 // who live at one door, share one car and set out at the same moment (so who reaches the car first is decided by the
-// machine's order alone). Otherwise nobody shares or competes: the first 21 people have a car each, live one to a door
-// and each want a different door (so no two cars are sent to one space), and everyone sets out at time 0.
-constexpr int kLoneDrivers = kNodes;
-constexpr int kLoneDriverHop = 7;
+// machine's order alone). Otherwise nobody shares or competes: the first 10 people have a car each, live one to a door
+// (the first ten) and each want a different door, 11 doors (1100 m) east, far enough that they drive (so no two cars
+// are sent to one space), and everyone sets out at time 0. EVERY TRIP GOES EAST of home (the last door's people, who have nothing east, go west and walk): the street's
+// cars drive only along its south kerb lane, which runs east, and the street ends with nowhere to turn round, so a
+// drive west has no route (the trip planner prices a drive by the driving's router).
+constexpr int kLoneDrivers = 10;
+constexpr int kLoneDriverHop = 11;
+// The door a person whose home is `node` wants, from a hash `h`: east of it, or (from the last door) west.
+int doorWanted(int node, uint32_t h) {
+    if (node >= kNodes - 1) return node - 1 - static_cast<int>(h % static_cast<uint32_t>(kNodes - 1));
+    return node + 1 + static_cast<int>(h % static_cast<uint32_t>(kNodes - 1 - node));
+}
 Crowd populate(Lab& lab, bool households) {
     Crowd crowd;
     for (int n = 0; n < kNodes; ++n) crowd.doors.push_back(lab.door(100.0 * n));
@@ -83,9 +91,8 @@ Crowd populate(Lab& lab, bool households) {
         const uint8_t traits = static_cast<uint8_t>(engine::lowbias32(static_cast<uint32_t>(i) + 99u) % 4);
         const Detail detail = engine::lowbias32(home + 31u) % 3 == 0 ? Detail::Far : Detail::Near;
         lab.person(crowd.doors[static_cast<std::size_t>(homeNode)], traits, car, detail);
-        const int hop = loneDriver ? kLoneDriverHop
-                                   : 1 + static_cast<int>(engine::lowbias32(static_cast<uint32_t>(i) + 7777u) % (kNodes - 1));
-        crowd.wants.push_back(crowd.doors[static_cast<std::size_t>((homeNode + hop) % kNodes)]);
+        const int wanted = loneDriver ? homeNode + kLoneDriverHop : doorWanted(homeNode, engine::lowbias32(static_cast<uint32_t>(i) + 7777u));
+        crowd.wants.push_back(crowd.doors[static_cast<std::size_t>(wanted)]);
         crowd.setsOut.push_back(households ? static_cast<BrainTime>(engine::lowbias32(home + 5u) % 8) * kTick : 0);
     }
     lab.drive->trips.resize(lab.world.cars.size());

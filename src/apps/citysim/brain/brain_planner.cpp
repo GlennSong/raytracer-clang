@@ -34,11 +34,29 @@ bool TripPlanner::plan(const PlanAsk& ask, PlanLegs& out) {
     if (haveCar) {
         const bool isFree = ask.atTheWheel || world_.carFreeFor(ask.car, ask.agent);
         for (std::size_t i = 0; i < travel_.modes.size(); ++i)
-            if (travel_.modes[i].ownVehicle)
-                req.vehicles.push_back(OwnedVehicle{static_cast<int>(i), carPoint, leavePoint, isFree, ask.atTheWheel});
+            if (travel_.modes[i].ownVehicle) {
+                OwnedVehicle v{static_cast<int>(i), carPoint, leavePoint, isFree, ask.atTheWheel, world_.carClass(ask.car)};
+                v.onLane = ask.atTheWheel && world_.carOnLane(ask.car, v.lane);
+                req.vehicles.push_back(v);
+            }
     }
     const TripPlan trip = planTrip(nav_, travel_, req);
     lastReason_ = trip.reason;
+    for (std::size_t o = 0; o < trip.options.size(); ++o) {
+        if (!trip.options[o].possible) continue;
+        const bool chosen = static_cast<int>(o) == trip.chosen;
+        for (const TripLeg& leg : trip.options[o].legs) {
+            if (leg.mode < 0 || !travel_.modes[static_cast<std::size_t>(leg.mode)].roads) continue;
+            const Real onFreeway = kindMetres(travel_, leg, "freeway");
+            ++roadCounts_.pricedLegs;
+            roadCounts_.pricedOnFreeway += onFreeway > 0 ? 1 : 0;
+            roadCounts_.pricedFreewayMetres += onFreeway;
+            if (!chosen) continue;
+            ++roadCounts_.chosenLegs;
+            roadCounts_.chosenOnFreeway += onFreeway > 0 ? 1 : 0;
+            roadCounts_.chosenFreewayMetres += onFreeway;
+        }
+    }
     if (!trip.valid()) {
         lastError_ = "no way there (" + trip.reason + ")";
         return false;

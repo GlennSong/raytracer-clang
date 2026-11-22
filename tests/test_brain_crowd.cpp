@@ -23,6 +23,7 @@
 #include "../src/apps/citysim/city_brain.h"
 #include "../src/apps/citysim/city_car.h"
 #include "../src/apps/citysim/city_render.h"
+#include "../src/apps/citysim/trip_plan.h"
 #include "../src/apps/driving/wait_graph.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
@@ -92,6 +93,63 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 "%d with a board, %d with a scooter\n",
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), withBoard, withScooter);
 
+    // A DRIVE ACROSS TOWN BETWEEN THE FREEWAY'S RAMPS IS PRICED ON THE FREEWAY (#306 sweep bug 4: a drive was priced over
+    // the sidewalks, and no walk runs along a freeway). From the street feeding one on-ramp to the street an off-ramp
+    // leads to, the farthest such pair: the trip planner's car leg (planLeg, by the driving's router) has freeway metres.
+    {
+        const engine::RoadModel& m = *d.model();
+        const engine::LaneGraph& g = m.laneLevel;
+        const auto klassOf = [&](uint32_t path) {
+            const engine::ModelStreet* st = m.streetOf(engine::PathId(path));
+            return st ? st->section.klass : engine::RoadClass::Local;
+        };
+        std::vector<uint32_t> feeders, outlets;   // a lane leading onto an on-ramp; a lane an off-ramp leads onto
+        for (uint32_t r = 0; r < g.paths.size(); ++r) {
+            if (klassOf(r) != engine::RoadClass::Ramp || g.paths[r].kind != engine::PathKind::Lane) continue;
+            for (uint32_t n = g.paths[r].next.first; n < g.paths[r].next.end() && n < g.nextPaths.size(); ++n) {
+                const uint32_t o = g.nextPaths[n].index;
+                if (klassOf(o) != engine::RoadClass::Freeway) {
+                    outlets.push_back(o);
+                    continue;
+                }
+                for (uint32_t j = 0; j < g.paths.size(); ++j)
+                    for (uint32_t k = g.paths[j].next.first; k < g.paths[j].next.end() && k < g.nextPaths.size(); ++k)
+                        if (g.nextPaths[k].index == r && klassOf(j) != engine::RoadClass::Ramp && klassOf(j) != engine::RoadClass::Freeway)
+                            feeders.push_back(j);
+            }
+        }
+        engine::Vec2 from, to;
+        engine::Real apart = -1;
+        for (const uint32_t f : feeders)
+            for (const uint32_t o : outlets) {
+                const engine::Vec2 a = g.pointAt(engine::PathId(f), g.paths[f].length * 0.5);
+                const engine::Vec2 c = g.pointAt(engine::PathId(o), g.paths[o].length * 0.5);
+                if ((a - c).length() > apart) {
+                    apart = (a - c).length();
+                    from = a;
+                    to = c;
+                }
+            }
+        citysim::TravelCatalog cat;
+        citysim::TravelMode car;
+        car.name = "car";
+        car.roads = true;
+        cat.modes = {car};
+        citysim::RoadKind streets, freeway;
+        streets.name = "streets";
+        streets.classes = {engine::RoadClass::Arterial, engine::RoadClass::Collector, engine::RoadClass::Local, engine::RoadClass::Ramp};
+        freeway.name = "freeway";
+        freeway.classes = {engine::RoadClass::Freeway};
+        cat.roadKinds = {streets, freeway};
+        const engine::roads::RouteWalker walker = engine::roads::bindWalker(m, "walker", 1.4);
+        citysim::TripLeg leg;
+        const bool priced = apart > 0 && citysim::planLeg(citysim::TripNetwork{&m, &walker, &d}, cat, 0, from, to, leg);
+        const engine::Real onFreeway = priced ? citysim::kindMetres(cat, leg, "freeway") : 0;
+        std::printf("    [crowd] across town by the freeway: %zu on-ramp feeders, %zu off-ramp outlets; (%.0f %.0f) -> (%.0f %.0f), "
+                    "%.0f m apart: a drive of %.0f m in %.2f min, %.0f m of it on the freeway\n",
+                    feeders.size(), outlets.size(), from.x, from.y, to.x, to.y, apart, leg.metres, leg.minutes, onFreeway);
+        CHECK(priced && onFreeway > 0);
+    }
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
     int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0, busyMinutes = 0;
@@ -239,6 +297,14 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                     static_cast<unsigned long long>(tc.crosswalkStandOffs), longestLitTicks * kStep, longestLitCar,
                     longestLitJunction);
     }
+    // WHAT THE PLANS PUT ON THE FREEWAY (#306 sweep bug 4): legs by car priced and chosen, and those with metres on it
+    {
+        const citysim::brain::PlanRoadCounts rc = b.planRoadCounts();
+        std::printf("    [crowd] legs by car: priced %llu (on the freeway %llu, %.1f km), chosen %llu (on the freeway %llu, %.1f km)\n",
+                    static_cast<unsigned long long>(rc.pricedLegs), static_cast<unsigned long long>(rc.pricedOnFreeway),
+                    rc.pricedFreewayMetres / 1000.0, static_cast<unsigned long long>(rc.chosenLegs),
+                    static_cast<unsigned long long>(rc.chosenOnFreeway), rc.chosenFreewayMetres / 1000.0);
+    }
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdHash(b, sim, world);
     std::printf("    [crowd] at the end: %zu rings of waits (%u gridlocks, %u deadlocks); the most cars on the road at once %d "
@@ -344,24 +410,29 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // beyond -- no ring); trips 315 -> 321; parked 237 -> 257; arrivals 476 -> 490; busy minutes 16 -> 14 (the most on
     // the road the same, 89 at minute 10); away from a kerb end 2.06% -> 2.31%; hash 0xd88b08b351744711 ->
     // 0x108c0a6b2babd46b.
+    // RE-PINNED (ADR-0480, the sweep's bugs, 4: a drive priced by the driving's router, kerb lane to kerb lane, at the
+    // limit each road is driven at): the most on the road 89 -> 90 (still minute 10); trips 321 -> 322; parked 257 ->
+    // 261; arrivals the same, 490; away from a kerb end 2.31% -> 2.16%; hash 0x108c0a6b2babd46b -> 0xa7a50cd8f2bb2c29.
+    // 463 car legs priced, 365 chosen, none on the freeway: the day's trips never pay for its 420 m ramps (the drive
+    // across town between them, checked above, does).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
         CHECK(b.cars().size() == 209u);
         CHECK(withCar == 222);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 89);
+        CHECK(mostOnRoad == 90);
         CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 14);
-        CHECK(b.counts().tripsBegun == 321u);
-        CHECK(b.counts().parkedReports == 257u);
+        CHECK(b.counts().tripsBegun == 322u);
+        CHECK(b.counts().parkedReports == 261u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
         CHECK(b.machine()->counts().arrivals == 490u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0x108c0a6b2babd46bull);
+        CHECK(hash == 0xa7a50cd8f2bb2c29ull);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

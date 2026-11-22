@@ -341,9 +341,10 @@ void FakeDrive::tick(Machine& machine) {
 }
 
 // ---- the lab -----------------------------------------------------------------------------------------------------------
-// (the road is laid along y = -h, h being how far its sidewalk's middle lies from its centre line, so the north
+// (the road is laid along y = +h, h being how far its sidewalk's middle lies from its centre line, so the south
 // sidewalk runs along y = 0: a place at (x, 0) stands on the walk, and a walk between two of them is their
-// straight-line metres, as the stand-ins take it)
+// straight-line metres, as the stand-ins take it. The south kerb's lane runs east, toward the far places, so a car
+// standing beside a place drives to them: the street has nowhere to turn round)
 const citytest::ModelScene& longStreet() {
     static const Real h = [] {
         const citytest::ModelScene& probe = citytest::straightScene(2000.0);
@@ -353,17 +354,18 @@ const citytest::ModelScene& longStreet() {
         return out.y;
     }();
     engine::RoadGraph g;
-    g.nodes = {{Vec2(0, -h)}, {Vec2(2000, -h)}, {Vec2(2000, -h - 30)}, {Vec2(2000, -h + 30)}};
+    g.nodes = {{Vec2(0, h)}, {Vec2(2000, h)}, {Vec2(2000, h - 30)}, {Vec2(2000, h + 30)}};
     g.edges = {engine::RoadEdge{0, 1, 8, engine::RoadClass::Local, 0}, engine::RoadEdge{1, 2, 8, engine::RoadClass::Local, 0},
                engine::RoadEdge{1, 3, 8, engine::RoadClass::Local, 0}};
     return citytest::graphScene("brain_long_street", g);
 }
 
-TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker}; }
+TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get()}; }
 
 StreetNet longStreetNet() {
     StreetNet s;
     s.walker = engine::roads::bindWalker(*longStreet().model, "walker", 1.4);
+    s.driving = citytest::tripDriving(*longStreet().model);
     return s;
 }
 

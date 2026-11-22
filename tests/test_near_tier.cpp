@@ -1162,12 +1162,17 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // it) from 20 at minute 12, in 113, out 82, 0x73ed4bc5b6d8b7fd to 18 at minute 12, in 115, out 85,
     // 0x53bbbe48fe67229c. Contacts and every kind of hit still 0; the longest off its lane the same (car 191, 5.6 s: the
     // pursuit's 4 m look-ahead cutting a 7 m turn as it stops in it, left as it is by Glenn's call).
+    // And again (ADR-0480, the sweep's bugs, 4: drives priced by the driving's router, so the residents' choices of
+    // walking or driving moved) from in 115, out 85, 0x53bbbe48fe67229c to in 117, out 80, 0x2bad62395eeaee44 (the most
+    // near the same, 18 at minute 12). The collisions are BACK: contacts 0 -> 3, hits on walkers 0 -> 14, on other things
+    // 0 -> 14, the longest off its lane 5.6 s -> 38.0 s (car 10, 0.53 m). Nothing in the near cars' driving changed:
+    // the clean runs after bugs 1 and 3 were trajectories that happened to miss, not a fix. Bug 2 stays open.
     CHECK(mostNear == 18);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 115u);
-    CHECK(c.intoLane == 85u);
+    CHECK(c.intoPhysics == 117u);
+    CHECK(c.intoLane == 80u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x53bbbe48fe67229cull);
+    CHECK(hash == 0x2bad62395eeaee44ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

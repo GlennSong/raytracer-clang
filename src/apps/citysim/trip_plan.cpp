@@ -1,6 +1,7 @@
 #include "trip_plan.h"
 
 #include "../../engine/procgen/city/roads/road_model.h"
+#include "../driving/driving.h"
 
 #include <algorithm>
 #include <cmath>
@@ -40,54 +41,66 @@ int TravelCatalog::find(const std::string& name) const {
 
 bool TripNetwork::valid() const { return model && model->built && walker && !walker->open.empty(); }
 
-bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out) {
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out,
+             uint32_t vehicleClass, const engine::PathPoint* fromLane) {
     if (mode < 0 || mode >= static_cast<int>(cat.modes.size()) || !net.valid()) return false;
     const TravelMode& m = cat.modes[static_cast<std::size_t>(mode)];
     const engine::RoadModel& model = *net.model;
-    const engine::WalkJoin a = model.walkJoinNear(from, net.walker->open);
-    const engine::WalkJoin b = model.walkJoinNear(to, net.walker->open);
-    if (!a.valid() || !b.valid()) return false;
-    engine::roads::WalkRoute r;
-    if (a.at != b.at) {
-        r = engine::roads::findWalkRoute(model, *net.walker, a.at, b.at);
-        if (!r.found) return false;
-    }
     TripLeg leg;
     leg.mode = mode;
     leg.from = from;
     leg.to = to;
-    const Real onWalks = r.found ? r.metres : 0;
-    leg.metres = (from - a.point).length() + onWalks + (b.point - to).length();
     if (m.roads) {
-        // EACH WALK AT ITS STREET'S CLASS SPEED (classSpeed; a walk along no street, a corner or a crossing, at a local
-        // street's), the bits off the walks at a local street's speed; and the kinds of road it is on, the bits off
-        // the walks counted as a local street
-        const engine::LaneGraph& g = model.laneLevel;
-        const Real local = engine::classSpeed(engine::RoadClass::Local);
-        Real seconds = (leg.metres - onWalks) / local;
+        // ON THE ROADS: from the kerb lane beside one end to the kerb lane beside the other, as the driving routes its
+        // cars (each lane and turn at the limit it is driven at). Getting from a space into its kerb lane and back into
+        // a space at the end is the way's start and end minutes (pulling out, parking), so the leg is the route alone.
+        if (!net.driving) return false;
+        const engine::KerbLanePlace a = fromLane ? engine::KerbLanePlace() : model.kerbLaneBeside(model.frontageAt(from));
+        const engine::KerbLanePlace b = model.kerbLaneBeside(model.frontageAt(to));
+        if ((!fromLane && !a.valid()) || !b.valid()) return false;
+        engine::PathPoint pa, pb;
+        if (fromLane) {
+            pa = *fromLane;
+        } else {
+            pa.path = a.path;
+            pa.along = a.along;
+        }
+        pb.path = b.path;
+        pb.along = b.along;
+        const engine::roads::Route r = net.driving->routeBetween(vehicleClass, pa, pb);
+        if (!r.found) return false;
+        leg.metres = r.metres;
+        leg.minutes = r.seconds / 60.0;
         leg.kindMetres.assign(cat.roadKinds.size(), 0);
         leg.kindStretches.assign(cat.roadKinds.size(), 0);
         int was = -1;
-        for (const engine::roads::WalkStep& s : r.steps) {
-            const engine::Walk& w = g.walks[s.walk.index];
-            const engine::RoadClass klass =
-                w.street < model.streets.size() ? model.streets[w.street].section.klass : engine::RoadClass::Local;
-            const Real metres = std::fabs(s.to - s.from);
-            seconds += metres / engine::classSpeed(klass);
-            const int k = cat.roadKindOf(klass);
+        const auto count = [&](engine::PathId path, Real metres) {
+            const engine::ModelStreet* st = model.streetOf(path);
+            const int k = cat.roadKindOf(st ? st->section.klass : engine::RoadClass::Local);
             if (k >= 0) {
                 leg.kindMetres[static_cast<std::size_t>(k)] += metres;
                 if (k != was) ++leg.kindStretches[static_cast<std::size_t>(k)];
             }
             was = k;
+        };
+        for (std::size_t i = 0; i < r.legs.size(); ++i) {
+            count(r.legs[i].lane, r.legs[i].metres);
+            if (i < r.turns.size() && r.turns[i].connector.valid()) count(r.turns[i].connector, r.turns[i].metres);
         }
-        const int ends = cat.roadKindOf(engine::RoadClass::Local);
-        if (ends >= 0) leg.kindMetres[static_cast<std::size_t>(ends)] += leg.metres - onWalks;
-        leg.minutes = seconds / 60.0;
     } else {
+        // ON FOOT: over the walks, from where each end joins them
+        const engine::WalkJoin a = model.walkJoinNear(from, net.walker->open);
+        const engine::WalkJoin b = model.walkJoinNear(to, net.walker->open);
+        if (!a.valid() || !b.valid()) return false;
+        engine::roads::WalkRoute r;
+        if (a.at != b.at) {
+            r = engine::roads::findWalkRoute(model, *net.walker, a.at, b.at);
+            if (!r.found) return false;
+        }
+        leg.metres = (from - a.point).length() + (r.found ? r.metres : 0) + (b.point - to).length();
         leg.minutes = leg.metres / m.speed / 60.0;
+        leg.route = std::move(r);
     }
-    leg.route = std::move(r);
     leg.minutes += m.startMinutes + m.endMinutes;
     out = std::move(leg);
     return true;
@@ -116,9 +129,10 @@ TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRe
         const int mode = static_cast<int>(i);
         TripOption o;
         o.mode = mode;
-        auto leg = [&](int legMode, Vec2 a, Vec2 b, LegEnd end, const std::string& whyNot) {
+        auto leg = [&](int legMode, Vec2 a, Vec2 b, LegEnd end, const std::string& whyNot, uint32_t vehicleClass = 0,
+                       const engine::PathPoint* fromLane = nullptr) {
             TripLeg l;
-            if (!planLeg(nav, cat, legMode, a, b, l)) { o.why = whyNot; return false; }
+            if (!planLeg(nav, cat, legMode, a, b, l, vehicleClass, fromLane)) { o.why = whyNot; return false; }
             const TravelMode& lm = cat.modes[static_cast<std::size_t>(legMode)];
             if (tooLong(lm, l)) {
                 o.why = "too far for " + lm.name + " (" + minutesText(l.minutes) + " min, at most " +
@@ -159,7 +173,8 @@ TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRe
         } else if (inHand && inHand->mode != mode) {
             o.why = "at the wheel of the " + cat.modes[static_cast<std::size_t>(inHand->mode)].name;
         } else if (inHand) {
-            o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name) &&
+            o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name, inHand->vehicleClass,
+                             inHand->onLane ? &inHand->lane : nullptr) &&
                          footLeg(inHand->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
         } else if (!m.ownVehicle) {
             o.possible = leg(mode, req.from, req.to, LegEnd::Door,
@@ -174,7 +189,7 @@ TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRe
                 o.why = "the " + m.name + " is in use";
             } else {
                 o.possible = footLeg(req.from, v->at, LegEnd::Vehicle, "no route to the " + m.name) &&
-                             leg(mode, v->at, v->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name) &&
+                             leg(mode, v->at, v->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name, v->vehicleClass) &&
                              footLeg(v->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
             }
         }

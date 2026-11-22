@@ -14,6 +14,10 @@
 
 #include "../../../engine/procgen/city/polygon.h"
 
+namespace engine {
+struct PathPoint;   // (lane_graph.h: a path and how far along it)
+}
+
 namespace citysim {
 namespace brain {
 
@@ -79,6 +83,18 @@ public:
         (void)who;
         (void)from;
         return has;
+    }
+    // THE CLASS A CAR IS DRIVEN AS (the driving's vehicle class): its drive is priced by a route found for that class.
+    virtual uint32_t carClass(CarRef car) const {
+        (void)car;
+        return 0;
+    }
+    // WHERE A CAR ON THE ROAD IS on its lane (the driving's record: its front's path and how far along it), so a drive
+    // planned at the wheel is priced from there. False: it is not on the road (or the world does not say).
+    virtual bool carOnLane(CarRef car, engine::PathPoint& out) const {
+        (void)car;
+        (void)out;
+        return false;
     }
     // THE HOUSEHOLD'S CAR. Where it stands now (false: no such car, or it is nowhere a person could take it from: the
     // player has it).

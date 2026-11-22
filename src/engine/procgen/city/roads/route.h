@@ -85,6 +85,10 @@ struct RouteClass {
     engine::TagMask tags = 0;          // the graph's vehicle-tag bits for the class's tag names
     Real tightestTurnRadius = 0;       // a path bending tighter than this is refused
     Real topSpeed = 0;                 // m/s; caps every speed limit
+    // THE LIMIT EACH PATH IS DRIVEN AT, by path index (the driving's rules: RoadRules::limitOfPath -- the posted limit,
+    // else the rule set's default for the road's class), so a route is timed as its car will drive it. Null, or a
+    // path with no entry or 0: the limit the road model posts.
+    const std::vector<Real>* limits = nullptr;
     // Routes may change lanes. Off, a route keeps to the lane the car is in and the lanes that lane leads into, so a car
     // that cannot change lanes yet can drive every route it is given (Driving sets it from DrivingSettings::laneChanges).
     bool laneChanges = true;
@@ -102,9 +106,9 @@ struct RouteClass {
 // lane path for a footway, so the car search does not yet ask RoadModel::openTo: ADR-0467.)
 bool mayUse(const engine::LaneGraph& roads, const RouteClass& cls, engine::PathId path);
 
-// The speed a class drives a path at with nothing in the way: the limit the road model posts on the path
-// (RoadModel::postedLimit), capped by the class's top speed. A path with no posted limit (0) is driven at the top speed.
-// Zero for an unknown path.
+// The speed a class drives a path at with nothing in the way: the limit it is driven at (RouteClass::limits, else the
+// limit the road model posts on the path, RoadModel::postedLimit), capped by the class's top speed. A path with no limit
+// (0) is driven at the top speed. Zero for an unknown path.
 Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, engine::PathId path);
 
 // WHAT THE LOWER BOUND NEEDS TO KNOW ABOUT A GRAPH, measured once per graph (studyRoads). The bound is the straight

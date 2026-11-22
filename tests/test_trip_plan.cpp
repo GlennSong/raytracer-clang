@@ -7,6 +7,7 @@
 #include "test_framework.h"
 
 #include "model_scene.h"
+#include "trip_driving.h"
 #include "../src/apps/citysim/trip_plan.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/roads/route.h"
@@ -23,12 +24,14 @@ namespace {
 struct Street {
     const citytest::ModelScene* scene = nullptr;
     engine::roads::RouteWalker walker;
-    TripNetwork net() const { return TripNetwork{scene->model.get(), &walker}; }
+    std::shared_ptr<driving::Driving> driving;   // its router prices the drives
+    TripNetwork net() const { return TripNetwork{scene->model.get(), &walker, driving.get()}; }
 };
 Street street(const citytest::ModelScene& s) {
     Street out;
     out.scene = &s;
     out.walker = engine::roads::bindWalker(*s.model, "walker", 1.4);
+    out.driving = citytest::tripDriving(*s.model);
     return out;
 }
 const Street& longStreet() {
@@ -65,9 +68,9 @@ TravelCatalog walkAndCar() {
 
 TripRequest goTo(Real x) {
     TripRequest r;
-    r.from = Vec2(20, 6);
-    r.to = Vec2(x, 6);
-    r.vehicles.push_back(OwnedVehicle{1, Vec2(40, 3), Vec2(x - 20, 3)});
+    r.from = Vec2(20, -6);
+    r.to = Vec2(x, -6);
+    r.vehicles.push_back(OwnedVehicle{1, Vec2(40, -3), Vec2(x - 20, -3)});
     return r;
 }
 
@@ -118,8 +121,24 @@ TEST_CASE(trip_plan_legs_follow_the_way_s_network_end_to_end) {
     CHECK(near((car.legs[0].to - car.legs[1].from).length(), 0, 1e-9));
     CHECK(near((car.legs[1].to - car.legs[2].from).length(), 0, 1e-9));
     CHECK(near((car.legs[2].to - p.to).length(), 0, 1e-9));
-    // the drive is routed over the walks, and a leg's metres are its route plus the steps to and from it
-    CHECK(car.legs[1].route.found && !car.legs[1].route.steps.empty());
+    // the drive is routed by the driving's router (the one its cars drive by), kerb lane to kerb lane, not over the
+    // walks: its metres and minutes are that route's, every metre of it on the street kind of road
+    const TripLeg& drive = car.legs[1];
+    CHECK(!drive.route.found);
+    const engine::KerbLanePlace a = longStreet().scene->model->kerbLaneBeside(longStreet().scene->model->frontageAt(drive.from));
+    const engine::KerbLanePlace b = longStreet().scene->model->kerbLaneBeside(longStreet().scene->model->frontageAt(drive.to));
+    CHECK(a.valid() && b.valid());
+    if (!a.valid() || !b.valid()) return;
+    engine::PathPoint pa, pb;
+    pa.path = a.path;
+    pa.along = a.along;
+    pb.path = b.path;
+    pb.along = b.along;
+    const engine::roads::Route r = longStreet().driving->routeBetween(0, pa, pb);
+    std::printf("    drive %.1f m in %.2f min (the router: %.1f m in %.1f s)\n", drive.metres, drive.minutes, r.metres, r.seconds);
+    CHECK(r.found && near(drive.metres, r.metres, 1e-9) && near(r.metres, 1460.0, 1.0));
+    CHECK(near(drive.minutes, r.seconds / 60.0 + cat.modes[1].startMinutes + cat.modes[1].endMinutes, 1e-9));
+    CHECK(drive.kindMetres.size() == 3 && near(drive.kindMetres[0], drive.metres, 1e-6) && drive.kindStretches[0] == 1);
     const TripLeg& w = p.options[0].legs[0];
     CHECK(w.route.found && w.metres >= w.route.metres - 1e-9 && w.metres < w.route.metres + 20.0);
 }
@@ -188,9 +207,9 @@ TEST_CASE(trip_plan_no_route_on_its_network_is_no_option) {
     const TripNetwork nav = two.net();
     const TravelCatalog cat = walkAndCar();
     TripRequest r;
-    r.from = Vec2(20, 6);
-    r.to = Vec2(5100, 6);
-    r.vehicles.push_back(OwnedVehicle{1, Vec2(30, 3), Vec2(5090, 3)});
+    r.from = Vec2(20, -6);
+    r.to = Vec2(5100, -6);
+    r.vehicles.push_back(OwnedVehicle{1, Vec2(30, -3), Vec2(5090, -3)});
     const TripPlan p = planTrip(nav, cat, r);
     CHECK(!p.valid());
     CHECK(p.options[0].why == "no route on the footpaths");
@@ -221,10 +240,10 @@ TEST_CASE(trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use)
     cat.modes.push_back(board);
     auto ask = [](Real x, uint32_t traits) {
         TripRequest r;
-        r.from = Vec2(20, 6);
-        r.to = Vec2(x, 6);
+        r.from = Vec2(20, -6);
+        r.to = Vec2(x, -6);
         r.traits = traits;
-        r.vehicles.push_back(OwnedVehicle{1, Vec2(120, 3), Vec2(x - 200, 3)});
+        r.vehicles.push_back(OwnedVehicle{1, Vec2(120, -3), Vec2(x - 200, -3)});
         return r;
     };
     // NO BOARD: the row is not theirs. It is not priced, and the reason does not mention it.

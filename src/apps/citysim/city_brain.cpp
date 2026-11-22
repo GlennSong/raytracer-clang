@@ -509,6 +509,15 @@ struct CityBrain::Impl::LabWorld : brain::World {
 
     BrainTime now() const override { return im.now(); }
     bool positionOf(PlaceRef place, Vec2& out) const override { return im.positionOf(place, out); }
+    uint32_t carClass(CarRef car) const override { return im.classOf(car); }
+    bool carOnLane(CarRef ref, engine::PathPoint& out) const override {
+        const Car c = im.car(ref);
+        const driving::Car* dc = c.valid() ? im.d->car(im.idOf(c)) : nullptr;
+        if (!dc) return false;
+        out.path = dc->path;
+        out.along = dc->along;
+        return true;
+    }
     bool bodyPosition(AgentId who, Vec2& out) const override {
         if (who >= im.people.size()) return false;
         out = im.agentOf(who).pos;   // (in a car: where the car is, Impl::followCars)
@@ -1261,7 +1270,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     }
 
     im.world = std::make_unique<Impl::LabWorld>(im);
-    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_}, im.travel, *im.world);
+    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d}, im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
     im.room = std::make_unique<brain::LaneRoom>(*im.d);
 
@@ -1518,6 +1527,9 @@ const std::vector<brain::Transition>& CityBrain::trace(int who) const {
 }
 const brain::Machine* CityBrain::machine() const { return impl_->machine.get(); }
 const CityBrainCounts& CityBrain::counts() const { return impl_->counts; }
+brain::PlanRoadCounts CityBrain::planRoadCounts() const {
+    return impl_->planner ? impl_->planner->inner.roadCounts() : brain::PlanRoadCounts();
+}
 const CityBrainCost& CityBrain::cost() const { return impl_->cost; }
 brain::BrainTime CityBrain::now() const { return impl_->now(); }
 bool CityBrain::dayOn(int who) const { return impl_->isPerson(who) && impl_->people[static_cast<std::size_t>(who)].dayOn; }

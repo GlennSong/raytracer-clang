@@ -17,6 +17,7 @@
 #include "apps/citysim/brain/brain_states.h"
 #include "apps/citysim/trip_plan.h"
 #include "model_scene.h"   // the test street, as a level's roads are made
+#include "trip_driving.h"   // the driving whose router prices its drives
 
 #include <cstdint>
 #include <memory>
@@ -148,6 +149,7 @@ private:
 const citytest::ModelScene& longStreet();
 struct StreetNet {
     engine::roads::RouteWalker walker;
+    std::shared_ptr<driving::Driving> driving;   // its router prices the drives (trip_driving.h)
     TripNetwork net() const;
 };
 StreetNet longStreetNet();
