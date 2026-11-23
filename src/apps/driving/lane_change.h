@@ -33,6 +33,9 @@ namespace driving {
 constexpr const char* kFactWrongLane = "wrong_lane";     // yes/no: my route needs another lane of this road, beside mine
 constexpr const char* kFactLastChance = "last_chance";   // m: how far I may still stay in my lane (absent: no need to leave)
 constexpr const char* kFactGapBeside = "gap_beside";     // yes/no: a safe gap in the lane I need, beside me now
+// yes/no, and m: no way on from my lane, so I wait for a gap -- stopped where a move across still fits
+constexpr const char* kFactMustWaitToChange = "must_wait_to_change";
+constexpr const char* kFactChangeWaitLine = "change_wait_line";
 constexpr const char* kNumberLaneChangeBrake = "lane_change_safe_brake";   // m/s2: MOBIL's b_safe
 constexpr const char* kNumberLaneChangeSeconds = "lane_change_seconds";    // s: how long the move across takes
 constexpr const char* kIntentionLane = "lane";
@@ -100,6 +103,9 @@ struct LaneChangeView {
     LaneGap gap;               // the lane beside, toward the one I want, and its gap
     // Where my move across must begin at the latest, from my front (m): last.metres less the shortest move it can make.
     Real changeBy = 0;
+    // NO WAY ON FROM MY LANE (routed again past my last chance, and nothing led on from it): I wait for a gap, stopped
+    // no further on than changeBy (never below 0), and move across from there, from rest if I must.
+    bool mustWait = false;
 };
 
 // THE LANE BESIDE `me` TOWARD `towardKerb` AND ITS GAP: where I would be in it, who would be ahead and behind, and

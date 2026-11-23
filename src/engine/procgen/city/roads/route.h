@@ -95,8 +95,9 @@ struct RouteClass {
     // ...and only out of a lane at least this long (m; 0: any): a move across needs room, the shortest its turning circle
     // allows and its own length (the driving's lane_change.h laneMoveShortest), so a short stretch is not changed in.
     Real laneChangeLeast = 0;
-    // ...but never out of the stretch it starts in: the car keeps its lane to the stretch's end, and is free to change
-    // past it (a driver that missed its lane, routed again from where it is: the driving's missed turn, sitting 5).
+    // ...but never within the stretch (section) it starts in: the car keeps its lane to the stretch's end, and is free
+    // to change past it (a driver that missed its lane, routed again from where it is: the driving's missed turn,
+    // sitting 5). Not in that stretch at all, should the route come back along it.
     bool keepLaneAtStart = false;
     // Connectors CLOSED to the class, sorted: turns it could never (or too seldom) be granted room beyond (room.h
     // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).

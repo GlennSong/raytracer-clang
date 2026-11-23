@@ -777,6 +777,7 @@ void Driving::plan() {
                 ++laneChangeCounts_.wanted;
                 // (the move needs room: where it must begin at the latest; a lane with no way on is waited in, there)
                 lane.changeBy = lane.last.metres - laneMoveShortest(roads_->paths[c.path.index].width, cls.tightestTurnRadius);
+                lane.mustWait = t->waitToChange && t->missedOn == c.path;
                 lane.gap = findLaneGap(*roads_, cars_, pathLists_, c, cls.length, lane.need.toward == Across::TowardKerb,
                                        laneChangeBrake_, kerbwardPerpSign(ruleSet_.drivesOn), pathsBefore_,
                                        [&](const Car& who, Real gap, Real speedAhead) {
@@ -1316,9 +1317,11 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
             ? laneMoveLength(gap.across, c.speed, laneChangeSeconds_, vehicleClasses_.at(c.vehicleClass).tightestTurnRadius,
                              roads_->paths[gap.target.index].length - gap.targetAlong, &fits)
             : Real(0);
-    if (p.changeLane && gap.safe && gap.target.valid() && fits && c.speed >= kLaneChangeLeastSpeed) {
+    // (a driver waiting for its gap with no other way on moves across from rest: the move is laid by distance)
+    if (p.changeLane && gap.safe && gap.target.valid() && fits && (c.speed >= kLaneChangeLeastSpeed || t.waitToChange)) {
         Real looked = -c.along;   // (how far its way ahead reached: the new one reaches as far)
         for (const engine::PathId path : t.way.paths) looked += roads_->paths[path.index].length;
+        t.waitToChange = false;
         c.besidePath = c.path;
         c.besideShift = c.along - gap.targetAlong;
         c.path = gap.target;
@@ -1362,9 +1365,11 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     front.along = c.along;
     Route route = findRoute(*model_, routeBounds_, inLane, front, t.destination);
     if (!route.found) {
-        // (no way on from its lane to where it goes: the host is told, as when a trip is begun with no route -- a
-        // resident's brain plans again, ruling the car out; the car stays where it stands)
+        // (no way on from its lane to where it goes: it waits in it for a gap, stopped where a move across still fits --
+        // the one place a driver stops in a through lane to change lanes -- and the host is told, as when a trip is begun
+        // with no route, so a resident's brain may plan otherwise)
         ++laneChangeCounts_.missedNoRoute;
+        t.waitToChange = true;
         queueEvent(EventKind::NoRoute, c.id, tripOf(c.id), t.person);
         return;
     }
@@ -1813,6 +1818,7 @@ uint64_t Driving::stateHash() const {
         if (junctionsOn_) h.pod(junctionPlansHash(t->junctions));
         // A missed turn (sitting 5): only with the lane change step, so a run without it hashes as it did.
         if (changingLanes()) h.pod(t->missedOn.index);
+        if (changingLanes()) h.pod(static_cast<uint8_t>(t->waitToChange));
     }
     // The cars moving across into the lane beside, and their move (sitting 5); and who decides again next tick.
     if (changingLanes())

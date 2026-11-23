@@ -40,6 +40,22 @@ void noticeGapBeside(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     if (v.laneChange->gap.target.valid()) out.aboutPath = v.laneChange->gap.target;
 }
 
+void noticeMustWaitToChange(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.laneChange) return;
+    out.present = true;
+    out.yes = v.laneChange->mustWait && v.laneChange->need.lanes > 0;
+}
+
+void noticeChangeWaitLine(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.laneChange || !v.laneChange->mustWait || v.laneChange->need.lanes == 0) return;
+    const Real metres = std::max(Real(0), v.laneChange->changeBy);
+    out.present = true;
+    out.number = metres;
+    out.hasMetres = true;
+    out.metres = metres;
+    out.aboutPath = v.me.path;
+}
+
 }  // namespace
 
 bool registerLaneChangeFacts(FactRegistry& registry, std::vector<std::string>* problems) {
@@ -48,6 +64,10 @@ bool registerLaneChangeFacts(FactRegistry& registry, std::vector<std::string>* p
                          "my route needs another lane of this road: a lane beside mine leads on where mine does not"));
     specs.push_back(spec(kFactLastChance, FactKind::Number, UnitFamily::Length, noticeLastChance,
                          "how far I may still stay in my lane before my route can no longer be kept from it (m)"));
+    specs.push_back(spec(kFactMustWaitToChange, FactKind::YesNo, UnitFamily::Ratio, noticeMustWaitToChange,
+                         "nothing leads on from my lane to where I go: I must get into the lane beside, and wait for a gap"));
+    specs.push_back(spec(kFactChangeWaitLine, FactKind::Place, UnitFamily::Length, noticeChangeWaitLine,
+                         "where I wait for that gap: the last place a move across still fits, from my front (m)"));
     FactSpec gap = spec(kFactGapBeside, FactKind::YesNo, UnitFamily::Ratio, noticeGapBeside,
                         "there is a safe gap in the lane beside me toward the one my route needs: after moving in, the car "
                         "behind me there and I each brake no harder than lane_change_safe_brake (MOBIL's safety criterion)");

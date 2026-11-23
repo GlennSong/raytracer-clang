@@ -504,6 +504,8 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
                 const bool startNode = u >= n && u < destNode;
                 if (startNode && (!startInSection || cls.keepLaneAtStart)) continue;
+                // (keeping its lane through the stretch it starts in: from no lane of that stretch, by any node)
+                if (cls.keepLaneAtStart && path.section.valid() && path.section == startPath.section) continue;
                 const uint32_t v = startNode ? n + roads.paths[beside.index].indexInSection : nodeFor(beside, nodeState(u));
                 search.reach(v, u, cost + kLaneChangeCostSeconds, 1);
             }

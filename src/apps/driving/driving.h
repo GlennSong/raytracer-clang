@@ -93,6 +93,9 @@ struct Trip {
     // A MISSED TURN (sitting 5): the lane it last passed its last chance to change lanes in, with no gap; routed again
     // from there, the other lanes of that stretch closed to the route (asked once from a lane, not again).
     engine::PathId missedOn;
+    // ...and nothing led on from that lane: the driver waits in it for a gap (LaneChangeView::mustWait) until it moves
+    // across or is routed again.
+    bool waitToChange = false;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
     // again, its path at that moment first. The move step never takes the car past the end of the last of them.
     WayAhead way;
@@ -404,7 +407,7 @@ public:
         uint64_t begun = 0;      // moves across begun
         uint64_t finished = 0;   // ...and done
         uint64_t missed = 0;     // last chances passed without a gap: routed again from the lane it was in
-        uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it stays in its lane and stops at its end)
+        uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it waits in its lane for a gap)
         uint64_t backedOff = 0;  // changes given up at the last moment: a car before it in the tick's order took the gap
     };
     const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }

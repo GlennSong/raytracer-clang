@@ -205,6 +205,8 @@ rule_set.numbers.lane_change_safe_brake = { 4, unit = 'm/s2', source = 'test: MO
 rule_set.numbers.lane_change_seconds = { 4, unit = 's', source = 'test' }
 table.insert(rule_set.rules, { name = 'change lanes for my route', when = { all = { 'wrong_lane', 'gap_beside' } },
                                 give = { lane = 'change' } })
+table.insert(rule_set.rules, { name = 'wait to change lanes', when = 'must_wait_to_change',
+                                give = { stop_at = 'change_wait_line' } })
 )LUA";
 
 // The rules above, read and bound to `d`'s road the way a level reads them, handed to `d`.
@@ -407,10 +409,11 @@ TEST_CASE(trip_places_6b_a_car_changes_lanes_for_its_route) {
         CHECK(arrived);
         CHECK(!d.atRoadEnd(CarId(1)));
     }
-    // B. A LANE OF STANDING CARS BESIDE IT (placed, never driven): no gap. It does not wait in its lane for one: as it nears
-    // where a move across must begin it asks for a way on from its lane -- here there is none (its lane ends), so the host
-    // is told "no route" (once), as when a trip is begun with nowhere to go, and the car stands at its lane's end
-    {
+    // B. A LANE OF STANDING CARS BESIDE IT (placed, never driven): no gap. As it nears where a move across must begin it
+    // asks for a way on from its lane -- here there is none (its lane ends) -- so the host is told "no route" (once), as
+    // when a trip is begun with nowhere to go, and the driver stops where a move across still fits and waits there for a
+    // gap (never at its lane's end, too late to get across). C: the standing cars drive off, and it moves over from rest.
+    for (const bool theyLeave : {false, true}) {
         Driving d(&t.model);
         d.setVehicleClasses(oneClass());
         DrivingSettings settings;
@@ -421,22 +424,44 @@ TEST_CASE(trip_places_6b_a_car_changes_lanes_for_its_route) {
         CHECK(d.placeCar(CarId(1), 0, at(from, 20)));
         // (bumper to bumper from the lane's start to its end: no gap a car fits in anywhere)
         const Real spacing = d.vehicleClasses().at(0).length + 0.3;
-        for (uint32_t k = 0; spacing * (k + 1) <= end; ++k) d.placeCar(CarId(10 + k), 0, at(beside, spacing * (k + 1)));
+        std::vector<CarId> standing;
+        for (uint32_t k = 0; spacing * (k + 1) <= end; ++k)
+            if (d.placeCar(CarId(10 + k), 0, at(beside, spacing * (k + 1)))) standing.push_back(CarId(10 + k));
         CHECK(d.beginTrip(CarId(1), 1, at(to, 50)).valid());
         int noRoutes = 0;
-        for (int i = 0; i < 60 * 60 && !d.atRoadEnd(CarId(1)); ++i) {
+        bool arrived = false;
+        Real restedAt = -1;
+        for (int i = 0; i < 60 * 60 && !arrived; ++i) {
             d.tick(1.0 / 60);
-            for (const Event& e : d.drainEvents()) noRoutes += e.kind == EventKind::NoRoute && e.car == CarId(1) ? 1 : 0;
+            for (const Event& e : d.drainEvents()) {
+                noRoutes += e.kind == EventKind::NoRoute && e.car == CarId(1) ? 1 : 0;
+                arrived = arrived || (e.kind == EventKind::Parked && e.car == CarId(1));
+            }
+            const Car* me = d.car(CarId(1));
+            if (me && me->path == from && me->speed < kStandingBelow && d.clockSeconds() > 5) restedAt = me->along;
+            // (C: once it has waited a while, the lane beside empties)
+            if (theyLeave && d.clockSeconds() > 30 && !standing.empty()) {
+                for (const CarId c : standing) d.removeCar(c);
+                standing.clear();
+            }
         }
         const Driving::LaneChangeCounts& n = d.laneChangeCounts();
-        std::printf("    a lane of standing cars beside it: begun %llu, missed %llu (no route on %llu); told the host no route %d "
-                    "time(s); at the road's end %d\n",
+        std::printf("    %s: begun %llu, missed %llu (no route on %llu); told the host no route %d time(s); waited at %.1f m of "
+                    "%.1f; at the road's end %d; arrived %d\n",
+                    theyLeave ? "the standing cars beside it leave" : "a lane of standing cars beside it",
                     static_cast<unsigned long long>(n.begun), static_cast<unsigned long long>(n.missed),
-                    static_cast<unsigned long long>(n.missedNoRoute), noRoutes, d.atRoadEnd(CarId(1)) ? 1 : 0);
-        CHECK(n.begun == 0u);
+                    static_cast<unsigned long long>(n.missedNoRoute), noRoutes, restedAt, end,
+                    d.atRoadEnd(CarId(1)) ? 1 : 0, arrived ? 1 : 0);
         CHECK(n.missed == 1u && n.missedNoRoute == 1u);
         CHECK(noRoutes == 1);
-        CHECK(d.atRoadEnd(CarId(1)));
+        CHECK(restedAt > 0 && restedAt < end - 5.0);   // (stopped with room left to move across)
+        CHECK(!d.atRoadEnd(CarId(1)));
+        if (theyLeave) {
+            CHECK(n.begun == 1u);
+            CHECK(arrived);
+        } else {
+            CHECK(n.begun == 0u);
+        }
     }
 }
 

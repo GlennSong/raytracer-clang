@@ -372,9 +372,12 @@ rule_set = {
                        { "thing_stood", ">=", "wait_before_another_way" } } },
       give = { way = "another" } },
     -- CHANGE LANES FOR MY ROUTE (sitting 5): my route needs the lane beside, and there is a safe gap in it. With no gap,
-    -- I keep to my lane; past my last chance I am routed again from it (the move step's, not a rule: I never stop in a
-    -- through lane to wait for one).
+    -- I keep to my lane; past my last chance I am routed again from it (the move step's, not a rule: I do not stop in a
+    -- through lane to wait for one while another way on exists).
     { name = "change lanes for my route", when = { all = { "wrong_lane", "gap_beside" } }, give = { lane = "change" } },
+    -- ...save where nothing leads on from my lane at all: then I stop where a move across still fits and wait there for
+    -- a gap, as a driver boxed into a lane that ends must.
+    { name = "wait to change lanes", when = "must_wait_to_change", give = { stop_at = "change_wait_line" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's
