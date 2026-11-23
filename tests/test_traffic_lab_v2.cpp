@@ -1014,11 +1014,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     printTouches(*d, touches);
     {   // LANE CHANGES (sitting 5)
         const driving::Driving::LaneChangeCounts& n = d->laneChangeCounts();
-        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu)\n",
+        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu); let in %llu\n",
                     static_cast<unsigned long long>(n.wanted), static_cast<unsigned long long>(n.begun),
                     static_cast<unsigned long long>(n.finished), static_cast<unsigned long long>(n.backedOff),
                     static_cast<unsigned long long>(n.missed),
-                    static_cast<unsigned long long>(n.missedNoRoute));
+                    static_cast<unsigned long long>(n.missedNoRoute), static_cast<unsigned long long>(n.letIn));
     }
     CHECK(touches.spells <= kMostTouchSpells);
     // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7

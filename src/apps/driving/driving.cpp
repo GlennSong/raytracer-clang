@@ -204,6 +204,7 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
             }
         laneChangeSeconds_ = static_cast<Real>(seconds->value);
         laneKind_ = vocabulary.findIntention(kIntentionLane);
+        letInKind_ = vocabulary.findIntention(kIntentionLetIn);
     }
     lightsRun_ = roadRules.lightsRun;
     lightTiming_ = lightTiming;
@@ -770,7 +771,8 @@ void Driving::plan() {
         LaneChangeView lane;
         // (in the destination's own stretch it does not move over for it: level with it in any lane of that stretch is
         // there, as the arrive fact reads a destination -- a short stretch has no room for a move anyway)
-        if (changingLanes() && !carried_.count(c.id) && !c.besidePath.valid() && !sameSection(c.path, t->destination.path)) {
+        const bool lanesLooked = changingLanes() && !carried_.count(c.id);
+        if (lanesLooked && !c.besidePath.valid() && !sameSection(c.path, t->destination.path)) {
             lane.need = lanesToCross(t->route, c.path, p.legReached);
             lane.last = lastChance(t->route, c.path, c.along, p.legReached);
             if (lane.need.onRoute && lane.need.lanes > 0) {
@@ -786,6 +788,33 @@ void Driving::plan() {
                                            return followAcceleration(who, gap, speedAhead);
                                        });
                 if (lane.gap.safe && landsInAMeeting(c, lane.gap, cls.length)) lane.gap.safe = false;
+            }
+        }
+        if (lanesLooked) {
+            // ITS INDICATOR: on while it wants the lane beside with no safe gap, and must have it -- it waits for one, or
+            // it has a last chance -- so a driver there may let it in.
+            if (lane.need.onRoute && lane.need.lanes > 0 && lane.gap.target.valid() && !lane.gap.safe &&
+                (lane.mustWait || lane.last.needed))
+                indicating_[c.id] = Indicating{lane.gap.target, lane.gap.targetAlong - c.along};
+            else
+                indicating_.erase(c.id);
+            // A CAR WANTING INTO MINE, ahead of my front: the one I let in already while it still indicates (zipper),
+            // else the nearest within the distance I would leave it (its body and my following gap at my speed)
+            const Real reach = cls.length + std::max(c.speed, Real(5)) * static_cast<Real>(personalValue(gapKept_, gapKeptHash_, t->person)) * 2;
+            Real front = 0, rear = 0;
+            const std::map<CarId, CarId>::const_iterator had = lettingIn_.find(c.id);
+            if (had != lettingIn_.end() && indicatedInto(had->second, c.path, &front, &rear) && front > c.along) {
+                lane.wantingIn = had->second;
+                lane.wantingInGap = rear - c.along;
+            } else {
+                for (const std::pair<const CarId, Indicating>& ind : indicating_) {
+                    if (ind.first == c.id || ind.second.into != c.path) continue;
+                    if (!indicatedInto(ind.first, c.path, &front, &rear) || front <= c.along || rear - c.along > reach) continue;
+                    if (!lane.wantingIn.valid() || rear - c.along < lane.wantingInGap) {
+                        lane.wantingIn = ind.first;
+                        lane.wantingInGap = rear - c.along;
+                    }
+                }
             }
             p.laneSeen = true;
             view.laneChange = &lane;
@@ -804,6 +833,13 @@ void Driving::plan() {
         if (p.laneSeen) {
             p.lane = lane;
             if (laneKind_ < decision_.intentions.size()) p.changeLane = decision_.intentions[laneKind_].given;
+            if (letInKind_ < decision_.intentions.size()) p.letIn = decision_.intentions[letInKind_].given;
+            if (p.letIn && lane.wantingIn.valid()) {
+                CarId& letting = lettingIn_[c.id];
+                if (letting != lane.wantingIn) ++laneChangeCounts_.letIn;
+                letting = lane.wantingIn;
+            } else
+                lettingIn_.erase(c.id);
         }
         if (thingsOn_ && p.thing.found) {
             for (const ActionAnswer& a : decision_.actions) p.horn = p.horn || (a.action != kNoAction && a.action == hornAction_);
@@ -939,7 +975,19 @@ void Driving::move(Real dt) {
         // What is ahead: the car ahead (looked at afresh), the place to stop by it holds, the end of its way.
         Obstacle ahead[kMaxObstacles];
         std::size_t count = 0;
-        const Neighbour n = carAhead(*roads_, cars_, pathLists_, c.id, pathsAfter_, toEnd);
+        Neighbour n = carAhead(*roads_, cars_, pathLists_, c.id, pathsAfter_, toEnd);
+        // LETTING IN (sitting 5): the car I let in is kept behind as if already ahead in my lane, until it is across
+        if (const std::map<CarId, CarId>::iterator li = lettingIn_.find(c.id); li != lettingIn_.end()) {
+            Real front = 0, rear = 0;
+            if (!indicatedInto(li->second, c.path, &front, &rear) || front <= c.along) {
+                lettingIn_.erase(li);
+            } else if (!n.found() || rear - c.along < n.gap) {
+                n.car = li->second;
+                n.gap = rear - c.along;
+                const Car* other = car(li->second);
+                n.speed = other ? other->speed : Real(0);
+            }
+        }
         if (n.found()) {
             Obstacle& o = ahead[count++];
             o.kind = Limit::CarAhead;
@@ -1099,7 +1147,7 @@ void Driving::move(Real dt) {
             const Real travelled = static_cast<Real>(out.odometer - m->second.startOdometer);
             if (!m->second.frontDone) {
                 out.offset = laneMoveOffset(m->second, travelled);
-                if (travelled >= m->second.length) {
+                if (travelled >= m->second.length - kMoveDoneWithin) {
                     out.offset = 0;
                     out.besidePath = engine::PathId();
                     out.besideShift = 0;
@@ -1305,6 +1353,16 @@ Real Driving::followAcceleration(const Car& who, Real gap, Real speedAhead) cons
 // change course or speed). Read off this tick's board, by the comfortable gap a driver decides to go into a meeting by.
 // (The 20-minute lab: a car moved across into a lane 30 m from where a ramp joined it, 0.4 s ahead of the ramp's car,
 // which could no longer stop; they overlapped by 1.8 m.)
+bool Driving::indicatedInto(CarId who, engine::PathId into, Real* front, Real* rear) const {
+    const std::map<CarId, Indicating>::const_iterator ind = indicating_.find(who);
+    if (ind == indicating_.end() || ind->second.into != into) return false;
+    const Car* other = car(who);
+    if (!other || other->vehicleClass >= vehicleClasses_.size()) return false;
+    *front = other->along + ind->second.shift;
+    *rear = *front - vehicleClasses_.at(other->vehicleClass).length;
+    return true;
+}
+
 bool Driving::landsInAMeeting(const Car& c, const LaneGap& gap, Real length) const {
     if (!gap.target.valid() || gap.target.index >= roads_->paths.size()) return false;
     const engine::Path& lane = roads_->paths[gap.target.index];
@@ -1350,7 +1408,10 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     bool fits = false;
     const Real radius = vehicleClasses_.at(c.vehicleClass).tightestTurnRadius;
     Real room = gap.target.valid() ? roads_->paths[gap.target.index].length - gap.targetAlong : Real(0);
-    if (gap.target.valid() && l.last.needed && l.need.inLeg > 1)
+    // (not for a driver already waiting for its gap: it has no better place to be, takes the move that fits, and meets
+    // the next one from the lane it moves into -- held to room for both, a car stopped half-way along a short lane two
+    // changes from its turn could never move at all: the 20-minute lab's longest queues)
+    if (gap.target.valid() && l.last.needed && l.need.inLeg > 1 && !t.waitToChange)
         room = std::min(room, l.last.metres - static_cast<Real>(l.need.inLeg - 1) *
                                                   laneMoveShortest(roads_->paths[gap.target.index].width, radius));
     const Real moveLength =
@@ -1360,6 +1421,7 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
         Real looked = -c.along;   // (how far its way ahead reached: the new one reaches as far)
         for (const engine::PathId path : t.way.paths) looked += roads_->paths[path.index].length;
         t.waitToChange = false;
+        indicating_.erase(c.id);
         c.besidePath = c.path;
         c.besideShift = c.along - gap.targetAlong;
         c.path = gap.target;
@@ -1613,6 +1675,10 @@ bool Driving::removeCar(CarId id, std::string* why) {
     cars_.erase(at);
     carried_.erase(id);
     laneMoves_.erase(id);
+    indicating_.erase(id);
+    lettingIn_.erase(id);
+    for (std::map<CarId, CarId>::iterator li = lettingIn_.begin(); li != lettingIn_.end();)
+        li = li->second == id ? lettingIn_.erase(li) : std::next(li);
     intents_.clear();   // (by record: the records moved)
     intentSet_.clear();
     if (roads_) rebuildPathLists(*roads_, vehicleClasses_, cars_, pathLists_);
@@ -1876,6 +1942,17 @@ uint64_t Driving::stateHash() const {
             h.pod(r.second.startOdometer);
             h.pod(r.second.length);
         }
+    if (changingLanes()) {   // (letting in, sitting 5)
+        for (const std::pair<const CarId, Indicating>& r : indicating_) {
+            h.pod(r.first.index);
+            h.pod(r.second.into.index);
+            h.pod(r.second.shift);
+        }
+        for (const std::pair<const CarId, CarId>& r : lettingIn_) {
+            h.pod(r.first.index);
+            h.pod(r.second.index);
+        }
+    }
     // The events not yet drained, in the order they will come out.
     std::vector<Event> queued = events_;
     std::sort(queued.begin(), queued.end(), eventBefore);
@@ -2038,7 +2115,10 @@ bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
         // the driver sees that at its next look. The tick itself never names a car that is not placed.)
         const Car* other = car(b.car);
         if (other && other->id == c.id) return no("behind itself");
-        if (other && !onMyWay(*other))
+        // (the car I let in, indicating into my lane ahead of me: I keep behind where it would be)
+        const std::map<CarId, CarId>::const_iterator li = lettingIn_.find(c.id);
+        const bool lettingItIn = li != lettingIn_.end() && li->second == b.car;
+        if (other && !lettingItIn && !onMyWay(*other))
             return no("behind car " + std::to_string(b.car.index) + ", which is not on its way ahead");
         return true;
     }

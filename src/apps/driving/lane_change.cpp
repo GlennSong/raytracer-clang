@@ -56,6 +56,12 @@ void noticeChangeWaitLine(const DriverView& v, NoticeScratch&, NoticedFact& out)
     out.aboutPath = v.me.path;
 }
 
+void noticeCarWantingIn(const DriverView& v, NoticeScratch&, NoticedFact& out) {
+    if (!v.laneChange) return;
+    out.present = true;
+    out.yes = v.laneChange->wantingIn.valid();
+}
+
 }  // namespace
 
 bool registerLaneChangeFacts(FactRegistry& registry, std::vector<std::string>* problems) {
@@ -68,6 +74,9 @@ bool registerLaneChangeFacts(FactRegistry& registry, std::vector<std::string>* p
                          "nothing leads on from my lane to where I go: I must get into the lane beside, and wait for a gap"));
     specs.push_back(spec(kFactChangeWaitLine, FactKind::Place, UnitFamily::Length, noticeChangeWaitLine,
                          "where I wait for that gap: the last place a move across still fits, from my front (m)"));
+    specs.push_back(spec(kFactCarWantingIn, FactKind::YesNo, UnitFamily::Ratio, noticeCarWantingIn,
+                         "a car in the lane beside, just ahead of me, is indicating into my lane (and I let no other in "
+                         "that is not across yet)"));
     FactSpec gap = spec(kFactGapBeside, FactKind::YesNo, UnitFamily::Ratio, noticeGapBeside,
                         "there is a safe gap in the lane beside me toward the one my route needs: after moving in, the car "
                         "behind me there and I each brake no harder than lane_change_safe_brake (MOBIL's safety criterion)");
@@ -97,6 +106,9 @@ bool registerLaneChangeFacts(FactRegistry& registry, std::vector<std::string>* p
 
 bool registerLaneChangeAnswers(AnswerVocabulary& vocabulary, std::string* why) {
     return vocabulary.addIntention(kIntentionLane, {kWordChange}, "move over into the lane beside, toward the one my route needs",
+                                   why) != kNoIntentionKind &&
+           vocabulary.addIntention(kIntentionLetIn, {kWordLetIn},
+                                   "ease off to let the car indicating into my lane ahead of me in: keep behind where it would be",
                                    why) != kNoIntentionKind;
 }
 

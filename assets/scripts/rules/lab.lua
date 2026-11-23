@@ -378,6 +378,11 @@ rule_set = {
     -- ...save where nothing leads on from my lane at all: then I stop where a move across still fits and wait there for
     -- a gap, as a driver boxed into a lane that ends must.
     { name = "wait to change lanes", when = "must_wait_to_change", give = { stop_at = "change_wait_line" } },
+    -- LETTING IN (design section 6): a car just ahead in the lane beside indicates into mine -- it must get over, and
+    -- has no gap -- so I ease off and keep behind where it would be, one car at a time (zipper: having let one in, not
+    -- the next until that one is across). UK Highway Code rule 134 (in queues, let a merging car in; take turns where
+    -- lanes merge), from memory. [~] every driver lets in; by personality is owed.
+    { name = "let in", when = "car_wanting_in", give = { let_in = "yes" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's

@@ -409,6 +409,7 @@ public:
         uint64_t missed = 0;     // last chances passed without a gap: routed again from the lane it was in
         uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it waits in its lane for a gap)
         uint64_t backedOff = 0;  // changes given up at the last moment: a car before it in the tick's order took the gap
+        uint64_t letIn = 0;      // times a driver began to let an indicating car in ahead of it
     };
     const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }
     bool laneChangeStep() const { return laneChangesOn_; }
@@ -572,6 +573,7 @@ private:
         bool laneSeen = false;
         LaneChangeView lane;
         bool changeLane = false;
+        bool letIn = false;
     };
     // Counts and traces what one update of a car's plans did.
     void changeLanes(Car& c, Trip& t, const Planned& p);
@@ -676,6 +678,18 @@ private:
     bool laneChangesOn_ = false;
     Real laneChangeBrake_ = 0, laneChangeSeconds_ = 0;
     IntentionKindId laneKind_ = kNoIntentionKind;
+    IntentionKindId letInKind_ = kNoIntentionKind;
+    // INDICATING (sitting 5): a driver that wants the lane beside and has no safe gap -- it must wait for one, or its last
+    // chance nears -- shows it; `shift` puts its front in that lane's terms (front there = along + shift).
+    struct Indicating {
+        engine::PathId into;
+        Real shift = 0;
+    };
+    std::map<CarId, Indicating> indicating_;
+    // LETTING IN: a driver -> the indicating car it keeps behind (as if already ahead in its lane), until that one is across.
+    std::map<CarId, CarId> lettingIn_;
+    // Where car `who` would be in lane `into` if it is indicating into it: its front's and rear's distance along it.
+    bool indicatedInto(CarId who, engine::PathId into, Real* front, Real* rear) const;
     LaneChangeCounts laneChangeCounts_;
     std::map<CarId, LaneMove> laneMoves_;   // the cars moving across into the lane beside, and each one's move
     std::vector<std::vector<engine::PathId>> pathsBefore_;   // per path, the paths leading into it (lane changes look back)

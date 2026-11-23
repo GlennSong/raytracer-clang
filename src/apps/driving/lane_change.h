@@ -36,6 +36,10 @@ constexpr const char* kFactGapBeside = "gap_beside";     // yes/no: a safe gap i
 // yes/no, and m: no way on from my lane, so I wait for a gap -- stopped where a move across still fits
 constexpr const char* kFactMustWaitToChange = "must_wait_to_change";
 constexpr const char* kFactChangeWaitLine = "change_wait_line";
+// yes/no: a car in the lane beside, its front ahead of mine, is indicating into my lane (letting in, sitting 5)
+constexpr const char* kFactCarWantingIn = "car_wanting_in";
+constexpr const char* kIntentionLetIn = "let_in";
+constexpr const char* kWordLetIn = "yes";
 constexpr const char* kNumberLaneChangeBrake = "lane_change_safe_brake";   // m/s2: MOBIL's b_safe
 constexpr const char* kNumberLaneChangeSeconds = "lane_change_seconds";    // s: how long the move across takes
 constexpr const char* kIntentionLane = "lane";
@@ -76,6 +80,10 @@ constexpr Real kLanesSideBySide = 0.006;
 constexpr Real kWidestLaneAcross = 4.0;
 // Below this sideways offset (m) a car is on its lane's line: its speed is read along the lane itself.
 constexpr Real kOffsetOnLine = 0.01;
+// A move across is over once its front is within this (m) of its length: a move laid to end where its lane ends is
+// driven up to a stop there, and a stop is reached only to within rounding -- left a hair short, the car stood listed
+// in both lanes for good, never looking for its next move (the 20-minute lab).
+constexpr Real kMoveDoneWithin = 0.01;
 inline Real laneMoveShortest(Real across, Real tightestRadius) {
     return kMoveMargin * std::sqrt(6 * std::fabs(across) * std::max(tightestRadius, Real(1)));
 }
@@ -125,6 +133,11 @@ struct LaneChangeView {
     // NO WAY ON FROM MY LANE (routed again past my last chance, and nothing led on from it): I wait for a gap, stopped
     // no further on than changeBy (never below 0), and move across from there, from rest if I must.
     bool mustWait = false;
+    // LETTING IN (design section 6: the other driver's own choice): the car indicating into my lane whose front is ahead
+    // of mine, nearest first -- or the one I already let in, until it is across (zipper: one at a time) -- and the gap
+    // from my front to where its rear would be in my lane. Not valid: none.
+    CarId wantingIn;
+    Real wantingInGap = 0;
 };
 
 // THE LANE BESIDE `me` TOWARD `towardKerb` AND ITS GAP: where I would be in it, who would be ahead and behind, and
