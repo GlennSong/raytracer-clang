@@ -1811,7 +1811,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the bake is reproducible and headless-testable. A render-time wall clock
     // would be acceptable too (a non-deterministic blink is fine per the ADR), but
     // the sim clock keeps determinism intact.
-    const bool blinkOn = engine::lampBlinkOn(sim_.seconds());
+    // (the new driving's cars blink off ITS clock: the agent sim's does not run in a level with nobody walking -- the
+    // traffic lab -- and an indicator read off it stayed lit without blinking)
+    const bool blinkOn = engine::lampBlinkOn(sim_.drivingV2() ? static_cast<Real>(sim_.drivingV2()->clockSeconds())
+                                                              : sim_.seconds());
     std::unordered_map<int, uint32_t> masks;   // the lit lamps of each drawn car, by its key in carAgentIds_
     // Darkness from the SUN where a render view has staged one (the
     // viewer), else from the sim's own clock (headless/offline). The two
