@@ -1107,7 +1107,7 @@ void Driving::move(Real dt) {
             // (the rear on the same curve a body length behind: the car points along its path across, as a car steered
             // over does, rather than sliding square; drawn only)
             const Real body = vehicleClasses_.at(c.vehicleClass).length;
-            out.offsetRearLag = laneMoveOffset(m->second, travelled - body) - out.offset;
+            out.offsetRearLag = laneMoveRearOffset(m->second, travelled, body) - out.offset;
             if (m->second.frontDone && travelled - body >= m->second.length) {
                 out.offsetRearLag = 0;
                 laneMoves_.erase(m);
@@ -1333,6 +1333,12 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
         move.from = c.offset;
         move.startOdometer = c.odometer;
         move.length = moveLength;
+        // (begun while the last move's rear is still crossing: the rear finishes that curve as it begins this one)
+        if (const std::map<CarId, LaneMove>::iterator last = laneMoves_.find(c.id); last != laneMoves_.end()) {
+            move.carryFrom = last->second.from;
+            move.carryStart = last->second.startOdometer;
+            move.carryLength = last->second.length;
+        }
         laneMoves_[c.id] = move;
         // (what it holds was decided in the old lane: it decides afresh, from the new one, on the next tick)
         decideNext_.insert(std::lower_bound(decideNext_.begin(), decideNext_.end(), c.id), c.id);

@@ -53,6 +53,11 @@ struct LaneMove {
     // Its front is on the new line: the move is over for the driving (no longer listed in both lanes). It is kept only
     // while its REAR still follows the same curve, a body length behind -- drawn, never decided by (Car::offsetRearLag).
     bool frontDone = false;
+    // A MOVE BEGUN WHILE THE LAST ONE'S REAR WAS STILL CROSSING (one lane change straight after another): that move's
+    // curve, which the rear goes on following, added to this one's (drawn only). carryLength 0: none.
+    Real carryFrom = 0;
+    double carryStart = 0;
+    Real carryLength = 0;
 };
 constexpr Real kMoveMargin = 1.25;
 // How far back a driver looks for the car that would be behind it in the lane beside, along the paths leading into that
@@ -83,6 +88,18 @@ inline Real laneMoveLength(Real across, Real speed, Real seconds, Real tightestR
 inline Real laneMoveOffset(const LaneMove& m, Real travelled) {
     const Real u = m.length > 0 ? std::clamp(travelled / m.length, Real(0), Real(1)) : Real(1);
     return m.from * (1 - u * u * (3 - 2 * u));
+}
+// Where the rear is in a move (its offset from the new lane's line), `body` metres behind a front `travelled` metres in:
+// this move's curve a body length back, plus what is left of a move it was begun on top of.
+inline Real laneMoveRearOffset(const LaneMove& m, Real travelled, Real body) {
+    Real rear = laneMoveOffset(m, travelled - body);
+    if (m.carryLength > 0) {
+        LaneMove carried;
+        carried.from = m.carryFrom;
+        carried.length = m.carryLength;
+        rear += laneMoveOffset(carried, static_cast<Real>(m.startOdometer - m.carryStart) + travelled - body);
+    }
+    return rear;
 }
 
 // THE LANE BESIDE ME AND THE GAP IN IT, as one driver sees it now.
