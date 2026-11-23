@@ -92,6 +92,9 @@ struct RouteClass {
     // Routes may change lanes. Off, a route keeps to the lane the car is in and the lanes that lane leads into, so a car
     // that cannot change lanes yet can drive every route it is given (Driving sets it from DrivingSettings::laneChanges).
     bool laneChanges = true;
+    // ...and only out of a lane at least this long (m; 0: any): a move across needs room, the shortest its turning circle
+    // allows and its own length (the driving's lane_change.h laneMoveShortest), so a short stretch is not changed in.
+    Real laneChangeLeast = 0;
     // Connectors CLOSED to the class, sorted: turns it could never (or too seldom) be granted room beyond (room.h
     // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).
     // Driving fills it once it has the rules; bindRouteClass leaves it empty.
@@ -230,6 +233,11 @@ RoutePlace placeOnRoute(const Route& route, const engine::LaneGraph& roads, cons
 // Which way across the road.
 enum class Across : uint8_t { None, TowardKerb, TowardOffside };
 constexpr uint8_t kAcrossCount = 3;
+
+// THE LANE BESIDE `lane` in its section, toward the kerb or toward the offside, when the line between may be crossed from
+// this lane's side; none otherwise (no such lane, a solid line, no sound section). The router's own sidestep: the one
+// answer to "which lane runs beside mine here, and may I cross into it" (the driving's lane changes ask it too).
+engine::PathId laneBeside(const engine::LaneGraph& g, engine::PathId lane, bool towardKerb);
 
 // HOW MANY LANES OVER the nearest lane with strictly fewer changes still needed is, and which way. Zero lanes (and
 // None) when this lane is already as good as any in its section, or when the lane is in no leg at or after `fromLeg`

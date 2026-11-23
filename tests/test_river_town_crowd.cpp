@@ -224,6 +224,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             const std::size_t at = card.find("by rule \"");
             const std::size_t to = at == std::string::npos ? at : card.find('"', at + 9);
             ++why[at == std::string::npos ? std::string("(no rule named)") : card.substr(at + 9, to - at - 9)];
+            static int shown = 0;
+            if (card.find("now: the end of its way") != std::string::npos && shown++ < 3)
+                std::printf("    [river] standing at the end of its way:\n%s\n", card.substr(0, 1500).c_str());
         }
         for (const std::pair<const std::string, int>& w : why) std::printf("    [river] standing at the end: %d by \"%s\"\n", w.second, w.first.c_str());
     }

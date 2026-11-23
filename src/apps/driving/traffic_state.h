@@ -135,6 +135,9 @@ struct Car {
     engine::PathId path;              // the path its front bumper is on
     // The second path it is ALSO listed on while changing lanes (the lane it is moving into or out of); none otherwise.
     engine::PathId besidePath;
+    // ...and where its front is along THAT lane, less where it is along its own (m): the two lanes of a section are not
+    // level metre for metre on a bend (the inner lane is shorter), so it is listed there at its own place (sitting 5).
+    Real besideShift = 0;
     Real along = 0;                   // where its front bumper is: metres along `path`
     // How far its middle is to the side of the path's centre line: + toward the kerb side, - toward the offside. Zero
     // except during a lane change.

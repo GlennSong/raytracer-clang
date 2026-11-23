@@ -183,7 +183,11 @@ constexpr double kLongestStand = 100.0;
 // 8.85 -> 9.67 m/s, standing at the end 78 -> 52, ramps used 6 -> 8, cars over kLongestStand 12 -> 10 (the longest
 // 142.9 -> 169.5 s: car 9 refused room beyond). The same two failures: queues 2.40 -> 3.03 s a car (over 8 gaps; turns
 // included 3.09 -> 3.08), and cars over kLongestStand.
-constexpr uint64_t kFiveMinuteStateHash = 0x9956a73de1425d39ull;
+// Retaken 2026-11-22 (ADR-0489): the pin had gone stale since the #306 sweep's bug fixes (94341134, the walk-only
+// phases; 511dc08e, followers along a split's stretch), which changed the lab's driving without retaking it; the same
+// value is given at 3db7e3d4 and with ADR-0489's lane change step present but off (routes planning no changes), so the
+// lane change step itself changes nothing here. 0x9956a73de1425d39 -> 0xd6190c9be20ab725. The same two failures.
+constexpr uint64_t kFiveMinuteStateHash = 0xd6190c9be20ab725ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -523,6 +527,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     for (int i = 1; i <= steps; ++i) {
         city.step(lc.world, kStep);
         const Real now = i * kStep;
+        if (std::getenv("RT_LAB_EARLY") && i == 4885)
+            if (const driving::Car* c54 = d->car(driving::CarId(54))) {
+                std::string why;
+                const bool holds = d->waitReasonHolds(*c54, &why);
+                std::printf("      [early] car 54 reason holds %d (%s); beside %d offset %.3f\n%s\n", holds ? 1 : 0, why.c_str(),
+                            c54->besidePath.valid() ? static_cast<int>(c54->besidePath.index) : -1, c54->offset,
+                            d->describeCar(c54->id).substr(0, 1800).c_str());
+            }
         for (const driving::Car& c : d->cars()) {
             if (!c.driven) continue;
             const engine::Path& p = roads.paths[c.path.index];
@@ -1000,6 +1012,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
     const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
     printTouches(*d, touches);
+    {   // LANE CHANGES (sitting 5)
+        const driving::Driving::LaneChangeCounts& n = d->laneChangeCounts();
+        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu)\n",
+                    static_cast<unsigned long long>(n.wanted), static_cast<unsigned long long>(n.begun),
+                    static_cast<unsigned long long>(n.finished), static_cast<unsigned long long>(n.backedOff),
+                    static_cast<unsigned long long>(n.missed),
+                    static_cast<unsigned long long>(n.missedNoRoute));
+    }
     CHECK(touches.spells <= kMostTouchSpells);
     // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7
     // to 2.1 s; it passed on the lane graph worked out from the built roads). Left failing, not loosened: the lane level

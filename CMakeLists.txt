@@ -504,6 +504,7 @@ add_library(driving STATIC
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/room.cpp            # room beyond a junction, asked for and granted one car at a time (#264)
     src/apps/driving/things.cpp          # what is in a driver's way, whatever it is, and going round it (ADR-0451)
+    src/apps/driving/lane_change.cpp     # lane changes: the lane the route needs, MOBIL's safe gap, the move (sitting 5)
     src/apps/driving/route.cpp           # a vehicle class bound to the road for the one router (roads/route.h, ADR-0467)
     src/apps/driving/signal_programme.cpp   # the traffic lights' clock: programmes, yellow, a pure function of time (#261)
     src/apps/driving/rule_set.cpp

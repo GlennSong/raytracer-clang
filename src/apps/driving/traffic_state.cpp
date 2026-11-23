@@ -119,8 +119,8 @@ void rebuildPathLists(const engine::LaneGraph& roads, const VehicleClasses& clas
             l.path = car.besidePath.index;
             l.entry.car = car.id;
             l.entry.why = OnPath::Beside;
-            l.entry.front = std::clamp(car.along, Real(0), laneLength);
-            l.entry.rear = std::clamp(car.along - length, Real(0), laneLength);
+            l.entry.front = std::clamp(car.along + car.besideShift, Real(0), laneLength);
+            l.entry.rear = std::clamp(car.along + car.besideShift - length, Real(0), laneLength);
             listed.push_back(l);
         }
     }

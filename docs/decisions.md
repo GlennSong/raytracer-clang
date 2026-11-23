@@ -24416,3 +24416,33 @@ Words:
 The crowd test now also checks that no bus stands in the road away from a stop for 3 minutes or more.
 
 **Unchanged:** brain_crowd passes as it was. brain_lab fails the same 14 checks as at HEAD before this.
+
+## ADR-0489 — Cars change lanes for their route: a safe gap by MOBIL's own rule, an S-curve across, a missed turn routed again; for now only where a level asks (sitting 5, step 1)
+
+**Why:** a route that needs another lane used to be refused (no route), or the car kept to its lane and stopped dead where it ended. Sitting 5 of `docs/two-drivers-meeting-design.md` gives one mechanism for it; this is its first step, the lane change a route needs. Merging by zipper and pulling out and in come next.
+
+**Words:** a *gap* is the space in the lane beside between the car that would be ahead of me and the one that would be behind me. *MOBIL* is the published lane-changing model whose safety rule this uses.
+
+**What a driver does** (`src/apps/driving/lane_change.h`, `.cpp`; the "lane change step"):
+- **Wants to:** the fact `wrong_lane`, from the route (`lanesToCross`).
+- **Judges the gap:** the fact `gap_beside` holds when, after moving over, the car that would be behind me in that lane, and I behind the car that would be ahead, each brake no harder than `lane_change_safe_brake`. Both are judged by the following model itself (the IDM, `easingAcceleration`), as MOBIL's eq. 2 asks; 4 m/s² is MOBIL's table 1. The car behind is looked for back along the paths leading into the lane too (up to 80 m), not only within the lane.
+  - Also required: my whole body fits in that lane; the two lanes run side by side where I am; I am rolling (at least 1 m/s); the move fits before that lane ends.
+- **Decides:** the rule "change lanes for my route" in `rules/lab.lua`: `wrong_lane` and `gap_beside` give the intention `lane = change`.
+- **Moves:** it joins the lane beside exactly where it is, by the same reading of a lane that draws it (`pointAt` and `directionAt`). It keeps its old line as a sideways offset and eases it to zero along an S-curve (smoothstep) laid by distance covered, never by time. So it never slides sideways at rest, and the curve is never tighter than its turning circle (`laneMoveLength`).
+  - While it moves across it is listed in both lanes, at its true place in each (`Car::besideShift`: on a bend the lanes' metres differ). It keeps behind the car ahead in the lane it is leaving, and the cars behind it in either lane follow it.
+  - Off its lane's line on a bend, it advances by its true speed on the line it drives.
+  - It decides afresh on the very next tick from its new lane.
+- **Two cars, one gap:** a change is checked again against the moves already made in the same tick, and given up if one took the gap. Nothing central hands out gaps.
+- **Missed turn:** no gap before the point where a move must begin: it is routed again from its lane, with the other lanes of that stretch closed, and changes lanes again later as it needs. No way on: the host is told "no route", as when a trip is begun with nowhere to go (a resident's brain plans again).
+- **The router** plans no move in a lane too short to make one in (`RouteClass::laneChangeLeast`). A car's way ends, as a place to come to rest, only where its lane really ends or at its destination's stretch. A destination in the lane beside, in its own stretch, is reached level with it, as before.
+- **The measurements** judge a jump by the front's true move while a car is off its lane's line, its sideways move excepted.
+
+**Checked:**
+- driving_tests 201/201, among them `trip_places_6b_a_car_changes_lanes_for_its_route`:
+  - On an empty road a car in a lane that ends moves over and arrives. It is listed in both lanes as it goes, its drawn front never moves more than its speed allows, and its body never turns on the spot.
+  - With the lane beside full, it does not wait in its lane: it asks for a way on once and tells the host "no route".
+- **traffic_lab with lane changes on** (`RT_LANE_CHANGES=1`, five minutes): 580 begun, 577 finished, 0 overlaps, 0 bodies touching, 0 tight turns, 59 turns missed (4 with no way on).
+
+**Not done, and why lane changes are off by default:** on traffic_lab with them on the flow is far worse than without. At 300 s, 166 cars have arrived and 152 stand, against 400 arrived and 49 standing without them. Also still failing: 15,202 short spells standing with no reason and 311 small jumps (the worst 2.2 cm). On river_town and brain_crowd more people drive (car trips 321 → 434), and river_town's arrivals fall (672 → 594). So `city_sim` plans lane changes only with `RT_LANE_CHANGES=1`, and everything lane changes alter waits on that (`Driving::changingLanes`). Without it every level drives exactly as before: its pins hold. The flow is the next work; after it, merging by zipper and pulling out and in.
+
+**Indicators** are not drawn yet (the measurements' "indicator on before the move" row stays "not measured").

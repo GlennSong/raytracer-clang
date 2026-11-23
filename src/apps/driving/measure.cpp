@@ -1178,6 +1178,7 @@ Measurements::Seen Measurements::seeCar(const Driving& d, const Car& c) const {
     s.odometer = c.odometer;
     s.front.path = c.path;
     s.front.along = c.along;
+    s.offset = c.offset;
     s.speed = c.speed;
     s.atRest = c.speed < kStandingBelow;
     s.restCameAt = s.atRest ? d.clockSeconds() : kNotYet;
@@ -1272,8 +1273,14 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
     if (sameDrive) {
         const double moved = c.odometer - before->odometer;
         const double dx = out.frontAt.x - before->frontAt.x, dz = out.frontAt.z - before->frontAt.z;
-        const double chord = std::sqrt(dx * dx + dz * dz);
-        rows_.jumps.note(c.id, tick, now, std::max(chord, moved), before->speed, c.speed, dt);
+        // (the sideways part of a swerve or a move across is a real motion its speed along the lane leaves out: the
+        // front's move along the lane is what its speed must account for)
+        const double sideways = std::fabs(out.offset - before->offset);   // (carried across a path's end with it)
+        const double chord = std::sqrt(std::max(0.0, dx * dx + dz * dz - sideways * sideways));
+        // (off its lane's line on a bend its odometer, in the lane's metres, runs ahead of or behind what its front
+        // really covers: then the front's own move is the one to judge)
+        const bool offLine = std::fabs(before->offset) > kOffsetOnLine || std::fabs(out.offset) > kOffsetOnLine;
+        rows_.jumps.note(c.id, tick, now, offLine ? chord : std::max(chord, moved), before->speed, c.speed, dt);
         const double tightest =
             c.vehicleClass < d.vehicleClasses().size() ? d.vehicleClasses().at(c.vehicleClass).tightestTurnRadius : 0;
         rows_.turns.note(c.id, tick, now, planAngle(before->bodyX, before->bodyZ, out.bodyX, out.bodyZ), moved,

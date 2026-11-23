@@ -638,6 +638,7 @@ private:
         double odometer = 0;
         PathPoint front;
         engine::Vec3 frontAt;
+        double offset = 0;            // its sideways offset from its lane's line (a swerve, a move across)
         double bodyX = 0, bodyZ = 0;  // the body's direction on the plan
         double speed = 0;
         bool atRest = true;

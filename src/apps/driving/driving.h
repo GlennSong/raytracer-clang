@@ -47,6 +47,7 @@
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
 #include "apps/driving/room.h"            // room beyond a junction, granted one car at a time
 #include "apps/driving/things.h"          // what is in a driver's way, whatever it is (ADR-0451)
+#include "apps/driving/lane_change.h"     // lane changes (sitting 5)
 #include "apps/driving/signal_programme.h"   // the traffic lights' clock: a pure function of the time
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
@@ -89,6 +90,9 @@ struct Trip {
     // ANOTHER WAY (issue #284): the tick its driver last asked for another way, refused room at a junction for longer
     // than the rule set's room_refused_another_way (0: never). It asks again no sooner than that long after.
     uint64_t askedAnotherWayTick = 0;
+    // A MISSED TURN (sitting 5): the lane it last passed its last chance to change lanes in, with no gap; routed again
+    // from there, the other lanes of that stretch closed to the route (asked once from a lane, not again).
+    engine::PathId missedOn;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
     // again, its path at that moment first. The move step never takes the car past the end of the last of them.
     WayAhead way;
@@ -393,6 +397,22 @@ public:
         uint64_t anotherWaysWanted = 0;
     };
     const ThingCounts& thingCounts() const { return thingCounts_; }
+    // LANE CHANGES (lane_change.h; sitting 5): moves begun and finished, and last chances missed (the car carried on in
+    // its lane and was routed again from there).
+    struct LaneChangeCounts {
+        uint64_t wanted = 0;     // decisions whose route needed another lane
+        uint64_t begun = 0;      // moves across begun
+        uint64_t finished = 0;   // ...and done
+        uint64_t missed = 0;     // last chances passed without a gap: routed again from the lane it was in
+        uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it stays in its lane and stops at its end)
+        uint64_t backedOff = 0;  // changes given up at the last moment: a car before it in the tick's order took the gap
+    };
+    const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }
+    bool laneChangeStep() const { return laneChangesOn_; }
+    // Lane changes under way: the step is there AND routes plan them (DrivingSettings::laneChanges). Everything lane
+    // changes alter -- the moves, the way's end, a line's speed, what the state hash folds -- waits on this, so a level
+    // whose routes do not plan them drives exactly as before them.
+    bool changingLanes() const { return laneChangesOn_ && settings_.laneChanges; }
     // THE CROSSWALK A DRIVER GAVE WAY AT in its last decision (the road model's id; kNoIndex: none), ADR-0452.
     uint32_t crosswalkGivingWayAt(CarId car) const {
         const std::map<CarId, uint32_t>::const_iterator it = crosswalkOf_.find(car);
@@ -419,6 +439,12 @@ public:
     // turnsClosedForRoom). A host that
     // finds places to send cars uses the same, so it never picks a place only a closed turn reaches.
     RouteClass routeClass(uint32_t vehicleClass) const;
+    // LANE CHANGES (lane_change.h; sitting 5)
+    Real followAcceleration(const Car& who, Real gap, Real speedAhead) const;
+    bool sameSection(engine::PathId a, engine::PathId b) const;
+    // How far short of its last chance (beyond its stopping distance, m) a car gives up looking for a gap and is
+    // routed again from its lane: [~] about the room a car pulls up in, so it never stands in a through lane to wait.
+    static constexpr Real kLastChanceMargin = 2.0;
     // A ROUTE FOR A CAR OF `vehicleClass` from `from` to `to` (routeClass: as its trips are routed), with no car on the
     // road: what a trip planner prices a drive by before the car sets off.
     Route routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const;
@@ -539,8 +565,13 @@ private:
         // WHAT WAS IN ITS WAY and what it decided about it (the thing step only)
         ThingAhead thing;
         bool horn = false, pass = false, anotherWay = false;
+        // ITS LANE (the lane change step only): what it saw, and whether it decided to move over now
+        bool laneSeen = false;
+        LaneChangeView lane;
+        bool changeLane = false;
     };
     // Counts and traces what one update of a car's plans did.
+    void changeLanes(Car& c, Trip& t, const Planned& p);
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
     // Records on the trip's plans what the driver decided (give_way.h), counting and tracing each change, and fixes the
     // arrival at each line it judged for the first time (`lineIn`, by plan).
@@ -638,6 +669,13 @@ private:
     std::map<CarId, ThingWatch> watch_;
     std::vector<CarId> horns_;
     ThingCounts thingCounts_;
+    bool laneChangesOn_ = false;
+    Real laneChangeBrake_ = 0, laneChangeSeconds_ = 0;
+    IntentionKindId laneKind_ = kNoIntentionKind;
+    LaneChangeCounts laneChangeCounts_;
+    std::map<CarId, LaneMove> laneMoves_;   // the cars moving across into the lane beside, and each one's move
+    std::vector<std::vector<engine::PathId>> pathsBefore_;   // per path, the paths leading into it (lane changes look back)
+    std::vector<CarId> decideNext_;          // cars that decide again on the next tick whatever their turn (moved lanes)
     IntentionKindId passKind_ = kNoIntentionKind, wayKind_ = kNoIntentionKind;
     ActionId hornAction_ = kNoAction;
     void askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing);

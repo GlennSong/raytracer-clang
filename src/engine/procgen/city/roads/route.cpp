@@ -222,6 +222,8 @@ Route noRoute(Route r, NoRouteWhy why, const std::string& words) {
 
 }  // namespace
 
+PathId laneBeside(const LaneGraph& g, PathId lane, bool towardKerb) { return sidestep(g, lane, towardKerb); }
+
 // ---- ways on closed to a class (issue #284) -------------------------------------------------------------------------
 
 namespace {
@@ -496,7 +498,7 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
             });
         }
         // Sideways, into the lane beside (a start node goes to the start node beside it), when the class may.
-        if (cls.laneChanges && path.kind == PathKind::Lane) {
+        if (cls.laneChanges && path.kind == PathKind::Lane && path.length >= cls.laneChangeLeast) {
             for (const bool towardKerb : {false, true}) {
                 const PathId beside = sidestep(roads, p, towardKerb);
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;

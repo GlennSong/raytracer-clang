@@ -142,8 +142,9 @@ struct Obstacle {
     StopFor stopFor = StopFor::Place;   // Stop: what it waits for (traffic_state.h)
     bool hardOnly = false;          // WayEnd: only where the driver stopped looking (the hard limit alone applies)
 };
-// The most things one driver weighs at once: the car ahead, the place to stop by, the end of the way.
-constexpr std::size_t kMaxObstacles = 3;
+// The most things one driver weighs at once: the car ahead, the place to stop by, the end of the way, and while it moves
+// across into the lane beside the car ahead in the lane it is leaving (sitting 5).
+constexpr std::size_t kMaxObstacles = 4;
 
 // WHAT ONE STEP COMES TO.
 struct StepOutcome {

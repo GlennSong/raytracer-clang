@@ -11,7 +11,8 @@
 -- from the numbers below (issue #261): stop at a red, stop at a yellow if you comfortably can, turn on red after a full
 -- stop where `turn_on_red` allows; a far turn on a plain green may wait inside the junction for a gap. Nobody enters a
 -- junction it cannot leave (issue #264): room beyond is asked for and granted one car at a time, and a car refused it
--- waits at the line (the "no room beyond" rule). No lane changes yet.
+-- waits at the line (the "no room beyond" rule). A car whose route needs another lane moves over into a safe gap (the
+-- "change lanes for my route" rule, sitting 5).
 --
 -- Every number says where it came from. "[~]" marks a guess to tune against the lab's measurements, not a figure
 -- from a source. The California Vehicle Code (CVC) is read with near turn / far turn and kerb side in place of its
@@ -269,6 +270,14 @@ rule_set = {
     -- the crossing is stopped for however hard that takes). The same comfortable braking the yellow is timed with.
     crosswalk_deceleration = { 10.0, unit = "ft/s2",
       source = "ITE kinematic change interval's deceleration (10 ft/s2), as signal_deceleration above: a comfortable stop; [~] its use here a judgement" },
+    -- LANE CHANGES (sitting 5; src/apps/driving/lane_change.h). A change is safe when, after it, the car behind in the new
+    -- lane need brake no harder than this to keep behind me by its own following, and nor need I behind the car ahead:
+    -- MOBIL's safety criterion.
+    lane_change_safe_brake = { 4.0, unit = "m/s2",
+      source = "Kesting, Treiber & Helbing 2007, General lane-changing model MOBIL for car-following models (TRR 1999), eq. 2 (the new follower's acceleration >= -b_safe) and table 1 (b_safe = 4 m/s2, well below the 9 m/s2 a car can brake on a dry road)" },
+    -- The move across, from one lane's line to the next.
+    lane_change_seconds = { 4.0, unit = "s",
+      source = "[~] driving-model-design.md section 10's 3-4 s; field studies of lane-change duration report means of 4-5 s (from memory, unverified): to tune against what the lab shows" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -362,6 +371,10 @@ rule_set = {
       when = { all = { "thing_ahead", { "not", "room_to_pass" }, { "waited_for_it", ">=", "wait_before_another_way" },
                        { "thing_stood", ">=", "wait_before_another_way" } } },
       give = { way = "another" } },
+    -- CHANGE LANES FOR MY ROUTE (sitting 5): my route needs the lane beside, and there is a safe gap in it. With no gap,
+    -- I keep to my lane; past my last chance I am routed again from it (the move step's, not a rule: I never stop in a
+    -- through lane to wait for one).
+    { name = "change lanes for my route", when = { all = { "wrong_lane", "gap_beside" } }, give = { lane = "change" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's

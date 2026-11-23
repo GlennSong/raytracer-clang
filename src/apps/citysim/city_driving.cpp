@@ -88,6 +88,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse("the thing step would not register: " + all);
     }
+    // Lane changes (sitting 5): the lane the route needs, the gap beside, the move across.
+    if (!driving::registerLaneChangeFacts(facts, &problems) || !driving::registerLaneChangeAnswers(vocabulary, &err)) {
+        std::string all = err;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the lane change step would not register: " + all);
+    }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
     if (!driving::buildRoadRules(*d.model(), ruleSet, facts, roadRules, &problems)) {

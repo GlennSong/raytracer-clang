@@ -199,8 +199,16 @@ rule_set = { name = 'trip_places_test', drives_on = 'left', ranks = {}, devices 
 
 namespace {
 
+// ...and with the lane change step (sitting 5): its numbers, the lab's own rule, and the step's facts registered.
+const char* kLaneChangeLua = R"LUA(
+rule_set.numbers.lane_change_safe_brake = { 4, unit = 'm/s2', source = 'test: MOBIL b_safe' }
+rule_set.numbers.lane_change_seconds = { 4, unit = 's', source = 'test' }
+table.insert(rule_set.rules, { name = 'change lanes for my route', when = { all = { 'wrong_lane', 'gap_beside' } },
+                                give = { lane = 'change' } })
+)LUA";
+
 // The rules above, read and bound to `d`'s road the way a level reads them, handed to `d`.
-bool giveRules(Driving& d, std::vector<std::string>* problems = nullptr) {
+bool giveRules(Driving& d, std::vector<std::string>* problems = nullptr, bool laneChangeStep = false) {
     FactRegistry facts;
     if (!registerBuiltInFacts(facts) || !registerMoveNeeds(facts)) return false;
     engine::ScriptVM vm;
@@ -208,7 +216,10 @@ bool giveRules(Driving& d, std::vector<std::string>* problems = nullptr) {
     RuleSet ruleSet;
     AnswerVocabulary vocabulary;
     CompiledRules rules;
-    if (!vm.doString(kRulesLua, &err) || !loadRuleSet(vm, "trip_places_test.lua", ruleSet, &err) ||
+    if (laneChangeStep &&
+        (!registerLaneChangeFacts(facts, problems) || !registerLaneChangeAnswers(vocabulary, &err))) return false;
+    if (!vm.doString(kRulesLua, &err) || (laneChangeStep && !vm.doString(kLaneChangeLua, &err)) ||
+        !loadRuleSet(vm, "trip_places_test.lua", ruleSet, &err) ||
         !loadRules(vm, "trip_places_test.lua", facts, ruleSet, vocabulary, rules, &err)) {
         std::printf("    rules: %s\n", err.c_str());
         return false;
@@ -321,6 +332,111 @@ TEST_CASE(trip_places_6_no_lane_change_routes_and_the_road_end) {
         CHECK(d.endTrip(trip));
         CHECK(!d.atRoadEnd(CarId(1)));
         CHECK(d.removeCar(CarId(1)));
+    }
+}
+
+// ---- 6b. the same car, with the lane change step: it moves over and gets there (sitting 5) ------------------------------
+
+TEST_CASE(trip_places_6b_a_car_changes_lanes_for_its_route) {
+    TestRoadSpec spec;
+    spec.lanesEachWay = 2;
+    TestRoads t = driving_test::straightRoad(2, spec);
+    const engine::PathId from = t.straightLane(0, true, 1), to = t.straightLane(1, true, 1);
+    t.model.laneLevel.paths[from.index].next = engine::Range();
+    const engine::PathId beside = laneBeside(t.model.laneLevel, from, false);
+    CHECK(beside.valid());
+    // A. AN EMPTY ROAD: it moves into the lane beside, listed in both while it does, and arrives
+    {
+        Driving d(&t.model);
+        d.setVehicleClasses(oneClass());
+        DrivingSettings settings;
+        settings.laneChanges = true;
+        d.setSettings(settings);
+        CHECK(giveRules(d, nullptr, true));
+        CHECK(d.laneChangeStep());
+        CHECK(d.placeCar(CarId(1), 0, at(from, 20)));
+        const TripId trip = d.beginTrip(CarId(1), 1, at(to, 50));
+        CHECK(trip.valid());
+        bool arrived = false, listedTwice = false;
+        Real widest = 0, worstJump = 0, worstTurn = 0;
+        bool had = false;
+        CarPose was;
+        Real wasSpeed = 0, wasOffset = 0;
+        engine::PathId wasPath;
+        for (int i = 0; i < 60 * 120 && !arrived; ++i) {
+            d.tick(1.0 / 60);
+            if (const Car* c = d.car(CarId(1))) {
+                // (the drawn front never moves further than its speed and its sideways move carry it, nor turns on the spot)
+                const CarPose pose = carPose(t.model.laneLevel, d.vehicleClasses(), d.ruleSet(), *c);
+                if (had) {
+                    const Real dx = pose.front.x - was.front.x, dz = pose.front.z - was.front.z;
+                    const Real side = c->path == wasPath ? std::fabs(c->offset - wasOffset) : Real(0);
+                    const Real along = std::sqrt(std::max(Real(0), dx * dx + dz * dz - side * side));
+                    worstJump = std::max(worstJump, along - std::max(wasSpeed, c->speed) / 60);
+                    const Real turn = std::fabs(was.body.x * pose.body.z - was.body.z * pose.body.x);
+                    worstTurn = std::max(worstTurn, turn);
+                }
+                had = true;
+                was = pose;
+                wasSpeed = c->speed;
+                wasOffset = c->offset;
+                wasPath = c->path;
+                if (c->besidePath.valid()) {
+                    bool onMine = false, onOld = false;
+                    for (const PathEntry& e : d.pathLists().on(c->path)) onMine = onMine || e.car == CarId(1);
+                    for (const PathEntry& e : d.pathLists().on(c->besidePath)) onOld = onOld || e.car == CarId(1);
+                    listedTwice = listedTwice || (onMine && onOld);
+                }
+                widest = std::max(widest, std::fabs(c->offset));
+            }
+            for (const Event& e : d.drainEvents()) arrived = arrived || e.kind == EventKind::Parked;
+        }
+        const Driving::LaneChangeCounts& n = d.laneChangeCounts();
+        std::printf("    an empty road: begun %llu, finished %llu, missed %llu; listed in both lanes %d; widest offset %.2f m; "
+                    "arrived %d at %.1f s\n",
+                    static_cast<unsigned long long>(n.begun), static_cast<unsigned long long>(n.finished),
+                    static_cast<unsigned long long>(n.missed), listedTwice ? 1 : 0, widest, arrived ? 1 : 0, d.clockSeconds());
+        // (twice: out of the lane that ends, then back to the kerb lane its destination is on in the next stretch)
+        std::printf("    ...its drawn front: the worst move beyond its speed %.4f m a tick; the most its body turned in a tick %.5f rad\n",
+                    worstJump, worstTurn);
+        CHECK(worstJump < 0.01);
+        // (once: out of the lane that ends; in its destination's stretch, level with it in any lane is there)
+        CHECK(n.begun == 1u && n.finished == 1u && n.missed == 0u);
+        CHECK(listedTwice);
+        CHECK(widest > 2.0 && widest < 4.5);   // (it started from its old lane's line: a lane's width over)
+        CHECK(arrived);
+        CHECK(!d.atRoadEnd(CarId(1)));
+    }
+    // B. A LANE OF STANDING CARS BESIDE IT (placed, never driven): no gap. It does not wait in its lane for one: as it nears
+    // where a move across must begin it asks for a way on from its lane -- here there is none (its lane ends), so the host
+    // is told "no route" (once), as when a trip is begun with nowhere to go, and the car stands at its lane's end
+    {
+        Driving d(&t.model);
+        d.setVehicleClasses(oneClass());
+        DrivingSettings settings;
+        settings.laneChanges = true;
+        d.setSettings(settings);
+        CHECK(giveRules(d, nullptr, true));
+        const Real end = t.model.laneLevel.paths[from.index].length;
+        CHECK(d.placeCar(CarId(1), 0, at(from, 20)));
+        // (bumper to bumper from the lane's start to its end: no gap a car fits in anywhere)
+        const Real spacing = d.vehicleClasses().at(0).length + 0.3;
+        for (uint32_t k = 0; spacing * (k + 1) <= end; ++k) d.placeCar(CarId(10 + k), 0, at(beside, spacing * (k + 1)));
+        CHECK(d.beginTrip(CarId(1), 1, at(to, 50)).valid());
+        int noRoutes = 0;
+        for (int i = 0; i < 60 * 60 && !d.atRoadEnd(CarId(1)); ++i) {
+            d.tick(1.0 / 60);
+            for (const Event& e : d.drainEvents()) noRoutes += e.kind == EventKind::NoRoute && e.car == CarId(1) ? 1 : 0;
+        }
+        const Driving::LaneChangeCounts& n = d.laneChangeCounts();
+        std::printf("    a lane of standing cars beside it: begun %llu, missed %llu (no route on %llu); told the host no route %d "
+                    "time(s); at the road's end %d\n",
+                    static_cast<unsigned long long>(n.begun), static_cast<unsigned long long>(n.missed),
+                    static_cast<unsigned long long>(n.missedNoRoute), noRoutes, d.atRoadEnd(CarId(1)) ? 1 : 0);
+        CHECK(n.begun == 0u);
+        CHECK(n.missed == 1u && n.missedNoRoute == 1u);
+        CHECK(noRoutes == 1);
+        CHECK(d.atRoadEnd(CarId(1)));
     }
 }
 
