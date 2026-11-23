@@ -503,7 +503,7 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
                 const PathId beside = sidestep(roads, p, towardKerb);
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
                 const bool startNode = u >= n && u < destNode;
-                if (startNode && !startInSection) continue;
+                if (startNode && (!startInSection || cls.keepLaneAtStart)) continue;
                 const uint32_t v = startNode ? n + roads.paths[beside.index].indexInSection : nodeFor(beside, nodeState(u));
                 search.reach(v, u, cost + kLaneChangeCostSeconds, 1);
             }

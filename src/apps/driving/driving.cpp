@@ -1340,20 +1340,12 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     if (!l.last.needed || l.changeBy > stoppingDistance(c.speed, cls.brake) + kLastChanceMargin) return;
     if (t.missedOn == c.path) return;   // (asked once from this lane already)
     t.missedOn = c.path;
-    // THE MISSED TURN: routed again from where it is, keeping to its lane through this stretch -- the other lanes of
-    // the section it is in are closed to the route -- and free to change lanes again past the junction
+    // THE MISSED TURN: routed again from where it is, keeping to its lane to the end of this stretch, and free to
+    // change lanes again past the junction. (Not by closing the stretch's other lanes to the whole route: a way round
+    // the block often comes back along this same road, in the lane it missed.)
     ++laneChangeCounts_.missed;
     RouteClass inLane = routeClass(c.vehicleClass);
-    const engine::Path& here = roads_->paths[c.path.index];
-    if (here.section.valid() && here.section.index < roads_->sections.size()) {
-        const engine::Range lanes = roads_->sections[here.section.index].lanes;
-        for (uint32_t k = lanes.first; k < lanes.end() && k < roads_->sectionLanes.size(); ++k) {
-            const engine::PathId other = roads_->sectionLanes[k];
-            if (other == c.path) continue;
-            const std::vector<engine::PathId>::iterator at = std::lower_bound(inLane.closed.begin(), inLane.closed.end(), other);
-            if (at == inLane.closed.end() || *at != other) inLane.closed.insert(at, other);
-        }
-    }
+    inLane.keepLaneAtStart = true;
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
