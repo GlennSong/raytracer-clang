@@ -428,6 +428,8 @@ struct ReachableParts {
 // allow, over every path. A caller asking for one kind of vehicle, or for cars that cannot change lanes yet, narrows it.
 struct ReachRules {
     bool laneChanges = true;        // follow the lane changes the lines allow (false: next lists only)
+    Real laneChangeLeast = 0;       // ...and only out of a lane at least this long (m), as the router changes lanes
+                                    // (route.h RouteClass::laneChangeLeast): the parts must agree with the routes
     std::vector<uint8_t> open;      // per path, non-zero: it may be driven; empty: every path may. A closed path is never
                                     // stepped onto and steps nowhere, so it is a part of its own.
 };

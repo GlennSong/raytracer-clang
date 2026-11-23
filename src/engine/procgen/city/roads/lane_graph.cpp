@@ -1086,7 +1086,9 @@ std::vector<PathId> stepsFrom(const LaneGraph& g, PathId from, const ReachRules&
     if (inRange(p.next, g.nextPaths.size()))
         for (uint32_t k = p.next.first; k < p.next.end(); ++k)
             if (g.nextPaths[k].index < g.paths.size() && isOpen(g.nextPaths[k])) out.push_back(g.nextPaths[k]);
-    if (!rules.laneChanges || p.kind != PathKind::Lane || p.section.index >= g.sections.size()) return out;
+    if (!rules.laneChanges || p.kind != PathKind::Lane || p.length < rules.laneChangeLeast ||
+        p.section.index >= g.sections.size())
+        return out;
     const Section& s = g.sections[p.section.index];
     if (!inRange(s.lanes, g.sectionLanes.size()) || !inRange(s.lines, g.laneLines.size())) return out;
     const uint32_t k = p.indexInSection;

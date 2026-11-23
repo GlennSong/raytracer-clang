@@ -40,6 +40,7 @@ TripPlaces findTripPlaces(const engine::LaneGraph& roads, const RouteClass& cls,
     out.partOfPath.assign(n, kNoTripPart);
     engine::ReachRules rules;
     rules.laneChanges = cls.laneChanges;
+    rules.laneChangeLeast = cls.laneChangeLeast;   // (a part the router could not leave by a lane change is no part)
     rules.open.assign(n, 0);
     for (std::size_t p = 0; p < n; ++p) rules.open[p] = mayUse(roads, cls, engine::PathId(static_cast<uint32_t>(p))) ? 1 : 0;
     const engine::ReachableParts parts = engine::reachableParts(roads, rules);
