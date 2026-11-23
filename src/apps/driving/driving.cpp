@@ -785,6 +785,7 @@ void Driving::plan() {
                                        [&](const Car& who, Real gap, Real speedAhead) {
                                            return followAcceleration(who, gap, speedAhead);
                                        });
+                if (lane.gap.safe && landsInAMeeting(c, lane.gap, cls.length)) lane.gap.safe = false;
             }
             p.laneSeen = true;
             view.laneChange = &lane;
@@ -1298,6 +1299,37 @@ Real Driving::followAcceleration(const Car& who, Real gap, Real speedAhead) cons
 // lane beside where it is -- its front at the same share of that lane's length -- still on its old line (an offset
 // from the new lane's), listed in both lanes, and eases across in the move step. No gap before its last chance, and
 // none to wait for without standing in a through lane: it carries on in its own lane, routed again from there.
+// WHERE ANOTHER PATH MEETS THE LANE I WOULD MOVE INTO (a ramp's lane joining it, a lane crossing it): I do not move
+// across into that stretch while a car on the other path is announced to be on it before I would be clear of it -- it
+// may no longer be able to stop for me (UK Highway Code rule 133: do not change lane where that would make another driver
+// change course or speed). Read off this tick's board, by the comfortable gap a driver decides to go into a meeting by.
+// (The 20-minute lab: a car moved across into a lane 30 m from where a ramp joined it, 0.4 s ahead of the ramp's car,
+// which could no longer stop; they overlapped by 1.8 m.)
+bool Driving::landsInAMeeting(const Car& c, const LaneGap& gap, Real length) const {
+    if (!gap.target.valid() || gap.target.index >= roads_->paths.size()) return false;
+    const engine::Path& lane = roads_->paths[gap.target.index];
+    const Real speed = std::max(c.speed, Real(1));
+    const Real rear = gap.targetAlong - length;
+    const Real gapNeeded = junctionNumbers_.gapComfortable;
+    for (uint32_t x = lane.crossings.first; x < lane.crossings.end(); ++x) {
+        const engine::CrossingId id = roads_->pathCrossings[x];
+        const engine::CrossingPoint& cp = roads_->crossings[id.index];
+        if (cp.otherSide != engine::OtherSide::Path) continue;
+        const bool mineIsA = cp.a == gap.target;
+        const Real from = mineIsA ? cp.aFrom : cp.otherFrom, to = mineIsA ? cp.aTo : cp.otherTo;
+        if (to < rear) continue;   // behind me there
+        const Real arrive = std::max(Real(0), from - gap.targetAlong) / speed;
+        if (arrive > junctionNumbers_.lookAheadTime) continue;
+        const Real clear = (to - rear) / speed;
+        const engine::PathId other = mineIsA ? cp.otherPath() : cp.a;
+        for (const Announcement& a : board_.on(id)) {
+            if (a.who == c.id.index || a.onPath != other) continue;
+            if (a.arriveIn < clear + gapNeeded && a.clearIn + gapNeeded > arrive) return true;
+        }
+    }
+    return false;
+}
+
 void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     const LaneChangeView& l = p.lane;
     if (!(l.need.onRoute && l.need.lanes > 0)) return;
@@ -1339,6 +1371,7 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
         move.from = c.offset;
         move.startOdometer = c.odometer;
         move.length = moveLength;
+        move.leftLane = c.besidePath;
         // (begun while the last move's rear is still crossing: the rear finishes that curve as it begins this one)
         if (const std::map<CarId, LaneMove>::iterator last = laneMoves_.find(c.id); last != laneMoves_.end()) {
             move.carryFrom = last->second.from;
@@ -1948,11 +1981,23 @@ bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
     const auto knownPath = [](const engine::LaneGraph& g, engine::PathId p) { return p.valid() && p.index < g.paths.size(); };
     // The paths it knows its way along, from where its front is: the named car must be on one of them (or on a path
     // leaving the same lane as one of them: the car ahead at a split, traffic_state.h carAhead).
+    // (a split's two paths, lanes or connectors: carAhead follows a car on the other one over the split's stretch)
+    const auto splitApart = [&](engine::PathId a, engine::PathId b) {
+        if (!knownPath(*roads_, a) || !knownPath(*roads_, b)) return false;
+        const engine::Range xs = roads_->paths[a.index].crossings;
+        for (uint32_t x = xs.first; x < xs.end() && x < roads_->pathCrossings.size(); ++x) {
+            const engine::CrossingPoint& rec = roads_->crossings[roads_->pathCrossings[x].index];
+            if (rec.otherSide != engine::OtherSide::Path || rec.meeting != engine::Meeting::Split) continue;
+            if ((rec.a == a && rec.otherPath() == b) || (rec.a == b && rec.otherPath() == a)) return true;
+        }
+        return false;
+    };
     const auto onMyWay = [&](const Car& other) {
         const auto touches = [&](engine::PathId p) {
+            if (splitApart(c.path, p)) return true;
             for (std::size_t k = t->wayAt; k < t->way.paths.size(); ++k) {
                 const engine::PathId w = t->way.paths[k];
-                if (w == p) return true;
+                if (w == p || splitApart(w, p)) return true;
                 if (knownPath(*roads_, w) && knownPath(*roads_, p) &&
                     roads_->paths[w.index].kind == engine::PathKind::Connector &&
                     roads_->paths[p.index].kind == engine::PathKind::Connector &&
@@ -1963,6 +2008,10 @@ bool Driving::waitReasonHolds(const Car& c, std::string* why) const {
         };
         if (touches(other.path)) return true;
         if (other.besidePath.valid() && touches(other.besidePath)) return true;   // (moving across, still in my lane)
+        // (its front across, its rear still leaving my lane)
+        if (const std::map<CarId, LaneMove>::const_iterator m = laneMoves_.find(other.id);
+            m != laneMoves_.end() && m->second.leftLane.valid() && touches(m->second.leftLane))
+            return true;
         for (std::size_t k = 0; k < other.trailCount && k < kMaxTrail; ++k)
             if (touches(other.trail[k])) return true;
         return false;

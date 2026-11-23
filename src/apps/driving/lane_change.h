@@ -53,6 +53,8 @@ struct LaneMove {
     // Its front is on the new line: the move is over for the driving (no longer listed in both lanes). It is kept only
     // while its REAR still follows the same curve, a body length behind -- drawn, never decided by (Car::offsetRearLag).
     bool frontDone = false;
+    // The lane it moves out of: until its rear is across, a car behind in that lane still follows it (a wait for it holds).
+    engine::PathId leftLane;
     // A MOVE BEGUN WHILE THE LAST ONE'S REAR WAS STILL CROSSING (one lane change straight after another): that move's
     // curve, which the rear goes on following, added to this one's (drawn only). carryLength 0: none.
     Real carryFrom = 0;

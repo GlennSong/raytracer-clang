@@ -575,6 +575,7 @@ private:
     };
     // Counts and traces what one update of a car's plans did.
     void changeLanes(Car& c, Trip& t, const Planned& p);
+    bool landsInAMeeting(const Car& c, const LaneGap& gap, Real length) const;
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
     // Records on the trip's plans what the driver decided (give_way.h), counting and tracing each change, and fixes the
     // arrival at each line it judged for the first time (`lineIn`, by plan).
