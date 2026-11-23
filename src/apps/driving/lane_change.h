@@ -40,6 +40,10 @@ constexpr const char* kFactChangeWaitLine = "change_wait_line";
 constexpr const char* kFactCarWantingIn = "car_wanting_in";
 constexpr const char* kIntentionLetIn = "let_in";
 constexpr const char* kWordLetIn = "yes";
+// yes/no: my route needs the lane beside and a car there closes the gap I would take (dropping back, sitting 5)
+constexpr const char* kFactCarBlockingGap = "car_blocking_my_gap";
+constexpr const char* kIntentionGap = "gap";
+constexpr const char* kWordDropBack = "drop_back";
 constexpr const char* kNumberLaneChangeBrake = "lane_change_safe_brake";   // m/s2: MOBIL's b_safe
 constexpr const char* kNumberLaneChangeSeconds = "lane_change_seconds";    // s: how long the move across takes
 constexpr const char* kIntentionLane = "lane";
@@ -84,6 +88,9 @@ constexpr Real kOffsetOnLine = 0.01;
 // driven up to a stop there, and a stop is reached only to within rounding -- left a hair short, the car stood listed
 // in both lanes for good, never looking for its next move (the 20-minute lab).
 constexpr Real kMoveDoneWithin = 0.01;
+// Dropping back for a gap: while the car closing it is level with me or behind, I keep this much (m/s) below its speed,
+// so it draws ahead and the gap behind it comes level with me [~].
+constexpr Real kDropBackBelow = 1.0;
 inline Real laneMoveShortest(Real across, Real tightestRadius) {
     return kMoveMargin * std::sqrt(6 * std::fabs(across) * std::max(tightestRadius, Real(1)));
 }
@@ -121,6 +128,10 @@ struct LaneGap {
     bool safe = false;         // MOBIL's safety criterion holds both ways (and nobody is beside me there)
     CarId ahead, behind;       // the cars that would be ahead of and behind me in it (not valid: none within the lane)
     Real gapAhead = 0, gapBehind = 0;
+    // NO GAP: the car that closes it -- level with me there, or too near ahead, or too near behind (blockerBehind) --
+    // for a driver that comes level with a gap instead of driving on to its end (design section 6).
+    CarId blocker;
+    bool blockerBehind = false;
 };
 
 // WHAT A DRIVER KNOWS ABOUT CHANGING LANES this decision, for its facts.
@@ -211,7 +222,8 @@ LaneGap findLaneGap(const engine::LaneGraph& roads, const std::vector<Car>& cars
                 g.gapBehind = myRear - e.front;
             }
         } else {
-            return g;   // beside me
+            g.blocker = e.car;   // beside me
+            return g;
         }
     }
     // (nobody behind me in the lane itself: the car that would be is on a path leading into it -- a connector, the lane
@@ -245,9 +257,16 @@ LaneGap findLaneGap(const engine::LaneGraph& roads, const std::vector<Car>& cars
     if (const Car* a = carOf(g.ahead)) speedAhead = a->speed;
     // MOBIL's safety criterion, eq. 2: the new follower's acceleration behind me is no harsher than -b_safe; and mine
     // behind the new leader (the following model's own answer, not a gap table)
-    if (g.ahead.valid() && follow(me, g.gapAhead, speedAhead) < -safeBrake) return g;
+    if (g.ahead.valid() && follow(me, g.gapAhead, speedAhead) < -safeBrake) {
+        g.blocker = g.ahead;
+        return g;
+    }
     if (const Car* b = carOf(g.behind))
-        if (follow(*b, g.gapBehind, me.speed) < -safeBrake) return g;
+        if (follow(*b, g.gapBehind, me.speed) < -safeBrake) {
+            g.blocker = g.behind;
+            g.blockerBehind = true;
+            return g;
+        }
     g.safe = true;
     return g;
 }

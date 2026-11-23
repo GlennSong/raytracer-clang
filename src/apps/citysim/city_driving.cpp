@@ -214,6 +214,7 @@ static void copyPose(const driving::Driving& d, const driving::Car& c, CityCarOn
     lane.speed = c.speed;
     lane.driven = c.driven;
     lane.braking = DrivingHost::braking(d, lane.car);
+    lane.signal = static_cast<int8_t>(d.signalSide(lane.car));
     lane.fresh = false;
 }
 

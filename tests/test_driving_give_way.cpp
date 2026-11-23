@@ -3366,7 +3366,7 @@ constexpr Real kBusOntoStretch = 0.05;
 
 }  // namespace
 
-TEST_CASE(merge_known_fault_a_two_bodies_on_the_join_stretch_drive_through_each_other) {
+TEST_CASE(merge_a_two_bodies_on_the_join_stretch_keep_apart) {
     // THE SCENE (the lab's, made small; the stretch sized for the bus and the car: fastMergeRoads). A through car (1)
     // comes up its lane from rest and is doing about 21.5 m/s when it is `shortBy` metres short of the stretch where the
     // two lanes join. At that moment a 12 m bus (2) stands at rest on the joining lane with its front 0.05 m onto its own
@@ -3423,8 +3423,8 @@ TEST_CASE(merge_known_fault_a_two_bodies_on_the_join_stretch_drive_through_each_
         bool overlapToday; // the outcome today
     };
     const Staged staged[] = {
-        {false, 34.0, true},    // KNOWN FAULT (test rule set)
-        {true, 33.0, true},     // KNOWN FAULT (the lab's rule set)
+        {false, 34.0, true},    // the old known fault (test rule set): now kept apart
+        {true, 33.0, true},     // the old known fault (the lab's rule set): now kept apart
         {false, 40.0, false},   // far enough back to stop short of the stretch: it does, and waits. Right, and stays right.
         {true, 40.0, false},
     };
@@ -3467,21 +3467,18 @@ TEST_CASE(merge_known_fault_a_two_bodies_on_the_join_stretch_drive_through_each_
                     CHECK(s.overlapping.empty());
                     continue;
                 }
-                // KNOWN FAULT, asserted as it is today: the two bodies overlap. The right outcome is that they do not.
+                // FIXED (sitting 5): following sees a moving car on a merge's other path further along the join's
+                // stretch (traffic_state.cpp carAhead), so the car keeps behind the bus that pulls away in front of it.
                 ++faultRuns;
                 faultOverlaps += touch;
-                if (!touch)
-                    std::printf("    >>> THE KNOWN FAULT IS GONE in this variant: the bodies no longer overlap. First make sure the "
-                                "scene still stages it (the car must still be carried onto its stretch: its speed and the "
-                                "distances above); then flip this row to overlapToday = false with CHECK(s.overlapping.empty()) "
-                                "(see the note above merge_known_fault_a) and keep it as the regression test.\n");
-                CHECK(touch);
+                CHECK(!touch);
+                CHECK(s.overlapping.empty());
             }
     CHECK(faultRuns == 8);
-    CHECK(faultOverlaps == 8);
+    CHECK(faultOverlaps == 0);
 }
 
-TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) {
+TEST_CASE(merge_b_a_car_creeping_to_its_give_way_stop_is_not_put_first) {
     // THE SCENE. The lab's rule set with `stated_merge` asked. A 12 m bus (2) comes down the joining lane and gives way
     // to two through cars (0, and 1 a long way behind it): the table says the bus gives way, and it holds a give-way
     // stop placed AT the start of the join's stretch (a lane has no line to stop at). Creeping up to that stop, in its
@@ -3491,8 +3488,8 @@ TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) 
     // one step of a double (7.1e-15 m) past the start, so the answer is no, and a decision's worth of travel is then
     // charged against the centimetres left. In the lab that put bus 239 onto the stretch in front of car 170.
     //
-    // TODAY: the flip happens, with the bus less than 0.1 m short of the stretch, slower than 1 m/s, holding its
-    // give-way stop within a hair of the stretch's start. The right outcome is that it never happens.
+    // UNTIL SITTING 5 the flip happened, with the bus less than 0.1 m short of the stretch, slower than 1 m/s, holding
+    // its give-way stop within a hair of the stretch's start. Now it never happens (the comparison has a tolerance).
     //
     // THIS CASE READS THE LAYER'S INSIDES (resolver().goesFirst, Question::CannotStop, held.stopFor) and will stop
     // compiling when the give-way layer is replaced; it is here to pin the cause while that layer stands. Case a reads
@@ -3537,20 +3534,9 @@ TEST_CASE(merge_known_fault_b_a_car_creeping_to_its_give_way_stop_is_put_first) 
         if (flipped)
             std::printf(", at t=%.2f s, %.4f m short of the stretch at %.3f m/s, its stop %.3e m from the stretch's start\n",
                         at, shortThen, speedThen, stopOffStart);
-        // KNOWN FAULT, asserted as it is today. The right outcome is CHECK(!flipped).
-        if (!flipped)
-            std::printf("    >>> THE FLIP DID NOT HAPPEN. LOOK FIRST at src/apps/driving/announce.cpp, the two places that ask "
-                        "whether the car holds a stop short of the stretch: `car.heldStop <= startAt` (near lines 257 and "
-                        "298). IF THAT EXACT COMPARISON IS UNCHANGED, THE FAULT IS NOT FIXED: this scene has drifted (other "
-                        "numbers now bring the bus to its stop differently) and must be RE-SEATED until the flip shows "
-                        "again, NOT flipped. Only if the comparison is gone or goes through a tolerance: flip this case to "
-                        "CHECK(!flipped) (see the note above merge_known_fault_a) and keep it as the regression test.\n");
-        CHECK(flipped);
-        if (flipped) {
-            CHECK(shortThen > 0 && shortThen < 0.1);
-            CHECK(speedThen < 1.0);
-            CHECK(std::fabs(stopOffStart) < 1e-9);
-        }
+        // FIXED (sitting 5): announce.cpp asks whether the car holds a stop short of the stretch within kSamePoint, not
+        // exactly, so a bus creeping to its give-way stop keeps it and is never put first by cannot_stop.
+        CHECK(!flipped);
     }
 }
 

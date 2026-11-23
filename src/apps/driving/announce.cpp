@@ -254,7 +254,7 @@ void announcePlan(const engine::LaneGraph& roads, const JunctionPlan& plan, cons
         a.clearIfGoing = when(toClear) + car.shift;
         // CANNOT STOP short of the stretch braking as hard as it can (or its front is on it already): it will be on it,
         // whatever it is told now (issue #284; the resolver's cannot_stop).
-        a.cannotStop = !canKeepShort(toStart, car.move.speed, car.hardestBrake, car.reaction, car.heldStop <= startAt);
+        a.cannotStop = !canKeepShort(toStart, car.move.speed, car.hardestBrake, car.reaction, car.heldStop - startAt <= engine::kSamePoint);
         // Waiting inside the junction to give way (task D4): not going through the crossing points at or beyond where it
         // waits (its stop is a stretch's start or a waiting point, which is one), though it is past its line.
         const bool waitsShort =
@@ -295,7 +295,9 @@ void announceLane(const engine::LaneGraph& roads, engine::PathId lane, Real lane
         a.arriveIn = toStart > 0 ? secondsToCover(toStart, car.move) : Real(0);
         if (a.arriveIn > car.lookAheadTime) continue;
         const double startAt = car.odometer + toStart, clearAt = car.odometer + toClear;
-        const bool holdsShort = car.heldStop <= startAt;
+        // (within a millimetre: a give-way stop placed AT the stretch's start sat one step of a double past it, so a car
+        // creeping up to it was read as unable to stop short and put first -- merge_known_fault_b, design section 9)
+        const bool holdsShort = car.heldStop - startAt <= engine::kSamePoint;
         // A lane has no line: read off the stretch itself (issue #284; before, a lane car announced itself going and
         // arrived first, always, and never judged).
         a.cannotStop = !canKeepShort(toStart, car.move.speed, car.hardestBrake, car.reaction, holdsShort);

@@ -122,6 +122,7 @@ struct CityCarOnLane {
     Real roadYFrom = 0, roadY = 0;   // the lane graph's height under the body's middle: as the tick began, and now
     Real speed = 0;                  // the driving's, after the last tick
     bool braking = false;            // its brake lamps are lit (city_driving.h kBrakeLampDecel)
+    int8_t signal = 0;               // its indicator: -1 its driver's left, +1 its right (Driving::signalSide)
     bool driven = false;             // on a trip (a car left standing in a lane is not)
     bool fresh = true;               // just put on the road: its road height is not blended from an earlier one
 };

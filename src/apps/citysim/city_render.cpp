@@ -1843,7 +1843,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
     };
 
     // THE CARS, which are entities (ADR-0444, ADR-0453): lit from the driving's own braking (its acceleration, or held
-    // at rest; no indicators until its rules give them, task C8), while on a trip (a car at rest is dark (ADR-0341):
+    // at rest; its indicator from Driving::signalSide), while on a trip (a car at rest is dark (ADR-0341):
     // standing in its space, or left in a lane)
     if (drawCars && sim_.drivingV2()) {
         world.each<CityCarBody, CityCarLink, CityCarOnLane>([&](Entity e, CityCarBody& body, CityCarLink& link, CityCarOnLane& lane) {
@@ -1855,8 +1855,11 @@ void CityRenderSystem::syncCarLamps(World& world) {
             const int key = entityCarDrawKey(body, link);
             const CityCarPose* pose = world.get<CityCarPose>(e);
             if (!pose || !lane.driven || v < 0 || v >= static_cast<int>(carLights_.size())) return;
-            const engine::VehicleLamps lamps = engine::vehicleLampState(lane.braking ? engine::LampMotion::Holding : engine::LampMotion::Rolling,
+            engine::VehicleLamps lamps = engine::vehicleLampState(lane.braking ? engine::LampMotion::Holding : engine::LampMotion::Rolling,
                                                             lane.speed, prev, dark, 0);
+            // (its indicator, from the driving: set beside the brakes, which a car signalling may also be on)
+            lamps.left = lane.signal < 0;
+            lamps.right = lane.signal > 0;
             const uint32_t m = engine::lampMask(lamps, blinkOn);
             if (m) masks[key] = m;
             if (lamps.head || lamps.brake) lampLights(pose->body, v, lamps, 0x20000000u | body.id);

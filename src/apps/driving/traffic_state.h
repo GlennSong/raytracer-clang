@@ -250,6 +250,14 @@ struct Neighbour {
 // the split and whose front is further along than mine is also a car ahead, its rear placed where it is level with on
 // my path (the two stretches matched end to end): the car behind follows the car ahead until their paths are apart
 // (issue #283, ADR-0408).
+// WHERE A CAR ON THE OTHER PATH IS FOLLOWED (carAhead): a split's two paths leaving one lane, and a join of two lanes
+// out on the road (filed under no junction: a ramp's lane into its host's) -- over the record's stretch the car further
+// along goes first. The wait check asks the same (Driving::waitReasonHolds), so the two never disagree.
+inline bool followedAcross(const engine::CrossingPoint& rec) {
+    if (rec.otherSide != engine::OtherSide::Path) return false;
+    return rec.meeting == engine::Meeting::Split || (rec.meeting == engine::Meeting::Join && !rec.junction.valid());
+}
+
 Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars, const PathLists& lists, CarId me,
                    const std::vector<engine::PathId>& pathsAhead, Real lookAhead);
 

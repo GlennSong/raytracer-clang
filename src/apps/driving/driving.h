@@ -83,6 +83,9 @@ struct Trip {
     PathPoint destination;
     std::vector<Hold> holds;     // sorted by name
     uint64_t beganAtTick = 0;    // the tick count when the host began it
+    // What it was planned as when begun: its route's length and free-flow time (for the delay a trip met, measured;
+    // routed again later, these stay what it set out to do).
+    Real plannedMetres = 0, plannedSeconds = 0;
     Route route;                 // from where the car was when it was last routed, to the destination
     // How far along the route the car has got: the first leg its front can be on (route.h's `fromLeg`). Moved on at
     // each decision; back to 0 whenever the trip is routed again.
@@ -410,8 +413,21 @@ public:
         uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it waits in its lane for a gap)
         uint64_t backedOff = 0;  // changes given up at the last moment: a car before it in the tick's order took the gap
         uint64_t letIn = 0;      // times a driver began to let an indicating car in ahead of it
+        uint64_t droppedBack = 0;   // times a driver began to drop back behind the car closing its gap
     };
     const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }
+    // TRIPS ARRIVED, and the time they took against their routes' free-flow time when begun (a measure that compares two
+    // runs sending cars on different trips: arrivals alone do not).
+    struct TripTimes {
+        uint64_t arrived = 0;
+        double seconds = 0;          // summed, begun to arrived
+        double freeFlowSeconds = 0;  // summed, as planned when begun
+        double metres = 0;           // summed, as planned when begun
+    };
+    const TripTimes& tripTimes() const { return tripTimes_; }
+    // THE SIDE A CAR SIGNALS (its indicator, sitting 5): -1 its driver's left, +1 its right, 0 none. On while it
+    // indicates into the lane beside (it wants it and has no gap yet) and while its front moves across.
+    int signalSide(CarId car) const;
     bool laneChangeStep() const { return laneChangesOn_; }
     // Lane changes under way: the step is there AND routes plan them (DrivingSettings::laneChanges). Everything lane
     // changes alter -- the moves, the way's end, a line's speed, what the state hash folds -- waits on this, so a level
@@ -574,6 +590,7 @@ private:
         LaneChangeView lane;
         bool changeLane = false;
         bool letIn = false;
+        bool dropBack = false;
     };
     // Counts and traces what one update of a car's plans did.
     void changeLanes(Car& c, Trip& t, const Planned& p);
@@ -677,13 +694,25 @@ private:
     ThingCounts thingCounts_;
     bool laneChangesOn_ = false;
     Real laneChangeBrake_ = 0, laneChangeSeconds_ = 0;
+    TripTimes tripTimes_;
     IntentionKindId laneKind_ = kNoIntentionKind;
     IntentionKindId letInKind_ = kNoIntentionKind;
+    IntentionKindId gapKind_ = kNoIntentionKind;
+    // DROPPING BACK (sitting 5): a driver -> the car in the lane beside that closes its gap, and where its own front is
+    // in that lane's terms (front there = along + shift): it keeps behind that car's rear there, or below its speed while
+    // that car is level or behind, until it has passed.
+    struct DropBack {
+        CarId behind;
+        engine::PathId into;
+        Real shift = 0;
+    };
+    std::map<CarId, DropBack> droppingBack_;
     // INDICATING (sitting 5): a driver that wants the lane beside and has no safe gap -- it must wait for one, or its last
     // chance nears -- shows it; `shift` puts its front in that lane's terms (front there = along + shift).
     struct Indicating {
         engine::PathId into;
         Real shift = 0;
+        bool towardKerb = false;
     };
     std::map<CarId, Indicating> indicating_;
     // LETTING IN: a driver -> the indicating car it keeps behind (as if already ahead in its lane), until that one is across.

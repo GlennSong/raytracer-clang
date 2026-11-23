@@ -278,6 +278,10 @@ rule_set = {
     -- The move across, from one lane's line to the next.
     lane_change_seconds = { 4.0, unit = "s",
       source = "[~] driving-model-design.md section 10's 3-4 s; field studies of lane-change duration report means of 4-5 s (from memory, unverified): to tune against what the lab shows" },
+    -- Within this of my last chance with no gap, I come level with one by dropping back behind the car closing it
+    -- (design section 6: a joining car slows or speeds up along a ramp instead of stopping at its end).
+    drop_back_within = { 150, unit = "m",
+      source = "[~] a judgement: about a ramp's acceleration lane (UK motorway slip roads run ~200 m, from memory); to tune against the lab" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -383,6 +387,11 @@ rule_set = {
     -- the next until that one is across). UK Highway Code rule 134 (in queues, let a merging car in; take turns where
     -- lanes merge), from memory. [~] every driver lets in; by personality is owed.
     { name = "let in", when = "car_wanting_in", give = { let_in = "yes" } },
+    -- DROPPING BACK FOR A GAP: my route needs the lane beside, my last chance nears, and a car there closes the gap; I
+    -- ease back behind it rather than drive on to my lane's end (zipper: the car behind it lets me in, "let in" above).
+    { name = "drop back for a gap",
+      when = { all = { "wrong_lane", "car_blocking_my_gap", { "last_chance", "<", "drop_back_within" } } },
+      give = { gap = "drop_back" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's

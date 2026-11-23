@@ -187,7 +187,13 @@ constexpr double kLongestStand = 100.0;
 // phases; 511dc08e, followers along a split's stretch), which changed the lab's driving without retaking it; the same
 // value is given at 3db7e3d4 and with ADR-0489's lane change step present but off (routes planning no changes), so the
 // lane change step itself changes nothing here. 0x9956a73de1425d39 -> 0xd6190c9be20ab725. The same two failures.
-constexpr uint64_t kFiveMinuteStateHash = 0xd6190c9be20ab725ull;
+// Retaken 2026-11-23 (sitting 5, the two merge faults): (b) announce.cpp asks whether a car holds a stop short of a
+// stretch within kSamePoint instead of exactly (a stop placed AT a stretch's start sat a double's step past it, and the
+// car creeping to it was put first by cannot_stop); (a) following sees a moving car on a road merge's other path further
+// along the join's stretch (traffic_state.h followedAcross), as it did a split's. 0xd6190c9be20ab725 -> 0x4cb5074df110f915.
+// At 5 minutes: arrived 400 -> 401, standing 49 -> 48; at 20 minutes arrived 1892 -> 1891; overlaps, touches, no-reason
+// stands and box stops unchanged (0, 0, 0, 8.1 car-s all allowed). The same two failures.
+constexpr uint64_t kFiveMinuteStateHash = 0x4cb5074df110f915ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -1012,13 +1018,24 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
     const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
     printTouches(*d, touches);
+    {   // TRIPS AGAINST FREE FLOW (sitting 5: compares runs whose cars go on different trips)
+        const driving::Driving::TripTimes& tt = d->tripTimes();
+        if (tt.arrived > 0)
+            std::printf("    [lab-v2] trips arrived %llu: mean %.0f m planned, %.1f s taken against %.1f s at free flow "
+                        "(%.2f times; %.1f s lost a trip, %.1f s a km)\n",
+                        static_cast<unsigned long long>(tt.arrived), tt.metres / tt.arrived, tt.seconds / tt.arrived,
+                        tt.freeFlowSeconds / tt.arrived, tt.freeFlowSeconds > 0 ? tt.seconds / tt.freeFlowSeconds : 0.0,
+                        (tt.seconds - tt.freeFlowSeconds) / tt.arrived,
+                        tt.metres > 0 ? (tt.seconds - tt.freeFlowSeconds) / (tt.metres / 1000.0) : 0.0);
+    }
     {   // LANE CHANGES (sitting 5)
         const driving::Driving::LaneChangeCounts& n = d->laneChangeCounts();
-        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu); let in %llu\n",
+        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu); let in %llu; dropped back %llu\n",
                     static_cast<unsigned long long>(n.wanted), static_cast<unsigned long long>(n.begun),
                     static_cast<unsigned long long>(n.finished), static_cast<unsigned long long>(n.backedOff),
                     static_cast<unsigned long long>(n.missed),
-                    static_cast<unsigned long long>(n.missedNoRoute), static_cast<unsigned long long>(n.letIn));
+                    static_cast<unsigned long long>(n.missedNoRoute), static_cast<unsigned long long>(n.letIn),
+                    static_cast<unsigned long long>(n.droppedBack));
     }
     CHECK(touches.spells <= kMostTouchSpells);
     // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7
