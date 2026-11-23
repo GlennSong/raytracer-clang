@@ -93,6 +93,22 @@ return {
       fascia = { 0.30, 0.75, 1.00 },
       room = { walls = { { 0.95, 0.95, 0.95 }, { 0.94, 0.95, 0.96 }, { 0.95, 0.94, 0.92 } },   -- all white, bright
                floor = { 0.82, 0.82, 0.80 }, ceiling = { 0.97, 0.97, 0.97 }, lights = "panels" } },
+    -- THE BARBER'S and THE GYM (Glenn, 2026-11-22: "we should add them as new trades"). New weights: every street's
+    -- shops were dealt again with these two rows (the lots tag of that day). A barber's is an everyday errand on a
+    -- residential street; a gym is a wide unit on a high street or in a mall. Their rooms are furnished from
+    -- furniture_rooms.lua ("shop:barber", "shop:gym"), every piece a prefab.
+    { id = 17, name = "barber", place = "shop", hours = { 9.0, 19.0 },
+      weight = { everyday = 6, high_street = 4, nightlife = 0, mall = 3 }, bays = { 2, 2 },
+      fascia = { 1.00, 0.30, 0.30 },
+      room = { walls = { { 0.90, 0.90, 0.86 }, { 0.20, 0.28, 0.34 }, { 0.86, 0.80, 0.70 } },   -- white tile to the dado, a checker floor
+               dado = { height = 1.2, color = { 0.94, 0.94, 0.92 } },
+               floor = { 0.10, 0.10, 0.10 }, checker = { color = { 0.90, 0.90, 0.88 }, size = 0.4 },
+               ceiling = { 0.94, 0.94, 0.92 }, lights = "round" } },
+    { id = 18, name = "gym", place = "shop", hours = { 6.0, 22.0 },
+      weight = { everyday = 4, high_street = 3, nightlife = 0, mall = 4 }, bays = { 3, 5 },
+      fascia = { 1.00, 0.60, 0.15 },
+      room = { walls = { { 0.30, 0.32, 0.35 }, { 0.88, 0.88, 0.86 }, { 0.80, 0.45, 0.20 } },   -- dark rubber underfoot
+               floor = { 0.16, 0.16, 0.17 }, ceiling = { 0.20, 0.20, 0.21 }, lights = "panels" } },
   },
 
   -- ROOMS THAT ARE NOT TRADES: the malls' concourses (20 the box mall's, 21 / 22 the American mall's lower / upper,

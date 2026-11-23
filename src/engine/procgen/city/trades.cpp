@@ -35,6 +35,9 @@ const TradeRow kTrades[] = {
     // weight (adding a weight would deal every shop on the island again): two in three grocers are one
     // (facadeLayout), so the rest of the street keeps its shops.
     {16, "konbini", "supermarket", 0.0f, 24.0f, {0, 0, 0, 0}, 2, 3, Vec3(0.30, 0.75, 1.00), false},
+    // THE BARBER'S and THE GYM (Glenn, 2026-11-22): new weights, so every street was dealt again with them
+    {17, "barber", "shop", 9.0f, 19.0f, {6, 4, 0, 3}, 2, 2, Vec3(1.00, 0.30, 0.30), false},
+    {18, "gym", "shop", 6.0f, 22.0f, {4, 3, 0, 4}, 3, 5, Vec3(1.00, 0.60, 0.15), false},
 };
 
 // The rooms. Colours are albedo (the room lights do the rest): a bar is oxblood, bottle green or ink over dark
@@ -73,6 +76,10 @@ const TradeRoom kRooms[] = {
           {0.96, 0.96, 0.95}, 1}},
     {16, {{{0.95, 0.95, 0.95}, {0.94, 0.95, 0.96}, {0.95, 0.94, 0.92}}, 0.0, {}, {0.82, 0.82, 0.80},   // konbini: all
           {}, 0.0, {0.97, 0.97, 0.97}, 0}},                                                          // white, bright
+    {17, {{{0.90, 0.90, 0.86}, {0.20, 0.28, 0.34}, {0.86, 0.80, 0.70}}, 1.2, {0.94, 0.94, 0.92},   // barber: tile + checker
+          {0.10, 0.10, 0.10}, {0.90, 0.90, 0.88}, 0.4, {0.94, 0.94, 0.92}, 1}},
+    {18, {{{0.30, 0.32, 0.35}, {0.88, 0.88, 0.86}, {0.80, 0.45, 0.20}}, 0.0, {}, {0.16, 0.16, 0.17},   // gym: dark rubber
+          {}, 0.0, {0.20, 0.20, 0.21}, 0}},
     {15, {{{0.04, 0.04, 0.05}, {0.08, 0.03, 0.10}, {0.03, 0.04, 0.08}}, 0.0, {},                   // club
           {0.03, 0.03, 0.035}, {}, 0.0, {0.02, 0.02, 0.025}, 2}},
 };

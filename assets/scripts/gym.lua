@@ -9,7 +9,7 @@
 --   dumbbell_rack    two sloping shelves of dumbbells in pairs, light to heavy
 --   bench_press      a padded bench under a barbell on its uprights (marker `lie`, role "lie")
 --   yoga_mats        three mats rolled out side by side, a rolled one and an exercise ball beside them
---   mirror_wall      a tall wall mirror with a ballet rail across it (its back to -z; `width`)
+--   mirror_wall      a tall wall mirror with a ballet rail across it (it faces +z; `width`)
 --   gym_bench        a slatted changing-room bench (markers `seat_1`, `seat_2`)
 --
 -- Each stands on y = 0 at its own origin; whoever uses it faces +z.
@@ -79,8 +79,9 @@ elseif a.kind == "mirror_wall" then
     local x = -W / 2 + 0.2 + i * (W - 0.4) / math.max(1, math.floor(W / 1.5))
     c.rod("metal", V(x, 1.0, 0.02), V(x, 1.0, 0.2), 0.012, GREY, 6)
   end
-  kit.put(m, m, c)
-  m:shape("mirror", { box = { W, 2.1, 0.06 }, pos = { 0, 1.05, 0.03 } })
+  local body = m:node("body", { pos = { 0, 0, -0.11 } })     -- (stood by the middle of its 0.22 m depth)
+  kit.put(m, body, c)
+  body:shape("mirror", { box = { W, 2.1, 0.06 }, pos = { 0, 1.05, 0.03 } })
   return m
 elseif a.kind == "gym_bench" then
   for i = 0, 3 do c.box("wood", V(0, 0.44, -0.15 + i * 0.1), V(1.6, 0.03, 0.08), 0.006, kit.wood("beech"), 1) end

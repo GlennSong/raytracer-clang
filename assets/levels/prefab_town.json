@@ -1534,7 +1534,7 @@
    "position": [
     16.3,
     0.05,
-    -14.92
+    -14.87
    ]
   },
   {
@@ -1687,7 +1687,7 @@
    "position": [
     23.3,
     0.05,
-    -14.98
+    -14.74
    ]
   },
   {
@@ -1698,7 +1698,7 @@
    "position": [
     25.1,
     0.05,
-    -14.98
+    -14.74
    ]
   },
   {
@@ -1709,7 +1709,7 @@
    "position": [
     26.9,
     0.05,
-    -14.98
+    -14.74
    ]
   },
   {
@@ -1823,9 +1823,9 @@
   },
   {
    "id": 113,
-   "name": "barber / waiting_seats 12",
+   "name": "barber / barber_waiting_seats 12",
    "shape": "prefab",
-   "prefab": "waiting_seats",
+   "prefab": "barber_waiting_seats",
    "position": [
     23.9,
     0.05,

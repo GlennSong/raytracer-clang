@@ -648,6 +648,11 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         const bool restroom = room.kind == RoomKind::Bath && rp.office;
         const bool child = childRoom[static_cast<std::size_t>(&room - rp.rooms.data())] != 0;
         const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : child ? "child_room" : programFor(room.kind));
+        // A SHOP is furnished by its trade's own program where there is one ("shop:barber", furniture_rooms.lua); the
+        // trades without one are still fitted out in code below. A new trade is a program, never a new case there.
+        if (room.kind == RoomKind::Shop)
+            if (const TradeInfo* t = tradeById(room.style))
+                if (const RoomProgram* own = FurnitureLibrary::global().program(std::string("shop:") + t->name)) prog = own;
         // a department store's SALES FLOOR is furnished as its department: the trade's own program
         // ("sales_floor:boutique", furniture_rooms.lua) where there is one
         if (room.kind == RoomKind::SalesFloor)

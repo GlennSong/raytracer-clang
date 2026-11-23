@@ -1832,12 +1832,19 @@ pumps up and reclines, a mirror station with a drawer, a backwash chair, waiting
 a towel shelf) and five more gym pieces in `gym.lua` (dumbbell rack, bench press, yoga mats, a mirror wall, a
 changing bench). `prefab_town` has a barber's, a second gym room of free weights and mats, and a playroom.
 
-- *Why they are not in cities yet.* A shop unit is a business of a TRADE (`trades.lua`), and the trades decide the
-  baked facades and signs: a new trade with a weight re-deals every street. So a barber's and a gym as trades are
-  a lots re-bake, and Glenn's decision. The konbini's way round it (taking a share of one existing trade's units)
-  would keep the streets but still re-signs those units.
-- Shop rooms are still furnished in C++ by trade (`furniture.cpp`); a barber's and a gym want to be room programs
-  in `furniture_rooms.lua` from the start, placing these prefabs.
+**Then they became trades** (Glenn, 2026-11-22: "we should add them as new trades"). Two rows at the end of
+`trades.lua` (and their copies in `trades.cpp`): `barber`, an everyday errand two bays wide, and `gym`, three to
+five bays on a high street or in a mall. Both are citysim places of type shop. Their signs have their own names.
+
+- *Every street was dealt again.* New weights change which trade each shop unit draws, and the trades decide the
+  baked fronts and signs, so the lots tag was bumped (`2026-11-22.1`). Every level re-bakes its lots on its next load.
+- *A shop is furnished by its trade's own program where there is one*: `furniture_rooms.lua` `"shop:barber"` and
+  `"shop:gym"`, looked up in `furniture.cpp` before the old `switch` on the trade. The older trades are still
+  fitted out in that switch; each can move to a program of its own the same way, and no new trade should add a case.
+- *What a piece a room program places must be.* It is stood by the middle of its own depth. The mirror station
+  and the mirror wall were built with their backs at the origin and had to be moved.
+- *Owed.* A gym visit is a shop visit: nobody works out. The barber cuts nobody's hair. Both want an activity of
+  their own (`activities.lua`) and people who use the chairs and machines, after the merge.
 
 ### How many copies would work near and far (agreed with Glenn, 2026-11-21; not built, this is step 10)
 

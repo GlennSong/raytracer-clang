@@ -655,3 +655,38 @@ furniture_rooms.child_room = {
   { wall = { 0.92, 0.48 }, sides = ANY, clear = 0.4, min_w = 3.4, pick = "dollhouse" },
   { wall = { 0.68, 0.52 }, sides = ANY, clear = 0.4, min_w = 3.8, pick = "kids_easel" },
 }
+
+-- A BARBER'S (the trade `barber`, trades.lua; the shop's room is furnished by the program named "shop:" and its
+-- trade). The till at the back with someone behind it; down the side walls a mirror station each with its chair
+-- turned to the mirror; the backwash chair and a dryer; seats to wait on by the window. Every piece but the
+-- counter is a prefab (barber_shop.lua).
+furniture_rooms["shop:barber"] = {
+  { wall = { 1.8, 1.6 }, sides = { 2 }, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+  { wall = { 1.6, 2.0 }, sides = { 1, 3 }, count = { per = 1.9, min = 1, max = 4 }, tall = true,
+    set = {
+      { pick = "barber_station", x = 0.8 },
+      { pick = "barber_chair", x = 0.8, z = 1.95, faces = "wall", fit = { 0.7, 1.1 } },
+    } },
+  { wall = { 2.52, 0.56 }, sides = { 0, 3, 1 }, clear = 0.6, pick = "barber_waiting_seats" },
+  { wall = { 0.62, 1.2 }, sides = { 3, 1, 2 }, clear = 0.5, pick = "backwash_chair" },
+  { wall = { 0.56, 0.92 }, sides = ANY, clear = 0.3, pick = "hood_dryer" },
+  { wall = { 0.42, 0.38 }, sides = ANY, clear = 0.3, pick = "salon_trolley" },
+}
+
+-- A GYM (the trade `gym`): the desk at the back; a mirror down one wall; treadmills and bikes in rows along the
+-- side walls; the rower; the weights corner (rack, bench, machine, bag); mats where the room is wide; lockers and
+-- a bench to change on. Every piece but the counter is a prefab (gym.lua, lockers.lua).
+furniture_rooms["shop:gym"] = {
+  { wall = { 1.8, 1.6 }, sides = { 2 }, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+  { wall = { 3.04, 0.24 }, sides = { 1, 3 }, tall = true, clear = 0.8, pick = "mirror_wall" },
+  { wall = { 0.9, 1.6 }, sides = { 3, 1 }, count = { per = 1.1, min = 1, max = 4 }, clear = 0.5, pick = "treadmill" },
+  { wall = { 0.7, 1.1 }, sides = { 1, 3 }, count = { per = 0.9, min = 1, max = 4 }, clear = 0.5, pick = "exercise_bike" },
+  { wall = { 1.9, 0.62 }, sides = { 2, 1, 3 }, clear = 0.9, pick = "dumbbell_rack" },
+  { wall = { 2.12, 1.42 }, sides = ANY, clear = 0.5, pick = "bench_press" },
+  { wall = { 1.14, 1.32 }, sides = ANY, tall = true, clear = 0.6, pick = "weight_machine" },
+  { wall = { 0.6, 2.54 }, sides = ANY, clear = 0.4, min_w = 5.0, pick = "rowing_machine" },
+  { wall = { 0.8, 1.1 }, sides = ANY, tall = true, clear = 0.6, pick = "punch_bag" },
+  { wall = { 2.84, 1.82 }, sides = ANY, min_w = 6.5, pick = "yoga_mats" },
+  { wall = { 1.32, 0.54 }, sides = { 2, 3, 1 }, tall = true, clear = 0.8, pick = "lockers" },
+  { wall = { 1.62, 0.46 }, sides = ANY, clear = 0.5, pick = "gym_bench" },
+}

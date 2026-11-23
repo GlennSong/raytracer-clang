@@ -290,7 +290,7 @@ return {
   barber_chair_oxblood = { recipe = "barber_shop", args = { kind = "chair", leather = "leather_oxblood" } },
   barber_station = { recipe = "barber_shop", args = { kind = "station" } },
   backwash_chair = { recipe = "barber_shop", args = { kind = "backwash" } },
-  waiting_seats = { recipe = "barber_shop", args = { kind = "waiting" } },
+  barber_waiting_seats = { recipe = "barber_shop", args = { kind = "waiting" } },
   hood_dryer = { recipe = "barber_shop", args = { kind = "hood_dryer" } },
   salon_trolley = { recipe = "barber_shop", args = { kind = "trolley" } },
   towel_shelf = { recipe = "barber_shop", args = { kind = "towel_shelf" } },

@@ -626,7 +626,7 @@ return {
   barber_chair_oxblood = { model = "barber_chair_oxblood", physics = { body = "static" }, uses = { { at = "seat", say = "sit", sit = true } } },
   barber_station = { model = "barber_station", physics = { body = "static" }, uses = { { at = "handle", say = "open", back = "close", move = { drawer = 0.3 }, speed = 0.6, sound = "drawer" } } },
   backwash_chair = { model = "backwash_chair", physics = { body = "static" } },
-  waiting_seats = { model = "waiting_seats", physics = { body = "static" } },
+  barber_waiting_seats = { model = "barber_waiting_seats", physics = { body = "static" } },
   hood_dryer = { model = "hood_dryer", physics = { body = "static" } },
   salon_trolley = { model = "salon_trolley", physics = { body = "static" } },
   towel_shelf = { model = "towel_shelf", physics = { body = "static" } },

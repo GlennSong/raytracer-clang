@@ -82,14 +82,14 @@ ROOMS = [
         P("drinking_fountain", -4.5, 3.4, 90), P("wall_clock", 0, B + 0.09, 0, 2.4), P("turnstile", 1.6, 2.6),
     ]),
     dict(name="gym: free weights and mats", w=9, yaw=0, door=1.02, floor="wood", things=[
-        P("door", 0, F), P("mirror_wall", -1.2, B + 0.08), P("dumbbell_rack", -3.0, B + 0.75), P("bench_press", -0.6, -1.6),
+        P("door", 0, F), P("mirror_wall", -1.2, B + 0.13), P("dumbbell_rack", -3.0, B + 0.75), P("bench_press", -0.6, -1.6),
         P("bench_press", 1.4, -1.6), P("yoga_mats", -2.4, 1.6), P("gym_bench", 3.4, 2.6, 270), P("lockers", 3.9, -0.4, 270),
         P("lockers", 3.9, -1.7, 270), P("punch_bag", 2.6, 0.8, 270), P("towel_shelf", 3.4, B + 0.02, 0, 1.2),
     ]),
     dict(name="barber", w=9, yaw=0, door=1.02, floor="tile", things=[
-        P("door_glass", 0, F), *row("barber_station", [-3.2, -1.4, 0.4], B + 0.02), *row("barber_chair", [-3.2, 0.4], -2.3, 180),
+        P("door_glass", 0, F), *row("barber_station", [-3.2, -1.4, 0.4], B + 0.26), *row("barber_chair", [-3.2, 0.4], -2.3, 180),
         P("barber_chair_oxblood", -1.4, -2.3, 180), P("backwash_chair", 3.4, -2.8), P("towel_shelf", 2.2, B + 0.02, 0, 1.2),
-        P("salon_trolley", -2.3, -2.6), P("hood_dryer", 3.6, -0.6, 270), P("waiting_seats", -2.6, 3.3, 180), P("barber_pole", 1.4, F + 0.25),
+        P("salon_trolley", -2.3, -2.6), P("hood_dryer", 3.6, -0.6, 270), P("barber_waiting_seats", -2.6, 3.3, 180), P("barber_pole", 1.4, F + 0.25),
         P("cash_register", 3.4, 2.4, 270, TOP["worktop"]), P("shop_counter", 3.4, 2.4, 270), P("wall_clock", -0.5, B + 0.09, 0, 2.5),
     ]),
     dict(name="station hall", w=14, yaw=0, door=3.24, floor="tile", things=[

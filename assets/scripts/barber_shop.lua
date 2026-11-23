@@ -3,7 +3,7 @@
 --   chair        the barber's chair: a padded seat on a hydraulic column with a footrest. The seat pumps up (`seat`,
 --                0 to 0.2 m) and its back reclines for a shave (`back`); marker `seat` (role "seat")
 --   station      a mirror on the wall over a shelf of bottles, combs and a jar, with a drawer unit under it
---                (its back to -z, to stand against a wall; a drawer slides, `drawer`)
+--                (its mirror faces +z; it stands by the middle of its 0.48 m depth; a drawer slides, `drawer`)
 --   backwash     a reclined chair at a basin, for washing hair (marker `seat`)
 --   waiting      a row of three linked seats with a low magazine table at one end (markers `seat_1` ... `seat_3`)
 --   hood_dryer   a dryer hood on a wheeled stand; the hood tips (`hood`)
@@ -63,15 +63,17 @@ elseif a.kind == "station" then
   c.turned("glass", V(0.22, 0.84, 0.16), { { 0, 0 }, { 0.05, 0 }, { 0.05, 0.16 }, { 0, 0.16 } }, V(0.4, 0.7, 0.9), nil, 10)   -- the jar of combs
   for i = 1, 3 do c.box("hard", V(0.2 + i * 0.012, 0.95, 0.16), V(0.004, 0.14, 0.03), 0.0, DARK, 1) end
   c.box("fabric", V(0.0, 0.855, 0.36), V(0.3, 0.02, 0.18), 0.004, WHITE, 1)                 -- a folded towel
-  kit.put(m, m, c)
-  local drawer = m:node("drawer", { pos = { 0, 0.62, 0.43 }, motion = { slide = { 0, 0, 1 }, min = 0, max = 0.3 } })
+  -- (built with its back at z = 0; stood with its middle on the origin, as a piece a room program places is)
+  local body = m:node("body", { pos = { 0, 0, -0.24 } })
+  kit.put(m, body, c)
+  local drawer = body:node("drawer", { pos = { 0, 0.62, 0.43 }, motion = { slide = { 0, 0, 1 }, min = 0, max = 0.3 } })
   local k = kit.maker()
   k.box("wood", V(0, 0, 0.01), V(0.9, 0.22, 0.02), 0.004, wood * 1.05, 1)
   k.rod("metal", V(-0.1, 0, 0.03), V(0.1, 0, 0.03), 0.01, CHROME, 6)
   kit.put(m, drawer, k)
   drawer:marker("handle", { pos = { 0, 0, 0.05 }, role = "hold" })
-  m:shape("unit", { box = { 1.1, 0.86, 0.48 }, pos = { 0, 0.43, 0.24 } })
-  kit.far_box(m, m, "wood", { 1.0, 2.2, 0.4 }, { 0, 1.1, 0.2 }, wood, far)
+  body:shape("unit", { box = { 1.1, 0.86, 0.48 }, pos = { 0, 0.43, 0.24 } })
+  kit.far_box(m, body, "wood", { 1.0, 2.2, 0.4 }, { 0, 1.1, 0.2 }, wood, far)
 elseif a.kind == "backwash" then
   c.turned("ceramic", V(0, 0, -0.55), { { 0, 0 }, { 0.2, 0 }, { 0.14, 0.1 }, { 0.12, 0.72 }, { 0, 0.72 } }, WHITE, nil, 12)
   c.cage("ceramic", V(0, 0.72, -0.5), { { 0.5, 0.42, 0.1, 0 }, { 0.6, 0.5, 0.14, 0.2 }, { 0.54, 0.44, 0.12, 0.2 }, { 0.44, 0.36, 0.08, 0.04 } }, WHITE, { level = 0 })

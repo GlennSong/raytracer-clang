@@ -291,7 +291,20 @@ TEST_CASE(a_storefront_ground_floor_is_shops_with_their_own_doors) {
     for (const PlacedPiece& pp : in.furniture)
         if (pp.piece == static_cast<uint8_t>(Piece::ShopCounter)) ++counters;
     std::printf("    [shops] ground floor: %zu pieces, %d counters\n", in.furniture.size(), counters);
-    CHECK(counters >= 2);
+    // WHICH SHOPS, and what each got. A counter is not every trade's (a restaurant has tables, a bar its bar), and
+    // which trades a street draws changes whenever a trade is added (the barber's and the gym, 2026-11-22: this
+    // building's five went from two counter trades to one). What must hold is that EVERY unit is fitted out.
+    std::vector<int> perUnit(in.units.size(), 0);
+    for (const PlacedPiece& pp : in.furniture)
+        if (pp.unit >= 0 && static_cast<std::size_t>(pp.unit) < perUnit.size()) ++perUnit[static_cast<std::size_t>(pp.unit)];
+    std::string trades;
+    for (const ShopFront& f : shopFrontsOf(plan, p)) trades += std::string(" ") + (tradeById(f.trade) ? tradeById(f.trade)->name : "?");
+    std::printf("    [shops] trades:%s; pieces per unit:", trades.c_str());
+    for (int n : perUnit) std::printf(" %d", n);
+    std::printf("\n");
+    CHECK(perUnit.size() >= 2);
+    for (int n : perUnit) CHECK(n >= 3);
+    CHECK(counters >= 1);
 }
 
 // BIG-BOX STORES (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"). Each chain: one door on the front
@@ -2093,6 +2106,57 @@ TEST_CASE(a_hotel_has_a_lobby_with_its_reception) {
 // THE KONBINI (Glenn, 2026-10-13: the convenience store, on the list after the station entrances). Two in three
 // grocers are a konbini now -- read off the facade's own hash, so no other unit on the street changes trade --
 // open round the clock (trades.h), with its counter by the door, a wall of drinks fridges, shelves and gondolas.
+// THE BARBER'S AND THE GYM (Glenn, 2026-11-22: "we should add them as new trades"): streets deal both, and each is
+// fitted out by its own program (furniture_rooms.lua "shop:barber", "shop:gym") from prefab pieces -- a barber's has
+// its chairs at their mirror stations, a gym its machines -- with someone's counter to stand behind.
+TEST_CASE(a_barbers_and_a_gym_are_trades_fitted_out_from_their_own_programs) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"brick_shop", "corner_shop", "commercial_block", "mixed_use", "oldtown_house", "oldtown_grand", "strip_mall"};
+    const Real sizes[][2] = {{20, 14}, {30, 20}, {40, 26}, {60, 30}};
+    int units = 0, barbers = 0, gyms = 0, barbersFitted = 0, gymsFitted = 0, chairs = 0, stations = 0, machines = 0, counters = 0;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 24; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.walkableGround = true;
+                p.openDoorway = true;
+                int b = 0, g = 0;
+                for (const ShopFront& f : shopFrontsOf(plan, p)) {
+                    ++units;
+                    b += f.trade == 17;
+                    g += f.trade == 18;
+                }
+                barbers += b;
+                gyms += g;
+                if (b + g == 0) continue;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);
+                int ch = 0, st = 0, ma = 0;
+                for (const PlacedPiece& pp : in.furniture) {
+                    const std::string name = furniturePieceName(static_cast<Piece>(pp.piece));
+                    ch += name == "barber_chair";
+                    st += name == "barber_station";
+                    ma += name == "treadmill" || name == "exercise_bike" || name == "bench_press" || name == "dumbbell_rack" || name == "weight_machine";
+                    counters += pp.piece == static_cast<uint8_t>(Piece::ShopCounter);
+                }
+                chairs += ch; stations += st; machines += ma;
+                barbersFitted += b > 0 && ch >= 1 && st >= 1;
+                gymsFitted += g > 0 && ma >= 2;
+            }
+    std::printf("    [trades] %d shop units: %d barbers (%d buildings fitted: %d chairs, %d stations), %d gyms (%d fitted: %d machines); %d counters\n",
+                units, barbers, barbersFitted, chairs, stations, gyms, gymsFitted, machines, counters);
+    const TradeInfo* bt = tradeById(17);
+    const TradeInfo* gt = tradeById(18);
+    CHECK(bt && std::string(bt->name) == "barber" && std::string(bt->placeType) == "shop");
+    CHECK(gt && std::string(gt->name) == "gym" && std::string(gt->placeType) == "shop");
+    CHECK(barbers > 5 && gyms > 3);            // (streets deal them)
+    CHECK(barbersFitted > 0 && chairs == stations);   // every chair has its mirror
+    CHECK(gymsFitted > 0);
+    CHECK(counters >= barbersFitted + gymsFitted);
+}
+
 TEST_CASE(small_grocers_are_konbini_round_the_clock) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"brick_shop", "corner_shop", "commercial_block", "mixed_use", "oldtown_house", "oldtown_grand"};
