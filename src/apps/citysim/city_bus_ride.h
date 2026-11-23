@@ -8,7 +8,8 @@
 //     `bus_board <bus>` (a probe's way in).
 //   - ABOARD: the move keys walk the aisle and the door wells, in the bus's frame; every seat within reach is an E
 //     offer (the interaction broker), and seated, E stands you up again. Sat, you face the way the seat faces.
-//   - OFF: walk out through a doorway while the bus stands. Moved by something else (a teleport): off.
+//   - OFF: walk out through a doorway while the bus stands; you land in its mouth, and are not taken back on until you
+//     have stepped out of it. Moved by something else (a teleport): off.
 // The carrier is the bus as drawn this bake (CityRenderSystem::busCabinOf), so the bus and the view cannot disagree.
 
 #include "city_render.h"
@@ -62,6 +63,7 @@ private:
     bool boardPending_ = false;
     engine::BusBoardRequest board_;
     engine::Entity bus_{};
+    engine::Entity leftBus_{};   // the bus last stepped off: not boarded again until you are out of its doorway
     engine::Vec3 local_{0, 0, 0};
     engine::Vec3 pinned_{0, 0, 0};
     int seat_ = -1;

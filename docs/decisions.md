@@ -24357,8 +24357,19 @@ Words:
   - The small shift seen on a slope is the capsule hanging straight down in the world under an eye set along the bus's own up (riderCentre, by design).
 
 **Not done:**
-- A level test that boards and rides (the deleted `a_bus_passenger_rides_in_the_bus_frame`): it needs a test harness with the player, physics and the city's driving on a level, which no level test has yet.
+- ~~A level test that boards and rides~~ done, see below.
 - The door leaves: the new buses draw none (ADR-0460 took them), so a doorway always looks open, and you can only walk out of it while the bus stands.
 - Seated NPC riders' shins through the side panel (an old problem; Glenn: not now).
 
 **Suites, all with RT_TEST_FILTER:** run_tests 1492/1492 (the three bus_ride cases and the regenerated web/engine/commands.json); level_river_town_crowd passes unchanged; the near crowd fails the same four checks with the same state hash as before (bug 2).
+
+**The level test (2026-11-22, added after).** `river_town_the_player_walks_onto_a_bus_rides_it_and_walks_off_at_the_next_stop` (tests/test_bus_ride_level.cpp, in physics_tests, which already loads levels with Jolt and the real PlayerSystem). It runs river_town with the city, its kinematic boxes, the near tier, the VehicleSystem and the BusRideSystem, in the arena's order, and the player moved by the pad:
+- waits for a bus to arrive at a stop (bus 4 at stop 1, after 53 s), puts the player on the pavement a step out from its middle door, and walks them in: aboard;
+- standing still in the standing bus: moved 0.0000 m in it;
+- E sits them (seat 15); seated over 40 m of driving: 0.003 m off the seat at worst, no step moved them in the bus, the bus never made physical;
+- E stands them up; they push out through the doorway for the whole leg (168 s, 50 s of it at a red light at junction 29): not off while it drives;
+- at stop 2 the same push takes them out through the open doorway, onto the pavement 3.8 m out from the bus's middle, feet 0.38 m below its floor, settled.
+
+**A bug the test found, fixed:** stepping off put you in the doorway's mouth, which is where you get on, so with the bus still standing you were taken straight back on unless you walked on. Now the bus you just stepped off does not take you on again until you have stepped out of its doorway's mouth (or it has left).
+
+`RT_BUS_RIDE_LOG=1` prints a line a second, and the bus's driver card whenever it stands in the road away from a stop.

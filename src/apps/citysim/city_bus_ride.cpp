@@ -131,12 +131,17 @@ void BusRideSystem::ride(engine::FrameContext& ctx, Real dt) {
         // ON FOOT: walking into an open doorway of a bus standing at its stop is getting on
         const Vec3 feet = pt->position - Vec3(0, centreUp, 0);
         ctx.world.each<CityBusRuns, CityCarBody>([&](Entity e, CityBusRuns& runs, CityCarBody&) {
-            if (bus_.valid() || !runs.standing) return;
+            if (bus_.valid()) return;
             BusCabin cabin;
             Mat4 drawn;
-            if (!city_.busCabinOf(ctx.world, e, cabin, &drawn)) return;
-            const Vec3 l = drawn.inverse().transformPoint(feet);
-            const int door = busDoorMouth(cabin, l);
+            const int door = runs.standing && city_.busCabinOf(ctx.world, e, cabin, &drawn)
+                                 ? busDoorMouth(cabin, drawn.inverse().transformPoint(feet))
+                                 : -1;
+            // (the bus you just stepped off: you land in its doorway's mouth, so not on again until you have left it)
+            if (e == leftBus_) {
+                if (door < 0) leftBus_ = Entity{};
+                return;
+            }
             if (door < 0) return;
             bus_ = e;
             local_ = busInside(cabin, door);
@@ -212,7 +217,9 @@ void BusRideSystem::ride(engine::FrameContext& ctx, Real dt) {
         Vec3 out = drawn.transformPoint(busOutside(cabin, door));
         out.y += centreUp + 0.05;
         LOG_INFO << "[bus] you got off bus " << ctx.world.get<CityCarBody>(bus_)->id << " by door " << door;
+        const Entity left = bus_;
         getOff(ctx, player);
+        leftBus_ = left;
         pin(out);
         return;
     }
