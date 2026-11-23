@@ -2,7 +2,11 @@
 // where you get off. (Being carried in its frame is engine/riding.h's, the trains' too.) A cabin laid out as the kit bus
 // lays its saloon: seat pairs either side of a 0.56 m aisle, two doors on the kerb side (+X), the driver ahead.
 #include "test_framework.h"
+
+#include <cmath>
 #include "../src/apps/citysim/city_bus_ride.h"
+#include "../src/apps/citysim/city_car.h"
+#include "../src/apps/citysim/city_driving.h"
 
 using namespace engine;
 using namespace citysim;
@@ -78,4 +82,30 @@ TEST_CASE(bus_ride_a_standing_room_bus_has_a_wide_aisle_between_its_wall_benches
     CHECK(busWalkable(c, Vec3(0.5, floor, 1.5)));    // well off the middle: the floor between the benches
     CHECK(busWalkable(c, Vec3(-0.5, floor, -2.0)));
     CHECK(!busWalkable(c, Vec3(-1.0, floor, -2.0)));  // the bench itself
+}
+
+// THE DOORS (ADR-0487): shut while it drives; as it stands at its stop they slide open over `door_seconds`, and are shut
+// again `doors_shut_before` before it pulls away; fully open is when anyone gets on or off (bus_service.json).
+TEST_CASE(bus_doors_open_as_it_stands_and_are_shut_before_it_pulls_away) {
+    const BusService& s = busService();
+    CHECK(s.usable && s.doorSeconds > 0);
+    CityBusRuns r;
+    r.standing = false;
+    r.dwellLeft = 0;
+    CHECK(busDoorsOpenness(r) == 0 && !busDoorsOpen(r));                                  // driving: shut
+    r.standing = true;
+    r.dwellLeft = s.dwellSeconds;
+    CHECK(busDoorsOpenness(r) == 0);                                                        // just stopped: still shut
+    r.dwellLeft = s.dwellSeconds - s.doorSeconds * 0.5;
+    CHECK(std::fabs(busDoorsOpenness(r) - 0.5) < 1e-9 && !busDoorsOpen(r));               // opening: nobody through yet
+    r.dwellLeft = s.dwellSeconds - s.doorSeconds;
+    CHECK(busDoorsOpen(r));                                                                 // open
+    r.dwellLeft = s.dwellSeconds * 0.5;
+    CHECK(busDoorsOpen(r));
+    r.dwellLeft = s.doorsShutBefore + s.doorSeconds * 0.5;
+    CHECK(std::fabs(busDoorsOpenness(r) - 0.5) < 1e-9 && !busDoorsOpen(r));               // closing
+    r.dwellLeft = s.doorsShutBefore;
+    CHECK(busDoorsOpenness(r) == 0);                                                        // shut before it goes
+    r.dwellLeft = 0;
+    CHECK(busDoorsOpenness(r) == 0);
 }

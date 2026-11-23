@@ -120,9 +120,10 @@ const BusService& busService() {
         }
         const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false);
         if (doc.is_discarded() || !doc.contains("headway_minutes") || !doc.contains("most_buses_per_line") || !doc.contains("dwell_seconds") ||
-            !doc.contains("traffic_factor") || !doc.contains("capacity")) {
+            !doc.contains("traffic_factor") || !doc.contains("capacity") || !doc.contains("door_seconds") ||
+            !doc.contains("doors_shut_before")) {
             LOG_WARN << "[buses] " << path << ": not JSON, or a number is missing (headway_minutes, most_buses_per_line, dwell_seconds, "
-                                              "traffic_factor, capacity): no bus runs";
+                                              "traffic_factor, capacity, door_seconds, doors_shut_before): no bus runs";
             return b;
         }
         b.headwayMinutes = doc["headway_minutes"].get<Real>();
@@ -130,11 +131,22 @@ const BusService& busService() {
         b.dwellSeconds = doc["dwell_seconds"].get<Real>();
         b.trafficFactor = doc["traffic_factor"].get<Real>();
         b.capacity = doc["capacity"].get<int>();
-        b.usable = b.headwayMinutes > 0 && b.mostBusesPerLine > 0 && b.dwellSeconds >= 0 && b.trafficFactor >= 1 && b.capacity > 0;
+        b.doorSeconds = doc["door_seconds"].get<Real>();
+        b.doorsShutBefore = doc["doors_shut_before"].get<Real>();
+        b.usable = b.headwayMinutes > 0 && b.mostBusesPerLine > 0 && b.dwellSeconds >= 0 && b.trafficFactor >= 1 && b.capacity > 0 &&
+                   b.doorSeconds > 0 && b.doorsShutBefore >= 0 && 2 * b.doorSeconds + b.doorsShutBefore < b.dwellSeconds;
         if (!b.usable) LOG_WARN << "[buses] " << path << ": a number is out of range: no bus runs";
         return b;
     }();
     return service;
+}
+
+Real busDoorsOpenness(const CityBusRuns& runs) {
+    const BusService& s = busService();
+    if (!runs.standing || s.doorSeconds <= 0) return 0;
+    const Real opened = s.dwellSeconds - runs.dwellLeft;      // seconds since it stopped
+    const Real shutting = runs.dwellLeft - s.doorsShutBefore;  // seconds left before they must be shut
+    return std::clamp(std::min(opened, shutting) / s.doorSeconds, Real(0), Real(1));
 }
 
 // Where a bus stands at stop `stop` of line `line`: the kerb lane beside it (RoadModel::busStopLane). False: no such stop,

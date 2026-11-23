@@ -24373,3 +24373,23 @@ Words:
 **A bug the test found, fixed:** stepping off put you in the doorway's mouth, which is where you get on, so with the bus still standing you were taken straight back on unless you walked on. Now the bus you just stepped off does not take you on again until you have stepped out of its doorway's mouth (or it has left).
 
 `RT_BUS_RIDE_LOG=1` prints a line a second, and the bus's driver card whenever it stands in the road away from a stop.
+
+## ADR-0487 — A bus's doors are drawn again, open while it stands at a stop and shut before it pulls away; getting on and off waits for them (2026-11-22)
+
+**Why:** the new buses (ADR-0483) were drawn with their doorways cut out of the body and nothing in them, so a bus always looked open, even driving. ADR-0460 had deleted the old buses' door leaves with the old buses. The recipe still builds the leaves (`vehicles.lua` `bus_doors`: each leaf's paint and glass, and how far it slides at fully open, read into `CarBodyRecipe::doorLeaves`); nothing drew them.
+
+**What changed:**
+- **One answer for how far the doors are open:** `busDoorsOpenness(CityBusRuns)` in city_driving.h, 0 shut to 1 open. They start opening as the bus stops, take `door_seconds` each way, and are fully shut `doors_shut_before` seconds before it pulls away. `busDoorsOpen` means fully open.
+- **The timings are data:** `door_seconds` (1.5) and `doors_shut_before` (1.0) in `assets/data/bus_service.json`, required like its other numbers. The service is refused if the doors could not open and shut within the dwell.
+- **Drawn:** each bus slot's door leaves get a paint group and a glass group (`carDoorLeaves_`). `syncBusDoors` places every leaf on its bus's drawn body each bake, slid by its `slide` times the openness. `buses?` adds "N door parts drawn (M leaves open)".
+- **The player follows the same answer** (`BusRideSystem`): you get on through a doorway, and off through one, only while the doors are fully open. Before, it was the whole time the bus stood.
+
+**Checked:**
+- run_tests `bus_doors_open_as_it_stands_and_are_shut_before_it_pulls_away`: shut while driving, half open halfway through opening, open in the middle of the dwell, half shut on closing, shut before it leaves.
+- The level test (physics_tests, river_town, ADR-0486's) now also checks that you get on and off only with the doors open. It gets on at 54.0 s, 1.4 s after the bus stopped, against 52.7 s before the doors.
+- Viewer shots on river_town (~/Pictures/Raytracer/buses/doors_*.png):
+  - Standing at a stop: both kerb-side doorways open, the leaves slid back along the side.
+  - Driving away: both shut flush.
+  - The road side has no doors.
+
+**Found, not changed:** while the doors were still opening, the test's player pushed into the bus and the player's ordinary climb took them up its side onto the roof, 2.9 m above the floor, so they never reached the doorway. The test now waits at the doorway until the doors open, as a person would. Climbing a standing bus is the movement system's general climb, so it is left as it is.

@@ -67,8 +67,16 @@ struct BusService {
     Real dwellSeconds = 0;
     Real trafficFactor = 1;   // a bus's leg as driven over the same leg at the free-flow speed (measured)
     int capacity = 0;         // people aboard one bus at most
+    Real doorSeconds = 0;       // its doors' time to slide open, or shut
+    Real doorsShutBefore = 0;   // ...fully shut this long before it pulls away
 };
 const BusService& busService();
+// A BUS's DOORS (ADR-0487): how far open they are, 0 shut .. 1 open. They open as it stands at its stop and are shut
+// `doorsShutBefore` before it pulls away, `doorSeconds` each way. Fully open is when anyone gets on or off: the player
+// (BusRideSystem) and the doors drawn (CityRenderSystem) read this one answer.
+struct CityBusRuns;
+Real busDoorsOpenness(const CityBusRuns& runs);
+inline bool busDoorsOpen(const CityBusRuns& runs) { return busDoorsOpenness(runs) >= 1; }
 
 // WHAT THE HAND-OVER HAS DONE SO FAR.
 struct DrivingCounts {

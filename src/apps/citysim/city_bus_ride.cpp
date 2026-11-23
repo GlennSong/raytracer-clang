@@ -1,6 +1,7 @@
 #include "city_bus_ride.h"
 
-#include "city_car.h"   // CityBusRuns
+#include "city_car.h"       // CityBusRuns
+#include "city_driving.h"   // busDoorsOpen: when its doors are open
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/input/input_map.h"
 #include "../../engine/interact_broker.h"
@@ -128,13 +129,13 @@ void BusRideSystem::ride(engine::FrameContext& ctx, Real dt) {
             return;
         }
     } else {
-        // ON FOOT: walking into an open doorway of a bus standing at its stop is getting on
+        // ON FOOT: walking into a doorway of a bus standing at its stop with its doors open is getting on
         const Vec3 feet = pt->position - Vec3(0, centreUp, 0);
         ctx.world.each<CityBusRuns, CityCarBody>([&](Entity e, CityBusRuns& runs, CityCarBody&) {
             if (bus_.valid()) return;
             BusCabin cabin;
             Mat4 drawn;
-            const int door = runs.standing && city_.busCabinOf(ctx.world, e, cabin, &drawn)
+            const int door = busDoorsOpen(runs) && city_.busCabinOf(ctx.world, e, cabin, &drawn)
                                  ? busDoorMouth(cabin, drawn.inverse().transformPoint(feet))
                                  : -1;
             // (the bus you just stepped off: you land in its doorway's mouth, so not on again until you have left it)
@@ -204,7 +205,7 @@ void BusRideSystem::ride(engine::FrameContext& ctx, Real dt) {
     Vec3 next = local_;
     next.x += engine::dot(move, sideAxis) * kWalk * dt;
     next.z += engine::dot(move, fwdAxis) * kWalk * dt;
-    const bool doorsOpen = runs.standing;
+    const bool doorsOpen = busDoorsOpen(runs);
     // (out of a doorway is a step you may take only while the doors are open)
     const auto ok = [&](const Vec3& p) { return busStepsOff(cabin, p) >= 0 ? doorsOpen : busWalkable(cabin, p); };
     if (ok(next)) local_ = next;   // (try the step, then each axis alone: slide along a seat row or a wall)

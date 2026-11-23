@@ -10,6 +10,7 @@
 
 #include "city_brain.h"                               // the households' cars (ADR-0444)
 #include "city_car.h"                                 // ...which are entities
+#include "city_driving.h"                             // busDoorsOpenness: how far a bus's doors are open (ADR-0487)
 #include "city_near.h"                                // CityNearCar: a near car the driving sees by itself (ADR-0451)
 #include "city_crowd.h"                               // a crowd made from the roads (ADR-0446)
 #include "../../engine/procgen/city/polyline.h"       // distToSegment
@@ -973,6 +974,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carPassengerSeats_.clear();
     carPassengerFacing_.clear();
     carDoors_.clear();
+    carDoorLeaves_.clear();
     carHasRear_.clear();
     carHasDriver_.clear();
     {
@@ -997,6 +999,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             bool hasRear = false;
             bool hasDriver = false;
             std::vector<Vec3> passengerSeats, passengerFacing, doors;
+            std::vector<engine::CarBodyRecipe::DoorLeaf> doorLeaves;
             if (assets) {
                 engine::RenderMesh mesh;
                 bool scripted = false;
@@ -1040,6 +1043,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         passengerSeats = recipe.seats;
                         passengerFacing = recipe.seatFacing;
                         doors = recipe.doors;
+                        doorLeaves = std::move(recipe.doorLeaves);
                         hasRear = recipe.hasRearHip;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
@@ -1131,6 +1135,36 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carPassengerSeats_.push_back(std::move(passengerSeats));
                 carPassengerFacing_.push_back(std::move(passengerFacing));
                 carDoors_.push_back(std::move(doors));
+                // a bus's door leaves: drawn apart from its body, which has its doorways cut out (vehicles.lua)
+                std::vector<DoorLeafGroups> leaves;
+                for (std::size_t li = 0; assets && li < doorLeaves.size(); ++li) {
+                    const engine::CarBodyRecipe::DoorLeaf& leaf = doorLeaves[li];
+                    DoorLeafGroups lg;
+                    lg.slide = leaf.slide;
+                    lg.paint = world.create();
+                    InstanceGroup pg;
+                    pg.mesh = assets->acquireMesh(leaf.body, "city:busdoor" + std::to_string(v) + "_" + std::to_string(li));
+                    pg.material = carMaterial();
+                    pg.renderLayer = engine::LayerSim;
+                    pg.drawClass = engine::DrawClass::SimBody;
+                    world.add<InstanceGroup>(lg.paint, pg);
+                    if (!leaf.glass.vertices.empty()) {
+                        lg.glass = world.create();
+                        InstanceGroup gg;
+                        gg.mesh = assets->acquireMesh(leaf.glass, "city:busdoorglass" + std::to_string(v) + "_" + std::to_string(li));
+                        engine::RenderMaterial gm;   // (as the body's clear glass: a bus is seen into)
+                        gm.albedo = Vec3(1, 1, 1);
+                        gm.metallic = 0.0f;
+                        gm.roughness = 0.06f;
+                        gm.opacity = glassOpacity;
+                        gg.material = gm;
+                        gg.renderLayer = engine::LayerSim;
+                        gg.drawClass = engine::DrawClass::SimBody;
+                        world.add<InstanceGroup>(lg.glass, gg);
+                    }
+                    leaves.push_back(lg);
+                }
+                carDoorLeaves_.push_back(std::move(leaves));
                 carHasRear_.push_back(hasRear ? 1 : 0);
                 carHasDriver_.push_back(hasDriver ? 1 : 0);
             }
@@ -1956,6 +1990,47 @@ const Mat4* CityRenderSystem::drawnBody(World& world, int slot, int key) const {
     return nullptr;
 }
 
+// Each bus's door leaves where its drawn body puts them, slid open by busDoorsOpenness (the one answer the player's way
+// on and off reads too), named for the renderer's interpolation like the bodies.
+void CityRenderSystem::syncBusDoors(World& world) {
+    std::vector<InstanceGroup*> groups;
+    for (const std::vector<DoorLeafGroups>& slot : carDoorLeaves_)
+        for (const DoorLeafGroups& lg : slot)
+            for (Entity e : {lg.paint, lg.glass})
+                if (InstanceGroup* g = e.valid() ? world.get<InstanceGroup>(e) : nullptr) {
+                    g->beginStep();
+                    groups.push_back(g);
+                }
+    if (groups.empty()) return;
+    std::size_t open = 0;
+    world.each<CityBusRuns, CityCarBody, CityCarLink>([&](Entity, CityBusRuns& runs, CityCarBody& body, CityCarLink& link) {
+        const int v = parkedVariant(body.slot, body.type);
+        if (v < 0 || v >= static_cast<int>(carDoorLeaves_.size())) return;
+        const std::vector<DoorLeafGroups>& leaves = carDoorLeaves_[static_cast<std::size_t>(v)];
+        if (leaves.empty()) return;
+        const Mat4* drawn = drawnBody(world, v, entityCarDrawKey(body, link));
+        if (!drawn) return;
+        const Real f = busDoorsOpenness(runs);
+        if (f > 0) open += leaves.size();
+        for (std::size_t li = 0; li < leaves.size(); ++li) {
+            const Vec3 s = leaves[li].slide * f;
+            const Mat4 at = *drawn * Mat4::translate(s.x, s.y, s.z);
+            const uint64_t key = (uint64_t(0x6D) << 56) | (uint64_t(body.id) << 8) | static_cast<uint64_t>(li);
+            if (InstanceGroup* g = leaves[li].paint.valid() ? world.get<InstanceGroup>(leaves[li].paint) : nullptr) g->push(at, key);
+            if (InstanceGroup* g = leaves[li].glass.valid() ? world.get<InstanceGroup>(leaves[li].glass) : nullptr) g->push(at, key);
+        }
+    });
+    // (the leaves travel the town with their buses: the town's cull sphere, as the boards')
+    std::size_t drawn = 0;
+    for (InstanceGroup* g : groups) {
+        g->boundsCenter = Vec3(0, 0, 0);
+        g->boundsRadius = 6000.0;
+        drawn += g->transforms.size();
+    }
+    busDoorsDrawn_ = drawn;
+    busDoorsOpenDrawn_ = open;
+}
+
 void CityRenderSystem::syncBusBoards(World& world) {
     // `buses?` (ADR-0485): every bus, its line and stop and where it is, and the riders' counts
     if (sim_.buses().any()) {
@@ -1993,7 +2068,8 @@ void CityRenderSystem::syncBusBoards(World& world) {
                     out += b;
                 }
             }
-        out += "; " + std::to_string(busBoardsDrawn_) + " boards drawn, " + std::to_string(busRidersDrawn_) + " riders drawn" +
+        out += "; " + std::to_string(busBoardsDrawn_) + " boards drawn, " + std::to_string(busRidersDrawn_) + " riders drawn, " +
+               std::to_string(busDoorsDrawn_) + " door parts drawn (" + std::to_string(busDoorsOpenDrawn_) + " leaves open)" +
                (busRiderGroup_.valid() ? "" : " (no rider group: no slot has seats)") + busRiderNote_;
         for (const std::pair<uint32_t, std::string>& r : rows) out += r.second;
         answers_.set("buses?", out);
@@ -2571,6 +2647,7 @@ void CityRenderSystem::syncGroups(World& world) {
     // Car lamps (ADR-0342): each drawn car's lit lamps onto its body instance, and the bus signs. Always baked.
     syncCarLamps(world);
     syncBusBoards(world);
+    syncBusDoors(world);
     sec(5);
     if (syncStats && ++secCalls % 300 == 0) {
         LOG_INFO << "[stats] group sync ms per bake: agents " << secMs[0] / secCalls << ", parked cars " << secMs[1] / secCalls

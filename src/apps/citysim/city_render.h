@@ -613,6 +613,15 @@ private:
     std::size_t busBoardsDrawn_ = 0;   // boards set on the buses at the last bake (`buses?`)
     std::size_t busRidersDrawn_ = 0;   // riders seated in the buses at the last bake (`buses?`)
     std::string busRiderNote_;         // the first seated bus's seats as placed (`buses?`)
+    // THE BUSES' DOOR LEAVES (ADR-0487): per slot, each leaf of its recipe's `bus_doors` -- its paint and its glass, and
+    // its slide at fully open -- slid by busDoorsOpenness on every bus drawn
+    struct DoorLeafGroups {
+        engine::Entity paint, glass;
+        Vec3 slide{0, 0, 0};
+    };
+    std::vector<std::vector<DoorLeafGroups>> carDoorLeaves_;
+    std::size_t busDoorsDrawn_ = 0, busDoorsOpenDrawn_ = 0;   // leaves drawn at the last bake, and of them open (`buses?`)
+    void syncBusDoors(engine::World& world);
     // Wheel-less bodies + wheel layouts, one per car variant (indexed like
     // carGroups_). Populated only from Lua fleet recipes that publish a separate
     // wheelset; see carChassisMesh() / carWheels().

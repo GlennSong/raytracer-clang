@@ -1,7 +1,8 @@
 // THE PLAYER RIDES A BUS ON RIVER_TOWN (ADR-0486; the level test ADR-0459 deleted with the old buses, back on the new).
 // The real level through LevelLoader on the NullRenderer, Jolt, the real PlayerSystem walking the player, the city
 // stepped as the app steps it (its kinematic boxes, the near tier and the VehicleSystem in the arena's order), and the
-// BusRideSystem. A script on the pad: wait for a bus to stand at a stop, walk into its doorway from the pavement, sit,
+// BusRideSystem. A script on the pad: wait for a bus to stand at a stop, walk to its doorway from the pavement and in
+// when its doors are open, sit,
 // stand, try the door while it drives (it stays shut), and walk out at the next stop.
 //
 // What it holds the ride to:
@@ -11,7 +12,8 @@
 //   - never physical: the bus carrying the player is never made a physics car by the near tier (its box would push
 //     the player out);
 //   - E sits you on an offered seat and E stands you up;
-//   - the doors are shut while it drives: walking at the doorway does not get you off;
+//   - the doors (city_driving.h busDoorsOpen, ADR-0487) are shut while it drives: walking at the doorway does not get
+//     you off; on and off only while they are fully open;
 //   - OFF at the next stop through the doorway, onto the pavement beside the bus, standing on the ground.
 //
 //   RT_BUS_RIDE_LOG=1   a line a second: the bus, its stop, where you are in it
@@ -20,6 +22,7 @@
 
 #include "../src/apps/citysim/city_bus_ride.h"
 #include "../src/apps/citysim/city_car.h"
+#include "../src/apps/citysim/city_driving.h"
 #include "../src/apps/citysim/city_near.h"
 #include "../src/apps/citysim/city_physics.h"
 #include "../src/apps/citysim/city_render.h"
@@ -240,13 +243,26 @@ TEST_CASE(river_town_the_player_walks_onto_a_bus_rides_it_and_walks_off_at_the_n
     for (int i = 0; i < 4 * perSecond && !r.bus.riding().valid() && runsOf(r, b)->standing; ++i) {
         Mat4 now;
         if (!r.inBus(b, local, nullptr, &now)) break;
-        r.walk(now.transformPoint(citysim::busInside(cabin, door)) - r.centre(), true);
+        // (to the doorway, and wait there till the doors are open, as a person does: pushing at a shut bus climbs it)
+        if (citysim::busDoorsOpen(*runsOf(r, b))) {
+            r.walk(now.transformPoint(citysim::busInside(cabin, door)) - r.centre(), true);
+        } else {
+            Vec3 to = now.transformPoint(citysim::busOutside(cabin, door)) - r.centre();
+            to.y = 0;
+            r.walk(to, to.length() > 0.15);
+        }
         r.frame();
+        if (log && i % (perSecond / 4) == 0 && r.inBus(b, local))
+            std::printf("    [bus ride] walking in t %.2f s: doors %.2f open, feet at %.3f %.3f %.3f in the bus (door %d at %.2f %.2f %.2f)\n",
+                        r.time, citysim::busDoorsOpenness(*runsOf(r, b)), local.x, local.y - r.centreUp(), local.z, door,
+                        cabin.doors[static_cast<std::size_t>(door)].x, cabin.doors[static_cast<std::size_t>(door)].y,
+                        cabin.doors[static_cast<std::size_t>(door)].z);
     }
     std::printf("    [bus ride] bus %u at stop %u, door %d: aboard %d after %.1f s\n", busId, firstStop, door,
                 r.bus.riding() == b ? 1 : 0, r.time);
     CHECK(r.bus.riding() == b);
     if (r.bus.riding() != b) return;
+    CHECK(citysim::busDoorsOpen(*runsOf(r, b)));   // (on through an open door: ADR-0487)
 
     // 3. HELD STILL in a standing bus (the stick let go)
     r.walk(Vec3(0, 0, 0), false);
@@ -331,7 +347,7 @@ TEST_CASE(river_town_the_player_walks_onto_a_bus_rides_it_and_walks_off_at_the_n
         const bool wasAboard = r.bus.riding() == b;
         const Vec3 before = local;
         rideStep();
-        if (wasAboard && r.bus.riding() != b && !runsOf(r, b)->standing) offWhileDriving = true;
+        if (wasAboard && r.bus.riding() != b && !citysim::busDoorsOpen(*runsOf(r, b))) offWhileDriving = true;
         ++pushedAtShutDoor;
         if (log && (i % perSecond == 0 || (wasAboard && r.bus.riding() != b) || (local - before).length() > kStepMost))
             std::printf("    [bus ride] door push t %.2f s: aboard %d, stop %u standing %d, you at %.3f %.3f %.3f in it, centre %.2f %.2f %.2f\n",
@@ -352,12 +368,15 @@ TEST_CASE(river_town_the_player_walks_onto_a_bus_rides_it_and_walks_off_at_the_n
     CHECK(!everPhysical);
 
     // 7. OFF at the next stop: the same push takes you out through the open doorway
+    bool offShut = false;
     for (int i = 0; i < 4 * perSecond && r.bus.riding() == b; ++i) {
         Mat4 now;
         if (r.inBus(b, local, nullptr, &now)) r.walk(now.transformPoint(beyond) - r.centre(), true);
         r.frame();
+        if (r.bus.riding() != b && !citysim::busDoorsOpen(*runsOf(r, b))) offShut = true;
     }
     CHECK(!r.bus.riding().valid());
+    CHECK(!offShut);   // (out through an open door)
     // (a little further out onto the pavement, then the stick let go: not taken back on)
     for (int i = 0; i < perSecond / 2; ++i) {
         Mat4 now;

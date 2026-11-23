@@ -4,11 +4,12 @@
 // THE PLAYER ON A BUS (ADR-0486; the passenger seat ADR-0459 deleted with the old buses, back on the new ones). The bus's
 // own rules -- where you get on, where you may stand, its seats, when its doors let you off -- are kept here; being
 // carried in its frame is engine/riding.h's (a Passenger), as on the trains.
-//   - ON: walk into one of its doorways from the pavement while it stands at a stop (CityBusRuns::standing). Or
+//   - ON: walk into one of its doorways from the pavement while it stands at a stop with its doors open
+//     (city_driving.h busDoorsOpen, the doors drawn by the same answer). Or
 //     `bus_board <bus>` (a probe's way in).
 //   - ABOARD: the move keys walk the aisle and the door wells, in the bus's frame; every seat within reach is an E
 //     offer (the interaction broker), and seated, E stands you up again. Sat, you face the way the seat faces.
-//   - OFF: walk out through a doorway while the bus stands; you land in its mouth, and are not taken back on until you
+//   - OFF: walk out through a doorway while its doors are open; you land in its mouth, and are not taken back on until you
 //     have stepped out of it. Moved by something else (a teleport): off.
 // The carrier is the bus as drawn this bake (CityRenderSystem::busCabinOf), so the bus and the view cannot disagree.
 
