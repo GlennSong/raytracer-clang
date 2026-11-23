@@ -250,6 +250,10 @@ struct LanesToCross {
     bool onRoute = false;
     uint32_t lanes = 0;
     Across toward = Across::None;
+    // The lane changes still needed IN THIS LEG: how many lanes over the nearest lane is that leads on to the next leg
+    // and finishes the route with the changes left (0 when this one does). A car two lanes from its turn needs room for
+    // two moves before its last chance, not one.
+    uint32_t inLeg = 0;
 };
 LanesToCross lanesToCross(const Route& route, engine::PathId lane, uint32_t fromLeg = 0);
 

@@ -776,7 +776,9 @@ void Driving::plan() {
             if (lane.need.onRoute && lane.need.lanes > 0) {
                 ++laneChangeCounts_.wanted;
                 // (the move needs room: where it must begin at the latest; a lane with no way on is waited in, there)
-                lane.changeBy = lane.last.metres - laneMoveShortest(roads_->paths[c.path.index].width, cls.tightestTurnRadius);
+                // (room for every move still needed: the one after this one begins where this one ends)
+                lane.changeBy = lane.last.metres - static_cast<Real>(std::max<uint32_t>(lane.need.inLeg, 1)) *
+                                                       laneMoveShortest(roads_->paths[c.path.index].width, cls.tightestTurnRadius);
                 lane.mustWait = t->waitToChange && t->missedOn == c.path;
                 lane.gap = findLaneGap(*roads_, cars_, pathLists_, c, cls.length, lane.need.toward == Across::TowardKerb,
                                        laneChangeBrake_, kerbwardPerpSign(ruleSet_.drivesOn), pathsBefore_,
@@ -1311,12 +1313,16 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
         if (!gap.safe) ++laneChangeCounts_.backedOff;
     }
     // (moving: a car at rest cannot step sideways, and the move across is laid by the distance it covers)
+    // (done in time to begin the moves still needed after it: a move laid over all the room left stranded a car two
+    // lanes from its turn at the end of the lane between, the second move no longer fitting)
     bool fits = false;
+    const Real radius = vehicleClasses_.at(c.vehicleClass).tightestTurnRadius;
+    Real room = gap.target.valid() ? roads_->paths[gap.target.index].length - gap.targetAlong : Real(0);
+    if (gap.target.valid() && l.last.needed && l.need.inLeg > 1)
+        room = std::min(room, l.last.metres - static_cast<Real>(l.need.inLeg - 1) *
+                                                  laneMoveShortest(roads_->paths[gap.target.index].width, radius));
     const Real moveLength =
-        gap.target.valid()
-            ? laneMoveLength(gap.across, c.speed, laneChangeSeconds_, vehicleClasses_.at(c.vehicleClass).tightestTurnRadius,
-                             roads_->paths[gap.target.index].length - gap.targetAlong, &fits)
-            : Real(0);
+        gap.target.valid() ? laneMoveLength(gap.across, c.speed, laneChangeSeconds_, radius, room, &fits) : Real(0);
     // (a driver waiting for its gap with no other way on moves across from rest: the move is laid by distance)
     if (p.changeLane && gap.safe && gap.target.valid() && fits && (c.speed >= kLaneChangeLeastSpeed || t.waitToChange)) {
         Real looked = -c.along;   // (how far its way ahead reached: the new one reaches as far)

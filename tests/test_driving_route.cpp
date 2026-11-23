@@ -270,10 +270,12 @@ TEST_CASE(route_lane_changes_table_for_a_far_turn) {
         const engine::PathId kerb2 = t.laneLeaving(1, 2, far, 1);
         LanesToCross x = lanesToCross(r, kerb0);
         CHECK(x.onRoute && x.lanes == 1u && x.toward == Across::TowardOffside);
+        CHECK(x.inLeg == 0u);   // it may stay to the next section and change there
         x = lanesToCross(r, kerb1);
         CHECK(x.onRoute && x.lanes == 1u && x.toward == Across::TowardOffside);
+        CHECK(x.inLeg == 1u);   // the last section before the turn: one change in it
         x = lanesToCross(r, off1);
-        CHECK(x.onRoute && x.lanes == 0u && x.toward == Across::None);
+        CHECK(x.onRoute && x.lanes == 0u && x.toward == Across::None && x.inLeg == 0u);
         CHECK(!lanesToCross(r, t.laneLeaving(2, 2, Heading::East, 0)).onRoute);
         LastChance last = lastChance(r, kerb0, 30);
         CHECK(!last.needed);

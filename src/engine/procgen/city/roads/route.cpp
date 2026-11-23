@@ -709,6 +709,16 @@ LanesToCross lanesToCross(const Route& route, PathId lane, uint32_t fromLeg) {
     const RouteLeg& leg = route.legs[static_cast<std::size_t>(legIndex)];
     const uint32_t k = static_cast<uint32_t>(laneSlot(route, leg, lane));
     const uint32_t mine = route.lanes[leg.firstLane + k].changes;
+    for (uint32_t d = 0; mine != kCannotFinish && d < leg.laneCount; ++d) {
+        const auto leadsOn = [&](uint32_t at) {
+            const uint32_t staying = route.lanes[leg.firstLane + at].changesIfStaying;
+            return staying != kCannotFinish && staying + d == mine;
+        };
+        if ((k + d < leg.laneCount && leadsOn(k + d)) || (k >= d && leadsOn(k - d))) {
+            out.inLeg = d;
+            break;
+        }
+    }
     for (uint32_t d = 1; d < leg.laneCount; ++d) {
         const uint32_t kerbward = k + d < leg.laneCount ? route.lanes[leg.firstLane + k + d].changes : kCannotFinish;
         const uint32_t offward = k >= d ? route.lanes[leg.firstLane + k - d].changes : kCannotFinish;
