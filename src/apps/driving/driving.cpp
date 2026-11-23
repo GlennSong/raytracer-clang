@@ -1021,7 +1021,8 @@ void Driving::move(Real dt) {
         // driver means to drive at (a carried car's host steers there, passOffset)
         // MOVING ACROSS INTO THE LANE BESIDE (sitting 5): the same easing onto the new lane's line, at the pace that
         // takes lane_change_seconds; listed in both lanes until it is there
-        const bool crossing = laneMoves_.count(c.id) != 0;
+        const std::map<CarId, LaneMove>::const_iterator moving = laneMoves_.find(c.id);
+        const bool crossing = moving != laneMoves_.end() && !moving->second.frontDone;
         if (thingsOn_ && !crossing) {
             Real target = 0, pace = kSwerveSideSpeed;
             if (thingsOn_) {
@@ -1089,16 +1090,26 @@ void Driving::move(Real dt) {
         }
         // MOVING ACROSS INTO THE LANE BESIDE (sitting 5): the S-curve by the distance covered; listed in both lanes
         // until it is on the new one's line
-        if (crossing) {
-            const std::map<CarId, LaneMove>::iterator m = laneMoves_.find(c.id);
+        out.offsetRearLag = 0;
+        if (const std::map<CarId, LaneMove>::iterator m = laneMoves_.find(c.id); m != laneMoves_.end()) {
             const Real travelled = static_cast<Real>(out.odometer - m->second.startOdometer);
-            out.offset = laneMoveOffset(m->second, travelled);
-            if (travelled >= m->second.length) {
-                out.offset = 0;
-                out.besidePath = engine::PathId();
-                out.besideShift = 0;
+            if (!m->second.frontDone) {
+                out.offset = laneMoveOffset(m->second, travelled);
+                if (travelled >= m->second.length) {
+                    out.offset = 0;
+                    out.besidePath = engine::PathId();
+                    out.besideShift = 0;
+                    m->second.frontDone = true;
+                    ++laneChangeCounts_.finished;
+                }
+            }
+            // (the rear on the same curve a body length behind: the car points along its path across, as a car steered
+            // over does, rather than sliding square; drawn only)
+            const Real body = vehicleClasses_.at(c.vehicleClass).length;
+            out.offsetRearLag = laneMoveOffset(m->second, travelled - body) - out.offset;
+            if (m->second.frontDone && travelled - body >= m->second.length) {
+                out.offsetRearLag = 0;
                 laneMoves_.erase(m);
-                ++laneChangeCounts_.finished;
             }
         }
         if (onWay) t->wayAt = static_cast<uint32_t>(at);
@@ -1414,6 +1425,7 @@ bool Driving::carry(CarId id, bool carriedNow, Real lag) {
         seen_.erase(id);
         // back on its lane: at the nearest point along it, on its centre line, at the speed last written
         c->offset = 0;
+        c->offsetRearLag = 0;
         listsStale_ = true;
     }
     return true;
@@ -1807,6 +1819,7 @@ uint64_t Driving::stateHash() const {
         for (const CarId id : decideNext_) h.pod(id.index);
     if (changingLanes())
         for (const std::pair<const CarId, LaneMove>& r : laneMoves_) {
+            if (r.second.frontDone) continue;   // (a rear still easing over is drawn, not decided by)
             h.pod(r.first.index);
             h.pod(r.second.from);
             h.pod(r.second.startOdometer);

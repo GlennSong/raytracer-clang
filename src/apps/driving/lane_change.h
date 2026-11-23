@@ -47,6 +47,9 @@ struct LaneMove {
     Real from = 0;                // its offset from the new lane's line when it began (+ toward the kerb)
     double startOdometer = 0;     // where it began, by its odometer
     Real length = 0;              // the distance it takes (m)
+    // Its front is on the new line: the move is over for the driving (no longer listed in both lanes). It is kept only
+    // while its REAR still follows the same curve, a body length behind -- drawn, never decided by (Car::offsetRearLag).
+    bool frontDone = false;
 };
 constexpr Real kMoveMargin = 1.25;
 // How far back a driver looks for the car that would be behind it in the lane beside, along the paths leading into that

@@ -272,7 +272,8 @@ CarPose carPose(const engine::LaneGraph& roads, const VehicleClasses& classes, c
     }
     const BodyPiece& last = body.pieces[body.count - 1];
     const engine::Vec2 rearHeading = roads.directionAt(last.path, last.rear);
-    const engine::Vec2 rear = roads.pointAt(last.path, last.rear) + engine::perp(rearHeading) * kerbward;
+    const Real kerbwardRear = kerbwardPerpSign(rules.drivesOn) * (car.offset + car.offsetRearLag);
+    const engine::Vec2 rear = roads.pointAt(last.path, last.rear) + engine::perp(rearHeading) * kerbwardRear;
     pose.rear = lift(rear, roads.heightAt(last.path, last.rear));
     const engine::Vec3 span = pose.front - pose.rear;
     pose.body = span.length() > kShortestBody ? engine::normalize(span) : pose.travel;

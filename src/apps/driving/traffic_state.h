@@ -142,6 +142,10 @@ struct Car {
     // How far its middle is to the side of the path's centre line: + toward the kerb side, - toward the offside. Zero
     // except during a lane change.
     Real offset = 0;
+    // How far its REAR's offset lags its front's (drawn only: carPose puts the rear at offset + this). Zero but in a lane
+    // change, where the rear follows the front's S-curve a body length behind, so the car turns toward the lane it
+    // moves into instead of sliding across square.
+    Real offsetRearLag = 0;
     Real speed = 0;                   // m/s along the path
     Real acceleration = 0;            // m/s2 along the path
     // The earlier paths its body still lies on, nearest first: trail[0] leads into `path`, trail[1] into trail[0], ...
