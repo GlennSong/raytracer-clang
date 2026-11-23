@@ -782,7 +782,9 @@ void Driving::plan() {
                 // (room for every move still needed: the one after this one begins where this one ends)
                 lane.changeBy = lane.last.metres - static_cast<Real>(std::max<uint32_t>(lane.need.inLeg, 1)) *
                                                        laneMoveShortest(roads_->paths[c.path.index].width, cls.tightestTurnRadius);
-                lane.mustWait = t->waitToChange && t->missedOn == c.path;
+                // (while it still needs the change, on whichever piece of lane it has rolled onto: tied to the lane it
+                // missed on, it was let go a metre later, on the next piece of the same road, and drove to its end)
+                lane.mustWait = t->waitToChange;
                 lane.gap = findLaneGap(*roads_, cars_, pathLists_, c, cls.length, lane.need.toward == Across::TowardKerb,
                                        laneChangeBrake_, kerbwardPerpSign(ruleSet_.drivesOn), pathsBefore_,
                                        [&](const Car& who, Real gap, Real speedAhead) {
@@ -1521,6 +1523,13 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     front.path = c.path;
     front.along = c.along;
     Route route = findRoute(*model_, routeBounds_, inLane, front, t.destination);
+    // (none keeping its lane -- its destination just behind it in the lane beside, overshot, say: any way on, round the
+    // block; the router plans no change from where it stands without room for one)
+    // -- taken only if it keeps its lane from here, as the first did (the change it missed is no way on)
+    if (!route.found) {
+        Route round = findRoute(*model_, routeBounds_, routeClass(c.vehicleClass), front, t.destination);
+        if (round.found && lanesToCross(round, c.path, 0).lanes == 0) route = std::move(round);
+    }
     if (!route.found) {
         // (no way on from its lane to where it goes: it waits in it for a gap, stopped where a move across still fits --
         // the one place a driver stops in a through lane to change lanes -- and the host is told, as when a trip is begun

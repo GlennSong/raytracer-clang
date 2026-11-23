@@ -481,8 +481,12 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
         const Real whole = pathSeconds(model, cls, p, sectionSeconds);
         if (whole >= 0 && path.length > 0) {
             const Real perMetre = whole / path.length;
-            // The destination, when it lies ahead on this path.
-            if (p == to.path && to.along + kAlongTolerance >= entry)
+            // The destination, when it lies ahead on this path -- and, on a lane come to by a lane change, far enough
+            // ahead for the move across to be made before it (a destination 7 m into the lane beside a car's next one
+            // was "reached" by a move no car can make so short, and the car stood at its lane's end for good)
+            const bool bySidestep = search.how[u] == 1;
+            if (p == to.path && to.along + kAlongTolerance >= entry &&
+                (!bySidestep || to.along - entry >= cls.laneChangeLeast))
                 search.reach(destNode, u, cost + perMetre * std::max(Real(0), to.along - entry), 0);
             // On along the path's end (a turn that completes a closed chain is not taken).
             const Real toEnd = cost + perMetre * (path.length - entry);
