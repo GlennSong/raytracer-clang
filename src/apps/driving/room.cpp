@@ -977,11 +977,14 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
     }
     ans.at = engine::JunctionId();
 
-    // 2. THE CARS ON THE WAY, each once: its rear-most point on it, and its front if that is on it.
+    // 2. THE CARS ON THE WAY, each once: its rear-most point on it, and its front if that is on it. A car moving across
+    // into or out of a lane of the way (listed Beside) is on it too, its front not: its body is there until it is across
+    // (sitting 5: counted as gone the moment it began to move out, the lane was granted to the car behind it, which then
+    // stood in the box behind it when it stopped half across).
     onWay_.clear();
     for (const Seg& g : segs_)
         for (const PathEntry& e : world.lists.on(g.path)) {
-            if (e.why == OnPath::Beside || e.car == c.id) continue;
+            if (e.car == c.id) continue;
             OnWay o;
             o.car = e.car.index;
             o.rear = g.from + e.rear;
