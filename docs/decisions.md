@@ -24393,3 +24393,26 @@ Words:
   - The road side has no doors.
 
 **Found, not changed:** while the doors were still opening, the test's player pushed into the bus and the player's ordinary climb took them up its side onto the roof, 2.9 m above the floor, so they never reached the doorway. The test now waits at the doorway until the doors open, as a person would. Climbing a standing bus is the movement system's general climb, so it is left as it is.
+
+## ADR-0488 — A walker's crossing state goes with the near tier: drivers no longer give way, for ever, to a walker who went far mid-crossing (2026-11-22)
+
+**What was seen:** on river_town a bus stood still in the road for minutes away from any stop (bus 0 at (−33, 723) about 2 minutes in an earlier run; bus 7 410 s in this one). The crowd test now records the longest any bus stands in the road away from a stop, with its driver card.
+
+**Why, found:**
+- Bus 7 was committed inside junction 53 on a far turn, 1 m short of crosswalk 219, held by "give way to people crossing: person_at_crosswalk is yes".
+- Nobody was on crosswalk 219. Five people waited at its kerb for WALK (it has lights), and drivers do not give way to those.
+- The drivers' list said two walkers were ON crosswalk 219, but both stood 80 m away, three steps past it on their routes.
+- Both were far-tier walkers (tier V: no drawing, no sensing, their route walked once a second without the crossing rule). A walker's crossing state (`crosswalkAt`, `onCrosswalk`, `aboutToCross`) is written only by the near tier's step (`CitySim::advance`). It was kept as it was when they went far mid-crossing, and `thingsForDriving` kept telling the drivers so.
+
+**What changed:** `CitySim::setTier` clears a walker's crossing state when it leaves the near tier. One line of thought: the state is the near tier's, so it goes with the near tier.
+
+**Measured (river_town, 30 minutes):**
+- The longest a bus stood in the road: 410 → 87 s (a red light).
+- Arrivals 660 → 672; trips 312 → 321; parked 225 → 245.
+- The buses' calls 154 → 167; their legs 4.17 → 3.79 times the free-flow time.
+- Riders: 49 waits, 40 boardings, 38 got off (was 51 / 41 / 34).
+- Hash 0xf5c3d679818d2ee3 → 0xd99d3758b0039615, re-pinned.
+
+The crowd test now also checks that no bus stands in the road away from a stop for 3 minutes or more.
+
+**Unchanged:** brain_crowd passes as it was. brain_lab fails the same 14 checks as at HEAD before this.

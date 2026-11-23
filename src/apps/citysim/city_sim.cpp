@@ -2109,9 +2109,22 @@ void CitySim::setTier(int i, Agent::Tier t) {
     };
     auto add = [&](std::vector<int>& v) { v.insert(std::lower_bound(v.begin(), v.end(), i), i); };
     crowdChanged(i);
-    if (a.tier == Agent::Tier::K) drop(kIdx_);
-    else if (a.tier == Agent::Tier::V) { drop(vIdx_); vGrid_.remove(i); }
-    else dGrid_.remove(i);
+    if (a.tier == Agent::Tier::K) {
+        drop(kIdx_);
+        // WHERE IT STOOD AGAINST A CROSSWALK goes with the near tier: only the near tier's step (advance) writes it, and
+        // a far walker walks its route without the crossing rule, so left set it said "on crosswalk N" for ever. The
+        // drivers read it (thingsForDriving): river_town's bus 7 stood 410 s in junction 53 giving way to two children
+        // a block past crosswalk 219, their flags left from crossing it before they went far.
+        a.crosswalkAt = -1;
+        a.onCrosswalk = false;
+        a.aboutToCross = false;
+        a.crossWaited = 0;
+    } else if (a.tier == Agent::Tier::V) {
+        drop(vIdx_);
+        vGrid_.remove(i);
+    } else {
+        dGrid_.remove(i);
+    }
     a.tier = t;
     if (t == Agent::Tier::D) {
         releaseSeat(a);   // a bench, a place in a group: let go (it was holding them for ever)

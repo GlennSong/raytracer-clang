@@ -109,6 +109,14 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     int longestStandTicks = 0;
     uint32_t longestStandCar = 0;
     std::string longestStandWhy;
+    // ...and THE BUSES' longest stand in the road, not at a stop (its doors shut): which bus, where, and its card
+    std::map<uint32_t, engine::Entity> busOf;   // car id -> the bus's entity
+    world.each<citysim::CityBusRuns, citysim::CityCarBody>(
+        [&](engine::Entity e, citysim::CityBusRuns&, citysim::CityCarBody& body) { busOf[body.id] = e; });
+    std::map<uint32_t, int> busStandSince;
+    int busStandTicks = 0;
+    uint32_t busStandCar = 0;
+    std::string busStandWhy;
     for (int minute = 1; minute <= minutes; ++minute) {
         for (int t = 0; t < ticksPerMinute; ++t) {
             const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -120,6 +128,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             for (const driving::Car& c : d.cars()) {
                 if (!driving::isWaiting(c)) {
                     standingSince.erase(c.id.index);
+                    busStandSince.erase(c.id.index);
                     continue;
                 }
                 const std::map<uint32_t, int>::iterator it = standingSince.emplace(c.id.index, tick).first;
@@ -127,6 +136,19 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                     longestStandTicks = tick - it->second;
                     longestStandCar = c.id.index;
                     if (t % 60 == 0) longestStandWhy = d.describeCar(c.id);   // (once a second: the card is long)
+                }
+                const std::map<uint32_t, engine::Entity>::const_iterator bus = busOf.find(c.id.index);
+                if (bus == busOf.end()) continue;
+                const citysim::CityBusRuns* runs = world.get<citysim::CityBusRuns>(bus->second);
+                if (!runs || runs->standing) {
+                    busStandSince.erase(c.id.index);
+                    continue;
+                }
+                const int since = busStandSince.emplace(c.id.index, tick).first->second;
+                if (tick - since > busStandTicks) {
+                    busStandTicks = tick - since;
+                    busStandCar = c.id.index;
+                    if (t % 60 == 0) busStandWhy = d.describeCar(c.id);
                 }
             }
         }
@@ -189,6 +211,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                 static_cast<unsigned long long>(hash));
     std::printf("    [river] the longest stand, car %u, %.1f s; its card then:\n%s\n", longestStandCar, longestStandTicks * kStep,
                 longestStandWhy.c_str());
+    if (!busOf.empty())
+        std::printf("    [river] the longest a bus stood in the road (not at a stop): bus %u, %.1f s; its card then:\n%s\n", busStandCar,
+                    busStandTicks * kStep, busStandWhy.c_str());
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
     // WHY THE CARS STANDING AT THE END STAND: the rule each one's last decision named (its card's "now:" line)
     {
@@ -286,13 +311,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 126);
-        CHECK(mostOnRoadAt == 11);
-        CHECK(b.counts().tripsBegun == 312u);
-        CHECK(b.counts().parkedReports == 225u);
+        CHECK(mostOnRoad == 124);
+        CHECK(mostOnRoadAt == 10);
+        CHECK(b.counts().tripsBegun == 321u);
+        CHECK(b.counts().parkedReports == 245u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 660u);
+        CHECK(b.machine()->counts().arrivals == 672u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -319,16 +344,25 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x84834e8b10e27894 -> 0xf5c3d679818d2ee3 (ADR-0485: a post and a bench at each of the 38 stops, and the
         // street trees within 3 m of one gone, so the walkers' obstacles moved): parked 223 -> 225, arrivals 658 -> 660;
         // the riders' counts are the same
-        CHECK(hash == 0xf5c3d679818d2ee3ull);
+        // 0xf5c3d679818d2ee3 -> 0xd99d3758b0039615 (a walker's crossing state goes with the near tier, city_sim.cpp
+        // setTier): a walker that went far kept "on crosswalk N" from its last near step, and the drivers gave way to it
+        // for ever -- bus 7 stood 410 s in junction 53 for two children a block past crosswalk 219. The longest a bus
+        // stood in the road 410 -> 87 s (a red light); most on the road 126 -> 124 (minute 11 -> 10), trips 312 -> 321,
+        // parked 225 -> 245, arrivals 660 -> 672,
+        // the buses' calls 154 -> 167, their legs 4.17 -> 3.79 times the free-flow time
+        CHECK(hash == 0xd99d3758b0039615ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 154u);
+        CHECK(sim.drivingHost().counts().busCalls == 167u);
+        // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
+        // (87 s); a bus held by something that never goes was 410 s
+        CHECK(busStandTicks * kStep < 180.0);
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 51u && rc.boardings == 41u && rc.alightings == 34u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 42u && b.counts().busRides == 34u);
+            CHECK(rc.waits == 49u && rc.boardings == 40u && rc.alightings == 38u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 41u && b.counts().busRides == 38u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
     }
