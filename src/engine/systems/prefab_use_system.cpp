@@ -48,7 +48,22 @@ bool seatAt(World& world, Entity instance, const std::string& marker, bool lying
 
 }  // namespace
 
-void PrefabUseSystem::fixedUpdate(FrameContext& ctx) { stepPrefabUses(ctx.world, ctx.clock.fixedStep()); }
+void PrefabUseSystem::fixedUpdate(FrameContext& ctx) {
+    // the player, as someone who may be walking a roundabout round: where their feet are and how fast they go
+    Vec3 feet, velocity;
+    bool walker = false;
+    const Real dt = ctx.clock.fixedStep();
+    ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform& t, ControlledBy&) {
+        if (walker || ctx.world.has<Seated>(e) || ctx.world.has<InVehicle>(e)) return;
+        Real drop = 0.7;
+        if (const CharacterController* cc = ctx.world.get<CharacterController>(e)) drop = cc->halfHeight + cc->radius;
+        feet = t.position - Vec3(0, drop, 0);
+        if (const PrevTransform* prev = ctx.world.get<PrevTransform>(e)) velocity = (t.position - prev->value.position) * (Real(1) / std::max(dt, Real(1e-6)));
+        walker = true;
+    });
+    stepFreeTurns(ctx.world, dt, walker ? &feet : nullptr, walker ? &velocity : nullptr);
+    stepPrefabUses(ctx.world, dt);
+}
 
 // THE SOUNDS. prefab_sounds.lua names, for each kind of sound a use may have, a clip for each thing that happens.
 void PrefabUseSystem::onStart(FrameContext& ctx) {

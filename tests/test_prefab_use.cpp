@@ -342,24 +342,48 @@ TEST_CASE(a_pattern_use_is_made_for_every_part_that_fits_and_a_push_coasts_to_a_
         if (ru->uses[i].use.say == "push") push = i;
     CHECK(push < ru->uses.size());
     if (push >= ru->uses.size()) return;
-    CHECK(doPrefabUse(world, r, push));
+    // IT TURNS FREELY (Glenn, 2026-11-23: "a real physics object that you could get into and it would turn"): a push
+    // sets it going, a second push makes it faster, it slows by itself, and someone walking round it with a hand
+    // on the rail takes it round with them.
     const Real step = 1.0 / 60.0;
-    auto run = [&](Real seconds) {
+    auto run = [&](Real seconds, const Vec3* feet = nullptr, const Vec3* velocity = nullptr) {
         const Real before = modelValue(world, r, "deck");
-        for (int i = 0; i < static_cast<int>(seconds * 60 + 0.5); ++i) { stepPrefabUses(world, step); advanceModelMotion(world, r, step); }
+        for (int i = 0; i < static_cast<int>(seconds * 60 + 0.5); ++i) {
+            stepFreeTurns(world, step, feet, velocity);
+            stepPrefabUses(world, step);
+            advanceModelMotion(world, r, step);
+        }
         return modelValue(world, r, "deck") - before;
     };
-    const Real pushed = run(0.5);
-    CHECK(pushed > 40 * kDeg);                              // at 110 degrees a second
-    CHECK(world.get<PrefabUses>(r)->uses[push].on);
-    run(0.3);                                               // its time is up: it is off, and coasting
-    CHECK(!world.get<PrefabUses>(r)->uses[push].on);
+    CHECK_APPROX(run(0.5), 0.0, 1e-9);                      // nobody has touched it
+    CHECK(doPrefabUse(world, r, push));
+    const Real once = run(0.5);
+    CHECK(once > 30 * kDeg);                                // about 110 degrees a second
+    CHECK(!world.get<PrefabUses>(r)->uses[push].on);        // (a shove is over at once: it can be pushed again)
+    CHECK(doPrefabUse(world, r, push));
+    const Real twice = run(0.5);
+    CHECK(twice > once * 1.5);                              // faster for the second push
     const Real early = run(1.0);
-    run(5.0);
+    run(12.0);
     const Real late = run(1.0);
     CHECK(early > late && late > 0);                        // slower and slower
-    run(4.0);
+    run(60.0);
     CHECK_APPROX(run(1.0), 0.0, 1e-9);                      // stopped
+    // walked round: at 1.6 m from the middle on +x, going toward -z at 2 m/s. About +y that is a turn the positive
+    // way (up x out = -z), at 2 / 1.6 radians a second
+    const Vec3 feet(1.6, 0.0, 0.0), going(0, 0, -2.0);
+    run(2.0, &feet, &going);
+    const Real led = run(0.5, &feet, &going);
+    CHECK(led > 0.4 * (2.0 / 1.6) * 0.5);                   // well on its way to their pace
+    const Vec3 back(0, 0, 2.0);
+    run(3.0, &feet, &back);
+    CHECK(run(0.5, &feet, &back) < 0);                      // and round the other way when they turn back
+    const Vec3 onIt(0.5, 0.3, 0.0);                         // standing on the deck: carried, not pushing
+    const FreeTurns* turns = world.get<FreeTurns>(r);
+    CHECK(turns != nullptr && turns->parts.size() == 1);
+    const Real before = turns != nullptr && !turns->parts.empty() ? turns->parts[0].speed : 0;
+    run(0.2, &onIt, &going);
+    CHECK(std::fabs(world.get<FreeTurns>(r)->parts[0].speed) <= std::fabs(before));
 }
 
 TEST_CASE(a_seat_that_is_sat_on_runs_and_sways_until_its_sitter_gets_up) {

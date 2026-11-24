@@ -22,6 +22,19 @@ struct PrefabLamps {
     std::vector<PrefabLamp> lamps;
 };
 
+// On a stamped prefab with parts that turn freely (Prefab::free): each part and how fast it is turning now, in
+// degrees a second. stepFreeTurns keeps them turning, slows them, and lets a walker take them round.
+struct FreeTurns {
+    struct Part {
+        PrefabFree spec;
+        Real speed = 0;
+    };
+    std::vector<Part> parts;
+};
+// One fixed step for every freely turning part. `feet` and `velocity` are someone walking (null: nobody): within a
+// part's reach and outside its radius, level with it, they take it round at their own pace.
+void stepFreeTurns(World& world, Real dt, const Vec3* feet = nullptr, const Vec3* velocity = nullptr);
+
 // On a stamped prefab that has uses: each use, and whether it is on.
 struct PrefabUses {
     struct Use {

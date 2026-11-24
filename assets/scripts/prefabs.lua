@@ -53,7 +53,10 @@ return {
     uses = { { at = "seat_*", say = "ride", sit = true, sway = { beam = 14 }, period = 2.4 } } },
   playground_seesaw_in_use = { model = "playground_seesaw", physics = { body = "static" }, script = "playground_seesaw_rock.lua" },
   playground_roundabout = { model = "playground_roundabout", physics = { body = "static" },
-    uses = { { at = "push", say = "push", run = { deck = 110 }, seconds = 0.6, coast = 9, sound = "wheel" },
+    -- (its deck turns freely: walk round it with a hand on the rail and it comes with you; push it and it goes
+    -- faster each time; it slows by itself; stand or ride on it and it carries you)
+    free = { { node = "deck", radius = 1.25, reach = 2.1, drag = 10, top = 300 } },
+    uses = { { at = "push", say = "push", kick = { deck = 110 }, sound = "knock" },
              { at = "ride_*", say = "ride", sit = true } } },
   playground_roundabout_in_use = { model = "playground_roundabout", physics = { body = "static" }, script = "playground_roundabout_spin.lua" },
   playground_slide = { model = "playground_slide", physics = { body = "static" },

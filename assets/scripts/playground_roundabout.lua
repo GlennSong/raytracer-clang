@@ -38,7 +38,13 @@ local function disc(segments)
 end
 deck:add(mesh.paint(disc(48), color), "paint")
 deck:add(mesh.paint(disc(12), color), "paint", { level = far })
-deck:shape("deck", { hull = disc(12), friction = 1.0 })
+-- its collision shape: four boxes turned 45 degrees apart, which together are the disc as an octagon. (Not a hull:
+-- a hull on a part that moves stays where it is at rest, and a deck that does not turn under your feet does not
+-- carry you. Boxes on a moving node turn with it, so whoever stands on the deck goes round.)
+for k = 0, 3 do
+  deck:shape("deck_" .. (k + 1), { box = { 2 * R, TOP - UNDER, 2 * R * math.tan(math.pi / 8) }, pos = { 0, (TOP + UNDER) / 2, 0 },
+                                   turn = { 0, k * 45, 0 }, friction = 1.0 })
+end
 
 -- studs to grip, in two rows
 local stud = model.new()

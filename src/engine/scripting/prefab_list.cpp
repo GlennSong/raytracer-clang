@@ -67,12 +67,12 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
     if (!line.is_object()) return fail(where + " is a table: { model = \"...\" }");
 
     std::string stray;
-    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses", "lights", "water"}, stray)) {
+    if (!onlyKeys(line, {"model", "physics", "draw", "script", "uses", "lights", "water", "free"}, stray)) {
         // What the design note gives a prefab that is not built yet: say so, so a line is never half obeyed.
         const std::vector<std::string> later = {"sounds", "lights", "offers", "particles"};
         if (std::find(later.begin(), later.end(), stray) != later.end())
             return fail(where + ": `" + stray + "` is not built yet (docs/model-record-design.md, step 9)");
-        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses, lights, water)");
+        return fail(where + " has `" + stray + "`, which a prefab does not have (model, physics, draw, script, uses, lights, water, free)");
     }
 
     Prefab p;
@@ -116,6 +116,20 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         p.script = line["script"].get<std::string>();
         if (loadScriptCode(p.script, levelDir).empty()) return fail(where + ": the script '" + p.script + "' cannot be read");
     }
+    if (line.contains("free")) {
+        if (!line["free"].is_array()) return fail(where + ": `free` is a list: { { node = \"deck\", radius = 1.25, reach = 2, drag = 10, top = 300 } }");
+        for (const nlohmann::json& f : line["free"]) {
+            PrefabFree one;
+            if (f.is_object()) one.node = f.value("node", std::string());
+            if (one.node.empty()) return fail(where + ": a freely turning part needs `node`");
+            one.radius = f.value("radius", 1.0);
+            one.reach = f.value("reach", one.radius + 0.8);
+            one.drag = f.value("drag", 8.0);
+            one.top = f.value("top", 240.0);
+            if (one.reach <= one.radius || one.drag <= 0 || one.top <= 0) return fail(where + ": a freely turning part's reach is more than its radius, and its drag and top are more than 0");
+            p.free.push_back(one);
+        }
+    }
     if (line.contains("water")) {
         const nlohmann::json& w = line["water"];
         if (!w.is_object() || !w.contains("size") || !w["size"].is_array() || w["size"].size() != 2 || w.value("at", std::string()).empty())
@@ -141,8 +155,8 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
         for (const nlohmann::json& u : uses) {
             const std::string which = where + ": use " + std::to_string(++number);
             if (!u.is_object()) return fail(which + " is a table: { at = \"handle\", say = \"open\", ... }");
-            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "stop", "coast", "sway", "period", "light", "light_at", "sound", "sit", "lie", "id", "needs", "unless", "stops", "near"}, stray))
-                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, stop, coast, sway, period, light, light_at, sound, sit, lie, id, needs, unless, stops, near)");
+            if (!onlyKeys(u, {"at", "say", "back", "move", "speed", "run", "seconds", "stop", "coast", "sway", "period", "light", "light_at", "sound", "sit", "lie", "id", "needs", "unless", "stops", "near", "kick"}, stray))
+                return fail(which + " has `" + stray + "`, which a use does not have (at, say, back, move, speed, run, seconds, stop, coast, sway, period, light, light_at, sound, sit, lie, id, needs, unless, stops, near, kick)");
             PrefabUse use;
             if (!u.contains("at") || !u["at"].is_string() || u["at"].get<std::string>().empty()) return fail(which + " needs `at`, a marker on the model");
             if (!u.contains("say") || !u["say"].is_string() || u["say"].get<std::string>().empty()) return fail(which + " needs `say`, the word offered (\"open\")");
@@ -152,13 +166,13 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 if (!u["back"].is_string()) return fail(which + ": `back` is the word offered once it is done (\"close\")");
                 use.back = u["back"].get<std::string>();
             }
-            for (const char* key : {"move", "run", "sway"}) {
+            for (const char* key : {"move", "run", "sway", "kick"}) {
                 if (!u.contains(key)) continue;
                 if (!u[key].is_object()) return fail(which + ": `" + key + "` is a table of nodes and numbers: { door = 105 }");
                 const std::string k = key;
                 for (nlohmann::json::const_iterator it = u[key].begin(); it != u[key].end(); ++it) {
                     if (!it.value().is_number()) return fail(which + ": " + key + "." + it.key() + " is a number");
-                    (k == "move" ? use.move : k == "run" ? use.run : use.sway).emplace_back(it.key(), it.value().get<double>());
+                    (k == "move" ? use.move : k == "run" ? use.run : k == "kick" ? use.kick : use.sway).emplace_back(it.key(), it.value().get<double>());
                 }
             }
             for (const char* key : {"speed", "seconds", "coast", "period"}) {
@@ -196,8 +210,8 @@ bool readPrefabLine(const std::string& name, const nlohmann::json& line, Prefab&
                 use.lie = u["lie"].get<bool>();
             }
             // (a use that only sounds is a use: a piano played, a bell rung)
-            if (use.move.empty() && use.run.empty() && use.sway.empty() && use.light.empty() && use.sound.empty() && !use.sit && !use.lie)
-                return fail(which + " does nothing: give it `move`, `run`, `sway`, `light`, `sound`, `sit` or `lie`");
+            if (use.move.empty() && use.run.empty() && use.sway.empty() && use.kick.empty() && use.light.empty() && use.sound.empty() && !use.sit && !use.lie)
+                return fail(which + " does nothing: give it `move`, `run`, `sway`, `kick`, `light`, `sound`, `sit` or `lie`");
             p.uses.push_back(use);
         }
         // a use that needs, or gives way to, another names one this line has
@@ -291,6 +305,13 @@ std::string prefabLine(const Prefab& p) {
         out += " }";
     }
     if (!p.script.empty()) out += ", script = " + luaQuoted(p.script);
+    if (!p.free.empty()) {
+        out += ", free = { ";
+        for (std::size_t i = 0; i < p.free.size(); ++i)
+            out += std::string(i ? ", " : "") + "{ node = " + luaQuoted(p.free[i].node) + ", radius = " + plainNumber(p.free[i].radius) + ", reach = " +
+                   plainNumber(p.free[i].reach) + ", drag = " + plainNumber(p.free[i].drag) + ", top = " + plainNumber(p.free[i].top) + " }";
+        out += " }";
+    }
     if (!p.waterAt.empty()) out += ", water = { at = " + luaQuoted(p.waterAt) + ", size = { " + plainNumber(p.waterW) + ", " + plainNumber(p.waterL) + " } }";
     if (!p.lights.empty()) {
         out += ", lights = { ";
@@ -308,9 +329,9 @@ std::string prefabLine(const Prefab& p) {
             if (!u.stops.empty()) out += ", stops = " + luaQuoted(u.stops);
             if (u.near > 0) out += ", near = " + plainNumber(u.near);
             if (!u.back.empty()) out += ", back = " + luaQuoted(u.back);
-            for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run, &u.sway}) {
+            for (const std::vector<std::pair<std::string, Real>>* list : {&u.move, &u.run, &u.sway, &u.kick}) {
                 if (list->empty()) continue;
-                out += std::string(list == &u.move ? ", move = { " : list == &u.run ? ", run = { " : ", sway = { ");
+                out += std::string(list == &u.move ? ", move = { " : list == &u.run ? ", run = { " : list == &u.kick ? ", kick = { " : ", sway = { ");
                 for (std::size_t i = 0; i < list->size(); ++i) {
                     const std::string& node = (*list)[i].first;
                     // a name with a `*` in it is not a plain Lua key

@@ -92,6 +92,9 @@ struct PrefabUse {
     bool stop = false;
     Real coast = 0;
     std::vector<std::pair<std::string, Real>> sway;   // node, how far each way (degrees or metres)
+    // kick = { deck = 110 }: a shove: that many degrees a second more on a part that turns freely (Prefab::free), up
+    // to the part's top speed. Push again and it goes faster.
+    std::vector<std::pair<std::string, Real>> kick;
     Real period = 2;
     std::string light, lightAt;
     std::string sound;
@@ -105,6 +108,16 @@ struct PrefabUse {
 // use's `light`.)
 struct PrefabLamp {
     std::string at, kind;
+};
+
+// A PART THAT TURNS FREELY (prefabs.lua `free = { { node = "deck", radius = 1.25, reach = 2.0, drag = 10, top = 300 } }`):
+// a roundabout's deck. It keeps the speed it is given and loses it over `drag` seconds. Someone walking round it
+// within `reach` metres of its middle, outside its `radius`, takes it round with them (holding its rail); a use's
+// `kick` shoves it; `top` is the most it turns, in degrees a second. Whoever stands on it is carried, since its
+// collision shapes turn with it.
+struct PrefabFree {
+    std::string node;
+    Real radius = 1, reach = 1.8, drag = 8, top = 240;
 };
 
 struct Prefab {
@@ -134,6 +147,8 @@ struct Prefab {
     // wide along the marker's x and long along its z (a pool's). Every copy gets a WaterPool (components.h).
     std::string waterAt;
     Real waterW = 0, waterL = 0;
+    // free = { ... }: its parts that turn freely (PrefabFree, above).
+    std::vector<PrefabFree> free;
     // lights = { ... }: the lamps every copy has (PrefabLamp, above).
     std::vector<PrefabLamp> lights;
 };

@@ -110,6 +110,11 @@ Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, co
     }
 #endif
     if (!prefab.lights.empty()) world.add<PrefabLamps>(entity, PrefabLamps{prefab.lights});
+    if (!prefab.free.empty()) {
+        FreeTurns turns;
+        for (const PrefabFree& f : prefab.free) turns.parts.push_back(FreeTurns::Part{f, 0});
+        world.add<FreeTurns>(entity, turns);
+    }
     {
         std::vector<std::string> skipped;
         addPrefabUses(world, entity, prefab, &skipped);

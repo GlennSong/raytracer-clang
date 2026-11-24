@@ -72,7 +72,7 @@ std::vector<PrefabUse> expanded(const ProcModel& model, const PrefabUse& use) {
                 one.needs = withStar(use.needs, star);
                 one.unless = withStar(use.unless, star);
                 one.stops = withStar(use.stops, star);
-                for (std::vector<std::pair<std::string, Real>>* list : {&one.move, &one.run, &one.sway})
+                for (std::vector<std::pair<std::string, Real>>* list : {&one.move, &one.run, &one.sway, &one.kick})
                     for (std::pair<std::string, Real>& n : *list) n.first = withStar(n.first, star);
                 out.push_back(one);
             }
@@ -108,9 +108,11 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
     for (const PrefabUse& use : all) {
         std::string why;
         if (mi->model->findMarker(use.at) == nullptr) why = "no marker '" + use.at + "'";
-        if (why.empty() && use.move.empty() && use.run.empty() && use.sway.empty() && use.light.empty() && !use.sit && !use.lie) why = "none of the parts it names";
+        if (why.empty() && use.move.empty() && use.run.empty() && use.sway.empty() && use.kick.empty() && use.light.empty() && use.sound.empty() &&
+            !use.sit && !use.lie)
+            why = "none of the parts it names";
         if (why.empty() && !use.lightAt.empty() && mi->model->findMarker(use.lightAt) == nullptr) why = "no marker '" + use.lightAt + "'";
-        for (const std::vector<std::pair<std::string, Real>>* list : {&use.move, &use.run, &use.sway})
+        for (const std::vector<std::pair<std::string, Real>>* list : {&use.move, &use.run, &use.sway, &use.kick})
             for (const std::pair<std::string, Real>& n : *list)
                 if (why.empty() && mi->model->jointAt(n.first) == nullptr) why = "no moving node '" + n.first + "'";
         if (!why.empty()) {
@@ -171,6 +173,14 @@ bool setPrefabUse(World& world, Entity instance, std::size_t index, bool on) {
     u.moving = !u.use.move.empty() && u.use.speed > 0;
     // A use that cannot be undone by hand and has no time of its own (a button pressed) lets go by itself.
     if (on && u.use.back.empty() && u.use.seconds <= 0 && u.use.run.empty() && !u.use.move.empty()) u.left = Real(0.4);
+    // A SHOVE (a use's `kick`): more speed on a part that turns freely, up to its top speed.
+    if (on && !u.use.kick.empty()) {
+        if (FreeTurns* turns = world.get<FreeTurns>(instance))
+            for (const std::pair<std::string, Real>& k : u.use.kick)
+                for (FreeTurns::Part& part : turns->parts)
+                    if (part.spec.node == k.first) part.speed = std::clamp(part.speed + k.second, -part.spec.top, part.spec.top);
+        if (u.use.back.empty() && u.use.seconds <= 0 && u.use.run.empty()) u.left = Real(0.3);   // (a shove is over at once)
+    }
     // DOING THIS STOPS THAT (a use's `stops`): opening the door turns the machine off.
     if (on && !was && !u.use.stops.empty()) {
         const std::string stops = u.use.stops;
@@ -236,6 +246,42 @@ void stepPrefabUses(World& world, Real dt) {
                     else u.left = Real(0.5);   // something that needs it is still on: look again shortly
                 }
             }
+        }
+    }
+}
+
+void stepFreeTurns(World& world, Real dt, const Vec3* feet, const Vec3* velocity) {
+    std::vector<Entity> with;
+    world.each<FreeTurns>([&](Entity e, FreeTurns&) { with.push_back(e); });
+    for (Entity e : with) {
+        FreeTurns* turns = world.get<FreeTurns>(e);
+        const ModelInstance* mi = world.get<ModelInstance>(e);
+        if (turns == nullptr || mi == nullptr) continue;
+        for (FreeTurns::Part& part : turns->parts) {
+            // SOMEONE WALKING ROUND IT, a hand on its rail: it goes round with them. (Their pace across the line to
+            // its middle, over their distance from it, is the turn they would give it.)
+            Vec3 middle;
+            Quat turn;
+            if (feet != nullptr && velocity != nullptr && modelNodeWorld(world, e, part.spec.node, middle, turn)) {
+                const Vec3 out(feet->x - middle.x, 0, feet->z - middle.z);
+                const Real r = out.length();
+                if (r >= part.spec.radius && r < part.spec.reach && std::fabs(feet->y - middle.y) < Real(1.2) && velocity->length() < Real(12)) {
+                    const Vec3 along = cross(Vec3(0, 1, 0), out * (Real(1) / r));
+                    const Real pace = dot(*velocity, along);
+                    if (std::fabs(pace) > Real(0.4)) {
+                        const Real want = std::clamp(pace / r * Real(180.0 / 3.14159265358979323846), -part.spec.top, part.spec.top);
+                        part.speed += (want - part.speed) * std::min(Real(1), dt * Real(4));
+                    }
+                }
+            }
+            part.speed *= std::exp(-dt / std::max(part.spec.drag, Real(0.1)));
+            if (std::fabs(part.speed) < Real(1.5)) {   // (under a degree and a half a second: it has stopped)
+                if (part.speed != 0) setModelTarget(world, e, part.spec.node, modelValue(world, e, part.spec.node), 0);
+                part.speed = 0;
+                continue;
+            }
+            const Real rate = part.speed * unitOf(*mi, part.spec.node);
+            setModelTarget(world, e, part.spec.node, modelValue(world, e, part.spec.node) + rate, std::fabs(rate));   // a second ahead, always
         }
     }
 }
