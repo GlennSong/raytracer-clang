@@ -99,22 +99,21 @@ struct CityCarLink {
 enum class CityCarPhase : uint8_t {
     Standing,         // in a kerb space, or left standing in a lane
     WaitingForRoom,   // in its space, its driver aboard, waiting for the kerb lane to be clear
-    EasingOut,        // placed in the kerb lane; drawn sliding out of the space
-    OnRoad,           // the driving's
-    EasingIn,         // out of the driving; drawn sliding into its space
+    OnRoad,           // the driving's (pulling out of its space and into one included: on the driving's curve)
 };
 struct CityCarKept {
     brain::PlaceRef standing;                 // where it stands, or last stood (not valid: an outsider has it)
     brain::AgentId heldBy = brain::kNoAgent;  // a resident, the brain's outsider (city_brain.cpp kOutsider), or nobody
     bool stranded = false;                    // left where no lane is beside it: nobody can drive it from there
     CityCarPhase phase = CityCarPhase::Standing;
-    // the slide between its space and the lane (while EasingOut or EasingIn)
-    Vec2 easeFromPos, easeFromHeading, easeToPos, easeToHeading;
-    Real easeT = 0;
     // a trip to begin once it is in the lane: who drives it, from and to where
     bool tripWanted = false;
     brain::AgentId tripPerson = brain::kNoAgent;
     brain::PlaceRef tripFrom, tripTo;
+    // WHERE THE DRIVING LEFT IT in its space (its front on the kerb lane, as it came to rest pulling in): it pulls out
+    // from there, so it never moves between the two. Not valid: it was put in its space some other way, and pulls out
+    // from the space's own place.
+    driving::PathPoint spaceFront;
 };
 
 struct CityCarOnLane {

@@ -315,6 +315,13 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused), static_cast<unsigned long long>(hash));
+    {
+        const driving::Driving::KerbMoveCounts& k = d.kerbMoveCounts();
+        std::printf("    [crowd] kerb spaces: pulled out of %llu, pulled into %llu, trips that ended in the lane instead %llu; "
+                    "handed between space and driving, the farthest moved %.3f m (put in a space, not driven in: %u)\n",
+                    static_cast<unsigned long long>(k.pulledOut), static_cast<unsigned long long>(k.pulledIn),
+                    static_cast<unsigned long long>(k.stoppedInLane), static_cast<double>(b.counts().worstKerbHandOver), b.counts().putInSpace);
+    }
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
 
     // NO RING OF WAITS AT ANY MINUTE: a ring is cars each waiting on the next, which nothing can end (the wait-for graph,
@@ -415,6 +422,13 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // 261; arrivals the same, 490; away from a kerb end 2.31% -> 2.16%; hash 0x108c0a6b2babd46b -> 0xa7a50cd8f2bb2c29.
     // 463 car legs priced, 365 chosen, none on the freeway: the day's trips never pay for its 420 m ramps (the drive
     // across town between them, checked above, does).
+    // RE-PINNED (sitting 5: pulling out of and into kerb spaces on the driving's own curve, not a drawn 2.5 s slide): a car
+    // is placed standing in its space and sets off at once, driving out on the lane change's curve; a trip ends with the
+    // car driven into its space and left where it came to rest. Trips 322 -> 326, arrivals 490 -> 494 (no 2.5 s slide
+    // before each trip); parked the same, 261; the most on the road (90 at minute 10) and busy minutes (14) the same;
+    // rings still 0; away from a kerb end 2.16% -> 2.30%; hash 0xa7a50cd8f2bb2c29 -> 0xe8da33de4e20c514. Pinned now too:
+    // every trip ended in its space (none in the lane) and no car moved more than a centimetre between its space and the
+    // driving (4 mm). Not pinned, looked at: the longest stand 685.6 s -> 690.4 s (the same car 68, junction 7).
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
@@ -424,15 +438,17 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(mostOnRoad == 90);
         CHECK(mostOnRoadAt == 10);
         CHECK(busyMinutes == 14);
-        CHECK(b.counts().tripsBegun == 322u);
+        CHECK(b.counts().tripsBegun == 326u);
         CHECK(b.counts().parkedReports == 261u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 490u);
+        CHECK(b.machine()->counts().arrivals == 494u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xa7a50cd8f2bb2c29ull);
+        CHECK(hash == 0xe8da33de4e20c514ull);
+        CHECK(d.kerbMoveCounts().pulledIn == 261u && d.kerbMoveCounts().stoppedInLane == 0u);
+        CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full

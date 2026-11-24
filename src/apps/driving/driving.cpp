@@ -896,6 +896,22 @@ void Driving::plan() {
             // Undriven from here on; its speed (a crawl at most) is set to rest by the move step, which writes the
             // copy the other cars read next tick.
             queueEvent(EventKind::Parked, c.id, p.trip, t->person);
+            if (t->pullInOffset != 0) {
+                // In its kerb space: the curve is driven to within the arrival distance of its end, which is flat
+                // there, so what is left of it is a centimetre or so; it stands on the space's line from now.
+                const std::map<CarId, LaneMove>::iterator m = laneMoves_.find(c.id);
+                if (t->pullInBegun && !t->pullInMissed) {
+                    if (m != laneMoves_.end() && m->second.kerb) {   // (gone already: driven to its very end)
+                        c.offset = m->second.to;
+                        c.offsetRearLag = 0;
+                        laneMoves_.erase(m);
+                    }
+                    inSpace_.insert(c.id);
+                    ++kerbMoveCounts_.pulledIn;
+                } else {
+                    ++kerbMoveCounts_.stoppedInLane;
+                }
+            }
             ++tripTimes_.arrived;
             tripTimes_.seconds += static_cast<double>(tickCount_ - t->beganAtTick) * step_;
             tripTimes_.freeFlowSeconds += t->plannedSeconds;
@@ -1140,7 +1156,7 @@ void Driving::move(Real dt) {
         // (its speed is along the line it drives: offset from its lane's line on a bend, that line is longer or shorter
         // than the lane by the bend -- a move across, a swerve -- so its front goes along the lane by that much less or more)
         Real perLaneMetre = 1;
-        if (changingLanes() && std::fabs(c.offset) > kOffsetOnLine) {
+        if ((changingLanes() || moving != laneMoves_.end()) && std::fabs(c.offset) > kOffsetOnLine) {
             const Real len = roads_->paths[c.path.index].length;
             const Real a0 = std::clamp(c.along, Real(0), len), a1 = std::min(len, a0 + 1), back = a1 > a0 ? a0 : std::max(Real(0), a0 - 1);
             const Real k = kerbwardPerpSign(ruleSet_.drivesOn) * c.offset;
@@ -1186,11 +1202,12 @@ void Driving::move(Real dt) {
             if (!m->second.frontDone) {
                 out.offset = laneMoveOffset(m->second, travelled);
                 if (travelled >= m->second.length - kMoveDoneWithin) {
-                    out.offset = 0;
+                    out.offset = m->second.to;
                     out.besidePath = engine::PathId();
                     out.besideShift = 0;
                     m->second.frontDone = true;
-                    ++laneChangeCounts_.finished;
+                    if (!m->second.kerb) ++laneChangeCounts_.finished;
+                    else if (m->second.to == 0) ++kerbMoveCounts_.pulledOut;
                 }
             }
             // (the rear on the same curve a body length behind: the car points along its path across, as a car steered
@@ -1200,6 +1217,44 @@ void Driving::move(Real dt) {
             if (m->second.frontDone && travelled - body >= m->second.length) {
                 out.offsetRearLag = 0;
                 laneMoves_.erase(m);
+            }
+        }
+        // PULLING INTO A KERB SPACE AT THE END (sitting 5): once the destination is as near as the move across and a body
+        // length after it, the car moves across on the same curve, so it comes to rest at its destination standing
+        // straight in the space. Begun too near (the trip began there, or a move out of a space was still under way): it
+        // ends in the lane.
+        if (t->pullInOffset != 0 && !t->pullInBegun && onWay) {
+            Real toDestination = -1, before = -out.along;
+            for (std::size_t k = at; k < way.size(); ++k) {
+                if (way[k] == t->destination.path) {
+                    toDestination = before + t->destination.along;
+                    break;
+                }
+                before += roads_->paths[way[k].index].length;
+            }
+            const Real shortest = laneMoveShortest(t->pullInOffset - out.offset, cls.tightestTurnRadius);
+            const std::map<CarId, LaneMove>::iterator last = laneMoves_.find(c.id);
+            const bool busy = last != laneMoves_.end() && !last->second.frontDone;
+            if (toDestination >= 0 && toDestination <= std::max(shortest, out.speed * laneChangeSeconds_) + cls.length) {
+                const Real length = toDestination - cls.length;
+                if (length >= shortest / kMoveMargin && !busy) {
+                    LaneMove move;
+                    move.from = out.offset;
+                    move.to = t->pullInOffset;
+                    move.kerb = true;
+                    move.startOdometer = out.odometer;
+                    move.length = length;
+                    if (last != laneMoves_.end()) {   // (the rear still finishing the move out of a space)
+                        move.carryFrom = last->second.from - last->second.to;
+                        move.carryStart = last->second.startOdometer;
+                        move.carryLength = last->second.length;
+                    }
+                    laneMoves_[c.id] = move;
+                    t->pullInBegun = true;
+                } else if (length < shortest / kMoveMargin) {
+                    t->pullInBegun = true;
+                    t->pullInMissed = true;
+                }
             }
         }
         if (onWay) t->wayAt = static_cast<uint32_t>(at);
@@ -1394,8 +1449,8 @@ Real Driving::followAcceleration(const Car& who, Real gap, Real speedAhead) cons
 int Driving::signalSide(CarId car) const {
     bool towardKerb = false;
     if (const std::map<CarId, LaneMove>::const_iterator m = laneMoves_.find(car);
-        m != laneMoves_.end() && !m->second.frontDone && m->second.from != 0)
-        towardKerb = m->second.from < 0;   // (from: its offset from the new lane's line, + toward the kerb)
+        m != laneMoves_.end() && !m->second.frontDone && m->second.from != m->second.to)
+        towardKerb = m->second.to > m->second.from;   // (offsets from the new lane's line, + toward the kerb)
     else if (const std::map<CarId, Indicating>::const_iterator i = indicating_.find(car); i != indicating_.end())
         towardKerb = i->second.towardKerb;
     else
@@ -1442,6 +1497,10 @@ bool Driving::landsInAMeeting(const Car& c, const LaneGap& gap, Real length) con
 void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     const LaneChangeView& l = p.lane;
     if (!(l.need.onRoute && l.need.lanes > 0)) return;
+    // (not while its front is still coming out of a kerb space, or going into one)
+    if (const std::map<CarId, LaneMove>::const_iterator k = laneMoves_.find(c.id);
+        k != laneMoves_.end() && k->second.kerb && !k->second.frontDone)
+        return;
     LaneGap gap = l.gap;
     if (p.changeLane && gap.safe && listsStale_) {
         // (a car before it in this tick's order has already moved over: it looks again, and backs off if that took
@@ -1726,6 +1785,33 @@ bool Driving::placeCar(CarId id, uint32_t vehicleClass, const PathPoint& front, 
     return true;
 }
 
+bool Driving::placeCarInSpace(CarId id, uint32_t vehicleClass, const PathPoint& front, Real offset, std::string* why) {
+    if (!placeCar(id, vehicleClass, front, {}, why)) return false;
+    Car* c = findPlaced(id);
+    c->offset = offset;
+    layPullOut(*c);
+    return true;
+}
+
+Real Driving::offsetBeside(const PathPoint& at, engine::Vec2 point) const {
+    if (!roads_ || !onRoad(at)) return 0;
+    const engine::Vec2 side = engine::perp(roads_->directionAt(at.path, at.along));
+    return engine::dot(point - roads_->pointAt(at.path, at.along), side) * kerbwardPerpSign(ruleSet_.drivesOn);
+}
+
+// THE MOVE OUT OF A KERB SPACE onto the lane's line, for a car standing beside its lane (placed in a space, or one whose
+// last trip ended in one): the lane change's curve at the tightest its turning circle allows, driven as it moves off.
+void Driving::layPullOut(const Car& c) {
+    if (std::fabs(c.offset) <= kOffsetOnLine || laneMoves_.count(c.id) != 0) return;
+    LaneMove move;
+    move.from = c.offset;
+    move.to = 0;
+    move.kerb = true;
+    move.startOdometer = c.odometer;
+    move.length = laneMoveShortest(c.offset, vehicleClasses_.at(c.vehicleClass).tightestTurnRadius);
+    laneMoves_[c.id] = move;
+}
+
 bool Driving::removeCar(CarId id, std::string* why) {
     if (!car(id)) return refuse(why, carName(id) + " is not placed");
     if (tripOfCar_.count(id) != 0) return refuse(why, carName(id) + " is on a trip: end the trip first");
@@ -1734,6 +1820,7 @@ bool Driving::removeCar(CarId id, std::string* why) {
     cars_.erase(at);
     carried_.erase(id);
     laneMoves_.erase(id);
+    inSpace_.erase(id);
     indicating_.erase(id);
     lettingIn_.erase(id);
     droppingBack_.erase(id);
@@ -1747,7 +1834,7 @@ bool Driving::removeCar(CarId id, std::string* why) {
     return true;
 }
 
-TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destination) {
+TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset) {
     Car* placed = findPlaced(car);
     if (!placed || tripOfCar_.count(car) != 0 || !onRoad(destination)) return TripId{};
     Route route = routeFor(*placed, destination);
@@ -1757,11 +1844,13 @@ TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destinati
     }
     placed->driven = true;
     placed->held = HeldAnswers();   // nothing decided yet: it decides on its next tick
+    if (inSpace_.erase(car) != 0) layPullOut(*placed);   // (its last trip ended in a kerb space: it drives out first)
     placed->binding = Binding();
     Trip t;
     t.car = car;
     t.person = person;
     t.destination = destination;
+    t.pullInOffset = pullInOffset;
     t.beganAtTick = tickCount_;
     t.plannedMetres = route.metres;
     t.plannedSeconds = route.seconds;
@@ -1778,7 +1867,7 @@ const Route* Driving::route(TripId id) const {
     return t ? &t->route : nullptr;
 }
 
-bool Driving::changeDestination(TripId id, const PathPoint& destination) {
+bool Driving::changeDestination(TripId id, const PathPoint& destination, Real pullInOffset) {
     Trip* t = trips_.get(id);
     if (!t || !onRoad(destination)) return false;
     const Car* c = car(t->car);
@@ -1789,6 +1878,9 @@ bool Driving::changeDestination(TripId id, const PathPoint& destination) {
         return false;
     }
     t->destination = destination;
+    t->pullInOffset = pullInOffset;
+    t->pullInBegun = false;
+    t->pullInMissed = false;
     t->route = std::move(route);
     t->legReached = 0;
     findPlaced(t->car)->held.decided = false;   // decides again on its next tick, on the new route
@@ -1994,18 +2086,25 @@ uint64_t Driving::stateHash() const {
         // A missed turn (sitting 5): only with the lane change step, so a run without it hashes as it did.
         if (changingLanes()) h.pod(t->missedOn.index);
         if (changingLanes()) h.pod(static_cast<uint8_t>(t->waitToChange));
+        if (t->pullInOffset != 0) {   // (a trip ending in a kerb space; one ending in the lane hashes as before)
+            h.pod(t->pullInOffset);
+            h.pod(static_cast<uint8_t>(t->pullInBegun));
+            h.pod(static_cast<uint8_t>(t->pullInMissed));
+        }
     }
     // The cars moving across into the lane beside, and their move (sitting 5); and who decides again next tick.
     if (changingLanes())
         for (const CarId id : decideNext_) h.pod(id.index);
-    if (changingLanes())
-        for (const std::pair<const CarId, LaneMove>& r : laneMoves_) {
-            if (r.second.frontDone) continue;   // (a rear still easing over is drawn, not decided by)
-            h.pod(r.first.index);
-            h.pod(r.second.from);
-            h.pod(r.second.startOdometer);
-            h.pod(r.second.length);
-        }
+    for (const std::pair<const CarId, LaneMove>& r : laneMoves_) {
+        if (r.second.frontDone) continue;   // (a rear still easing over is drawn, not decided by)
+        if (!changingLanes() && !r.second.kerb) continue;
+        h.pod(r.first.index);
+        h.pod(r.second.from);
+        h.pod(r.second.startOdometer);
+        h.pod(r.second.length);
+        if (r.second.kerb) h.pod(r.second.to);   // (pulling out of or into a kerb space: a run with none hashes as before)
+    }
+    for (const CarId id : inSpace_) h.pod(id.index);   // (standing in a kerb space)
     if (changingLanes()) {   // (letting in, sitting 5)
         for (const std::pair<const CarId, Indicating>& r : indicating_) {
             h.pod(r.first.index);

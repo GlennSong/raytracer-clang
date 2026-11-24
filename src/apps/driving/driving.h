@@ -62,6 +62,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -99,6 +100,14 @@ struct Trip {
     // ...and nothing led on from that lane: the driver waits in it for a gap (LaneChangeView::mustWait) until it moves
     // across or is routed again.
     bool waitToChange = false;
+    // PULLING IN AT THE END (sitting 5): the trip ends in a kerb space beside its destination's lane, its middle this
+    // far from the lane's line (+ toward the kerb; 0: it ends in the lane). The car moves across on the lane change's
+    // curve, laid so that its front reaches the space's line a body length before the destination and its rear is on it
+    // by then too: it stands straight in the space. Begun once (pullInBegun); a trip that began too near its end for the
+    // curve to fit ends in the lane instead (pullInMissed, counted: KerbMoveCounts::stoppedInLane).
+    Real pullInOffset = 0;
+    bool pullInBegun = false;
+    bool pullInMissed = false;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
     // again, its path at that moment first. The move step never takes the car past the end of the last of them.
     WayAhead way;
@@ -334,6 +343,16 @@ public:
     // kMaxTrail, or the body does not fit on the path and the trail.
     bool placeCar(CarId car, uint32_t vehicleClass, const PathPoint& front,
                   const std::vector<engine::PathId>& trail = {}, std::string* why = nullptr);
+    // PLACE A CAR STANDING IN A KERB SPACE beside its lane, ready to pull out (sitting 5): as placeCar, its front level
+    // with `front` and its middle `offset` metres from the lane's line (+ toward the kerb). Its move out onto the line
+    // is laid at once, on the lane change's curve at the tightest its turning circle allows, and is driven as the car
+    // moves off (laid by distance: it never steps sideways at rest). Listed in the lane from now: the host places it when
+    // the lane has room for it to come out into.
+    bool placeCarInSpace(CarId car, uint32_t vehicleClass, const PathPoint& front, Real offset,
+                         std::string* why = nullptr);
+    // HOW FAR `point` IS TO THE SIDE OF THE LANE'S LINE at `at` (m), as a car's offset reads (Car::offset: + toward the
+    // kerb side of the way the lane runs): for a host to say where a kerb space lies beside its lane.
+    Real offsetBeside(const PathPoint& at, engine::Vec2 point) const;
     // REMOVE A CAR from the road. Refused (false, with the reason) when it is not placed or is on a trip (end the trip
     // first).
     bool removeCar(CarId car, std::string* why = nullptr);
@@ -416,6 +435,13 @@ public:
         uint64_t droppedBack = 0;   // times a driver began to drop back behind the car closing its gap
     };
     const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }
+    // PULLING OUT OF AND INTO KERB SPACES (sitting 5).
+    struct KerbMoveCounts {
+        uint64_t pulledOut = 0;       // cars placed in a space that drove out of it onto their lane's line
+        uint64_t pulledIn = 0;        // trips that ended standing in their space
+        uint64_t stoppedInLane = 0;   // trips meant to end in a space that began too near it to pull in: ended in the lane
+    };
+    const KerbMoveCounts& kerbMoveCounts() const { return kerbMoveCounts_; }
     // TRIPS ARRIVED, and the time they took against their routes' free-flow time when begun (a measure that compares two
     // runs sending cars on different trips: arrivals alone do not).
     struct TripTimes {
@@ -446,7 +472,8 @@ public:
     // Refused (a null handle) when the car has not been placed, is already on a trip, or the destination is not a
     // place on the road (an unknown path, or a distance off its ends). Refused too when the destination is on the road
     // but there is no route there for the car's class: then a NoRoute event is queued for the car (with a null trip).
-    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination);
+    // `pullInOffset`: the trip ends in the kerb space that far beside the destination (Trip::pullInOffset; 0: in the lane).
+    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset = 0);
     // The trip, or null when the handle is null or stale (its trip has ended).
     const Trip* trip(TripId id) const;
     std::size_t tripCount() const { return trips_.size(); }
@@ -484,7 +511,7 @@ public:
     // place not on the road.
     // A new destination (a cab given a new fare, a bus's next stop), routed from where the car is now. When there is
     // no route there, the trip keeps its old destination and route, a NoRoute event is queued, and the answer is false.
-    bool changeDestination(TripId id, const PathPoint& destination);
+    bool changeDestination(TripId id, const PathPoint& destination, Real pullInOffset = 0);
     // ROUTE AGAIN from where the car is now to the same destination (after a missed turn). When there is no route, the
     // old one is kept, a NoRoute event is queued, and the answer is false.
     bool reroute(TripId id);
@@ -562,6 +589,7 @@ private:
     void findTripsOfRecords();
     // A car whose trip has ended (arrived, or ended by the host): undriven, at rest where it is, nothing held.
     static void leaveParked(Car& c);
+    void layPullOut(const Car& c);
     // What the driver of car record `record` on trip `t` decided this tick, before it is applied.
     struct Planned {
         std::size_t record = 0;
@@ -720,7 +748,10 @@ private:
     // Where car `who` would be in lane `into` if it is indicating into it: its front's and rear's distance along it.
     bool indicatedInto(CarId who, engine::PathId into, Real* front, Real* rear) const;
     LaneChangeCounts laneChangeCounts_;
-    std::map<CarId, LaneMove> laneMoves_;   // the cars moving across into the lane beside, and each one's move
+    KerbMoveCounts kerbMoveCounts_;
+    // the cars moving across into the lane beside, or out of or into a kerb space, and each one's move
+    std::map<CarId, LaneMove> laneMoves_;
+    std::set<CarId> inSpace_;   // the undriven cars whose last trip ended in a kerb space (they drive out of it first)
     std::vector<std::vector<engine::PathId>> pathsBefore_;   // per path, the paths leading into it (lane changes look back)
     std::vector<CarId> decideNext_;          // cars that decide again on the next tick whatever their turn (moved lanes)
     IntentionKindId passKind_ = kNoIntentionKind, wayKind_ = kNoIntentionKind;

@@ -33,6 +33,10 @@ class KerbLanes {
 public:
     virtual ~KerbLanes() = default;
     virtual bool kerbLane(PlaceRef place, driving::PathPoint& out) const = 0;
+    // How far a car standing in the place has its middle from that lane's line (m, + toward the lane's kerb side, as
+    // the driving reads an offset: Driving::offsetBeside): 0 for a place in the lane itself, which is all a host that
+    // knows no driving can say. A car pulls out of a space and into one on the driving's curve across this.
+    virtual Real kerbOffset(PlaceRef) const { return 0; }
 };
 
 class RoadPlaces : public KerbLanes {

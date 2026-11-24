@@ -379,9 +379,9 @@ struct Run {
     void printTrip(const char* what) const {
         std::printf("    [brain-lab] %s: plan \"%s\"\n    [brain-lab] states: %s\n", what, b->planText().c_str(), b->traceText().c_str());
         const citysim::CityBrainCounts& c = b->counts();
-        std::printf("    [brain-lab] got in %u, pulled out %u (waited %u ticks for room), trips begun %u, \"parked\" reports %u, slid in %u, "
+        std::printf("    [brain-lab] got in %u, pulled out %u (waited %u ticks for room), trips begun %u, \"parked\" reports %u, parked in a space %u, "
                     "got out %u; walks %u begun, %u arrived, %u blocked; next spaces %u\n",
-                    c.boarded, c.pulledOut, c.waitedForRoom, c.tripsBegun, c.parkedReports, c.slidIn, c.alighted, c.walksBegun,
+                    c.boarded, c.pulledOut, c.waitedForRoom, c.tripsBegun, c.parkedReports, c.parkedInSpace, c.alighted, c.walksBegun,
                     c.walksArrived, c.walksBlocked, c.nextSpaces);
         std::printf("    [brain-lab] the car: %llu ticks on the road, fastest %.2f m/s, worst over the posted limit %.2f m/s (at "
                     "t=%.1f, %.1f m along path %u, limit %.2f), farthest from its first space %.1f m; %zu junctions entered:\n",
@@ -478,7 +478,7 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     const citysim::CityBrainCounts& c = b.counts();
     CHECK(c.boarded == 1u && c.alighted == 1u);
     // THE CAR LEFT ITS SPACE, was driven, and the driving reported "parked" once
-    CHECK(c.pulledOut == 1u && c.tripsBegun == 1u && c.parkedReports == 1u && c.slidIn == 1u);
+    CHECK(c.pulledOut == 1u && c.tripsBegun == 1u && c.parkedReports == 1u && c.parkedInSpace == 1u);
     CHECK(r.watch.ticksDriven > 60u * 60u);            // more than a minute at the wheel
     CHECK(r.watch.farthestFromStart > 400.0);
     CHECK(c.walksBegun == 2u && c.walksArrived == 2u && c.walksBlocked == 0u);
@@ -636,7 +636,7 @@ TEST_CASE(level_brain_lab_a_goto_while_driving_redirects_the_drive) {
     CHECK(b.planText() == "car>space s106 along 2, walk>shop");
     CHECK(b.machine()->counts().plans == 2u && b.machine()->counts().arrivals == 1u);
     CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
-    CHECK(b.counts().parkedReports == 1u && b.counts().boarded == 1u && b.counts().alighted == 1u && b.counts().slidIn == 1u);
+    CHECK(b.counts().parkedReports == 1u && b.counts().boarded == 1u && b.counts().alighted == 1u && b.counts().parkedInSpace == 1u);
     CHECK(b.carSpaceName() == "s106 along 2" && !b.heldSpace().valid());
     const int shop = b.markerNamed("shop");
     CHECK(shop == 2);
@@ -663,7 +663,7 @@ TEST_CASE(level_brain_lab_a_taken_space_is_answered_with_the_next) {
     if (!arrived) return;
     // beside the taken space they are told the next nearest free one, drive on, and park there
     CHECK(stateNames(b) == "standing walking pulling_out driving parking driving parking walking standing");
-    CHECK(b.counts().nextSpaces == 1u && b.counts().parkedReports == 2u && b.counts().slidIn == 1u);
+    CHECK(b.counts().nextSpaces == 1u && b.counts().parkedReports == 2u && b.counts().parkedInSpace == 1u);
     CHECK(b.machine()->counts().plans == 1u);
     const std::vector<engine::KerbSpaceNear> nearWork = model.kerbSpacesNear(b.markers()[1].frontage, citysim::kSpaceReach, 2);
     CHECK(nearWork.size() == 2u);
@@ -878,7 +878,7 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     CHECK(stateNames(b, kAna) == "standing walking pulling_out walking standing");
     CHECK(b.carSpaceName(kAna) == "s223 against 3" && b.carHolder(b.cars()[0]) == citysim::CarHolder::Nobody);
     CHECK(b.standingAt(kAna) == "work" && b.standingAt(kBen) == "ramp");
-    CHECK(b.counts().boarded == 1u && b.counts().pulledOut == 1u && b.counts().slidIn == 1u);
+    CHECK(b.counts().boarded == 1u && b.counts().pulledOut == 1u && b.counts().parkedInSpace == 1u);
     // ANA GOES TO WHERE THE CAR IS (on foot: it is not worth walking to a car to drive five minutes), and from there
     // takes it home
     CHECK(b.goTo(kAna, "ramp", &why));
@@ -893,7 +893,7 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     CHECK(b.planText(kAna) == "walk>space s223 against 3, car>space s19 along 3, walk>home");
     CHECK(r.until([&] { return r.there("home", kAna); }));
     std::printf("    [brain-lab] t=%.1f ana: %s\n", r.seconds(), b.traceText(kAna).c_str());
-    CHECK(b.counts().boarded == 2u && b.counts().slidIn == 2u && b.carSpaceName(kAna) == "s19 along 3");
+    CHECK(b.counts().boarded == 2u && b.counts().parkedInSpace == 2u && b.carSpaceName(kAna) == "s19 along 3");
     // ...AND BEN, STILL AT THE RAMP, walks home: the car is no longer where he left it
     CHECK(b.goTo(kBen, "home", &why));
     r.step();

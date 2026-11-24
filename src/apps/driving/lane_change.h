@@ -13,6 +13,9 @@
 //   - NOT GETTING ACROSS: past `last_chance` (route.h lastChance) the driver does not stop in a through lane to wait:
 //     it carries on in its lane and is routed again from there (the missed turn), as section 10 says.
 // What a driver does with the facts is the rule set's ("change lanes for my route"); the move is the tick's.
+// PULLING OUT OF A KERB SPACE AND INTO ONE (design principle 5: pulling out follows a real path too) is the same move
+// across, between the space's offset beside the kerb lane and the lane's line (LaneMove::kerb, LaneMove::to): out when
+// a car placed in its space sets off (Driving::placeCarInSpace), in at the end of a trip to a space (Trip::pullInOffset).
 
 #include "apps/driving/decide.h"
 #include "apps/driving/notice.h"
@@ -56,6 +59,10 @@ constexpr const char* kLaneChangeReaderName = "lane change step";
 // margin of kMoveMargin).
 struct LaneMove {
     Real from = 0;                // its offset from the new lane's line when it began (+ toward the kerb)
+    // ...and the offset it ends at: 0 (the lane's line) for a lane change and for pulling out of a kerb space; the
+    // space's offset for pulling into one (sitting 5: parking on the same drivable curve).
+    Real to = 0;
+    bool kerb = false;            // pulling out of or into a kerb space beside its lane, not a lane change
     double startOdometer = 0;     // where it began, by its odometer
     Real length = 0;              // the distance it takes (m)
     // Its front is on the new line: the move is over for the driving (no longer listed in both lanes). It is kept only
@@ -101,10 +108,10 @@ inline Real laneMoveLength(Real across, Real speed, Real seconds, Real tightestR
     if (ok) *ok = room >= shortest;
     return std::max(shortest, std::min(speed * seconds, room));
 }
-// The offset `travelled` metres into a move (0 once it is done).
+// The offset `travelled` metres into a move (`to` once it is done).
 inline Real laneMoveOffset(const LaneMove& m, Real travelled) {
     const Real u = m.length > 0 ? std::clamp(travelled / m.length, Real(0), Real(1)) : Real(1);
-    return m.from * (1 - u * u * (3 - 2 * u));
+    return m.to + (m.from - m.to) * (1 - u * u * (3 - 2 * u));
 }
 // Where the rear is in a move (its offset from the new lane's line), `body` metres behind a front `travelled` metres in:
 // this move's curve a body length back, plus what is left of a move it was begun on top of.

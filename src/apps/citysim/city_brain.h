@@ -93,8 +93,6 @@ using engine::Real;
 using engine::Vec2;
 
 // HOW THE GLUE BEHAVES (metres, seconds), named once.
-// How long a car is drawn sliding between its space and the kerb lane.
-constexpr Real kKerbEaseSeconds = 2.5;
 // The kerb lane counts as clear for pulling out when no car's body is on its path from this far behind where the
 // car's rear will be (a car arriving at a local street's 11 m/s and braking gently stops in about this), measured on
 // back along every path leading into the lane where the lane itself begins nearer (brain_driving.h LaneRoom) ...
@@ -104,6 +102,9 @@ constexpr Real kPullOutRoomAhead = 3.0;
 // A car's front is put no nearer than this to the end of a lane path, so a car standing beside a space has no part in
 // a junction (the hand-over's own margin for a place a trip may end, city_driving.h kPlaceMargin).
 constexpr Real kKerbLaneEndMargin = 2.0;
+// A car the driving has standing this near its space's offset beside the kerb lane (m) drove into the space: it stays
+// where it came to rest (the driving settles a pull-in to the offset exactly; a car that ended in the lane is metres off).
+constexpr Real kInSpaceWithin = 0.05;
 // How far on foot from a marker a kerb space may be to be offered for it, and how many are looked at.
 constexpr Real kSpaceReach = 400.0;
 // (64: a crowd's homes share the spaces of their streets, and the ones a car cannot drive from are passed over, ADR-0446;
@@ -155,7 +156,11 @@ struct CityBrainCounts {
     uint32_t waitedForRoom = 0;    // ticks a car waited in its space for the kerb lane to be clear
     uint32_t tripsBegun = 0;
     uint32_t parkedReports = 0;    // the driving's "parked" events for the resident's car
-    uint32_t slidIn = 0;           // times the car left the driving for a space
+    uint32_t parkedInSpace = 0;    // times the car left the driving, standing in its space
+    // The farthest (m) a car moved as it was handed between its kerb space and the driving: placed to pull out (where
+    // the driving puts it against where it stood: millimetres), or put in its space when it did not drive in.
+    Real worstKerbHandOver = 0;
+    uint32_t putInSpace = 0;       // ...of them, cars not driven into the space (ended in the lane): put there, a jump
     uint32_t alighted = 0;
     uint32_t walksBegun = 0, walksArrived = 0, walksBlocked = 0;
     uint32_t nextSpaces = 0;       // times a taken space was answered with another

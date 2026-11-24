@@ -223,6 +223,15 @@ struct CityBrain::Impl {
     }
     // Is it on the driving's road?
     bool onRoad(Car c) const { return d->car(idOf(c)) != nullptr; }
+    // HOW FAR FROM `at` THE DRIVING HAS THE CAR'S MIDDLE (it is on the road): where a car is handed between its kerb
+    // space and the driving, the two should agree (CityBrainCounts::worstKerbHandOver).
+    Real awayFromDriving(Car c, Vec2 at) const {
+        const driving::Car* on = d->car(idOf(c));
+        if (!on) return 0;
+        const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), *on);
+        const Vec3 mid = (pose.front + pose.rear) * 0.5;
+        return (Vec2(mid.x, mid.z) - at).length();
+    }
     // ITS LANE COMPONENT FOLLOWS THE DRIVING: added when the driving has just been given the car, taken away when the
     // driving no longer has it. Called after every placeCar and removeCar.
     void syncLane(Car c) {
@@ -476,10 +485,10 @@ struct CityBrain::Impl {
     void writeCarPose(Car c, Vec2 pos, Vec2 heading);
     void haltWalker(AgentId who);
     void tickWalks(Real dt);
-    void tickCars(Real dt);
+    void tickCars();
     void tickDay(AgentId who);
     void tickChoice(AgentId who);
-    void slideIn(Car c, PlaceRef space);
+    void parkInSpace(Car c, PlaceRef space);
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
     void outsiderTook(Car c, bool lost);
@@ -512,6 +521,11 @@ struct CityBrain::Impl::FrontPoints : brain::KerbLanes {
     bool kerbLane(PlaceRef place, driving::PathPoint& out) const override {
         driving::PathPoint mid;
         return im.spaces->kerbLane(place, mid) && frontAt(mid, out);
+    }
+    Real kerbOffset(PlaceRef place) const override {
+        driving::PathPoint mid;
+        Vec2 at;
+        return im.spaces->kerbLane(place, mid) && im.spaces->positionOf(place, at) ? im.d->offsetBeside(mid, at) : Real(0);
     }
 };
 
@@ -621,7 +635,8 @@ struct CityBrain::Impl::LabWorld : brain::World {
         CityCarKept& k = im.keptOf(c);
         k.heldBy = brain::kNoAgent;
         k.tripWanted = false;
-        if (k.phase != CarPhase::EasingIn) k.phase = CarPhase::Standing;
+        k.phase = CarPhase::Standing;
+        im.held.erase(who);   // (a space they were driving to is free again)
         im.tellHousehold(c, who);
     }
     void parkCar(CarRef ref, AgentId who, PlaceRef space) override {
@@ -647,7 +662,7 @@ struct CityBrain::Impl::LabWorld : brain::World {
         if (!c.valid() || !im.isSpace(space) || !im.spaceFree(space, ref, im.keptOf(c).heldBy)) return false;
         im.leaveEverySpace(c);
         im.occupant[space.id] = ref.id;
-        im.slideIn(c, space);
+        im.parkInSpace(c, space);
         return true;
     }
     void holdSpace(PlaceRef space, AgentId who) override {
@@ -830,16 +845,19 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
         k.tripPerson = person;
         k.tripFrom = fromSpace;
         k.tripTo = toSpace;
-        if (im.onRoad(c) && k.phase != CarPhase::EasingOut) {
+        // (the space it drives to is held for its driver from now, so nobody else pulls into it first)
+        if (im.isSpace(toSpace) && person != brain::kNoAgent) im.held[person] = toSpace.id;
+        if (im.onRoad(c)) {
             k.phase = CarPhase::OnRoad;
             k.tripWanted = false;
             if (!im.skill->beginTrip(ref, person, fromSpace, toSpace, 0)) return false;
             ++im.counts.tripsBegun;
             return true;
         }
-        // in its space: it is placed in the kerb lane when the lane is clear, eased out, and the trip begins then
+        // in its space: it is placed beside the kerb lane when the lane is clear, and the trip begins then (it drives
+        // out of the space on the driving's curve)
         k.tripWanted = true;
-        if (k.phase == CarPhase::Standing || k.phase == CarPhase::EasingIn) k.phase = CarPhase::WaitingForRoom;
+        if (k.phase == CarPhase::Standing) k.phase = CarPhase::WaitingForRoom;
         return true;
     }
     void endTrip(CarRef ref) override {
@@ -882,6 +900,7 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
         }
         if (!im.onRoad(c) || !im.skill->changeDestination(ref, toSpace)) return false;
         k.tripTo = toSpace;
+        if (im.isSpace(toSpace) && k.tripPerson != brain::kNoAgent) im.held[k.tripPerson] = toSpace.id;
         ++im.counts.redirected;
         return true;
     }
@@ -967,33 +986,45 @@ Vec2 CityBrain::Impl::outOf(Car c) const {
 void CityBrain::Impl::writeCarPose(Car c, Vec2 pos, Vec2 heading) {
     engine::Transform& t = poseOf(c);
     setCarPose(t, pos, heading, t.position.y);
+    keptOf(c).spaceFront = driving::PathPoint();   // (moved by hand: not where the driving left it)
 }
 
-// The space is the car's: it leaves the driving and is drawn sliding in from where it stands in the lane.
-void CityBrain::Impl::slideIn(Car c, PlaceRef space) {
+// The space is the car's: it leaves the driving where the driving left it. Its trip ended there: the driving drove it
+// in on its curve across (Driving::beginTrip's pullInOffset) and it came to rest in the space, its front within the
+// arrival distance of the space's own place; it stays exactly there, and pulls out from there (CityCarKept::spaceFront).
+// A car not in the space -- a trip begun too near it to pull in ended in the lane (the driving's
+// KerbMoveCounts::stoppedInLane), or one off the road -- is put where a car in the space stands, and counted.
+void CityBrain::Impl::parkInSpace(Car c, PlaceRef space) {
     engine::KerbSpacePose pose;
     Vec2 kerbward;
     if (!spacePose(space, pose, kerbward)) return;
     const driving::CarId id = idOf(c);
-    if (onRoad(c)) {
+    driving::PathPoint front;
+    bool pulledIn = false;
+    if (const driving::Car* on = d->car(id)) {
+        pulledIn = std::fabs(on->offset - fronts->of(c).kerbOffset(space)) <= kInSpaceWithin;
+        front.path = on->path;
+        front.along = on->along;
         CarRef ref;
         ref.id = id.index;
         skill->endTrip(ref);   // (harmless: the trip ended when the driving reported "parked")
         d->removeCar(id);
         syncLane(c);
     }
+    if (pulledIn) {
+        keptOf(c).spaceFront = front;
+    } else {
+        counts.worstKerbHandOver = std::max(counts.worstKerbHandOver, (carPos(c) - pose.at).length());
+        ++counts.putInSpace;
+        writeCarPose(c, pose.at, pose.facing);
+    }
     CityCarKept& k = keptOf(c);
-    k.easeFromPos = carPos(c);
-    k.easeFromHeading = carFacing(c);
-    k.easeToPos = pose.at;
-    k.easeToHeading = pose.facing;
-    k.easeT = 0;
-    k.phase = CarPhase::EasingIn;
+    k.phase = CarPhase::Standing;
     k.standing = space;
-    ++counts.slidIn;
+    ++counts.parkedInSpace;
 }
 
-void CityBrain::Impl::tickCars(Real dt) {
+void CityBrain::Impl::tickCars() {
     for (const Car c : cars) {
         CityCarKept& k = keptOf(c);
         if (k.heldBy == kOutsider) continue;   // somebody else's to move
@@ -1003,40 +1034,24 @@ void CityBrain::Impl::tickCars(Real dt) {
         if (k.phase == CarPhase::WaitingForRoom) {
             driving::PathPoint front;
             const Real length = lengthOf(c);
-            if (!fronts->of(c).kerbLane(k.standing, front)) continue;
+            if (k.spaceFront.path.valid()) front = k.spaceFront;   // (where the driving left it, pulling in)
+            else if (!fronts->of(c).kerbLane(k.standing, front)) continue;
             if (!room->clear(front, length, kPullOutRoomBehind, kPullOutRoomAhead)) {
                 ++counts.waitedForRoom;
-            } else if (d->placeCar(id, bodyOf(c).vehicleClass, front)) {
+            } else if (d->placeCarInSpace(id, bodyOf(c).vehicleClass, front, fronts->of(c).kerbOffset(k.standing))) {
+                // placed standing in its space beside the kerb lane: its trip begins at once, and it drives out on
+                // the driving's curve across
+                counts.worstKerbHandOver = std::max(counts.worstKerbHandOver, awayFromDriving(c, carPos(c)));
+                k.spaceFront = driving::PathPoint();
                 syncLane(c);
                 occupant.erase(k.standing.id);
-                k.easeFromPos = carPos(c);
-                k.easeFromHeading = carFacing(c);
-                // where the driving has it: the middle of its body and the way it points (as the hand-over copies it)
-                const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), *d->car(id));
-                const Vec3 mid = (pose.front + pose.rear) * 0.5;
-                k.easeToPos = Vec2(mid.x, mid.z);
-                k.easeToHeading = unit(Vec2(pose.body.x, pose.body.z), k.easeFromHeading);
-                k.easeT = 0;
-                k.phase = CarPhase::EasingOut;
+                k.phase = CarPhase::OnRoad;
                 ++counts.pulledOut;
-            }
-        }
-        if (k.phase == CarPhase::EasingOut || k.phase == CarPhase::EasingIn) {
-            k.easeT = std::min(kKerbEaseSeconds, k.easeT + dt);
-            const Real s = engine::smoothstep01(k.easeT / kKerbEaseSeconds);
-            writeCarPose(c, k.easeFromPos + (k.easeToPos - k.easeFromPos) * s,
-                         unit(k.easeFromHeading + (k.easeToHeading - k.easeFromHeading) * s, k.easeToHeading));
-            if (engine::atOrPast(k.easeT, kKerbEaseSeconds, engine::kSamePoint)) {
-                if (k.phase == CarPhase::EasingIn) {
-                    k.phase = CarPhase::Standing;
-                } else {
-                    k.phase = CarPhase::OnRoad;
-                    if (k.tripWanted) {
-                        k.tripWanted = false;
-                        fronts->of(c);
-                        // (no route: the driving queues its own "no route" for the person, which the skill passes on)
-                        if (skill->beginTrip(ref, k.tripPerson, k.tripFrom, k.tripTo, 0)) ++counts.tripsBegun;
-                    }
+                if (k.tripWanted) {
+                    k.tripWanted = false;
+                    fronts->of(c);
+                    // (no route: the driving queues its own "no route" for the person, which the skill passes on)
+                    if (skill->beginTrip(ref, k.tripPerson, k.tripFrom, k.tripTo, 0)) ++counts.tripsBegun;
                 }
             }
         }
@@ -1493,7 +1508,7 @@ void CityBrain::tick(Real dt) {
     im.tickRides();
     im.tickWalks(dt);
     im.machine->tick();
-    im.tickCars(dt);
+    im.tickCars();
     im.followCars();   // (...and the cars sliding between a space and the lane)
     for (AgentId who = 0; who < im.people.size(); ++who) {
         im.tickChoice(who);
