@@ -392,7 +392,7 @@ RoadLayout deriveLayout(const RoadLabGraph& graph, LayoutSource source) {
         }
         // A STREET'S END IS AT A JUNCTION OR CARRIES ON, NEVER BOTH (ADR-0435). Where the file's own list states a junction
         // at this meeting (a control plan that gives carry-ons a control makes each a junction of two arms), the junction
-        // says how the street runs on (its through pair), and every reader asks the junction first (street_map.cpp,
+        // says how the street runs on (its through pair), and every reader asks the junction first (the road model,
         // lanes/lane_level.cpp). The grouping above still reports the meeting as a carry-on; stating it too wrote a
         // second answer nothing read into the file (traffic_lab: 40 street ends).
         if (out.streets[static_cast<std::size_t>(st[0])].junctions[static_cast<std::size_t>(end[0])].valid() ||
@@ -488,7 +488,7 @@ std::string keyedRoadFileText(const std::string& text) {
     // an order of its own (the arms' list order, their controls, signs, names and points move no paint).
     for (std::size_t k = 0; k < top.size(); ++k)
         if (top[k].key == "streets" || top[k].key == "divided" || top[k].key == "junctions" || top[k].key == "lane_rules" ||
-            top[k].key == "arms_in_ring")
+            top[k].key == "arms_in_ring" || top[k].key == "bus_lines")
             cut.push_back(removal(top, k));
     std::string out = cutText(text, cut);
     if (const Member* listed = memberNamed(top, "junctions")) {
@@ -525,6 +525,44 @@ uint64_t laneLevelKey(const nlohmann::json& spec) {
         text += std::string(key) + "|" + member.dump() + "|";
     }
     return text.empty() ? 0 : bundle::fnv1aStr(text);
+}
+
+std::string insertBusLinesText(const std::string& text, const nlohmann::json& lines, std::string* err) {
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why;
+        return std::string();
+    };
+    const Text t(text);
+    std::vector<Member> top;
+    if (!t.members(t.ws(0), top) || top.empty()) return fail("the file is not a JSON object with members");
+    // one line to a bus line, inside an array that opens and closes on lines of its own
+    std::string value = "[";
+    for (std::size_t i = 0; i < lines.size(); ++i) value += (i ? ",\n    " : "\n    ") + lines[i].dump();
+    value += lines.empty() ? "]" : "\n  ]";
+    std::string out = text;
+    if (const Member* had = memberNamed(top, "bus_lines")) {
+        out.replace(had->valueBegin, had->valueEnd - had->valueBegin, value);
+    } else {
+        // WHERE THE LAYOUT WRITER LEAVES IT: the layout written again takes "streets" and "divided" out and puts them
+        // back after the file's last member, and the lane rules are written just before them (insertLaneRulesText), so
+        // the lines go before all three -- after the member before "lane_rules" (or "streets", or "divided"); a file
+        // with none of them: after its last member
+        std::size_t after = top.size() - 1;
+        for (std::size_t k = 0; k < top.size(); ++k)
+            if (top[k].key == "lane_rules" || top[k].key == "streets" || top[k].key == "divided") {
+                if (k > 0) after = k - 1;
+                break;
+            }
+        const Member& before = top[after];
+        out.insert(before.valueEnd, "," + leadOf(text, before) + "\"bus_lines\": " + value);
+    }
+    if (keyedRoadFileText(out) != keyedRoadFileText(text)) return fail("writing them would change what the bake key sees");
+    return out;
+}
+
+uint64_t busLinesKey(const nlohmann::json& spec) {
+    if (!spec.is_object() || !spec.contains("bus_lines")) return 0;
+    return bundle::fnv1aStr("bus_lines|" + spec["bus_lines"].dump());
 }
 
 std::string insertLaneRulesText(const std::string& text, double solidBeforeStopLine, std::string* err) {

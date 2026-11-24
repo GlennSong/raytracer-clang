@@ -1,4 +1,5 @@
 #include "apps/driving/traffic_state.h"
+#include "apps/driving/notice.h"   // kStandingBelow
 
 #include <algorithm>
 #include <limits>
@@ -119,8 +120,8 @@ void rebuildPathLists(const engine::LaneGraph& roads, const VehicleClasses& clas
             l.path = car.besidePath.index;
             l.entry.car = car.id;
             l.entry.why = OnPath::Beside;
-            l.entry.front = std::clamp(car.along, Real(0), laneLength);
-            l.entry.rear = std::clamp(car.along - length, Real(0), laneLength);
+            l.entry.front = std::clamp(car.along + car.besideShift, Real(0), laneLength);
+            l.entry.rear = std::clamp(car.along + car.besideShift - length, Real(0), laneLength);
             listed.push_back(l);
         }
     }
@@ -175,11 +176,17 @@ Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars,
     // car whose body is on the other path's stretch, and whose front is further along than mine, is a car ahead of me,
     // at the place its rear is level with on my path (the two stretches matched end to end). Without this, a car that
     // left my lane by the other path vanished from my following as soon as its tail was off the lane.
+    // AND ON A MERGE'S OTHER PATH (sitting 5, design section 9: merge fault a): two lanes joining out on the road (a
+    // ramp's lane into its host's, a lane tapering into its neighbour; a join filed under no junction) run together
+    // over the join's stretch the same way, so the car further along it goes first and the other follows it -- the
+    // zipper, by where the cars are. Before, once both fronts were on the stretch nobody owned the pair: the give-way
+    // judgement passes over a stretch its front is on, and following did not see the other body until the lanes were
+    // one, so a through car sped up beside a joining bus along the taper and through it.
     const auto splitSiblings = [&](engine::PathId path, Real toStart) {
         const engine::Path& p = roads.paths[path.index];
         for (uint32_t k = p.crossings.first; k < p.crossings.end() && k < roads.pathCrossings.size(); ++k) {
             const engine::CrossingPoint& rec = roads.crossings[roads.pathCrossings[k].index];
-            if (rec.otherSide != engine::OtherSide::Path || rec.meeting != engine::Meeting::Split) continue;
+            if (!followedAcross(rec)) continue;
             const bool mineIsA = rec.a == path;
             const engine::PathId other = mineIsA ? rec.otherPath() : rec.a;
             if (!knownPath(roads, other)) continue;
@@ -187,8 +194,14 @@ Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars,
             const Real theirFrom = mineIsA ? rec.otherFrom : rec.aFrom, theirTo = mineIsA ? rec.otherTo : rec.aTo;
             if (toStart + myTo <= 0) continue;   // my front is past the stretch: the two paths are apart here
             const Real scale = theirTo > theirFrom ? (myTo - myFrom) / (theirTo - theirFrom) : Real(1);
+            const bool join = rec.meeting == engine::Meeting::Join;
             for (const PathEntry& e : lists.on(other)) {
                 if (e.car == me || e.rear > theirTo || e.front < theirFrom) continue;
+                // (on a join, a car standing on the other lane is waiting to go, not going first: I drive past it)
+                if (join) {
+                    const Car* them = findCar(cars, lists, e.car);
+                    if (!them || them->speed < kStandingBelow) continue;
+                }
                 const Real frontHere = myFrom + (e.front - theirFrom) * scale;
                 const Real rearHere = myFrom + (std::max(e.rear, theirFrom) - theirFrom) * scale;
                 if (toStart + frontHere <= 0) continue;   // not ahead of my front
@@ -272,7 +285,8 @@ CarPose carPose(const engine::LaneGraph& roads, const VehicleClasses& classes, c
     }
     const BodyPiece& last = body.pieces[body.count - 1];
     const engine::Vec2 rearHeading = roads.directionAt(last.path, last.rear);
-    const engine::Vec2 rear = roads.pointAt(last.path, last.rear) + engine::perp(rearHeading) * kerbward;
+    const Real kerbwardRear = kerbwardPerpSign(rules.drivesOn) * (car.offset + car.offsetRearLag);
+    const engine::Vec2 rear = roads.pointAt(last.path, last.rear) + engine::perp(rearHeading) * kerbwardRear;
     pose.rear = lift(rear, roads.heightAt(last.path, last.rear));
     const engine::Vec3 span = pose.front - pose.rear;
     pose.body = span.length() > kShortestBody ? engine::normalize(span) : pose.travel;

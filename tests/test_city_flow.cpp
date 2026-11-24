@@ -1,40 +1,35 @@
 #include "test_framework.h"
 #include <cstdio>
 
-#include "city_test_util.h"
+#include "model_scene.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/procgen/city/road_network.h"
 
 using namespace engine;
 using namespace citysim;
 
-namespace {
-
-// cross4 (city_test_util.h): one junction every walk crosses.
-using citytest::cross4;
-
-}  // namespace
+// The scenes are road files built as a level's roads are (model_scene.h, #306 piece 6 W2).
 
 TEST_CASE(agents_never_teleport_even_with_unroutable_pairs) {
-    // Two road components with NO edge between them, ~200 m apart. An agent whose
+    // Two road components with NO road between them, 400 m apart. An agent whose
     // home and work land in different components has no route; the old code
     // teleported it to the goal (it "disappeared and reappeared"). Now it must
     // never jump: every step's displacement stays within normal travel.
+    // (W2: each component a cross of 40 m arms, A at (0, 0) and B at (400, 0); the hand-made map's were two 40 m
+    // squares, whose bends make no junction, and a road file with none gets no lane level.)
     RoadGraph g;
-    g.nodes = {
-        {Vec2(0, 0)}, {Vec2(40, 0)}, {Vec2(40, 40)}, {Vec2(0, 40)},        // A
-        {Vec2(400, 0)}, {Vec2(440, 0)}, {Vec2(440, 40)}, {Vec2(400, 40)},  // B (far)
-    };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0}, RoadEdge{1, 2, 8, RoadClass::Local, 0},
-        RoadEdge{2, 3, 8, RoadClass::Local, 0}, RoadEdge{3, 0, 8, RoadClass::Local, 0},
-        RoadEdge{4, 5, 8, RoadClass::Local, 0}, RoadEdge{5, 6, 8, RoadClass::Local, 0},
-        RoadEdge{6, 7, 8, RoadClass::Local, 0}, RoadEdge{7, 4, 8, RoadClass::Local, 0},
-    };
-    NavGraph nav = buildNavGraph(g);
+    for (const Real cx : {0.0, 400.0}) {
+        const int c = static_cast<int>(g.nodes.size());
+        g.nodes.push_back({Vec2(cx, 0)});
+        for (const Vec2 d : {Vec2(40, 0), Vec2(-40, 0), Vec2(0, 40), Vec2(0, -40)}) {
+            g.nodes.push_back({Vec2(cx, 0) + d});
+            g.edges.push_back(RoadEdge{c, static_cast<int>(g.nodes.size()) - 1, 8, RoadClass::Local, 0});
+        }
+    }
+    const citytest::ModelScene& s = citytest::graphScene("two_crosses", g);
+    CHECK(s.problems.empty());
 
     CitySim sim;
-    sim.build(nav, 32, 99);
+    s.build(sim, 32, 99);
     std::vector<Vec2> prev;
     for (const Agent& a : sim.agents()) prev.push_back(a.pos);
 
@@ -61,10 +56,10 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     // aside to go around them, their bodies never overlap, they enter the Avoiding
     // state when they see someone, they still reach their goals, and it's
     // deterministic.
-    NavGraph nav = cross4(40.0);
+    const citytest::ModelScene& s = citytest::crossScene(40.0);
     CitySim a, b;
-    a.build(nav, 30, 55);
-    b.build(nav, 30, 55);
+    s.build(a, 30, 55);
+    s.build(b, 30, 55);
 
     Real minPedDist = 1e9, maxLeanJump = 0;
     bool anyArrived = false, anyAvoided = false;
@@ -111,12 +106,9 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     // lean re-applied every tick — a pinned walker's ghost slid sideways without
     // bound. Pin a walking ped's tether far behind it and hold for 30 s: the
     // ghost must stay put (waiting), not wander off the map.
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(200, 0)} };
-    g.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    NavGraph nav = buildNavGraph(g);
+    const citytest::ModelScene& s = citytest::straightScene(200.0);
     CitySim sim;
-    sim.build(nav, 6, 9);   // several walkers so the cone SEES neighbours
+    s.build(sim, 6, 9);     // several walkers so the cone SEES neighbours
                             // (a non-zero lean is what used to accumulate)
     // Walk until someone is properly en route.
     int target = -1;
@@ -145,10 +137,10 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
 // pace, a heap at the door. On a wide pavement they keep up to three files, each its own following chain; on a narrow
 // one (and where the sim knows no pavement) one file, as before.
 TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
-    NavGraph nav = citytest::cityNav(600.0, 120.0, 5);
+    const citytest::ModelScene& s = citytest::gridScene(600.0, 120.0, 5);
     CitySim sim;
     sim.setWander(true);
-    sim.build(nav, 300, 11);
+    s.build(sim, 300, 11);
     int byFile[3] = {0, 0, 0};
     for (const Agent& a : sim.agents()) ++byFile[std::clamp(sim.walkerFile(a), 0, 2)];
     CHECK(byFile[0] == 300);   // no pavement known: the one line by the kerb
@@ -168,19 +160,26 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     for (const Agent& a : sim.agents()) narrow = std::max(narrow, sim.walkerFile(a));
     CHECK(narrow == 1);
 
-    // where they walk: their own file's distance in from the kerb
+    // where they walk: their own file across the street's walk (W3: measured against the walk's own line, the sidewalk's
+    // middle; a file is its distance in from the kerb, walkerVerge, held within the walk)
     sim.setJunctionPad(5.0);
     for (int t = 0; t < 200; ++t) sim.step(0.05, 0.0);
     int checked = 0, onFile = 0;
     for (const Agent& a : sim.agents()) {
-        if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
-        if (L.length < 30 || a.distOnLeg < 12 || a.distOnLeg > L.length - 12) continue;   // clear of the corners
-        const Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)], d = nav.direction(li);
-        const Real side = (a.pos.x - A.x) * d.y - (a.pos.y - A.y) * d.x;   // rightOf(d)
+        if (!CitySim::onRoute(a) || a.roadSide == 0) continue;
+        const engine::roads::WalkStep& s = a.route.steps[static_cast<std::size_t>(a.leg)];
+        if (sim.roads()->laneLevel.walks[s.walk.index].street == engine::kNoIndex) continue;   // on a street's stretch
+        const Real along = std::fabs(s.to - s.from);
+        if (along < 30 || a.distOnLeg < 12 || a.distOnLeg > along - 12) continue;   // clear of the corners
+        Vec2 dir(1, 0);
+        const Vec2 P = sim.routePoint(a, a.leg, a.distOnLeg, &dir);
+        const Vec2 right(dir.y, -dir.x);
+        const Vec2 away = a.roadSide > 0 ? right * -1.0 : right;
+        const Real half = s.walk.index < sim.roads()->laneLevel.walks.size() ? sim.roads()->laneLevel.walks[s.walk.index].width * 0.5 : 0;
+        const Real room = std::max(Real(0), half - CitySim::kWalkerHalfAcross);
+        const Real file = std::clamp(sim.walkerVerge(a) - half, -room, room);
         ++checked;
-        onFile += std::fabs(side - (L.width * 0.5 + sim.walkerVerge(a))) < 1.7;   // (less the lean)
+        onFile += std::fabs(dot(a.pos - P, away) - file) < 1.7;   // (less the lean)
     }
     std::printf("    [files] %d of %d walkers mid-link on their file\n", onFile, checked);
     CHECK(checked > 30);

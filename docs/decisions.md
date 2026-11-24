@@ -23546,3 +23546,903 @@ No crash, no hang. metro_v2_test was baked inside `metro_pedestrians_walk_and_ke
 **Format and caches:** no tag, format or code moved; tests and this ADR only.
 
 **Revisit when** the near crowd's hits at j7/j19 are found (then retake its pins, and check whether the fix moves any pin here); when metro_v2_test's road file is given its points; or when s169's walk is joined.
+
+## ADR-0479 — The sidewalk, shoulder and median are drawn without parts under 2 cm wide: the cuts' rounding left slivers and spikes that stood in the carriageway as kerb faces (the near crowd's hits at j7 and j19)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: each pavement layer (sidewalk, shoulder, median) is now drawn opened by 1 cm: shrunk by 1 cm and grown back (`withBody`, `kNoBody`, pavement.h/.cpp). That takes off any part of a layer narrower than 2 cm and nothing else of note: a concave corner comes back where it was, a convex corner is bevelled by under a centimetre. The parts it takes off were never pavement. They were seams under a millimetre wide that the cuts left behind, and the slab builder gave each one kerb faces standing about 10 cm proud of the asphalt, in the middle of the road.
+
+Words:
+- **Layer:** one of the pavement's drawn bands beside the lanes: sidewalk, shoulder, median (`Pavement::sidewalk/shoulder/median`). Each is cut per road at its own level and slabbed by `buildMeshes` with side faces (the kerbs), which are part of the road's static physics body.
+- **Sliver:** a layer polygon of its own, metres long and under a millimetre wide.
+- **Spike:** the same thing hanging off a real piece of sidewalk: its outline runs out metres into the road and back, a millimetre apart.
+- **Needle:** the tip of a sliver or spike in a layer's outline: a corner the material fills whose two sides, each 5 cm or longer, are within 2 degrees of each other.
+- **Opening:** shrink a shape, then grow it back by the same amount; anything thinner than twice that is gone.
+
+**What the cars hit** (ADR-0478's "Found"): on the S7 bake, brain_crowd's physics cars 148, 88 and 21 hit two slivers inside traffic_lab's j7, and car 148 then a third at j19.
+- j7: one sliver along the line where s206's end meets s211's end at the point (-365.22, -28.74), from (-361.6, -28.3) to (-370.6, -29.4); another along s211 from (-366.5, -12.8) to (-366.1, -17.8). The hits at (-364, -28.6) and (-364, -15.6) lie on them.
+- j19: a sliver from the point (-335.53, 180.0) to (-332.2, 178.4), along s216's end line, in s24's carriageway 0.8 m from its centre line. Car 148 hit it at 10.8 m/s and came to rest against it, 1.19 m off its lane, for 220.7 s. The long stand is the same wall.
+- The body hit is the road's static mesh (the contact's other body sits at the origin, the city mesh's frame). `lanes_tool build --probe` shows the deck flat there (0.59-0.62 m); the road glb's sidewalk mesh holds zero-width triangles there and its concrete mesh 0.3 m side faces along them (tops 0.71-0.74 m).
+- Picture: `out/near_crowd/j7_j19_slivers_before_after.png` (top view of the road mesh, kerb faces in red, the hits as dots sized by closing speed; before and after).
+
+**Why they were there.** The cut (`cutAtLevel`) takes from each road's band every piece a lane, a carriageway, a shoulder or a median covers at its level, each piece made by intersecting the band with that one cutter. The booleans work on a 1 mm integer grid (geom2d.cpp `kScale`), so each piece's edges are rounded on their own. Where two cutters' edges lie on one line but come from different end points (s206's carriageway end and s211's, which meet 0.5 degrees apart; a lane footprint's edge and a mitre piece's along it), the two rounded edges differ by under a millimetre and the band between them survives the cut. On traffic_lab that left 50 slivers of sidewalk and 6 of shoulder in the drawn mesh, and 298 sidewalk and 72 shoulder needles in the layers' outlines.
+
+**Not new, and not S2's or S3's doing.** A road glb built on 2026-11-18 (out/v1B, before ADR-0469..0478) has the same two j7 slivers, to the centimetre, and 57 sidewalk slivers in all. The re-bake moved traffic so that near cars now drive across them at j7; at j19 the sliver moved from the west side of the point (-336..-339, 180..182) to the east, onto s24's driven lanes. Street furniture and an old collider were ruled out: nothing else stands there in the mesh, and the hits' other body is the road mesh.
+
+**Why the opening, not a cleaner cut.** Subtracting each cutter whole, instead of its intersection with the band, does not remove the cause: collinear edges rounded from different end points (a lane footprint's 1 cm weld edge against a carriageway's end, a mitre piece's edge along a band's end) still disagree by under a millimetre. Dropping whole thin polygons was tried first: it removed the j7 and j19 slivers but kept the spikes on real pieces (7.8 m at j94 on s208, 3.8 m beside it). The opening takes both. It runs once per layer: the median's after its islands join it and before it cuts the other two, the shoulder's and sidewalk's on their unions.
+
+**Tolerance:** `kNoBody` = 1 cm (pavement.h). Nothing narrower than 2 cm is a sidewalk, shoulder or median anyone could use, and every seam found was under 1 mm. The test's needle: sides of 5 cm or more (`kSide`; a bevel's are under 1 cm), sharper than 2 degrees (`kNeedle`; the sharpest real corner, a mitre cut at kMitreLimit, is tens of degrees).
+
+**Before and after** (traffic_lab, `lanes_tool build`):
+- sidewalk pieces in the drawn mesh under 5 cm wide and over 0.5 m long: 50 -> 0; shoulder 6 -> 0. Layer areas unchanged to 0.1 m² (sidewalk 182 848.6, shoulder 36 612.2, median 10 453.2).
+- road mesh triangles 1 101 020 -> 1 117 365 (+1.5%: each bevelled corner adds a vertex).
+- The 43 median slivers in the drawn mesh are not in the median's polygons (the gate counts none, with or without the opening). They are what `layerMeshes` leaves where it drops triangles that join two levels (the freeway's edges, about y ±490..520). Not touched; see Revisit.
+
+**The near crowd** (`near_tier_in_the_crowd_follows_the_player`, physics_tests, after `rt_bake traffic_lab`):
+- chassis hits on other things 65 -> 3 (limit `kChassisHitsKnown` 8): car 179 touching s260's real kerb at 0.69 m/s, and car 220's two touches of a walker.
+- the longest stand off its lane 220.7 s -> 4.3 s (limit `kOffLaneKnownWorst` 5 s; car 6, 0.53 m off).
+- hits on walkers 2 -> 2, still failing: car 220 at (-259.8, 47.7) on s15, 10.2 m from the centre line (carriageway 11 m), about a metre before j11's stop line and 2-5 m before its crosswalk, closing at 1.61 then 0.15 m/s. j11 is a square junction neither S2 nor S3 moved. It is a walker at the carriageway's edge beside a car creeping to the stop line: a question for the walkers' and drivers' rules, not the road mesh. Not looked into here.
+- **Not re-pinned**, because the walker check still fails. Now: most near 14 (minute 9), in 76, out 64, hash 0x79168141d1414b43. Pinned: 13 (minute 12), 83, 63, 0x59168988decd4c99.
+
+**Tests:**
+- `road_model_47_the_layers_hold_no_part_without_a_body` (new, lanes_tests): traffic_lab's sidewalk, shoulder and median outlines hold no needle. Checked to bite: with the opening switched off it fails with 298 sidewalk and 72 shoulder needles. Put back, it passes.
+- lanes_tests 154/155. `lanes_no_elevated_deck_is_see_through_from_an_angle` fails its ratchet: system_interchange 7 -> 8 looks through, freeway_cross_relief 1 -> 0 (13 in all, as before). The test's comment says these are slab-corner ties that move with the tessellation; the bevelled corners moved one. **Not re-pinned** (system_interchange 7 -> 8 is Glenn's call).
+- driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513 (tolerance_literals passes).
+- Level tests on the new traffic_lab bundle: traffic_lab 10/11, its two known failures only (line 1011 the queue table, line 1035 the longest stand 169.5 s, car 9, as at S7); its v2_drives state hash and the other traffic_lab pins hold. brain_lab 12/12. brain_crowd: its one known failure (line 275); its pins hold.
+- `level_walk_join`: brain_crowd's half passes. river_town's half fails three pin checks, because the tag bump re-baked river_town inside the test (bundle miss, 172 s, cache/levels/59ebffe41cc29176): placing / starting / finishing 747 / 745 / 742 -> 740 / 735 / 733; fallback 754 -> 753; doors / joined / agree 891 / 882 / 821 -> 881 / 872 / 815. The lot pass reads the drawn pavement's gaps as blocks, so the opening moved river_town's lots (622 lots, 623 buildings read from the new bundle; S7 baked 625 / 626). **Not re-pinned.**
+
+**Format and caches:** `kLanesBuildTag` 2026-11-20.4 (every lanes level's sidewalks, shoulders and medians lose their slivers and spikes and bevel at convex corners; lot blocks beside them shift). `kLaneGraphBuildVersion` 21 (the walks are laid on the opened sidewalk). traffic_lab baked once with `rt_bake` (35 s, cache/levels/f093289ff4495b1d; brain_lab and brain_crowd share it). river_town was rebuilt by the walk_join test, not by `rt_bake`; agent_lab and the rest are not re-baked.
+
+**One model:**
+- Concept touched: roads (the drawn pavement's layers). The opening is applied once, where the layers are made (`buildFootprints`); every reader (the mesh, the walks, the lot blocks) reads the same layers.
+- No road fact is computed outside `roads/`; no new structure.
+
+**For players:** no more invisible ankle-high walls in the middle of junctions on any lanes level, so cars stop catching on them and getting stuck.
+
+**Revisit when** the median's drawn slivers at level-joining drops (`layerMeshes`) are looked at; when the walker touch at j11 is looked at; or if the booleans move off the 1 mm grid (then `kNoBody` may shrink).
+
+**Afterwards: re-bakes and re-pins** (same day, after review):
+- **Re-baked** with `rt_bake` under `ulimit -v 30000000`, one at a time: river_town 0 s, up to date (the walk_join run had already written its bundle, cache/levels/59ebffe41cc29176); agent_lab 174 s (cache/levels/ac102991c1e2701a, 227.3 MB, 12% shared).
+- **Re-pinned**, each with old -> new -> why in its comment:
+  - `lanes_no_elevated_deck_is_see_through_from_an_angle`: system_interchange 7 -> 8, freeway_cross_relief 1 -> 0, 13 in all as before (a slab-corner tie moved scenes with the bevels).
+  - `level_walk_join_...`, river_town: placing / starting / finishing 747 / 745 / 742 -> 740 / 735 / 733; fallback 754 -> 753; walks ending at a node 3 -> 2; doors / joined / agree 891 / 882 / 821 -> 881 / 872 / 815 (the lots regrown, 625 -> 622; the walks 3289 -> 3204). brain_crowd's half unchanged.
+- **Not re-pinned, worse:** `level_river_town_crowd_drives_on_the_new_driving` moved, mostly the wrong way: arrivals 753 -> 692, trips 322 -> 311, parked 210 -> 196, walks blocked 11 -> 21, another place 9 -> 18, no way 9 -> 42 (one resident in no_way at the end), the most on the road 135 at minute 11 -> 135 at minute 12; cars 364 -> 403 (with one 393 -> 434); better, the longest stand 1540.6 s (car 237) -> 1384.6 s (car 304); hash 0xc02460bd06f44189 -> 0x73e94991e8f742ae. Left failing for a sitting. A likely cause, not yet checked on river_town: the opening also cuts a real sidewalk in two where two pieces meet through a neck under 2 cm (on traffic_lab the sidewalk pieces over 1 m² go 160 -> 162), which can cost a corner its walk. If so, the opening wants to keep necks: open, then put back what the opening took that is not a needle (or close by kNoBody after it).
+- **The near crowd** stays failing on its walker touch; its comment records the state (other things 65 -> 3, off its lane 220.7 -> 4.3 s, the touch by car 220 at j11). Traced (`RT_NEAR_TRACE=220`): car 220 drives s15's kerb lane on its centre line (x -260.83, offset 0.00) at 5.6-6.7 m/s and passes the walker, whose centre stands 0.48 m inside the carriageway's edge, 2-5 m before j11's crosswalk; the car is not braking for it (nothing ahead on its line). The walker's lean rule (`kPedRoadsideRoom` 0.7 m, city_sim.cpp: "the 1 m verge to the kerb") assumes a 1 m verge, while the walks are laid `kWalkFromKerb` 0.5 m from the kerb (ADR-0465); off a street walk (`onStreet` false, a corner walk) the full 1.6 m lean toward the road is allowed. Either lets a walker's body into the kerb lane. Whether the touch is new since S7 cannot be read from the S7 log (its hit list stops at 32 entries, all slivers); the C3b run had none.
+- **Suites, all with RT_TEST_FILTER:** lanes_tests 155/155, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513; level_walk_join 1/1; level_river_town 1/2 (the crowd, above); traffic_lab 10/11, brain_lab 12/12 and brain_crowd (its known line 275) as above.
+
+**Changed: the sidewalk keeps its necks** (`kLanesBuildTag` 2026-11-20.5, `kLaneGraphBuildVersion` 22). The opening alone also cut real sidewalk in two where two pieces meet through a neck under 2 cm, and the river_town crowd went the wrong way (above). Now `withBody(layer, keepNecks)`: every layer is opened as before; the sidewalk is then closed by kNoBody (grown, shrunk back), which joins the pieces the opening parted and cannot bring back the slivers, gone at the first shrink.
+- Tried first: open-then-close on every layer. On traffic_lab it joined shoulders of carriageways at two levels that lie within 2 cm in plan (the freeways near (210, 472) and (-150, -494)): shoulder pieces 35 -> 33 and +388 m². So the shoulder and median stay open-only; they carry no walks.
+- Measured on traffic_lab's drawn mesh, sidewalk pieces over 1 m²: HEAD (no opening) 160, open-only 162, open-then-close 160. Shoulder 35 / 36 / 36 (one shoulder parted at a neck, harmless: no one walks it). Areas: sidewalk 182 848.7 m², shoulder 36 612.2, median 10 453.2. Thin sidewalk pieces in the drawn mesh 50 -> 1: a 0.69 m piece 0.1 mm wide at the map's edge, (107, 556). The layer's outline holds no needle (road_model_47), so it is made in the meshing, not the cut; probably `layerMeshes`'s level-joining drop, as with the median's; not checked. j7's and j19's slivers are gone. Road triangles 1 119 730.
+- `road_model_47` passes (0 needles in every layer) and still bites with `withBody` switched off (298 sidewalk, 72 shoulder needles).
+- **Re-baked** with `rt_bake` under `ulimit -v 30000000`: traffic_lab 36 s (cache/levels/a3a9f234a7228cea), river_town 172 s (62e37529ea83dd12), agent_lab 174 s (7fe40d0a30aaf383).
+- **The river_town crowd, re-pinned** (old S7 -> open-only -> now): arrivals 753 -> 692 -> 730; no-plans 9 -> 42 -> 0; walks blocked 11 -> 21 -> 0; another place 9 -> 18 -> 0; trips 322 -> 311 -> 318; parked 210 -> 196 -> 209; the longest stand 1540.6 s (car 237) -> 1384.6 -> 734.7 s (car 19); cars 364 -> 403 -> 383 (with one 393 -> 434 -> 407); the most on the road 135 (minute 11) -> 135 (12) -> 139 (11); hash 0xc02460bd06f44189 -> 0xa15a1ec8afaff85d. Better on every count but arrivals (-3%) and trips and parked (-1%).
+- **level_walk_join, river_town, re-pinned again** (S7 -> now): placing / starting / finishing 747 / 745 / 742 -> 741 / 739 / 736; the fallback 754 and walks ending at a node 3 back to S7's (the open-only re-pin of 753 and 2 undone); doors / joined / agree 891 / 882 / 821 -> 887 / 878 / 815. Lots 625 -> 622; walks 3289 -> 3191; cut off 23, in 4 -> 3 parts; held past a sidewalk's end 78, unchanged.
+- **The see-through re-pin holds** (system_interchange 8, freeway_cross_relief 0).
+- **Unchanged by .5:** the near crowd (hits on other things 3, off its lane 4.3 s, walkers 2, hash 0x79168141d1414b43; still failing on the walker touch, not re-pinned); traffic_lab 10/11 (its two known); brain_lab 12/12; brain_crowd (its known line 275).
+- **Suites, all with RT_TEST_FILTER:** lanes_tests 155/155, driving_tests 200/200, brain_tests 23/23, run_tests 1513/1513; level_river_town 2/2; level_walk_join 1/1.
+
+## ADR-0480 — People will walk by the road model's walks: the sim holds the level's road model on every lanes level, a walk has a height, and a place keeps where its door fronts (#306 task 4, piece 6, sitting W1)
+**Status:** Provisional · **Date:** 2026-11-20
+
+What it does: gets the city sim ready to walk its people by the road model instead of the old street map. Nobody walks differently yet. Three things the switch needs are put in place: (1) the sim is handed the level's road model on every level with a lane-built city, not only on the levels that drive; (2) a walk can be asked how high it is at a point along it, so a person on a bridge's sidewalk can stand on the bridge; (3) a place in the sim keeps where its door fronts the road, as the lot pass recorded it, so a walk can start and end at the door's own sidewalk. It also finds that 8 of the 13 lanes levels have no walks to walk yet, because their road files do not state what the lane level needs (below).
+
+Words:
+- **Road model:** the one description of a level's roads (ADR-0420). Its **built** form holds the **lane level**: the paths cars drive and the **walks** people walk (ADR-0466). Its **planned layer** is what the road file says, without the lane level.
+- **Walk:** one piece of path a person on foot can take: a sidewalk's stretch, a corner, a crossing, a turn-round, a footway's stretch or a walkway's (ADR-0466, ADR-0475).
+- **Frontage:** where a place's door faces the road: a street, a **station** (metres along the street's centre line) and a **kerb** (which side); or a walkway and the metres along it (ADR-0474).
+- **Street map:** the old graph the sim's people walk on today (`NavGraph`), deleted by the end of #306 piece 6.
+- **Lanes level:** a level with a city whose roads the lanes builder builds (a `lanelab` entity, or a road with `"builder": "lanes"`).
+- **Tier:** how fully a person is simulated: near (everything), far (a coarse tick) or dormant (rebuilt from their day when needed).
+
+**The plan this starts** (Glenn's answers to the piece 6a report, 2026-11-20): piece 6 moves every tier of walker onto routes over the walks from the one router (ADR-0467), with no second walking step left at its end. W1 (this) prepares the sim; W2 ports the ~100 tests that run on a hand-made street map onto road-model scenes, keeping the behaviour each checks; W3 switches the walking and deletes the old step; W4 makes the trips that go to no place go to a real spot.
+
+**What changed:**
+- **The sim holds the level's road model** (`CitySim::setRoads(model, report)`, `CitySim::roads()`, `roadsReport()`; was `setDrivingRoads`, which did nothing on a level that does not drive). The city host (`CityRenderSystem::build`) hands it `LevelRoadModel::builtCity()` (new: the first city's built model, or null) on every level, and only then, where the level drives, checks its vehicle classes against it and remakes the driving on it, as before. A lanes level whose first city is only the planned layer logs why.
+- **Behaviour held where nothing should change:** the walkers' crosswalk rules (`CitySim::crossingAhead`) read the model only where the level drives, as before: a level with no driving has no cars to judge a gap against. W3 replaces them with the crossings on each walker's own route. `lanegraph?` now answers the model's line on every lanes level (it said the driving was off on a level that does not drive).
+- **A walk's height:** `LaneGraph::heightAt(WalkId, along)`, read along the walk's own curve as the lane level laid it, beside `pointAt(WalkId, along)`. The walks already carried their heights; nothing asked.
+- **A place keeps its door's frontage:** `citysim::Place::frontage` (`engine::StatedFrontage`, the type the lot pass, the door and `AuthoredPlace` already share), copied from `AuthoredPlace::frontage` when the host makes the place (`PlaceMap::setFrontage`). It says nothing for a place that states nothing (an authored marker, a shop front, a door with no street a building may front). Nothing reads it until W3.
+
+**Lanes levels and their models** (`level_every_lanes_level_hands_the_sim_its_road_model`, level_tests: every level in assets/levels with a lane-built city and a city sim; Glenn's three untracked levels in progress left out):
+
+| Level | The sim holds | Walks |
+|---|---|---|
+| agent_lab, river_town | its built model | 1759 |
+| brain_crowd, brain_lab, traffic_lab | its built model | 1627 |
+| island_8_nature, light_rail_lab, metro_mountain, metro_planned, metro_v2_test, piedmont | nothing: the road file states no lane rules, and its junctions' arms are not listed in ring order | 0 |
+| wheel_lab | nothing: the road file states no lane rules | 0 |
+| rail_lab | nothing: as island_8_nature, and not every junction's control is stated | 0 |
+
+- **Found: 8 of the 13 lanes levels have no walks.** Their road files lack the facts the lane level is built from, so the loader publishes only the planned layer, and there is nothing for their people to walk by. The test prints each with the tool run that states the missing facts (`lanes_tool layout <road file> --lane-rules 20 --arm-order --write`; for rail_lab also `city_plan controls <road file> rules/lab.lua --layout --write --controls-only`). Running those writes the road files and re-bakes the levels (island_8_nature among them), which this sitting was told not to do. **It must be done, or decided, before W3:** after W3 a level with no walks has nowhere for its people to walk. It is Glenn's to schedule. The test pins the list, so a level that gains its lane level shows.
+
+**Tolerances (test 48):** the pavement may stand up to `kKerbAtMost` 0.5 m above the deck it is on (a kerb, with room), and its height above the deck may vary along one walk by up to `kSameRise` 2 cm (the lane level samples heights at its own points). Measured: 0.000 m above and 0.000 m of variation (the walks are laid at the deck's own heights).
+
+**Tests:**
+- `road_model_48_a_walk_is_as_high_as_the_pavement_it_runs_on` (lanes_tests): two roads crossing on a deck over flat ground, one climbing from 6 m to 12 m, the other level at 9 m. The four sidewalk walks along the climbing road read 6.00 to 12.00 m along their length, following the deck point by point; a walk the lane level does not hold reads 0. Checked to bite: with `heightAt(WalkId)` answering the walk's first point everywhere, 6 checks fail; put back, it passes.
+- `city_places_carry_where_their_doors_front` (run_tests): three places made by the city host, one stating a street, station and kerb, one a walkway and metres, one nothing; each place in the sim states the same. A hand world with no lane-built city: the sim holds no road model.
+- `level_every_lanes_level_hands_the_sim_its_road_model` (level_tests): the table above, by the same two calls the host makes.
+
+**Hashes and pins: none moved.** river_town crowd: arrivals 730, no way 0, walks blocked 0, hash 0xa15a1ec8afaff85d. brain_crowd: arrivals 426, hash 0xb67879f5b6ec7210. The near crowd: hash 0x79168141d1414b43, as at ADR-0479, still failing as recorded there (the walker touch by car 220, #314; not re-pinned). brain_lab 12/12, level_walk_join 1/1.
+
+**Suites, all with RT_TEST_FILTER:** full build; lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; run_tests 1514/1514; level_tests: level_every_lanes_level 1/1, level_brain_lab 12/12, level_river_town 2/2, level_walk_join 1/1, level_brain_crowd 0/1 (its known line 275 only: the share of walkers waiting away from a kerb end); physics_tests near_tier_in_the_crowd 0/1 (its known state, above).
+
+**Format and caches:** no format, bake key, lots tag or road model format moved; no road or lot geometry touched; no level baked.
+
+**One model:**
+- Concepts touched: roads (a walk's height; which model the sim holds), places (a place's frontage).
+- The sim holds the level's one road model, the same object the loader published and the driving drives on: no copy, no second model. A walk's height is read from the lane level's own curve. The frontage is the record the lot pass wrote (`StatedFrontage`), carried, not worked out again.
+- The street map is still what the sim's people walk on until W3. No new reader of it was added.
+
+**For players:** nothing changes on any level.
+
+**Revisit when** W2 and W3 land (this ADR's plan); when the 8 levels' road files state their lane facts (then the level test's list shrinks); or when a level has several lane-built cities whose people walk in a city other than the first.
+
+### W1b — island_8_nature's road file was given its lane facts once; its lane level builds but fails its own check at j396, so it is never saved and the bake runs out of memory. PARKED: the road file is back as it was
+
+**Superseded (2026-11-21) by "W1b, j396" below:** the filled-in file is back in place, with j396 fixed. What follows is the record as it was.
+
+**Parked** (the coordinator, 2026-11-20): Glenn's island must keep loading from its existing bundle, so the road file was put back (`git checkout` of that one file). The filled-in file is kept at `out/w1b_island/island_8_nature_lanelab.filled.json` until Glenn decides on j396. island_8_nature is back on the level test's list of levels with no walks (8). The findings below stand.
+
+**Glenn's decision** (2026-11-20): of the 8 levels with no walks, only island_8_nature's road file is given the missing facts now. The other 7 stay without walks, pinned by name; metro_planned is his work in progress and is not touched.
+
+**What was written** (`assets/lanelab/planned/island_8_nature_lanelab.json`, by the tool, two runs: `lanes_tool layout <file> --arm-order --write`, then `--lane-rules 20 --write`; one flag a run, since `--arm-order` returns before `--lane-rules` is read):
+- Added: `"arms_in_ring": true` and `"lane_rules": {"solid_before_stop_line": 20.0}`.
+- Four junctions' arms put in ring order: j371, j372, j588 and j668. Each holds the same arms, only in another order, and its `through` pairs were renumbered to name the same arms (checked arm by arm). Their `control` is a word ("signal", "unmarked") and names no arm, and the level's signs file places by position, so nothing else refers to an arm by its number.
+- Unchanged: every junction, street and edge id and their order, every name, every point and profile (1373 junctions, 2555 streets, 2519 edges, compared field by field on a copy first). The same bytes on a second copy (deterministic).
+- `lanes_tool layout <file> --write` on a copy prints "the file is CHANGED", but the file it writes holds the same JSON, field for field: only the spacing differs. The file at HEAD does the same. So the stated facts are stable; the tool's "changed" is about formatting.
+
+**The lane level** (`lanes_tool lanegraph`, the tool's two test vehicles; 13 min, 4.6 GB):
+- 16,327 lanes and 16,869 connectors, of 17,023 stated turns: 149 fit no vehicle (corner faults), 5 have no lane path; 1,373 junctions, 88 with only some of their turns built; 4,878 crosswalks.
+- **The largest part a car can get round: 50.2% of the lane paths.** 7,665 lanes cannot get back because they lead into a junction whose turns fit no vehicle; 247 into a road that just ends; 119 round a loop with no way out. A car gets round 33.8% with lane changes, 24.6% without.
+- Problems: 5,761 in all. Kinks in lanes 5,309; lane folds tidied 98; fits no vehicle 149; carry-ons joined across a gap 49, into another slot 17, with no way on 3; street ends with nothing stated 11; lane stretches with no lane path 8; leave/merge across a gap 7; no room between stop lines 2; turns with no lane path 5; paths meeting outside a junction 24; **lane table check 6**. The road model's own: 233 (164 turns taken as far turns; 29 crosswalk kerb ends in another road's carriageway; 24 junctions too close for the angle their roads meet at, ADR-0471's planning fault; 16 ramp lanes with no turn).
+- **The 6 failed checks are all at j396**, a five-arm signalled junction at (4827.9, -289.2) whose arms reach 37 m out: arriving lanes 4423, 4424, 4431 end 1.86-2.27 m from its outline and leaving lanes 4414, 4434 begin 1.61-3.18 m from it (the check allows 1.50 m). j396 is also one of ADR-0471's "too close" junctions (arms 0 and 1 stop 21.0 m and 27.1 m short of where their kerbs clear the crossing road), and two of its crosswalks have their kerb ends in another road's carriageway. A planning fault in the road file; not fixed here.
+
+**The walks** (`level_every_lanes_level_...`, the level's own fleet): 14,563 walks: 4,918 sidewalks, 4,771 corners, 4,817 crossings, 36 turn-rounds, 21 footways. **51 parts on foot; the largest holds 972 of the 4,918 sidewalks (19.8%).** Not traced. A likely cause, not checked: the island's towns are joined by roads with no sidewalk (freeway, rural roads), so each town is a part of its own. If so, it is what the road file says, and whether people walk between towns is a question for W3/W4.
+
+**Stopped: the bake fails, and so would every load's road model cache.**
+- The road model cache refuses to save a lane level that fails its own check (`obtainLevelRoadModel`: "the lane graph built fails its check ... it is not saved"). Because of j396, island_8_nature's built model is never saved, and every reader builds it again: 13-15 min and 4.6 GB each time (the loader, the bake's lots producer, the level test).
+- `rt_bake assets/levels/island_8_nature.json` under `ulimit -v 30000000`: **failed after 38 min, "rt_bake: lots: std::bad_alloc"** (22.8 GB resident at the peak). The lots producer grows every lot first, then asks `obtainLevelRoadModel` for the built model to state the lots' walkways on (ADR-0476). With no saved model it builds the whole lane level again, on top of the grown lots. Before W1b the island had no lane level, so that call returned the planned layer at once. **No bundle was written**; the island's last good bundle stays, but its key no longer matches the road file, so a load in this work tree grows the city again.
+- **Two engine weaknesses this showed** (the coordinator files them as one issue; not fixed here): (i) a lane level that fails its own check stops the built model being cached, so every reader builds it again; (ii) a cold bake's lots producer builds the lane level on top of the grown lots and runs out of memory.
+- Ways on: (a) fix j396 in the road file (the planner's), so the lane level passes its check and is cached once; (b) the issue above; (c), taken: the road file put back until (a) is decided.
+
+**The level test** (`level_every_lanes_level_hands_the_sim_its_road_model`): while the filled-in file was in place, 6 levels handed over a model and island_8_nature had 14,563 walks. Parked, it is back to 5 handed and 8 named with no lane level (island_8_nature's comment says it is blocked by the j396 fault). It now also prints each level's walks by kind, its parts on foot and the model's notes.
+
+**Suites, all with RT_TEST_FILTER:** lanes_tests 156/156, driving_tests 200/200, brain_tests 23/23, run_tests 1514/1514 (none reads island_8_nature). The island's in-suite level tests were not run (they would build the island's city).
+
+### W1b, j396 — one avenue the road file broke into two spurs is stated as it is: a crossroads at j396 and a T at P (j1373); the island's lane level passes its check and is cached
+
+What it does: W1b's fill-in is back in island_8_nature's road file (Glenn's go, 2026-11-21: "fix the junction"). The one junction that failed the lane level's check, j396, is fixed in the road file. The check now passes, so the built road model is saved, and every reader loads it from the cache instead of building it again.
+
+Words:
+- **Outline:** the junction's area as the lane level draws it (its box). Every lane arriving at a junction must end within 1.50 m of its outline, and every lane leaving must begin within 1.50 m of it (`kJunctionEndReach`, lane_graph.cpp `validate`): the **lane-table check**.
+- **Spur:** a stretch of road that runs off its street's line to reach a junction somewhere else.
+- **P:** the point (4849.84, -255.41), where Lake Boulevard meets the cross street.
+
+**What was wrong** (picture `out/j396/j396_before.png`):
+- Lake Boulevard (p1_s142, from j395) and Granary Boulevard (p1_s144, to j399) are one straight avenue through P. Their points march along one line exactly 15 m apart.
+- The road file broke the avenue at P. s142 stopped one step short of it and ran its last 40.5 m down to j396. s144 started at j396 with a 40.3 m spur up to P. The two spurs left j396 21 degrees apart, so j396 counted 5 arms where the grid has 4.
+- j396's outline swallowed both spurs. s142's lanes bent about 100 degrees inside it, so they ended 1.6-3.2 m off the outline: the 6 failed checks. The same spurs gave ADR-0471's two "too close" arms (21.0 and 27.1 m short) and two crosswalk kerb ends in another road's carriageway.
+- The missing fact was a junction at P. It is a planner fault; the lasting fix is #313's.
+
+**Why by hand.** The layout tool has no option that moves a road's point, adds a junction at a new point, or adds an edge. `--split-junction` needs a junction spread over several points, and all five roads met j396 at exactly one point. `--state-arm` had no missing arm to add. So the road file was edited by hand, on a copy first. The tool then checked every layout fact that was written by hand (below).
+
+**The fix** (`assets/lanelab/planned/island_8_nature_lanelab.json`):
+- **p1_s142** ends at P, which is s144's existing point, instead of at j396. Its profile goes from 75 samples to 50: samples 0-33 are kept, and 34-49 run in a straight line to the height at P, 10.953 m (a 4.3% fall over the last 15 m).
+- **p1_s144** is cut at P and keeps [j396, P]. Its profile keeps its first 40 samples, plus the height at P.
+- **A new edge, `p1_s144_1`** (arterial), holds the rest, [P ... j399], unchanged. It is written at the end of the edge list, so no edge id or order moves. Its 47 profile samples are read off the old profile along the same stretch: it starts at the height at P and ends at j399 as before (10.312 m).
+  - **Why a new edge:** a first try kept s144 whole, bending 80 degrees at P with the new junction on the bend. It moved the fault to that junction: two of its leaving lanes began 1.56 m and 2.00 m from its outline. With the road cut, no road bends at a junction's point.
+- **j396** drops its s142 arm. It is now a 4-arm crossroads, through pairs (0,2) and (1,3), still "signal".
+- **j1373**, new, at the end of the junction list, at P:
+  - arms: p1_s142 in (48.89), p1_s144 in (40.27), p1_s144_1 out (0);
+  - through: s142 with s144_1, the avenue;
+  - control "unmarked": the island's own rule, every 3-arm junction on place 1 unmarked and every one of 4 arms or more signalled.
+- **j399**'s arm is now p1_s144_1, at 46.11.
+- **Streets:**
+  - p1_s142 runs j395 to j1373 (48.89 m);
+  - p1_s144 runs j396 to j1373 (40.27 m);
+  - a new street, p1_s144_1, "Granary Boulevard", runs j1373 to j399 (46.11 m), at the end of the street list.
+
+**Checked:**
+- `lanes_tool layout <file> --arm-order`: 0 of 1374 junctions' rings differ from the measure.
+- `lanes_tool layout <copy> --write`: the same JSON as the hand-written file, field for field and in the same order (stations, headings, through pairs, streets).
+- Field by field against W1b's file:
+  - edges 2519 to 2520, the old ids in the same order; only p1_s142 and p1_s144 change, plus p1_s144_1;
+  - junctions 1373 to 1374, the same order; only j396 and j399 change, plus j1373;
+  - streets 2555 to 2556; only p1_s142 and p1_s144 change, plus p1_s144_1;
+  - every other member (classes, crossings, rules, terrain, lane rules) the same.
+- `lanes_tool junctions --top 100000` (the grouping's own view; its printed ids are its own and shift): leaving its ids aside, 3 lines differ. j396 has 4 arms, the T at P is new, and j399 names p1_s144_1.
+- problems.txt: with everything within 150 m of j396 left out and the lane, connector and crossing-point numbers set aside, the same as W1b's. No fault moved anywhere else.
+- The level's signs file has no sign within 60 m of j396.
+
+**Before and after** (`lanes_tool lanegraph`, the tool's two vehicles; "before" is W1b's file and gives W1b's numbers again):
+
+| | before (W1b) | after |
+|---|---|---|
+| Lane-table check failures | 6 (all at j396) | **0** |
+| Problems in all | 5,761 | 5,712 |
+| Stated turns; fit no vehicle | 17,023; 149 | 17,024; 146 |
+| Corner faults, all vehicles | 4,393 | 4,388 |
+| Paths meeting outside a junction | 24 | 2 |
+| Lane folds tidied; kinks in lanes | 98; 5,309 | 92; 5,297 |
+| The road model's own problems | 233 | 230 |
+| Junctions with every stated turn built | 1,285 of 1,373 | 1,287 of 1,374 |
+| Car: largest part / with lane changes / without | 50.2% / 33.8% / 24.6% | the same |
+| Walks (the level's own fleet) | 14,563 | 14,573 |
+| ... sidewalks, corners, crossings, turn-rounds, footways | 4,918, 4,771, 4,817, 36, 21 | 4,920, 4,775, 4,821, 36, 21 |
+| Parts on foot; sidewalks in the largest | 51; 972 (19.8%) | 51; 972 of 4,920 (19.8%) |
+
+- **Planner faults left at j1373 (#313):** arm 1 (p1_s144, the 40 m stretch from j396) is too close to j396 for the angle its roads meet at; its box edge stops 1.4 m short of where its kerbs clear the crossing road. j1373 has no corner faults and no crosswalk kerb end in a carriageway.
+
+**Picture:** `out/j396/j396_after.png`: j396 a crossroads, j1373 a T on the avenue, no lane off its outline. The drawing script is `out/j396/draw_j396.py`.
+
+**The cache:** `RT_TEST_FILTER=level_every_lanes_level_hands_the_sim_its_road_model ./build-viewer/level_tests` built the island's model (15.5 min, 4.6 GB) and saved it, with no "not saved" note: `cache/roadmodel/241597b0593ad586.roadmodel`, 167 MB. A second run read it: "from the cache". The test now pins 6 levels handed and island_8_nature's 14,573 walks, and the 7 levels left with none.
+
+**The bake** (`rt_bake island_8_nature` under `ulimit -v 30000000`): **still fails**, "rt_bake: lots: std::bad_alloc", and **no bundle is written**.
+- Run 1, the model cached: 40:12, peak 22.8 GB resident.
+- Run 2, the same with `MALLOC_ARENA_MAX=4` (glibc's per-thread heaps capped, to test whether reserved address space was what `ulimit -v` ran out of): 39:16, peak 22.7 GB.
+- Both die after the same last lots log line as W1b's bake, which had no cached model, at the same peak. So the cached model changed nothing, and neither did capping the arenas. The memory goes in growing the lots themselves (`growCity` in lots_producer.cpp runs before the producer asks for the road model), or in something the log does not show. It is not the lane level built again on top of the lots, as W1b supposed (#317).
+- Nothing in the sources sets `MALLOC_ARENA_MAX` or calls `mallopt`.
+- The island's last good bundle (9f5c95b6) is out of date for the new road file, so a load in this work tree grows the city cold.
+
+**Format and caches:** no format, no tag. The road file's edges changed, so the city's bake key changes and the island re-bakes.
+
+**For players:** at Lake Boulevard and Granary Boulevard the avenue runs straight on through a T, and the cross street meets it there. Before, both roads bent down into the five-way lights at j396. j396 is now a plain crossroads.
+
+**Revisit when** #313 states junctions as the planner plans them (no road ending away from where its street meets another); or when #317 is settled.
+
+### W2, first half — the sim's tests run on road-model scenes, not hand-made street maps
+
+What it does: the city sim's unit tests used to build their towns as hand-made street maps (`buildNavGraph` over a few nodes and edges). Now nine of the test files build each town as a level builds its roads: a small road file, built by the one road builder into a road model with its lane level and walks, and the street map made from that model by the loader's own function. The old walking step still runs (W3 replaces it), but it now runs on a street map that came from a road model, and the sim holds that model, so W3 can switch the walking without changing the scenes again.
+
+Words:
+- **Scene:** one test town. **Road file:** the roads stated as data (each road a line with its class), the form a level's roads take.
+- **Hand-made street map:** a `NavGraph` built straight from nodes and edges (`buildNavGraph`), with no road model behind it.
+
+**The helper** (`tests/model_scene.h`, new): `ModelScene` holds the built model and the street map made from it (`appendStreetMap`, ADR-0425); `build(sim, walkers, seed)` builds a sim on the map and hands it the model (`CitySim::setRoads`); `sidewalkBeside(p)` asks the model for the sidewalk point beside a place (`frontageAt`, `sidewalkBeside`). A drawing becomes a road file by `roadFileOf` (each edge one straight road of its class) and the layout, controls and lane rules the tools would write (`withLaneLevelFacts`). Each scene is built once a run and kept by name (`sceneNamed`). The shapes the tests used are there as road files: `crossScene`, `teeScene`, `straightScene`, `gridScene` (city_test_util.h's grid town, draw for draw), and `graphScene` for a test's own drawing.
+- `straightScene` has a T at its far end: the hand-made map was one road with no junction, and a road file with no junction gets no lane level.
+- Every junction is stated `unmarked` (no lights), as `withLaneLevelFacts` states a scene's junctions.
+- Building a scene takes a moment (the 360 m grid town 2.8 s); the 1.2 km and 3.2 km towns more. Each is built once a run.
+
+**Ported** (the behaviour each test checks kept, the scene a road file): test_city_perception (2), test_city_parking (the trip-lab walker; 1 of 2, the other draws no map), test_city_drive (5 of 6; `approach_stop` draws no map), test_city_flow (4), test_relationships (5 of 8 that build a sim), test_places (5 that read a map), test_rail_riders (2 that build a map), test_sim_scale (3), test_tier_v (10).
+- `agents_never_teleport_even_with_unroutable_pairs`: its two components were two 40 m squares, whose bends make no junction; now two crosses of 40 m arms, 400 m apart.
+- `trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way`: was a cross whose streets stated a parking band, the places written at x = 9; now the cross scene, the places asked of the model (`sidewalkBeside`).
+- `walkers_keep_files_across_a_wide_pavement`: still measures a walker's file against the street map's link the old step walks; W3 measures it against the walk's own line.
+- `place_entrance_lands_on_sidewalk`, `place_entrance_hint_wins_over_the_site_snap`: test `PlaceMap::add`'s snap to the street map, which W3 replaces with `walkJoinOn`; kept until then, on the model-made map.
+- tier_v's `agentMismatches` compares the old step's route fields (links, leg, distance on leg) for its determinism checks; W3 compares the walk route's instead.
+
+**Deleted:** one check, no test: `trip_plan_walker_...`'s `a.route.links.size() == 1` (the old step's route was one street-map link; an internal of the step, not what the walker does).
+
+**Numbers:** no pinned value moved; every ported test passed on its first run on the new scenes. What they print (none pinned): walkers' nearest to a pole 0.700 m (the clearance); nearest to the player 1.362 m; files 110 / 89 / 101 of 300, 226 of 226 on their file; travel truth K 138.6 s, V 139.0 s; promotion flips 17, none far or off the lane; dormancy 259 of 300 asleep, 23 wakes after crossing; by train 24 sent, 24 arrived.
+
+### W2, second half — the rest of the sim's tests, the test worlds, and the hand-made maps deleted
+
+What it does: the last city-sim tests on hand-made street maps move onto road-model scenes, and so do the test worlds the city host is built on. After it, no test builds a street map by hand for the sim: the hand-made map makers are deleted.
+
+**Every scene is checked to have built cleanly, wherever it is asked for** (`model_scene.h sceneNamed`): no error from the lane level, no fault from its own check (`validate`), no street-map error, a street map with links and a lane level with walks. A scene that fails says so in the asking test, with its name and what was found. So every ported test, the first half's too, checks its scene.
+
+**The test worlds** (`tests/street_map_test_util.h`, `testmap::addRoads` / `publishStreetMap`): a world drawn as `RoadEntity` components is turned into one road file (each drawn edge one road), built into a road model, and published as a level publishes its roads: `LevelRoadModel::cities` holds the built model and `streetMap` the street map made from it. The city host then hands the sim the model, as on a level (ADR-0480). Was: a hand-made street map (`buildNavGraph` over the entities' graphs), no model. Its unused `ground` argument went with it (no caller passed one). Users: test_city_render, test_sim_rate_ab, test_fleet_springs, test_city_map (physics_tests).
+
+**Ported:** test_city_sim (16), test_city_goals (every test that builds a sim or a map; one deleted, one rewritten, below), test_city_render (every world-building test, through `addRoads`), test_sim_rate_ab (1), test_fleet_springs (1), test_city_map (1).
+- **Drawings with no junction** were given the least junction that gives a lane level (a road file with none gets none): test_city_render's `squareLoop` (a T at its east side's middle, a 40 m stub east) and its 1.6 km square (a T and a 100 m stub).
+- **test_sim_rate_ab's town:** was the planner's default 3 km city copied as local roads, one plan segment each. As a road file that is thousands of 15-20 m roads, the freeway's and expressways' carriageways among them side by side as locals, and the road builder refuses it ("partner chain too deep"). Now the grid town (gridCity, 1.5 km half-size, 120 m blocks, seed 7, every road local, as before). Its numbers: 71 active, 1729 far, 32 moving at all three rates; the split drifts +0% at half rate.
+- **`a_crowd_walks_a_footpath_to_work`:** the walk is now a walkway of the road model (ADR-0475, ADR-0476): stated on a copy of the town's model, its ends on the two streets either side of the block at the station and kerb the model answers there, put on the street map by `appendWalkways` as the loader does. It was a diagonal the test joined to the hand-made map's links itself (`NavGraph::appendFootpaths`); its ends 8 m from the corners lie past where the sidewalks start, so the walk now runs across the block between the two streets' middles.
+- **`city_places_carry_where_their_doors_front`** (W1): its last check was that a hand-made test world gives the sim no model; the world now gives it one, and the check is that the sim holds it with walks.
+
+**Moved, with why:**
+- `schedule_snapshot_agrees_with_a_stepped_day`: its rate 0.05 -> 0.02 h/s. At 0.05 a walk of minutes is most of a day in-world. The hand-made town's median commute was 171.5 s (8.6 in-world hours); the same town from its road file draws other home and work nodes (82 nodes, not 81) and a median of 219.6 s (11 hours), so at 14:00 the snapshot had nobody at work. The same pairs route the same metres on both maps (95 pairs measured: 295.5 m mean each), so the town is the same; the draw is not. At 0.02 h/s: commute 4.4 hours; stepped 194 at work / 51 home / 155 moving, snapshot 266 / 51 / 83; passes.
+
+**Deleted, with why:**
+- `footpaths_are_walked_across_a_block_and_never_driven` (test_city_goals): joined a diagonal to the hand-made street map with `NavGraph::appendFootpaths` and routed it with the street map's `findRoute`: the street map's own footpath links, which piece 10 deletes. What it showed is shown on the one model: a walkway is walked and never driven, joined where its ends are stated (road_model_43, road_model_45), and a crowd walks one to work in the sim (above).
+- `metro_v2_density_target_prints` (test_sim_scale, RT_SIM_SCALE only): priced metro_v2_test's density on a hand-made map of the planner's streets. As a road file those streets do not build (the same "partner chain too deep"), and metro_v2_test's own road file states no lane level (one of the 8 lanes levels with no walks). To be taken again from that level's built model once its road file states its lane facts.
+
+**The hand-made map makers deleted** (de-duplication): `citytest::cross4`, `tee`, `straightRoad` and `cityNav` (city_test_util.h; `gridCity`, a road drawing, stays: the scenes are drawn from it), and street_map_test_util.h's `buildNavGraph` of the drawn entities. No test uses them. (test_street_furniture.cpp and test_nav_graph.cpp keep small hand-made maps of their own: they test the furniture planner and the street map itself, not the sim, and go with the street map in piece 10.)
+
+**Left:** test_trip_plan's hand-made maps price trips, which is piece 6c's. `sim_scale_100k_island_prints` (RT_SIM_SCALE only) now builds an 8 km grid town through the road builder; not run here.
+
+**Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (1514 less the two deleted), 1601 s and 3.8 GB at its peak (1141 s after the first half: each scene is built once a run, the 800 m towns of test_city_goals for several seeds among them); driving_tests 200/200; brain_tests 23/23; lanes_tests 156/156; physics_tests `city_map_tool_draws_you_facing_the_way_you_look` 1/1 and `every_fleet_car_is_put_down_on_its_own_springs` 1/1. No pinned value moved; one test condition did (the snapshot test's rate, above).
+
+### W3 — the switch: every walker, in every tier, walks a route from the one router over the road model's walks; the street map's walking step is deleted
+
+What it does: a person on foot in the city sim now walks the walks of the level's road model: the sidewalks, the corner walks round each junction, the crossings over its crosswalks and the walkways. Each walk is planned by the one route-finder for people on foot (`findWalkRoute`, ADR-0467), from where the person stands to where they are going. The sim's old way of walking, along the street map's links, is deleted. There is one walking step, and every tier uses it: the near people (K), the people in view (V) and the people asleep in the far city (D).
+
+Words:
+- **Walk:** one stretch of path for people on foot in the lane level (`Walk`): a sidewalk along one kerb of one street, a corner walk round a junction, a crossing over a crosswalk, a turn-round at a dead end, or a walkway.
+- **Route, step:** what the router hands back (`WalkRoute`): the walks to take in order, each with its direction and its metres (`WalkStep`), and the crosswalks it crosses with the kerb end it crosses from (`WalkCrossing`).
+- **File:** how far across a sidewalk a person walks, their own lane in a crowd (ADR-0451's walker verge), kept as before.
+- **Road side, kerb room:** which side of the person the road is (`Agent::roadSide`), and how far they can step towards the kerb before they are in the road (`Agent::kerbRoom`). Read by the lean (#314).
+- **Frontage:** where a place's door fronts its street: the street, the station along it and the kerb (`StatedFrontage`; `citysim::Place::frontage`, W1).
+
+**How a walker walks now** (`src/apps/citysim/city_sim.cpp`):
+- **A trip** (`startTrip`) joins both of its ends to the walks from the places' stated frontage when they have one (`placeFrontageAt`, through `RoadModel::walkJoinOn`), and from their position otherwise (`walkJoinNear`). It asks the router for the route between them (`walkRouteBetween`). With no route the person stays where they are (`idlePose`) and the trip counts as blocked.
+- **A walk sent from outside** (`sendAgentTo`: the brain's walks and a possessed person's `walk_to`) gives only a position, so both ends join by position. A person already under way starts from the point of the walk they are on.
+- **Along the route** (`advance`, `glideAlong`): the person moves along the current step's walk (`LaneGraph::pointAt`), at its height (`heightAt`, so a bridge's sidewalk too). Their file is set out across the sidewalk, on sidewalk stretches only, eased in and out over 4 m (`kFileEase`) at each stretch's ends so nobody jumps sideways at a corner.
+- **Crossings:** the crosswalks ahead are read off the route (`nextCrossing`, looking 40 m ahead; `crossingGate`). A person stands at the crosswalk's kerb end and crosses on WALK, or in a gap where no lights rule it (`gapToCross`, `jaywalks`), as ADR-0452 set out.
+- **The other tiers:** a V person takes the same route, adding the junction wait for each crossing step (`vAdvance`). A D person's route is laid out in time (`dormantGlide`) and picked up where it is when the person wakes (`wakeDormant`). The far crowd is drawn on the GPU along the walks' segments (`city_render.cpp`).
+- **Why a walk was refused:** `RT_WALK_REFUSED=1` prints each walk the sim could not route, with why: "where it stands joins no walk", "where it is going joins no walk", or "no route", naming the walk and street at each end.
+
+**Deleted** (no second walking step):
+- the street-map walking step, with `Agent::arrivedLink` and `stopAtDist`;
+- the street map's look-ups a walk started and ended by (`walkStartNode`, `kerbSideLink`, `kerbLinkNear`), `kErrandOffLink`, `kWalkStartNodes`;
+- the twin links and U-turn pricing a wander used (`twinOf_`, `departScale_`, `wanderPriced_`);
+- the junction gate and look-ahead along links (`JunctionGate`, `junctionAhead`, `stopLineBack`, `crossingAhead`), and `kWalkerKerbStep`;
+- the room by the road the lean assumed (`kPedRoadsideRoom`): the lean now asks the walk's own width (`kerbRoom`, #314);
+- test_walk_join_levels' comparison of the street map's look-ups with the one answer (`level_walk_join_the_street_maps_lookups_beside_the_one_query`): what it compared is gone. The file keeps `level_every_lanes_level_hands_the_sim_its_road_model`.
+
+**Tried and taken back:** the brain's walks joining by its markers' stated frontage (a marker states street, station and kerb). With it the near crowd's cars touched walkers 27 times (and other things 30); without it, once. brain_crowd did worse with it too: arrivals 448 against 450, 23 plans with no way and 24 walks blocked against 0 and 0. So the brain hands the sim positions, and a comment in `LabWalk::walk` says why. Why stated ends do worse there was not dug into.
+
+**Moved, with why (old -> new):**
+- **brain_crowd** (`test_brain_crowd.cpp`), re-pinned: the most cars on the road 88 at minute 11 -> 80 at minute 10; minutes with 50 or more 12 -> 8; trips 233 -> 263; parked 179 -> 217; walks blocked 1 -> 0; arrivals 426 -> 455; hash 0xb67879f5b6ec7210 -> 0xcb6bf4524e6ee584. Rings, no plan, another place, errors, refused: still 0. People wait at a kerb end now: walkers waiting away from a kerb end 62.68% -> **4.38%**, so its check (under 5%) passes for the first time. Not pinned, looked at: the longest stand 563 s -> 166 s.
+- **The near crowd** (`test_near_tier.cpp near_tier_in_the_crowd_follows_the_player`), re-pinned: the most near 13 at minute 12 -> 11 at minute 8; in 83 -> 81; out 63 -> 71; hash 0x59168988decd4c99 -> 0xb182a398296f4017. **Still failing, not loosened:** one touch on a walker and one on another thing. Car 220 stands 1.47 m off its lane on s20, 9.63 m from the centre line: the car is off its carriageway when it meets the walker. The driving's to answer.
+- **trip-lab's walker step** (`test_city_parking.cpp kStepWithFile`): the most a walker moves in one step, 2.25 m (measured 2.14 m), was the street map's. A file eased in over 4 m adds up to 0.15 m a step at a corner.
+- Tests that read the old steps now read the route: test_tier_v (the road side and the steps), test_city_flow (the file measured against the walk's own line, sidewalk stretches only), test_city_goals (a walkway is told by `Walk::modelWalkway`), test_brain_crowd and test_river_town_crowd (`nextCrossing`).
+
+**river_town: PENDING the walks' fix.** Its crowd test fails. On the street map nobody was cut off, because every link of it could be walked. On the road model's walks, people whose place is in a part of the walks cut off from the rest stand there: no route leaves it. Measured with `RT_WALK_REFUSED=1`:
+- People stand on s10 (walk 15, from (-282.2, 489.4): 166 refusals), s172 (walk 297, near (143-146, 436): about 10 people), s143 (walk 240, from (107.7, 494.0)) and s174 (walk 300, from (129.3, 535.1)). Several points at (146.6-147.7, 435.8-436.0) join no walk: a stretch inside a junction.
+- With the brain's stated ends (taken back, above): s13 (walk 18, 167 refusals) and s169 (walk 290, 70), which have no corner walks.
+- The places most refused as goals: s52 (walk 78), s311 (walk 538), s314 (walk 545), s135 (walk 224).
+- Walks blocked: sidewalks that stop 25-36 m short of their junction, by j7 and j8.
+The fix is at the cause, in the roads (the coordinator's option (a)): not a re-pin of the worse numbers, and not a straight step to bridge the gap. W3 is committed once river_town recovers.
+
+river_town's crowd at W3, against its pins (not re-pinned): the most cars on the road 139 at minute 11 -> 113 at minute 10; trips 318 -> 342; parked 209 -> 263; walks blocked 0 -> 2; another place chosen 0 -> 192; plans with no way 0 -> 241; arrivals 730 -> 643; hash 0xa15a1ec8afaff85d -> 0x4fb696326045a7ef. Rings, errors, refused and touching spells still 0. 9 checks fail.
+
+**Suites, all with RT_TEST_FILTER:** full build; run_tests 1512/1512 (25 min 18 s, 3.8 GB at its peak); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; level_tests `level_every_lanes_level_hands_the_sim_its_road_model` 1/1; `level_brain_crowd` passes; `near_tier_in_the_crowd_follows_the_player` fails its one walker touch (above); `level_river_town_crowd` fails 9 checks (pending, above).
+
+### river_town slivers — two streets that ran alongside an arterial between the same two junctions are taken out: s8, s9, s10 (by j7-j8) and s169 (by j91-j75)
+
+What it does: river_town's and agent_lab's road files (the same roads) had two places where a second street ran beside an arterial, between the same pair of junctions, at a sliver of an angle. Those streets are taken out of both files (Glenn's decision, 2026-11-21). The arterials run through on their own. The four islands of sidewalk between the pairs are gone, and so are the long junction boxes the slivers made.
+
+Words:
+- **Sliver:** the thin wedge between two roads that leave a junction a few degrees apart. Their kerbs on the inside of it never clear each other, so the junction's box edge stands back (ADR-0471) until it nearly meets the next junction's.
+- **Carry-on:** where a street runs on as another with no junction (`carries_on`).
+- **Island:** a sidewalk that meets nothing at either end, so nobody standing on it can walk anywhere (a part on foot of its own).
+
+**What was wrong** (pictures `out/zz_rt_walks/j7_j8.png`, `j91_j75.png`):
+- **j7 to j8.**
+  - The arterial (s287, s12, s13, s50, Foundry Parkway) runs straight at 14 degrees.
+  - The collector s9, s10, s48 (Sherman Avenue) runs about due east. It forked off the arterial at j7's west point at 7 degrees, ran inside j7 3.5 m from it as s9, and then ran beside it as s10 to j8. The spines are 10.6 m apart at x = -330 and 30 m at j8.
+  - The two carriageways (22 m and 16 m wide) overlap for most of that length. j7 was spread over three points, with the 3.5 m link s8 between two of them.
+  - j8's two points were already joined by s47, square to both roads. So that is the T between the two streets.
+- **j91 to j75.**
+  - The collector s140, s169, s170 runs straight through j75 and on to j91's point A.
+  - The arterial s173, s172 runs straight at 19 degrees and ended on the collector at j75, at 29 degrees.
+  - j91's other point B lies square to the arterial from A, 27.2 m away. s168 joins them, and that is the T between the two.
+- **What it cost.** Each of s10, s13, s169 and s172 kept only about 12 m of sidewalk, in its middle. The inner one of each pair met nothing at either end. Those were walks 15, 18, 290 and 297, where W3's measure found 18 of river_town's 22 stranded people. The boxes stood back to within 8 m of each other, and the places along s10 and s13 were held 25-40 m past their sidewalk's end.
+- A branch at a T was looked at first. It cannot clear: the collector's line is too close to the arterial's everywhere west of j8. The T that would clear is s47 at j8 and s168 at j91, which already exist.
+
+**The change** (both files, by hand; no tool removes a road):
+- **Edges taken out:** s8, s9, s10, s169. The 370 left keep their ids and order.
+- **Streets taken out:** s10, s169.
+- **j7** is now one point, (-383.17, 479.24). Its arms are s13 (0), s11 (1) and s12 (2, new as an arm); through s13 with s12. Its point 1 (where s8, s9 and s10 met) and its west point are gone, and so are its stretches inside (s8, s9, s12).
+- **s12** (30.71 m) is a street from j7 that carries on as s287. s287's start carries on from s12 instead of being j7's arm.
+- **j8** loses its s10 arm, leaving 5 arms; through s50 with s13 and s49 with s44. s48 now starts at j8's point A, fed by s44 and s47.
+- **j91** is now one point, B (152.33, 448.29), with arms s173, s171, s172 and s168 (in, at 27.2); through s173 with s172 and s171 with s168.
+- **s168** (27.2 m, named Twentieth Road as the layout's run naming gives it) is a street from j146 to j91.
+- **j146**, new, at the end of the junction list, at j91's old point A (161.21, 422.58): two arms, s168 (0) and s170 (1); through; "unmarked". There, s170 (Sherman Avenue, 2+2 lanes) runs on as s168 (1+1) round a 63-degree bend. s170 now starts at j146.
+  - As a carry-on, the lanes would have been joined across the bend, up to 5.4 m apart. A junction joins them with connectors instead. One of those, s170.b1 into s168.f0, fits no vehicle (its tightest bend is 1.7 m): the outer lane, which has no lane of its own on s168.
+- **j75 is kept as a junction of two arms:** s172 runs on as s140, through, "unmarked". It is not taken out, for two reasons:
+  - a removed junction would leave the list without an id, and the split tool would then hand out an id that is already in use (below);
+  - a carry-on there, tried and taken back, joined the lanes 2.9-4.8 m apart across the 28-degree bend, with the 3 lanes of s172 into the 2 of s140. A junction joins them with connectors.
+- **agent_lab's controls:** j91 is now "stop" (the local streets s171 and s168 stop) where it was "signal" ("five or more roads meet"); j7 keeps "stop" with its stop sign on s11; j75 and j146 are "unmarked" ("one road running on as another"). These are the lab policy's own answers (`city_plan controls ... rules/lab.lua --layout`). Every other junction is unchanged.
+
+**A tool fault, for #313** (not fixed here): `lanes_tool layout --split-junction` (road_layout.cpp `insertSplitJunctionText`) names the junction it adds `j<count>`, the list's length. That is the next free id only while no junction has ever been taken out. Once one is, the new junction gets an id the list already holds. Until the tool takes the highest id plus one, a road file keeps its junction ids j0 to jN with none missing; that is why j75 stays.
+
+**Checked:**
+- `lanes_tool layout <file> --arm-order`: 0 of 147 junctions differ, in both files.
+- `lanes_tool layout <copy> --write`: "unchanged, byte for byte", in both files.
+- Field by field against HEAD:
+  - edges 374 to 370 (the four named), the rest unchanged and in the same order;
+  - junctions 146 to 147: only j7, j8, j75 and j91 changed, and j146 added at the end;
+  - streets 327: s10 and s169 out, s12 and s168 in, s170 and s287 changed;
+  - every other member unchanged.
+  agent_lab's junctions equal river_town's apart from their controls, why and stop signs.
+- `lanes_tool junctions`, the grouping's own view: j7 and j91 are one point each, as stated now.
+
+**Before and after** (`lanes_tool lanegraph`, the tool's two vehicles, river_town):
+
+| | before | after |
+|---|---|---|
+| Junctions | 146 | 147 |
+| Stated turns; fit no vehicle; with no lane path | 2,252; 165; 10 | 2,223; 145; 0 |
+| Car: largest part / with lane changes / without | 86.6% / 85.4% / 55.8% | 87.6% / 86.4% / 56.8% |
+| Problems in all | 510 | 482 |
+| Walks that meet nothing at either end | 8 | 4 (none on these streets) |
+| Arms too close for their angle (road_model_39) | 26 | 18 |
+| Stop lines with less than the storage between them | 2 | 4 |
+| Walk ends alone, kerb end out (road_model_33) | 22 | 16 |
+| Sidewalks outside the largest part on foot | 10 | 6, in 5 parts |
+
+- **Up, all reported as joined:**
+  - lanes joined across a gap, 51 -> 62, and kinks where paths join, 21 -> 29: from the new carry-on s12 into s287, and the lane counts it changes at s287's far end;
+  - the stop lines: both ends of s168, the 27.2 m street from j91 to j146;
+  - the kerb ends out: j146's inner corner, whose arm 0 kerb end lies 5.7 m from the nearest drawn sidewalk.
+- The 4 islands left (streets 48, 50, 82, 84 of the lane level) were there before and have another cause.
+
+**Bakes** (`rt_bake` under `ulimit -v 30000000`): river_town 2:50, 2.4 GB at its peak; agent_lab 2:48, 2.4 GB. 620 lots each (622 at ADR-0478).
+
+**Re-pinned, old -> new, why in each comment:**
+- `road_model_19`: streets carrying on 22 -> 23, their ends 32 -> 34, junctions listing their points 31 -> 29.
+- `road_model_33`: kerb end out 22 -> 16, sidewalks cut off 10 -> 6.
+- `road_model_39`: arms too close 26 -> 18; stop lines short of the storage + j146:0 and j91:3.
+- `road_model_46`: junctions 146 -> 147 (j146), still j0..jN in order.
+
+**The crowd: does not start.** `level_river_town_crowd_drives_on_the_new_driving` stops before minute 0: "household h433: a car near home_433: no such free kerb parking space within 400 m on foot of the marker".
+- The crowd's places are dealt along the streets (`makeCrowd`), so a change to the streets moves every marker.
+- A home is accepted where 24 drivable kerb spaces lie within reach. That count does not take away the spaces the households before it have taken, so where homes fall close together the last car finds none free.
+- That is the crowd generator's (city_crowd.cpp, city_render.cpp `onFoot`), not the roads'. Not fixed here; reported.
+- brain_crowd (`level_brain_crowd_the_residents_make_their_day`) passes.
+
+**For players:** by Foundry Parkway between j7 and j8, and by Tamarack Avenue between j91 and j75, there is one road where two overlapped. The junctions at their ends are ordinary ones, with sidewalks and crosswalks all round.
+
+**Revisit when** the planner stops laying a second street beside an arterial (#313); when `insertSplitJunctionText` takes the highest id plus one (#313); or when the crowd generator holds a home's spaces for its own households.
+
+### W3b — the crowd maker asks what the brain and the sim ask: a place only where the sim's walks reach it, a home only with its household's kerb spaces free, and held
+
+What it does: the crowd maker (`makeCrowd`, city_crowd.cpp, asked from city_render.cpp) now puts the crowd's places by the same answers the brain and the sim use later. So it never deals a household the brain must refuse, or a place whose people can walk nowhere. Every seed works: river_town's crowd starts again after the sliver streets went (above).
+
+Words:
+- **Kerb spaces offered:** the parking spaces at the kerb the brain offers a car for a place: of the 64 nearest on foot within 400 m of the place's frontage, nearest first, those a car can stand in and drive from (`kerbSpacesOffered`, city_brain.h; the reach and count are the brain's, unchanged).
+- **Held:** a space the crowd maker has kept for a household's cars while it makes the rest of the crowd.
+- **The largest part of the walks:** the walks a walker can get round all of, from any one to any other (`reachableWalks` over the walker's open walks).
+
+**What was wrong** (three counts that disagreed):
+- **Spaces not held.** A home was taken where at least 24 spaces lay within reach, but the spaces the households before it would take were not taken away. Where homes fell close together, a late household's car found none free, and the brain refused the crowd ("household h433: a car near home_433: no such free kerb parking space within 400 m on foot of the marker").
+- **Spaces from another frontage.** The crowd maker counted from where the home's stand fronts by position (`frontageAt`); the brain counts from the marker's stated street, station and kerb (`frontageOn`). By a junction those can be different streets, so the two lists differed.
+- **Walking asked of the street map.** Whether people could walk to a place was asked of the street map's walking network (`nearestWalkableLink`, `stronglyConnected` over its links). Since W3 nobody walks the street map, so places could be put on walks cut off from the rest.
+
+**The fix:**
+- **One list of spaces**, `kerbSpacesOffered(model, frontage, keep)`: the brain's `spacesFor` (keep: the car's class can drive from it) and the crowd maker (keep: every vehicle class can drive from it) both read it, from the marker's stated frontage. The crowd maker's spaces are among those the brain offers each car, in the same order.
+- **A home holds its household's spaces** (`CrowdSpaces`): a home is taken only where as many of its spaces are free (not held by an earlier home) as its household can have cars: the largest car count with a share, never more than its members. It then holds them; a home that cannot is drawn again. The brain puts the households' cars in the same order, each in the first free space of its list, so each finds one of its own household's held spaces or a nearer one. The 24-space floor stays, read from the same list.
+- **A place only where the sim's walks reach it:** its stand joins the walks by the sim's own join (`CitySim::walkJoin`, now handed the walker's parts, `cutOff` when asked) in the largest part.
+- `CityRenderSystem::nearestWalkableLink` is deleted: the crowd maker was its only reader (W3's report wrongly named it the player's boarding look-up).
+
+**Also, found on the way: walkers on a crossing are never held behind a queue past it** (`computeGaps`). On the new river_town a queue for one crosswalk filled the short corner walk before it. People crossing the crosswalk before that stood on it behind the queue, and car 228 gave way to them for 509 s ("give way to people crossing"; 20 people round (-167, 485)). A walker on a crossing now keeps no gap to whoever is beyond its end, so it steps onto the pavement beside them. A/B on river_town: the corner's pile and car 228's stand go (longest stand 509.5 s -> 453.4 s, car 292); arrivals 460 -> 464. brain_crowd and the near crowd give the same counts with or without it (hashes only).
+
+**Moved, with why (old -> new):**
+- **river_town's crowd** (not re-pinned, waiting for the coordinator). Against W3's run and the pins (W3 / pins -> now): arrivals 643 / 730 -> **464**; plans with no way 241 / 0 -> 29; another place chosen 192 / 0 -> 0; walks blocked 2 / 0 -> 0; the longest stand 496 s (car 223) -> 453.4 s (car 292); the most on the road 113 at minute 10 / 139 at minute 11 -> 93 at minute 11; trips 342 / 318 -> 280; parked 263 / 209 -> 229; cars 383 -> 391 (in a household with one 407 -> 413); hash 0x4fb696326045a7ef / 0xa15a1ec8afaff85d -> 0xb15c3ceac0e4a34d. With `RT_WALK_REFUSED=1`: no walk refused. Rings, errors, refused, touching spells 0. **Open:** arrivals are the lowest yet, and about 410 of the 630 are walking at any minute from minute 8 (W3's run: about 360). Why the walks take longer was not dug into.
+- **brain_crowd**, re-pinned (comment in the test): cars 229 -> 209 (in a household with one 246 -> 222: places drawn again draw the seeded stream on, so the households' car counts moved); the most on the road 80 -> 57; busy minutes 8 -> 3; trips 263 -> 201; parked 217 -> 164; arrivals 455 -> 487; hash 0xcb6bf4524e6ee584 -> 0xbacfb8b215f04aa1. Away from a kerb end 4.38% -> 3.24%.
+- **The near crowd**, re-pinned: 11 at minute 8 -> 11 at minute 6; in 81 -> 52; out 71 -> 48; hash 0xb182a398296f4017 -> 0x0fb18ec83c665a00. Its touches on walkers 1 -> 0 and on other things 1 -> 0, so it passes: car 220's day is not in this crowd. Whether a car can still stand off its carriageway as car 220 did is not known.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1512/1512; brain_tests 23/23; `level_brain_crowd` 1/1; `near_tier_in_the_crowd_follows_the_player` 1/1; `level_river_town_crowd` runs to the end and fails 8 pinned counts (above, not re-pinned).
+
+### The sweep, midpoint 1 — the city sim stands on the road model alone: its people rest at walk points, its trips are priced over the walks
+
+What it does: Glenn's call (2026-11-21): "eliminate the old code and replace it with the new system and we can iron out bugs afterwards". The street map (the NavGraph the loader made from the road model, ADR-0425) is deleted in one sweep, in two halves. This half takes the city sim and everything it holds off it: no file under `src/apps/citysim` reads the street map. The loader still makes it for the street furniture, the probes, the map tool and the planner's tools; the second half moves those and deletes it.
+
+Words:
+- **Walk point:** a place on one of the road model's walks where the sim's people rest, set out from and go to (`city_walk_points.h`, `WalkPointMap`). A **street point** is set out every 30 m along each sidewalk, footway and walkway walk; a **place point** is each place's door joined to the walks. The sim numbers them, and an agent's home, work, rest and trip goal are walk-point numbers: the street map's nodes were those numbers before.
+- **Part:** a set of walks a walker can get round (`reachableWalks`). Two walk points in one part reach each other on foot; another part is another town, reached by train.
+
+**What changed:**
+- **The sim** (`city_sim.h/.cpp`): `build(pedCount, seed)` sets the walk points out on the road model handed in by `setRoads` (which must come first), on every part with at least 60 m of street and walkway walks. Homes and jobs are drawn among the street points; "there and back" is "the same part". A commute's time, the brain's commute measure and the students' walk are the one router's walk between two points (`pointRoute`, `findWalkRoute`). `assignPlaces(places)` gives each place's door its own point, by its stated frontage (`walkJoinOn`) or by position (`walkJoinNear`). Deleted: the street map pointer, the junction boxes (`junctionRadius`, `nearJunction`, nothing asked them since the old driving), `laneSpacingFor`. `idlePose` stands a person a step along its point's walk; `pushPoseClearOfLanes` asks the road it fronts (`frontageAt`, the carriageway's half-width). `clearOfWalks` reads the walkway walks' lines. The population cache's format is 14 (its key reads the walk points).
+- **The trains' riders** (`city_rail_riders`): a station's way in is pinned to the nearest street point, its network is the point's part.
+- **The places** (`places.h/.cpp`): `PlaceMap::add` takes the road model; a door's entrance is where it joins the walks (`walkJoinNear`). `entranceLink`/`entranceT` and `snapToWalks` are deleted: a walkway door states its frontage.
+- **The trip planner** (`trip_plan.h/.cpp`; the brain's `TripPlanner`): a leg is routed over the walks from where each end joins them. A leg on foot is timed at the way's speed; a leg on the roads at each walk's street's class speed (`classSpeed`, moved to `road_network.h`). The simplest port: a drive is priced along the sidewalks of the streets it would drive, so no freeway (known bug, below).
+- **The brain**: its "steps off the paths" go to the sidewalk on the person's side of the road it fronts (`frontageAt`, `sidewalkBeside`).
+- **The city host** (`city_render`): hands the sim the road model before anything else, and has no city sim on a level without a built lane city with walks. The density count reads the model's streets (lane-km) and walks (walk-km). The signal poles are adopted in the loader's order (no longer keyed by street-map link). The street-map census, its height fixing, the footpath joining and the `ground?` link dump are deleted. The "nav" debug layer draws the walk points.
+
+**Tests, old -> new:**
+- `test_trip_plan` rewritten on the straight scene: numbers read off the walks, not worked out from a hand-made map. Deleted: `trip_plan_drive_minutes_are_the_router_s_road_class_times` (a freeway priced over the street map's links).
+- Deleted: `near_junction_covers_the_box_and_only_the_box` (the junction boxes), `freeway_census_links_and_routes` (the street map's links and router), `place_entrance_empty_graph_falls_back` (replaced by `place_entrance_with_no_road_model_falls_back`).
+- Rewritten: `place_entrance_lands_on_sidewalk` (the entrance is the walk join's point, off the carriageway), the city-render census (every walk point in one part; sampled pairs route), the "nav" view test (one strip and one ring per walk point), the perception tests' poles (along the walks), the rail riders' (walk points), the footpath crowd (block corners from the model's junctions), the traffic lab's stops (a junction's mouth: 12 m round the model's junction).
+- The brain lab's street is laid so its north sidewalk runs along y = 0 (places stand on the walk): every hand-worked time is the same. One re-pin: `brain_trip_a_new_intent_at_the_wheel_redirects_the_drive`, "car 6.3 min (5.1 car + 1.2 walk)" -> "car 6.1 min (4.9 car + 1.2 walk)": priced from where the car is, not the street map's node 44 m behind it.
+- **brain_crowd:** the most on the road 57 at minute 10 -> 87 at minute 9; busy minutes 3 -> 16; trips 201 -> 313; parked 164 -> 238; arrivals 487 -> 470; hash 0xbacfb8b215f04aa1 -> 0xf0e62a8d7fffa45b. **Still failing:** one ring of waits (a deadlock).
+- **The near crowd:** 11 at minute 6 -> 20 at minute 12; in 52 -> 120; out 48 -> 90; hash 0x0fb18ec83c665a00 -> 0xed4281eb889d8e9b. **Still failing:** car 10 off its lane 14.8 s (0.56 m).
+- **river_town's crowd** (pinned now): cars 383 -> 391 (with one 407 -> 413); the most on the road 139 at 11 -> 98 at 10; trips 318 -> 292; parked 209 -> 240; arrivals 730 -> 472; no way 0; hash 0xa15a1ec8afaff85d -> 0x9362ecbc934c82cf. The sim's own walkers there: 6,730 -> 5,149 (the density count now reads the model's walks).
+
+**Known bugs after this half:**
+- brain_crowd: one ring of waits from about minute 30; the longest stand 193 s -> 1,247.6 s (car 109).
+- The near crowd: car 10 stands 0.56 m off its lane for 14.8 s.
+- river_town: arrivals 472 of the old 730; about 410 of the 630 walking at any minute.
+- A drive is priced over the sidewalks: no freeway in a plan's price (the driving itself still drives freeways).
+- A place whose door joins no walk takes the walk point nearest its entrance.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1510/1510; lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23.
+
+### The sweep, midpoint 2 — the street map is deleted: the furniture, the signs, the probes, the map and the tools read the road model
+
+What it does: the second half of the street map's deletion. Everything that still read the street map now reads the road model, and the street map, its router and the bus network builder that planned over it are deleted. `grep -r "NavGraph\|street_map\|StreetMap" src tools tests` finds nothing.
+
+Words:
+- **Street piece:** two neighbouring points of a street's centre line (`RoadModel::linePoints`), with the street's carriageway half-width and class. What the furniture, the signs' carriageways, the probes and the map walk along.
+- **Mouth:** where a junction's area begins along an arm's street (`ModelArm::boxEdge`; not stated: 10 m back from the arm's end).
+
+**What changed:**
+- **The street furniture** (`street_furniture.h/.cpp`, `planStreetFurniture(cities, ground, params)`), rewritten over the model:
+  - one signal pole per arriving arm of a lit junction (`junctionLit`; a road file that states no control: a junction of four arms or more), on the arm's kerb corner a sidewalk's width back from its mouth, pushed out of every other street's carriageway and off the drawn asphalt; else the other kerb, else across the junction. A pole carries its city, junction and arm (`SignalSpot`; `packFurnitureArm`), not a link.
+  - lamps, street trees, bins, bike racks, news boxes and the data kinds (street_props.lua) along each kerb of each street piece that has a sidewalk there (`ModelSection::sidewalkOnKerb`), with the rules they had (spacing, junction clearance, off every carriageway and the drawn asphalt). A lamp carries its street (`LampStreet`), which `attachFurniture` attaches it to.
+  - `StreetFurnitureParams`: `approachArm` and `junctionPoints` are gone (the planner asks the model); `streetRun(city, street)`; `controlsStated`.
+- **Components:** `LevelRoadModel::streetMap` and `stateSignals` are deleted; `StreetFurniture::Signal::link` and `navLinkCount` are deleted.
+- **The loader:** no street map is made; the furniture is planned on every city's model; the city map's lit junctions are each junction's stated control; the furniture dump lists the lit junctions and each pole's arm; `RT_SIGNAL_NEAR` prints a pole's city, junction and arm.
+- **The street signs:** `carriagewaysOf(const RoadModel&)`: each car street's pieces at its travel width.
+- **The probes** (`placeProbeSites(const RoadModel&, ...)`) and **the day/night footprint** read the streets' centre lines.
+- **The city map (SVG)**: the sidewalk census labels a hit with the nearest street piece (`CityMapData::streets`); the "nav" layer draws the streets' centre lines. `CityMapData::nav` is deleted. The `lot?` command measures against the streets' pieces.
+- **The planner's scoring (D1):** its commute sample takes the quickest way over the plan's own road graph (a plain Dijkstra, each edge at its class speed, a street edge into a street junction 6 s more, as the old router charged).
+- **The island's bus lines (D3):** the local loops are not planned (`BusNetwork`, `city_bus.h/.cpp`, is deleted: it planned over a street map of each place's plan); an intercity line runs straight from its stop to the place's edge.
+- **The tools:** `lanes_tool streetmap` is deleted; `city_plan`'s place centre is its plan's street node nearest the core.
+- **`rightOf`** lives in `polygon.h`, **`classSpeed`** in `road_network.h`.
+
+**Deleted** (lines): `nav_graph.h/.cpp` (243 + 366), `pathfind.h/.cpp` (102 + 373), `roads/street_map.h/.cpp` (80 + 556), `citysim/city_bus.h/.cpp` (127 + 586); tests `test_nav_graph.cpp` (218), `test_pathfind.cpp` (252). `tests/street_map_test_util.h` is now `tests/test_world_roads.h` (`publishRoads`).
+
+**Tests, old -> new:**
+- `test_street_furniture.cpp` rewritten on model scenes: one pole per arriving arm of a lit cross, clear of every carriageway; none at an unlit T; no lamp in any carriageway on the grid town; kerb life on both kerbs and off the road; planting by character. Deleted with the street map's links: `signal_poles_clear_every_arm_at_an_acute_corner`, `signal_poles_dedupe_collinear_approaches`, `signal_poles_stand_clear_of_the_junction_pad` (their acute and collinear-stub street maps).
+- `probe_sites_line_the_streets` on a model cross (at the ground's height; the ramp-to-a-deck case went with the links' heights).
+- `semantics_nav_carries_kind_through_knot_merge` deleted (the street map's knot merge).
+- `road_model_21` asks `armReachedAt` directly (renamed `road_model_21_the_arm_a_street_arrives_by_is_the_models`); road_model_10's street-map routing and width checks removed (the section says them).
+- test_levels_playable: `modelStreetGraph` (the model's street pieces) in place of the street map's links; the street signs' carriageways from the model.
+- The city map SVG test's furniture is planned on its loop built as a road file (a stub off one corner gives it a lane level).
+- **river_town's crowd:** the most on the road 98 at minute 10 -> 99 at minute 11; trips 292 -> 290; parked 240 -> 237; arrivals 472 -> 475; hash 0x9362ecbc934c82cf -> 0xf9c704ff73207220 (the poles and furniture the walkers keep clear of stand elsewhere). No walk refused.
+- **brain_crowd:** the most on the road 87 at minute 9 -> 89 at minute 10; parked 238 -> 234; arrivals 470 -> 472; hash 0xf0e62a8d7fffa45b -> 0xec0a6a6e55e90ddc.
+- **The near crowd:** in 120 -> 113, out 90 -> 77, hash 0xed4281eb889d8e9b -> 0x3c4be4561e729e50.
+
+**Known bugs after the sweep** (both halves):
+- **Local buses gone; intercity buses run in a straight line from stop to town edge — rework both on the road model.**
+- **The near crowd:** contacts 0 -> 7, hits on parked cars 0 -> 1, on walkers 0 -> 5, on other things 0 -> 14, the longest off its lane 18.7 s (car 1, 1.95 m). (With the poles only a kerb gap back from the mouth: other things 46, walkers 3, contacts 0.)
+- **brain_crowd:** one ring of waits (a deadlock) from about minute 30; the longest stand 1,247.6 s (car 109).
+- **river_town:** arrivals 475 of the old 730; about 410 of the 630 walking at any minute.
+- A drive is priced over the sidewalks: no freeway in a plan's price.
+- Probes and furniture on a deck stand at the height `ground` gives (the loader's drawn-road sampler); the probe test's deck case went.
+- A place whose door joins no walk takes the walk point nearest its entrance.
+- Island_8 is out of scope and was not run.
+
+**Suites, all with RT_TEST_FILTER:** the whole tree builds; run_tests 1483/1483 (1510 less the street map's and the router's own tests, the furniture's link tests, the knot-merge test, plus the furniture's new ones); lanes_tests 156/156; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` runs to the end and passes, re-pinned; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, failing only their known bugs (above).
+
+**Try it:** in the worktree, `cmake --build build-viewer --target viewer`, then `./build-viewer/viewer assets/levels/river_town.json --play`; the city debug panel's "Nav graph" box draws the walk points.
+
+### The sweep's bugs, 1 — every crosswalk's walk signal walks in some phase (river_town's missing arrivals)
+
+What it does: at a junction with traffic lights, each crosswalk now shows WALK in at least one phase. Before, 14 of river_town's 432 lit crosswalks showed DON'T WALK all the time. Only the few jaywalkers crossed them, and the people whose routes crossed there queued behind the kerb for the whole run. That was why river_town's arrivals fell after the sweep (known bug 1).
+
+Words:
+- **Phase:** one step of a junction's signal cycle: which movements have green (`buildPhases`, right_of_way.cpp).
+- **Single-turn fill:** the step in `buildPhases` that, after whole approaches are given phases, adds every remaining turn to each phase where it meets no car that has green.
+- **Near turn:** the turn to the kerb side (to the left here, where cars drive on the left). It crosses no other traffic.
+- **Walk-only phase:** a phase in which every movement is red and every crosswalk walks (a pedestrian phase).
+
+**How it was found:** a temporary measure in the crowd test timed each resident's walk. Walks still under way at minute 30 were 862 s old on average, and they had stood still for 551 s of it, half at lit kerbs and half queued behind them. The waits sat on a few crosswalks; crosswalk 36 at junction 8 held about 15 people all run. Sampling each lit crosswalk's walk signal over 600 s found 14 that never showed WALK. The phase builder's dump for them showed the same thing every time: a turn that leaves across the crosswalk's own arm was green in every phase. Usually it was the near turn. It meets no car, so the single-turn fill had added it to every phase.
+
+**What changed** (`right_of_way.cpp`, `signal_programme.cpp`):
+- The crosswalks people reach at a lit junction, and the connectors that cross each one, are worked out once, before the phases are built (`JunctionWork::walkIds`, `walkCrosses`, `walkYields`; the model's `crossersOf`, as before). The walk signals are read from that same table. A connector **yields** to a crosswalk when it turns into the crosswalk's arm from another arm, is not straight on, and is not a protected turn: the rule as it was.
+- The single-turn fill does not add a turn to a phase when that would take away the last phase its crosswalk walks in.
+- Where a crosswalk still walks in no phase, arrow phases included, a walk-only phase is added. The case is a lit two-arm bend, whose one phase is all green: the four corners of the driving tests' 3 by 3 grid (`walks_1_...`, which now fails without it). river_town and brain_lab have none, so no walk-only phase is added there.
+- `checkSignalProgrammes` also reports a walk signal that shows WALK in none of its phases. Before, it checked only that walking was safe. `RightOfWayCounts::walksNever` counts such signals.
+
+**Tried and corrected:** at first the walk-only phase was decided before the arrow phases were built. On brain_lab, every crosswalk that walked in no main phase did walk during an arrow phase whose arrows do not cross it, so the extra phase was not needed there. It changed the timings and set off a pile-up in the near crowd: a ring of waits, 4 contacts and 11 hits on walkers. Deciding it after the arrows leaves brain_lab without one.
+
+**Numbers, old -> new:**
+- **river_town's crowd** (re-pinned): arrivals 475 -> **675** (730 before the sweep); trips 290 -> 316; parked 237 -> 245; the most on the road 99 -> 102 (still minute 11); walking at minute 30 416 -> 369; hash 0xf9c704ff73207220 -> 0x12277ea4937a87e4. Walkers standing still fell from about 190 at any moment to about 95. Those queued behind someone at a kerb fell from 162,786 to 24,245 person-seconds. Most of those still walking at minute 30 are on the crowd's 900 m-plus walks to work. No plan, blocked, another place, rings, touching spells: still 0. The longest stand is the same, 450.2 s (car 20). New checks: no walk signal that never walks, no signal problems.
+- **brain_crowd** (re-pinned): trips 313 -> 315; parked 234 -> 237; arrivals 472 -> 476; away from a kerb end 1.95% -> 2.06%; hash 0xec0a6a6e55e90ddc -> 0xd88b08b351744711. The ring of waits and the longest stand (1,247.6 s, car 109) are the same (known bug 3).
+- **The near crowd** (re-pinned): out 77 -> 82; hash 0x3c4be4561e729e50 -> 0x73ed4bc5b6d8b7fd. Contacts 7 -> 0, hits on parked cars 1 -> 0, on walkers 5 -> 0, on other things 14 -> 0. Still failing, not loosened: the longest a car stood off its lane is 18.7 s -> 5.6 s (car 191, 0.94 m off), against the 5 s allowed. Known bug 2 is now only that.
+
+**Found red, and red at HEAD too (checked by building HEAD's two driving files):** `level_brain_lab_six_residents_in_three_households` (1 check: Fay's walk 4.6 min is now 4.8) and `level_brain_lab_whoever_reaches_the_household_car_first_takes_it` (13 checks); `level_river_town_streets_are_drivable_grades` (the steepest grade is over the 0.70 ratchet). None of these reads the signals. Not fixed here.
+
+**Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` and `near_tier_in_the_crowd_follows_the_player` re-pinned, each failing only its known bug (above); run_tests 1483/1483.
+
+### The sweep's bugs, 3 — a car following another along a split's stretch is never put before it (brain_crowd's ring)
+
+What it does: two connectors that leave one lane share a stretch before they part (a **split**; ADR-0400). On that stretch the car behind follows the car ahead, whichever connector each takes (`carAhead`, traffic_state.h, issue #283). The resolver that settles who goes first at each crossing point now knows that too. A car queued behind another on a split's stretch can never be put before it further on.
+
+Words:
+- **Resolver:** `ConflictResolver` (conflict.h). Once a tick it settles who goes first wherever two announced cars meet. A loop in its answers is a **ring**, and it breaks a ring at one of its answers.
+- **Behind arrow:** a pair (the car ahead, the car behind it) handed to the resolver. No answer may turn it round, so a ring through it is broken at an answer, never through the queue.
+
+**The ring:** brain_crowd's one ring, from minute 11 to the end, was two cars at junction 7. Car 102 (far turn from the south, connector 1753) and car 136 (straight on from the south, connector 1752) left the same lane; the two connectors share their first 50 m and cross 60 m further on. Car 102 was ahead and waited inside the junction to give way at that crossing to car 136, which stood behind it on the shared stretch. The behind arrows came only from each path's own list of cars, and the two cars were on different paths, so the resolver never saw that 136 could not get there first. Car 109, the longest stand (1,247.6 s), was waiting for car 102.
+
+**What changed** (`Driving`'s plan step, driving.cpp): after the arrows from each path's list, each driven car's `carAhead` along its own path and that path's split stretches gives one more arrow (that car ahead, this car), unless it is already listed. The car-following code and the resolver now read "the car ahead" from one definition.
+
+**Numbers, old -> new:**
+- **brain_crowd** (re-pinned): rings 1 -> **0**; the longest stand 1,247.6 s (car 109) -> 685.6 s (car 68); trips 315 -> 321; parked 237 -> 257; arrivals 476 -> 490; minutes with 50 or more on the road 16 -> 14 (the most the same, 89 at minute 10); away from a kerb end 2.06% -> 2.31%; hash 0xd88b08b351744711 -> 0x108c0a6b2babd46b. Its ring check passes for the first time since the sweep.
+- **Car 68's 685.6 s is not a ring.** It stands on junction 7's north arm, and each green it loses to something else: a give-way to car 169, a walker on the crosswalk ahead, no room beyond behind car 169. Then the light goes red. A busy junction's throughput; not chased here.
+- **The near crowd** (re-pinned): the most near 20 -> 18 (still minute 12); in 113 -> 115; out 82 -> 85; hash 0x73ed4bc5b6d8b7fd -> 0x53bbbe48fe67229c. Contacts and every kind of hit still 0. The off-lane check still fails the same way (car 191, 5.6 s; bug 2, left by Glenn's call: the pursuit's 4 m look-ahead cuts a 7 m turn).
+- **river_town's crowd:** unchanged, hash 0x12277ea4937a87e4.
+
+**Not added:** a driving unit test on a lab scene with a split; brain_crowd's ring check is what covers it.
+
+**Suites, all with RT_TEST_FILTER:** driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (passes in full for the first time since the sweep); `near_tier_in_the_crowd_follows_the_player` fails only its off-lane check (bug 2, left); run_tests 1483/1483.
+
+### The sweep's bugs, 4 — a drive is priced by the driving's router, kerb lane to kerb lane, at the limit each road is driven at
+
+What it does: when the brain chooses between walking and driving, a car leg is now priced by the route the car will drive. That route runs from the kerb lane beside the car to the kerb lane beside where it will be left. It is found by the driving's own router (`Driving::routeBetween`, the router its cars drive by) and timed at the limit each road is driven at. Before, a drive was priced along the sidewalks of the streets it would drive (midpoint 1's simplest port), and no walk runs along a freeway. So no price ever counted a freeway, even though the cars themselves did drive freeways.
+
+Words:
+- **Kerb lane:** the lane nearest the kerb, the one a car pulls out into from a space and parks from (`RoadModel::kerbLaneBeside`).
+- **Free-flow time:** a route's seconds with nothing in the way, each path at the speed the car would drive it.
+
+**What changed:**
+- **The planner** (`trip_plan.h/.cpp`): `TripNetwork` holds the driving. `planLeg` for a way on the roads goes from the kerb lane beside each end (`frontageAt`, `kerbLaneBeside`) and routes between them for the car's own vehicle class (`OwnedVehicle::vehicleClass`, from `World::carClass`). Its metres and minutes are the route's, and its road kinds are read off the route's lanes and turns. A car already on the road is priced from where it is on its lane (`OwnedVehicle::onLane`, from the new `World::carOnLane`), as the driving's `routeFor` routes it. Getting from a space into its kerb lane, and from the kerb lane into a space at the end, is already in the way's start and end minutes (pulling out, parking), so it is not added again. Legs on foot are as they were.
+- **The router times a path at the limit it is driven at** (`RouteClass::limits`; the driving points it at its rules' `RoadRules::limitOfPath`, which is the posted limit, else the rule set's default for the road's class). Before, an unposted path was timed at the car class's top speed (50 m/s). That is every path on brain_crowd's and brain_lab's road file. Both the planner's prices and the cars' own choice of route were timed against speeds no car drove.
+- **Counts:** `brain::TripPlanner::roadCounts()` (`CityBrain::planRoadCounts`) counts the car legs priced and chosen, and those with metres on the freeway. Both crowd tests print it.
+
+**The freeway, measured:** brain_crowd prices 463 car legs (365 chosen) and river_town 566 (350 chosen); none of them is on the freeway, and the planner was not at fault. The lab's two diamonds have ramps 413–444 m long, so getting on and off costs about 850 m at 15.6 m/s, in a town about 1.1 km across. The day's trips never pay for that. Probed by hand: from the street by one diamond to the street by the other, the router takes the freeway every time it is quicker (1,131 m apart: 1,616 m in 82 s, 721 m on the freeway). brain_crowd now checks exactly that through the planner: its farthest on-ramp feeder to off-ramp outlet (1,136 m apart) is a drive of 1,694 m in 1.41 min, 813 m of it on the freeway. By construction this was 0 before.
+
+**The tests' scenes:** a car can drive only the way its kerb lane runs, and nowhere in the road model can a car turn round (there are no U-turn connectors at a dead end). The test streets are dead ends, and their cars stood on the kerb whose lane runs away from their trips. The old pricing over sidewalks never saw that. The trip-plan tests and the brain fakes' street are now mirrored so their places stand on the kerb whose lane runs toward the trips; every walk is the same length, and every hand-worked time is the same. The scale test's crowd now goes east of home, and its lone drivers go 1,100 m (far enough to drive). The test car (`tests/trip_driving.h`) drives at a local street's 8 m/s, since the scenes post no limit and have no rules.
+
+**Numbers, old -> new:**
+- **river_town** (re-pinned): the most on the road 102 -> 111 (still minute 11); parked 245 -> 229; arrivals 675 -> 663; trips the same, 316; hash 0x12277ea4937a87e4 -> 0x331264b35e85398b.
+- **brain_crowd** (re-pinned): the most on the road 89 -> 90 (still minute 10); trips 321 -> 322; parked 257 -> 261; arrivals the same, 490; away from a kerb end 2.31% -> 2.16%; hash 0x108c0a6b2babd46b -> 0xa7a50cd8f2bb2c29. Rings still 0.
+- **The near crowd** (re-pinned): in 115 -> 117, out 85 -> 80, hash 0x53bbbe48fe67229c -> 0x2bad62395eeaee44. **The collisions are back:** contacts 0 -> 3, hits on walkers 0 -> 14, on other things 0 -> 14, the longest off its lane 5.6 s -> 38.0 s (car 10, 0.53 m). Nothing in how the near cars drive changed. The clean runs after bugs 1 and 3 were trajectories that happened to miss, not a fix, and the "Contacts 7 -> 0" claimed there does not stand. Bug 2 is open.
+- **brain_lab:** the same 14 checks as at HEAD fail, and nothing new.
+
+**Owed, found here:** a car cannot turn round anywhere: a dead end has turn-rounds for people only, so a car whose kerb lane runs into one can leave only by the way it runs. In the 1-minute probe, 16 of 28 pairs of far-apart kerb lanes on brain_crowd had no route at all; not traced.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; driving_tests 200/200; brain_tests 23/23; `level_river_town_crowd` 1/1; `level_brain_crowd` 1/1 (its freeway check new); `near_tier_in_the_crowd_follows_the_player` fails its collision and off-lane checks (bug 2, open, above); `level_brain_lab` the same 14 checks as at HEAD.
+
+### The sweep's bugs, 5 — light probes stand over the road as the road model draws it, decks included; street furniture already did
+
+What it does: each light probe site along a street now takes its height from the road model: the mean of its two kerb lanes' drawn heights level with the site (`RoadModel::streetHeightAt`). Over a bridge or a viaduct that is the deck. Before, the probe system handed the sites the bare terrain's height, so every probe on a deck stood on the ground or water under it.
+
+Words:
+- **Light probe:** a point the renderer captures the surrounding light at, for lighting what is near it (`engine/lights/probe_sites.h`). Sites line every street, a rule height over the road.
+- **Drawn road:** the road surface as the mesher built it (`DrawnRoad`, the road's collider triangles), a producer separate from the road model.
+
+**What changed:**
+- `RoadModel::frontageOnStreet(street, p)`: where a point fronts a street already known, found on that street's own centre line, so a deck over or under it is never answered instead. `RoadModel::streetHeightAt(street, p)`: the mean of the street's kerb lanes' heights (`kerbLaneAt`, `LaneGraph::heightAt`) level with the point.
+- `placeProbeSites` asks it for each site; the `ground` it is given is used only where the model has no lane.
+
+**Street furniture: not changed, and why.** The known-bugs list said furniture on a deck stands at the height `ground` gives. Measured first, against the road as drawn, it does not: the loader's furniture sampler already reads the drawn decks (`RoadDeckField`, plus the kerb). On river_town all 7 signal poles and all 65 street trees on decks stand on them. I tried moving furniture onto the walks' own heights (the same model reading) and measured it worse: 4 poles sunk, 22 trees floating, 1 deck tree 3.3 m off. The walks are laid at the deck's own height, with no kerb. So that change was taken back. **Found:** a walk's height and the drawn sidewalk differ by up to 0.36 m in places, and by 3.3 m at (440.0, 286.5). People on foot stand on the walks' heights. Not traced.
+
+**The gate** (`level_river_town_street_furniture_and_probes_stand_on_the_drawn_road`, level_tests, new): every signal pole foot, street-tree foot and probe site (less its rule height), measured against the highest drawn road surface at or below a metre over it (`DrawnRoad::topAt`), with those standing on a deck (over 2 m above the terrain) counted on their own. It holds that none on a deck is off it, and that some probes stand on a deck.
+
+**Numbers, old -> new** (river_town, the gate):
+- **Light probes:** on the drawn road 728 of 1,182 -> **1,197 of 1,212**. Sunk 56 -> 6 (worst -0.97 m, none on a deck). Floating 46 -> 0 (the worst was +3.63 m). Over no drawn road (under a deck) 352 -> 9. On a deck 0 -> 421, all on it. The old code fails the gate.
+- **Signal poles:** 424 of 432 on the drawn road, 7 on decks, 0 off; the same before and after.
+- **Street trees:** 2,238 of 2,248 on the drawn road, 65 on decks, 0 off; the same before and after.
+
+**Tests:** `probe_sites_line_the_streets` (run_tests) now holds each site at the model's drawn road height plus its rule height, with the caller's ground put 2 m off it, so the test tells the two apart (it held them at the ground's).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1483/1483; lanes_tests 156/156; `level_river_town_street_furniture_and_probes_stand_on_the_drawn_road` 1/1 (new).
+
+## ADR-0481 — Buses come back on the road model: a bus line is stated in the road file, its stops by street, station and kerb, and the road model holds it (buses plan, step 1)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: the first step of putting buses back (the plan: `~/.claude/plans/buses-on-road-model.md`; Glenn's answers 2026-11-21). No bus has run since ADR-0460 deleted the old driving's buses. A road file can now state bus lines, and the road model holds them. It answers where each stop's bus pulls in and where its people wait. The driving checks that every line can be driven. Nothing drives a line yet (step 3), and no level states one yet (step 2's planner writes them).
+
+Words:
+- **Bus line:** one bus route: its stops in the order a bus calls at them, round and round. From the last stop it drives on to the first.
+- **Bus stop:** a place on a street's kerb where a bus pulls in and people get on and off. It is stated as a street (by its id), a **station** (metres along the street's centre line) and a **kerb** (+1: the kerb of the traffic running along the centre line, so a bus running that way serves it; -1: the other). That is how a door's frontage is stated (ADR-0474), so a stop is never worked out from a position.
+- **Leg:** the drive from one stop to the next.
+- **Kerb lane:** the lane nearest the kerb, where a bus pulls in (`RoadModel::kerbLaneAt`).
+
+**Decided, with Glenn (2026-11-21):** lines are road-file data that the planner writes and anyone can edit, never made at load; river_town is the first test bed; everyone rides from step 4; the island's intercity lines are re-routed now, for the map only.
+
+**What changed:**
+- **The road file** may state `"bus_lines": [{"id", "name", "stops": [{"id", "name", "street", "station", "kerb"}]}]` (`road_graph_spec.cpp`, read as written into `RoadLabGraph::busLines`).
+- **The road model** (`ModelBusLine`, `ModelBusStop` in `road_model_parts.h`; `RoadModel::busLines`) holds each line, with each stop's street resolved by its id (`plannedRoadModel`). A line is not held, and a problem names it, when a stop names no street, lies off its street, states a kerb that is not ±1, or has an id another stop has; or when the line has fewer than two stops or an id another line has. It answers `busStopLane(stop)`, the kerb lane beside the stop for its kerb's traffic, and `busStopWalk(stop)`, where the stop joins the walks on its own kerb.
+- **Every line is a loop.** A line that goes there and back calls at stops on the other kerb on its way back: a stop serves only the traffic on its own kerb. An out-and-back flag was tried and dropped, since its way back would have served no stop.
+- **The driving checks the lines** (`Driving::busLineProblems(class)`): each stop has a kerb lane and a walk, and every leg (each stop to the next, the last round to the first) routes for the class. Since no car turns round anywhere (ADR-0480, the sweep's bugs, 4), a leg back along a dead-end street has no route and is named. The city host checks the level's lines for the fleet's `bus` class at load and logs each fault.
+- **The keys:** the city's bake key leaves `bus_lines` out (`keyedRoadFileText`), so editing a line never re-bakes the meshes or the lots. The saved road model holds the lines, so its key mixes them in (`busLinesKey`), and its format is 19 (every saved model is made again once).
+
+**Tests** (`tests/test_bus_lines.cpp`, run_tests, new):
+- `bus_line_stated_in_the_road_file_is_held_with_its_stops_on_the_roads`: a two-stop line on a 3 by 3 grid is held. Each stop's bus pulls in on the street's kerb lane level with the stop, and its people wait on the stop's own kerb, 6.8 m across from where the bus stands.
+- `bus_line_with_a_stop_that_cannot_stand_is_not_held_and_is_named`: a stop on a street that does not exist, and one 50 m past its street's end, each keep their line out, named ("no street no_such_street"; "station 250.00 lies off street r0 (0.00 to 200.00)"). A good line beside them is held.
+- `bus_line_legs_are_checked_by_the_driving_round_a_block_and_not_past_a_dead_end`: on the grid the line can be driven (back round a block); the same line on a street that ends at a T one end and nowhere the other is refused at its leg back ("no route for its buses from stop D1-2 to stop D1-1").
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1486/1486 (1483 and the three new); lanes_tests 156/156; `level_river_town_crowd` 1/1, its hash the same (0x331264b35e85398b): no level states a line yet.
+
+**Next** (step 2): a planner step that lays each town's loops over the road model and writes them into the road file, river_town first; and the island's intercity lines routed over the island's roads, for the map.
+
+## ADR-0482 — A town's bus lines are laid by a tool over the level's own road model and written into its road file; the island's intercity lines run along each town's streets (buses plan, step 2)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: `lanes_tool buslines <level.json> --write` lays a town's bus lines and writes them into the level's road file as the stated `bus_lines` of ADR-0481. river_town now has three. The island planner's intercity lines no longer cut straight across each town from the stop to its edge: they follow the town's own streets. No bus drives a line yet (step 3).
+
+Words:
+- **Hub:** a far-apart point of town a line passes through. **Coverage:** the share of the length of the town's streets that have a sidewalk lying within 220 m (straight line) of a stop. **Street share:** the share of that length a bus drives. These were the old network's two numbers that mattered (street share most: "couldn't find a stop").
+- **The part a bus can drive round:** the lanes from which a bus can reach every other lane and come back (`reachableParts`). No car turns round anywhere, so a dead end's lanes, or a stretch a bus can drive into but not out of, lie outside it.
+
+**How the planner lays them** (`roads/bus_planner.{h,cpp}`, `planBusLines`; engine code, so a tool and the tests call the same thing):
+1. **Hubs:** kerb-lane points beside a sidewalk, only in the largest part a bus can drive round. There is one hub for each 2.5 km of sidewalk street, between 3 and 6. The first is nearest the town's middle; each next is the one farthest from those already picked.
+2. **Lines:** each a loop through every hub but one, in their order round the middle; at most 3 lines. Each leg is the route the bus would drive (the one router, for the bus's class). A street already on a line costs the next line's router 4 times its time more (`SectionSeconds`), so the lines spread over the town.
+3. **Stops:** along each loop about every 250 m, at least 25 m from either end of a lane, and only where the bus's route is in the kerb lane beside a sidewalk. The driving cannot change lanes yet (the sim turns `laneChanges` off), so a bus must already be in the lane it pulls in on. Each stop is stated by its street, station and kerb.
+4. **Checked:** every leg between two stops routes for the bus; a stop that breaks its line is left out.
+
+**Two faults found getting there** (both measured on river_town):
+- **Planned on the wrong model.** At first the tool built its own model from the road file, and 2 of 45 legs could not be driven on the level's model, which is built with the level's settings and fleet. The tool now plans on exactly the model the level drives on (`obtainLevelRoadModel`: from the level's cache or built, with its fleet), and writes into that level's road file.
+- **Planned with lane changes.** The sim's driving changes no lane, so every leg must follow lanes that lead into one another. With lane changes allowed, 31 of 62 legs failed at load. The route class's `laneChanges` now decides both the part a bus can drive round and the routes, and the tool sets it as the sim does (`--lane-changes` to plan for a driving that has them).
+- The load-time check (ADR-0481) also ran before the sim turned lane changes off, so it passed legs the buses could not drive. It now runs once the driving has started.
+
+**river_town** (`lanes_tool buslines assets/levels/river_town.json --write`, on the level's cached model): 6 hubs, 3 lines, 38 stops (11, 12, 15); coverage 74.5%, street share 34.4%; the load check finds 0 faults. **Found:** 663 lanes a stop could stand beside lie outside the largest part a bus can drive round, which holds 1,188 paths. A large share of the town is a place a bus could drive into and not out of. That is the missing U-turn (ADR-0480, the sweep's bugs, 4), larger than it looked, and it holds for every car.
+
+**The intercity lines** (`tools/city_plan.cpp`, the island planner): inside each place, the quickest way over the place's plan's own street graph. That search was a lambda inside the plan's commute score; it is now one class, `plan::PlanGraphRouter` (`city_plan.h`), used by both. The score's freeway commute share is the same (0.203). On island 8 (seed 8) the ring line has 8 stops and the high road 3. The longest single segment of either is 96 m, where it was a straight line of several hundred metres from each stop to the town's edge. They are on the map only, as Glenn asked; no bus drives them.
+
+**Writing the file:** `insertBusLinesText` puts the `bus_lines` member in place, one line of text to a bus line, replacing it when the file has one. It refuses if the city's bake key would see the change, so nothing is re-baked. Written twice, the bytes are the same.
+
+**Tests:** `bus_planner_lays_loops_with_stops_along_them_that_can_be_driven` (run_tests): on the jittered grid town, 6 hubs, 3 lines, coverage 92.6%, street share 49.0%. Every stop is beside a sidewalk and none crowd together. Written into the road file and built again, the lines are held, the driving finds no fault, and the bake key is unchanged. `level_river_town_crowd` now checks that its 3 lines and 38 stops are held and can be driven by the fleet's bus.
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1487/1487 (the planner's test new); lanes_tests 156/156 (`road_model_19` holds river_town's file with its lines in: rewriting the layout or the lane rules moves nothing, since the lines are written before both); `level_river_town_crowd` 1/1, its hash the same (the lines are data nothing drives yet).
+
+## ADR-0483 — Buses drive their lines on the new driving: each a car of the hand-over's, put down at a stop, driving stop to stop, standing at each (buses plan, step 3)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: on a level whose road file states bus lines (ADR-0481), the sim now runs buses on them. Each line gets as many buses as its headway needs, spread evenly round it. A bus drives to its next stop, pulls in beside it, stands there with its doors open, and drives on, round its line for ever. Nobody rides yet (step 4).
+
+Words:
+- **Headway:** the minutes between one bus and the next at a stop. **Dwell:** how long a bus stands at a stop. **Round trip:** a line's driving time from each stop to the next at the free-flow speed, plus a dwell at every stop.
+- **The hand-over** (`DrivingHost`, city_driving.h): the city's side of the driving. It puts its own cars down, sends them on trips and copies where the driving has each car into its entity.
+
+**What changed:**
+- **The service is data** (`assets/data/bus_service.json`, read once by `busService()`): headway 8 minutes, at most 6 buses a line, 20 s at each stop. These are sourced estimates, marked to tune. A missing file or number runs no buses, and the log says why.
+- **The buses are made** with the level's roaming cars (`CitySim::startDrivingV2`). For each line, the round trip is timed with the driving's own routes for the fleet's `bus` class; the line gets the round trip divided by the headway, rounded up, at least 1 and at most the cap. Bus k of n starts at stop k·stops/n. A bus is drawn as the fleet slot whose class is `bus`, and is numbered after the roaming cars.
+- **A bus is one of the hand-over's own cars** (`CityCarRoams`, as the roaming cars are) with a `CityBusRuns` (city_car.h): its line, the stop it is bound for, whether it is standing, how long it has left there, and the stops it has called at. The hand-over's branches:
+  - **put down** at its starting stop's kerb lane (`busStopLane`) when there is a standstill gap's room there (`roomFor`). The room asked of a car dropped anywhere into moving traffic (70 m) is not asked of it: at load one stop had a car on it, and every try after asked for 70 m, so that bus was never put down.
+  - **sent** to its next stop's kerb lane (`beginTrip`).
+  - **on arriving** (the driving's `Parked`), it stands for the dwell, then is sent on to the stop after.
+- `DrivingCounts` holds `buses` and `busCalls`; the river_town crowd test prints and holds them.
+
+**river_town** (3 lines, 38 stops; ADR-0482): 6 buses (2 a line), 72 stops called at in 30 minutes, about one every 2.5 minutes a bus with the lights and the waits. No ring of waits. Re-pinned: the most on the road 111 -> 120 (still minute 11, the buses among them); arrivals 663 -> 665; trips and parked the same (316, 229); hash 0x331264b35e85398b -> 0x96738d598af1e6e2. Levels whose road files state no line (brain_crowd, the near crowd's) run no bus and are unchanged.
+
+**Suites, all with RT_TEST_FILTER:** `level_river_town_crowd` 1/1, re-pinned (above); `level_brain_crowd` 1/1 and `near_tier_in_the_crowd_follows_the_player` (its known open checks only) with their hashes unchanged (no line on their roads); run_tests 1487/1487.
+
+## ADR-0484 — People ride the buses: a bus is a way in the trip planner, the brain waits and rides, and the sim's own walkers take a bus when it clearly beats the walk; one set of riders for both (buses plan, step 4)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: the buses of ADR-0483 now carry people. A resident planning a trip prices the bus beside walking and driving: walk to a stop, wait, ride round the line, walk to the door. A near resident waits at the stop until a bus of the line actually stands there, rides it hidden inside, and gets off at their stop. A far resident's clock stands in for all of that. The sim's own background walkers (not the brain's) take a bus too, when it clearly beats the walk. Glenn asked for everyone to ride from this step.
+
+Words:
+- **Timetable:** for each line, each stop's waiting place (where it joins the walks) and the seconds from it to the next stop. That is the bus's route at the free-flow speed, times the measured **traffic factor**, plus the wait at a stop. What a ride is priced by.
+- **Traffic factor:** a bus's leg as driven over the same leg at the free-flow speed. On a 250 m leg, the lights, the crossings and pulling in at the stop dominate.
+- **Mean wait:** the average wait at a stop for someone who turns up without looking at the timetable: half the headway.
+
+**What changed:**
+- **travel.lua** has a `bus` row: network `bus`, start minutes 4 (the mean wait, half of bus_service.json's 8-minute headway; a brain test holds the two files together), begins in `waiting`. A bus row is not a way on foot: the reader's "some way on foot is open to everyone" rule and the planner's "cheapest way on foot to the car" both pass it over. Before that fix, the old test `trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with` caught the reader counting it as one.
+- **The planner** (`trip_plan.h/.cpp`): `TripNetwork::buses`, a `BusTimetable`. `bestBusRide` (one function, used by the planner and by the sim's walkers) finds the line and the two stops, each within 800 m in a straight line of its end, with the least estimate: the walks in a straight line plus the ride by the timetable. The bus option is the walk to the stop (`LegEnd::Stop`), the ride (its minutes the wait plus the timetable's), and the walk to the door. With no line anywhere the bus is not offered, so plans on other levels do not name it. `FixedLeg` carries a stop end's line and stop.
+- **The brain:** `waiting` and `riding` are built (they were NOT BUILT); `boarded` and `alighted` are new events. A `RideSkill` (brain_skills.h) waits, puts a person raised from far aboard, and cancels; `Machine::setRide` hands it in. `waiting` lasts the way's start minutes (the mean wait); `riding` lasts the rest of the leg. A bus leg's handle is its line. Stops are places to the brain (`World::stopPlace`; the city's band `0x03`, line and stop in the low bits).
+- **The sim owns the riding** (`city_buses.{h,cpp}`, `BusRiders`), for both kinds of walker. It builds the timetable with the buses. Each tick after the driving, every bus standing at a stop sets down whoever is getting off there (on the pavement at the waiting place) and takes on whoever waits there for its line while it has room. Whoever is aboard is carried where the bus is, out of sight. It reports each boarding and alighting. The brain's ride skill only hands its people to it and posts the reports to them (`boarded`, `alighted`).
+- **The sim's own walkers:** when a trip begins (`startTrip`), a walker of the sim's own takes the bus when the best ride's walks, the ride and the mean wait come under 80% of the walk (`kBusBeatsWalk`). It walks to the stop and waits there on arriving (`arriveOrChain`). Off the bus, it walks on to its trip's goal, still doing what it was doing (`rideEventsForWalkers`).
+- **bus_service.json** gains `traffic_factor` 4.0 and `capacity` 60. With free-flow timing, river_town's lines got 6 buses, the real wait was about twice the 4 minutes priced, and 237 people stood at stops at minute 12. Measured with the new leg counts (`DrivingCounts::busDriven`, `busFreeFlow`), the legs took 4.03 times their free-flow time (4.17 with the riders in). The fleet is now sized and the timetable timed by it, so river_town runs 13 buses. A full bus leaves the rest for the next one.
+
+**river_town** (re-pinned; 13 buses on 3 lines): in 30 minutes, 51 waits at stops (42 by residents, 9 by the sim's own walkers), 41 boardings, 34 got off, and no full bus left anyone. The buses called at 154 stops, and their legs took 4.17 times their free-flow time. Arrivals 665 -> 658, trips 316 -> 312, parked 229 -> 223, most on the road 120 -> 126; hash 0x96738d598af1e6e2 -> 0x84834e8b10e27894. Only 9 of 5,149 background walkers chose the bus: most of their trips are short, and a bus must beat the walk by a fifth.
+
+**Tests:** `trip_plan_prices_a_bus_trip_by_the_timetable` (run_tests): a far trip takes the bus, priced as walk, wait and timetable ride, walk; a short trip walks; no stop near one end, no bus; no line anywhere, not offered. `brain_trip_by_bus_walk_wait_ride_walk` (brain_tests): a far person's states fall exactly on the hand-worked times (walking at 0, waiting at 72 s, riding at 312 s, walking at 512 s, indoors at 584 s). A near person waits for the bus itself rather than the clock, is not moved by a bus at another stop, boards, stays aboard past a stop that is not theirs, and gets off at theirs. The brain table, the travel reader and the agent-goals reader tests count the new row, states and events.
+
+**Not yet:** riders are out of sight while aboard (step 5 draws them, the stops and the sign); a change of bus; a far rider's clock does not know a full bus; the island's intercity lines carry nobody.
+
+**Suites, all with RT_TEST_FILTER:** brain_tests 24/24, driving_tests 200/200, run_tests all pass. level_river_town_crowd passes. level_brain_crowd is unchanged. level_brain_lab shows the same 14 failures it had at HEAD before this step (not this step's). The near crowd fails the same four checks with the same state hash as before (#306 sweep bug 2, left for later).
+
+## ADR-0485 — A bus stop you can see, the buses' boards back on the new buses, and riders seated aboard (buses plan, step 5)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: each stop of the road file's bus lines now has a post with the stop's flag and a bench beside it, on the stop's own kerb. Each bus shows its line again: the line's number and which way round its loop it runs on the front, back and side boards, and NEXT and the next stop's street on the board inside, behind the cab. A new question, `buses?`, says where every bus is.
+
+Words:
+- **Kerb prop kind:** an entry in `street_props.lua` (ADR-0354) that the street-furniture planner places and the loader draws, collides and breaks. The hydrant is one.
+- **Board:** the amber LED dot board of ADR-0351 (engine/procgen/city/shop_signs.h). One atlas row per label, drawn as an instance group per label.
+- **Marker:** a named point the bus model carries (vehicle_kit.lua): `dest_sign` at the front, `dest_sign_rear`, `dest_sign_side` in the kerb-side pane, `stop_display` behind the cab.
+
+**What changed:**
+- **The stop is data:** `street_props.lua` has a `bus_stop` kind with the new key `at_bus_stops = true`. The planner (`planStreetFurniture`) does not march such a kind along the kerbs. It stands one at each stop the road model's lines state, on that stop's kerb, `verge` metres out from the kerb line, facing the pavement. A stop keeps its spot clear: a street tree within 3 m of it gives way. It is a body like the others (a car stops at it; it does not break). river_town has 38, one per stop.
+- **A kerb prop kind that fails to build is now said:** a kind whose `mesh()` fails was left out with only an error string nobody printed. That is how the first bus stop went missing (`mesh.box` takes one table). The loader now warns. A run_tests case (`street_props_lua_builds_every_kind_and_the_bus_stop_stands_at_the_stops`) builds every kind.
+- **The boards:** `makeBusBoards` (once there are buses) makes a label per line and per stop's street, using the engine's sign font and board pieces, which outlived ADR-0460's deletion of the old buses' use of them. The line's label is its number and CLOCKWISE or ANTICLOCKWISE as a map shows it; a stop's is NEXT and its street, without the " 2" a second stop on a street carries. `syncBusBoards` sets each bus's boards on its body's markers every bake. The board groups get a town-wide cull sphere: without one they were culled away (the first try showed only the black backing).
+- **`buses?`** (control channel): how many buses, the riders' counts, the boards drawn, then each bus's number, line, the stop it is going to or standing at, where it is and its heading. `lanes_tool buslines --where` prints where each stop's bus stands, to frame a shot.
+
+- **Riders seated aboard:** the cabin builder already gave each seat's hip point. It now also gives the way each seat's rider faces (`seat_facing`: forward, or across to the aisle on the standing-room bus's wall benches), passed through vehicle_kit.lua, vehicles.lua and the body reader. `BusRiders::aboardOn(bus)` says how many ride each bus, and the city draws one seated figure per rider on the bus's drawn body. Seats fill from the middle of the bus outward, as people do.
+- **river_town** re-pinned: the stops' posts and benches and the cleared trees moved the walkers' obstacles. Parked 223 -> 225, arrivals 658 -> 660, hash 0x84834e8b10e27894 -> 0xf5c3d679818d2ee3; the riders' counts are the same.
+
+**Not yet:**
+- The seated riders' shins show through the bus's lower side panel from outside. Their hips are where the numbers say (0.8 m above the road, 0.96 m off the middle of a bus 1.27 m half-wide) and they face forward, so it is either a drawing-order or depth problem with the see-into body, or a figure built larger than the seat. For Glenn to look at.
+- The player boarding a bus on the new driving.
+
+**Seen:** ~/Pictures/Raytracer/buses/ (stop_top, stop_yaw0: the stop; bus1_yaw0: CLOCKWISE on the front; riders_s1_y180: NEXT ROWAN PARKWAY inside and 3 CLOCKWISE on the side; riders_s-1_y0: the riders and their shins).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1489/1489 (with the new street-props case and the regenerated web/engine/commands.json). level_river_town_crowd and the furniture gate pass. level_brain_crowd is unchanged. level_river_town_streets_are_drivable_grades fails as it did at HEAD before these steps.
+
+## ADR-0486 — The player rides a bus again: on through a door, the aisle and the seats, off at a stop (buses plan, the passenger seat ADR-0459 deleted)
+**Status:** Provisional · **Date:** 2026-11-22
+
+What it does: you can ride the new buses.
+- Walk into an open doorway of a bus standing at its stop and you are aboard.
+- Aboard, the move keys walk the aisle and the door wells, in the bus's own frame, so the bus can turn and brake without you sliding about.
+- Every seat within reach is an E offer. Seated, you face the way the seat faces, and E stands you up again.
+- Walk out through a doorway while the bus stands at a stop, and you are on the pavement.
+- `bus_board <bus>` puts you aboard bus `<bus>` (its number, as `buses?` gives it), a probe's way in.
+
+Words:
+- **Carrier:** the vehicle a rider is carried in. engine/riding.h (ADR-0243) keeps a rider at a point in the carrier's frame each step and draws them on it between steps, as the renderer draws the vehicle. Each vehicle's owner keeps its own rules (who boards where, the aisle, the doors). The trains do it this way too.
+- **Near tier:** the few cars closest to the player become physical cars (a Jolt vehicle) so you can bump into them.
+
+**What changed:**
+- **The bus's rules** (`city_bus_cabin.cpp`, plain functions so they can be tested; in libcitysim): the aisle (from the middle to the nearest seat's edge; wide between a standing-room bus's wall benches), the saloon's length (behind the driver's partition to the last seat), the door wells, a doorway's mouth on the pavement (gets you on), and past the wall in a doorway (gets you off).
+- **The owner** (`BusRideSystem`, `city_bus_ride.cpp`, beside the train's in the viewer) carries the player using `rideStep`. The cabin comes from the bus's recipe through `CityRenderSystem::busCabinOf`: seats, which way each faces, doors, driver's seat and size. The recipe's door points are kept again (`carDoors_`).
+- **The carrier is the bus's pose this step** (`CityCarPose`, set every step whether drawn or not, ADR-0454). Two tries before it were wrong:
+  - Looking the bus up among the drawn car instances by its draw key: it sometimes landed on another car, and the player jumped 200 m.
+  - The drawn instance alone: a bus far from the camera is not drawn, and the rider was left behind.
+- **The near tier leaves your bus alone:** a bus you ride is marked `CityCarCarriesPlayer` and is never made a physical car, and is handed back to the driving if it was one. As a physical car its solid body pushed the passenger's capsule out: 0.7 m sideways and 0.4 m up, seen in the probe.
+- **One rider eye height for every owner:** `kRiderStandingEye` (1.62 m) and `kRiderSeatedEye` (0.74 m) are in engine/riding.h; the train's own copies now name them.
+- The NPC riders drawn aboard leave your seat free. `buses?` adds "you: aboard bus N, seat S / standing at x y z in the bus".
+
+**Checked:**
+- run_tests: `bus_ride_the_aisle_and_the_door_wells_are_walkable_the_seats_are_not`, `bus_ride_you_get_on_from_a_doorway_and_off_through_one`, `bus_ride_a_standing_room_bus_has_a_wide_aisle_between_its_wall_benches`.
+- In the viewer on river_town (a probe, not a test):
+  - Placed at a standing bus's middle door, the player got on.
+  - Rode 215 m, 80 s, through a stop and a hill.
+  - Your place in the bus stayed put: the same to 0.0001 m while it stood, no jumps while it drove.
+  - The small shift seen on a slope is the capsule hanging straight down in the world under an eye set along the bus's own up (riderCentre, by design).
+
+**Not done:**
+- ~~A level test that boards and rides~~ done, see below.
+- The door leaves: the new buses draw none (ADR-0460 took them), so a doorway always looks open, and you can only walk out of it while the bus stands.
+- Seated NPC riders' shins through the side panel (an old problem; Glenn: not now).
+
+**Suites, all with RT_TEST_FILTER:** run_tests 1492/1492 (the three bus_ride cases and the regenerated web/engine/commands.json); level_river_town_crowd passes unchanged; the near crowd fails the same four checks with the same state hash as before (bug 2).
+
+**The level test (2026-11-22, added after).** `river_town_the_player_walks_onto_a_bus_rides_it_and_walks_off_at_the_next_stop` (tests/test_bus_ride_level.cpp, in physics_tests, which already loads levels with Jolt and the real PlayerSystem). It runs river_town with the city, its kinematic boxes, the near tier, the VehicleSystem and the BusRideSystem, in the arena's order, and the player moved by the pad:
+- waits for a bus to arrive at a stop (bus 4 at stop 1, after 53 s), puts the player on the pavement a step out from its middle door, and walks them in: aboard;
+- standing still in the standing bus: moved 0.0000 m in it;
+- E sits them (seat 15); seated over 40 m of driving: 0.003 m off the seat at worst, no step moved them in the bus, the bus never made physical;
+- E stands them up; they push out through the doorway for the whole leg (168 s, 50 s of it at a red light at junction 29): not off while it drives;
+- at stop 2 the same push takes them out through the open doorway, onto the pavement 3.8 m out from the bus's middle, feet 0.38 m below its floor, settled.
+
+**A bug the test found, fixed:** stepping off put you in the doorway's mouth, which is where you get on, so with the bus still standing you were taken straight back on unless you walked on. Now the bus you just stepped off does not take you on again until you have stepped out of its doorway's mouth (or it has left).
+
+`RT_BUS_RIDE_LOG=1` prints a line a second, and the bus's driver card whenever it stands in the road away from a stop.
+
+## ADR-0487 — A bus's doors are drawn again, open while it stands at a stop and shut before it pulls away; getting on and off waits for them (2026-11-22)
+
+**Why:** the new buses (ADR-0483) were drawn with their doorways cut out of the body and nothing in them, so a bus always looked open, even driving. ADR-0460 had deleted the old buses' door leaves with the old buses. The recipe still builds the leaves (`vehicles.lua` `bus_doors`: each leaf's paint and glass, and how far it slides at fully open, read into `CarBodyRecipe::doorLeaves`); nothing drew them.
+
+**What changed:**
+- **One answer for how far the doors are open:** `busDoorsOpenness(CityBusRuns)` in city_driving.h, 0 shut to 1 open. They start opening as the bus stops, take `door_seconds` each way, and are fully shut `doors_shut_before` seconds before it pulls away. `busDoorsOpen` means fully open.
+- **The timings are data:** `door_seconds` (1.5) and `doors_shut_before` (1.0) in `assets/data/bus_service.json`, required like its other numbers. The service is refused if the doors could not open and shut within the dwell.
+- **Drawn:** each bus slot's door leaves get a paint group and a glass group (`carDoorLeaves_`). `syncBusDoors` places every leaf on its bus's drawn body each bake, slid by its `slide` times the openness. `buses?` adds "N door parts drawn (M leaves open)".
+- **The player follows the same answer** (`BusRideSystem`): you get on through a doorway, and off through one, only while the doors are fully open. Before, it was the whole time the bus stood.
+
+**Checked:**
+- run_tests `bus_doors_open_as_it_stands_and_are_shut_before_it_pulls_away`: shut while driving, half open halfway through opening, open in the middle of the dwell, half shut on closing, shut before it leaves.
+- The level test (physics_tests, river_town, ADR-0486's) now also checks that you get on and off only with the doors open. It gets on at 54.0 s, 1.4 s after the bus stopped, against 52.7 s before the doors.
+- Viewer shots on river_town (~/Pictures/Raytracer/buses/doors_*.png):
+  - Standing at a stop: both kerb-side doorways open, the leaves slid back along the side.
+  - Driving away: both shut flush.
+  - The road side has no doors.
+
+**Found, not changed:** while the doors were still opening, the test's player pushed into the bus and the player's ordinary climb took them up its side onto the roof, 2.9 m above the floor, so they never reached the doorway. The test now waits at the doorway until the doors open, as a person would. Climbing a standing bus is the movement system's general climb, so it is left as it is.
+
+## ADR-0488 — A walker's crossing state goes with the near tier: drivers no longer give way, for ever, to a walker who went far mid-crossing (2026-11-22)
+
+**What was seen:** on river_town a bus stood still in the road for minutes away from any stop (bus 0 at (−33, 723) about 2 minutes in an earlier run; bus 7 410 s in this one). The crowd test now records the longest any bus stands in the road away from a stop, with its driver card.
+
+**Why, found:**
+- Bus 7 was committed inside junction 53 on a far turn, 1 m short of crosswalk 219, held by "give way to people crossing: person_at_crosswalk is yes".
+- Nobody was on crosswalk 219. Five people waited at its kerb for WALK (it has lights), and drivers do not give way to those.
+- The drivers' list said two walkers were ON crosswalk 219, but both stood 80 m away, three steps past it on their routes.
+- Both were far-tier walkers (tier V: no drawing, no sensing, their route walked once a second without the crossing rule). A walker's crossing state (`crosswalkAt`, `onCrosswalk`, `aboutToCross`) is written only by the near tier's step (`CitySim::advance`). It was kept as it was when they went far mid-crossing, and `thingsForDriving` kept telling the drivers so.
+
+**What changed:** `CitySim::setTier` clears a walker's crossing state when it leaves the near tier. One line of thought: the state is the near tier's, so it goes with the near tier.
+
+**Measured (river_town, 30 minutes):**
+- The longest a bus stood in the road: 410 → 87 s (a red light).
+- Arrivals 660 → 672; trips 312 → 321; parked 225 → 245.
+- The buses' calls 154 → 167; their legs 4.17 → 3.79 times the free-flow time.
+- Riders: 49 waits, 40 boardings, 38 got off (was 51 / 41 / 34).
+- Hash 0xf5c3d679818d2ee3 → 0xd99d3758b0039615, re-pinned.
+
+The crowd test now also checks that no bus stands in the road away from a stop for 3 minutes or more.
+
+**Unchanged:** brain_crowd passes as it was. brain_lab fails the same 14 checks as at HEAD before this.
+
+## ADR-0489 — Cars change lanes for their route: a safe gap by MOBIL's own rule, an S-curve across, a missed turn routed again; for now only where a level asks (sitting 5, step 1)
+
+**Why:** a route that needs another lane used to be refused (no route), or the car kept to its lane and stopped dead where it ended. Sitting 5 of `docs/two-drivers-meeting-design.md` gives one mechanism for it; this is its first step, the lane change a route needs. Merging by zipper and pulling out and in come next.
+
+**Words:** a *gap* is the space in the lane beside between the car that would be ahead of me and the one that would be behind me. *MOBIL* is the published lane-changing model whose safety rule this uses.
+
+**What a driver does** (`src/apps/driving/lane_change.h`, `.cpp`; the "lane change step"):
+- **Wants to:** the fact `wrong_lane`, from the route (`lanesToCross`).
+- **Judges the gap:** the fact `gap_beside` holds when, after moving over, the car that would be behind me in that lane, and I behind the car that would be ahead, each brake no harder than `lane_change_safe_brake`. Both are judged by the following model itself (the IDM, `easingAcceleration`), as MOBIL's eq. 2 asks; 4 m/s² is MOBIL's table 1. The car behind is looked for back along the paths leading into the lane too (up to 80 m), not only within the lane.
+  - Also required: my whole body fits in that lane; the two lanes run side by side where I am; I am rolling (at least 1 m/s); the move fits before that lane ends.
+- **Decides:** the rule "change lanes for my route" in `rules/lab.lua`: `wrong_lane` and `gap_beside` give the intention `lane = change`.
+- **Moves:** it joins the lane beside exactly where it is, by the same reading of a lane that draws it (`pointAt` and `directionAt`). It keeps its old line as a sideways offset and eases it to zero along an S-curve (smoothstep) laid by distance covered, never by time. So it never slides sideways at rest, and the curve is never tighter than its turning circle (`laneMoveLength`).
+  - While it moves across it is listed in both lanes, at its true place in each (`Car::besideShift`: on a bend the lanes' metres differ). It keeps behind the car ahead in the lane it is leaving, and the cars behind it in either lane follow it.
+  - Off its lane's line on a bend, it advances by its true speed on the line it drives.
+  - It decides afresh on the very next tick from its new lane.
+- **Two cars, one gap:** a change is checked again against the moves already made in the same tick, and given up if one took the gap. Nothing central hands out gaps.
+- **Missed turn:** no gap before the point where a move must begin: it is routed again from its lane, with the other lanes of that stretch closed, and changes lanes again later as it needs. No way on: the host is told "no route", as when a trip is begun with nowhere to go (a resident's brain plans again).
+- **The router** plans no move in a lane too short to make one in (`RouteClass::laneChangeLeast`). A car's way ends, as a place to come to rest, only where its lane really ends or at its destination's stretch. A destination in the lane beside, in its own stretch, is reached level with it, as before.
+- **The measurements** judge a jump by the front's true move while a car is off its lane's line, its sideways move excepted.
+
+**Checked:**
+- driving_tests 201/201, among them `trip_places_6b_a_car_changes_lanes_for_its_route`:
+  - On an empty road a car in a lane that ends moves over and arrives. It is listed in both lanes as it goes, its drawn front never moves more than its speed allows, and its body never turns on the spot.
+  - With the lane beside full, it does not wait in its lane: it asks for a way on once and tells the host "no route".
+- **traffic_lab with lane changes on** (`RT_LANE_CHANGES=1`, five minutes): 580 begun, 577 finished, 0 overlaps, 0 bodies touching, 0 tight turns, 59 turns missed (4 with no way on).
+
+**Not done, and why lane changes are off by default:** on traffic_lab with them on the flow is far worse than without. At 300 s, 166 cars have arrived and 152 stand, against 400 arrived and 49 standing without them. Also still failing: 15,202 short spells standing with no reason and 311 small jumps (the worst 2.2 cm). On river_town and brain_crowd more people drive (car trips 321 → 434), and river_town's arrivals fall (672 → 594). So `city_sim` plans lane changes only with `RT_LANE_CHANGES=1`, and everything lane changes alter waits on that (`Driving::changingLanes`). Without it every level drives exactly as before: its pins hold. The flow is the next work; after it, merging by zipper and pulling out and in.
+
+**Indicators** are not drawn yet (the measurements' "indicator on before the move" row stays "not measured").

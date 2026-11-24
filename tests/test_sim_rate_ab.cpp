@@ -15,7 +15,7 @@
 #include "../src/engine/procgen/city/plan/city_plan.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/world.h"
-#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
+#include "test_world_roads.h"   // a test world's road model, from its road entities
 
 #include <chrono>
 #include <cstdio>
@@ -25,11 +25,17 @@ using namespace citysim;
 
 namespace {
 
-// A planned 3 km city (the planner's default brief), headless.
+// A 3 km town, headless: the grid town (city_test_util.h gridCity, 120 m blocks), every road local, at grade. (#306
+// piece 6 W2: the world's roads are built into a road model as a level's are. It was the planner's default 3 km city,
+// copied as local roads one plan segment each; as a road file that is thousands of 15-20 m roads, including the
+// freeway's and expressways' carriageways side by side as locals, which the road builder refuses: "partner chain too
+// deep". The question here is the tick rate's effect on the tier split, which wants a populated 3 km town, not that one.)
 RoadEntity cityNet() {
-    plan::Brief b;
-    b.seed = 7;
-    const RoadGraph g = plan::generatePlan(b).streets;
+    citytest::GridCityParams p;
+    p.extent = 1500;
+    p.cellSize = 120;
+    p.seed = 7;
+    const RoadGraph g = citytest::gridCity(p);
     RoadEntity net;
     net.look.defaultWidth = 12.0;
     net.look.sidewalk = 3.5;

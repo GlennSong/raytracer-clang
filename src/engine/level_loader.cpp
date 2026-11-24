@@ -69,7 +69,6 @@
 #include "procgen/city/roads/lanes/block_audit.h"  // sceneBlocks: city blocks straight from the pavement
 #include "procgen/city/roads/lanes/city_producer.h" // the city as a bundle producer (ADR-0084)
 #include "procgen/city/roads/road_model.h"          // the road model's planned layer at load (ADR-0420)
-#include "procgen/city/roads/street_map.h"          // the street map every agent routes on, from the model (ADR-0425)
 #include "procgen/city/roads/control_signs.h"       // the signs that follow from its facts (ADR-0424)
 #include "procgen/city/roads/lanes/lots_producer.h" // the lot pass as the second producer (milestone B)
 #include "procgen/city/roads/lanes/road_model_cache.h"   // obtainLevelRoadModel: the level's one road model (ADR-0435)
@@ -85,7 +84,6 @@
 #include "procgen/city/street_signs.h"  // street name signs
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
-#include "ai/nav_graph.h"             // the street map (LevelRoadModel::streetMap) the furniture and the sim read
 #include "asset_root.h"               // assetPath: the map's control colours (road_attachments.json)
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
@@ -738,6 +736,7 @@ static ColliderSurface colliderSurfaceForRoadMaterial(const std::string& name) {
 // `"builder": "lanes"` — come through this one function (docs/road-module-plan.md).
 static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBuildInput& in,
                                 const roads::RoadProducts& built, const RoadDeckField* drawnDeck, World& world) {
+    (void)drawnDeck;   // (the street map was made over it, ADR-0425; it went with #306)
     // A builder that paves the whole city publishes it; a mesher carves the ground it was given and publishes nothing.
     // That is the test, not the entity's shape and not a build flag (ADR-0085's hazard).
     if (!b.pavesCity()) return;
@@ -795,36 +794,13 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
                         LOG_WARN << "[roads]   and " << (model->problems.size() - kProblemsShown) << " more";
                 }
                 models->cities.push_back(std::move(model));
-                // THE STREET MAP (ADR-0425): this city's, from the model just read and the drawn deck (one spine per road of
-                // the file, in its order: checked, road by road), appended to the level's one map
-                {
-                    const engine::RoadDeckField* deck = drawnDeck;
-                    bool deckFits = deck && deck->spines.size() == g.edges.size();
-                    for (std::size_t k = 0; deckFits && k < g.edges.size(); ++k)
-                        deckFits = deck->spines[k].points.size() == g.edges[k].xy.size();
-                    if (!deckFits) {
-                        LOG_WARN << "[roads] street map: the drawn deck does not hold one spine per road of the file (" << (deck ? deck->spines.size() : 0)
-                                 << " spines, " << g.edges.size() << " roads): its freeways and ramps carry no heights";
-                        deck = nullptr;
-                    }
-                    if (!models->streetMap) models->streetMap = std::make_shared<engine::NavGraph>();
-                    engine::StreetMapReport rep;
-                    const int cityIndex = static_cast<int>(models->cities.size()) - 1;
-                    if (engine::appendStreetMap(*models->streetMap, *models->cities.back(), cityIndex, deck, &rep)) {
-                        LOG_INFO << "[roads] street map, city " << cityIndex << ": " << engine::describeStreetMap(rep);
-                    } else {
-                        for (const std::string& err : rep.errors)
-                            LOG_ERROR << "[roads] street map, city " << cityIndex << " (" << e.graphPath << "): " << err;
-                    }
-                    // its signals, by each node's junction (one rule: the stated control; a file stating none lights nothing)
-                    bool controls = false;
-                    models->stateSignals(*models->streetMap, nullptr, &controls);
-                    if (!controls)
-                        LOG_WARN << "[roads] " << e.graphPath << " states no junction's control: no junction is lit. State them once: "
-                                 << "city_plan controls " << e.graphPath << " rules/lab.lua --layout --write --controls-only";
-                }
+                // (The street map made from the model and the drawn deck, ADR-0425, went with #306. Its signals: the stated controls, read by the furniture and the driving; a file stating none lights
+                // nothing)
+                if (!models->controlsStated())
+                    LOG_WARN << "[roads] " << e.graphPath << " states no junction's control: no junction is lit. State them once: "
+                             << "city_plan controls " << e.graphPath << " rules/lab.lua --layout --write --controls-only";
             } catch (const std::exception& ex) {
-                LOG_WARN << "[roads] road model and street map: " << ex.what();
+                LOG_WARN << "[roads] road model: " << ex.what();
             }
         }
     }
@@ -892,7 +868,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
     // The entity's RoadEntity carries the look the builder's products are drawn with (its sidewalk and curb,
     // copied from the builder's bands below). Its graph stays empty: a lane-built city's streets are its road model's,
-    // and the street map agents route on is built from that at load (LevelRoadModel::streetMap, ADR-0425). (Roads drawn as nodes in the level, and the old
+    // and every reader asks that model (the street map made from it, ADR-0425, went with #306). (Roads drawn as nodes in the level, and the old
     // grower's "generate" recipe, retired with ADR-0267.)
     RoadEntity net;
     if (roadBlock.contains("nodes") || roadBlock.contains("generate"))
@@ -3950,10 +3926,7 @@ static void attachSignBlades(engine::LevelRoadModel* level, const std::vector<en
     (void)posts;
 #endif
 }
-// A model arm as one key for the furniture planner (StreetFurnitureParams::approachArm): city, junction, arm.
-static int64_t packArm(const engine::LevelRoadModel::Place& a) {
-    return (static_cast<int64_t>(a.city) << 40) | (static_cast<int64_t>(a.junction) << 16) | static_cast<int64_t>(a.arm);
-}
+// A model arm's key (street_furniture.h packFurnitureArm) back to its city, junction and arm.
 static engine::LevelRoadModel::Place unpackArm(int64_t k) {
     engine::LevelRoadModel::Place a;
     a.city = static_cast<int>(k >> 40);
@@ -3961,9 +3934,9 @@ static engine::LevelRoadModel::Place unpackArm(int64_t k) {
     a.arm = static_cast<int>(k & 0xFFFF);
     return a;
 }
-// Each signal pole and its head attached to the arm it governs, each lamp to the street it lights (ADR-0421): the street of
-// the street-map link it was planted along (ADR-0425; a lamp along a stretch inside a junction lights no street).
-static void attachFurniture(engine::LevelRoadModel* level, const engine::NavGraph& nav, const engine::StreetFurniturePlan& plan) {
+// Each signal pole and its head attached to the arm it governs, each lamp to the street it lights (ADR-0421): the street it
+// was planted along.
+static void attachFurniture(engine::LevelRoadModel* level, const engine::StreetFurniturePlan& plan) {
 #ifdef RT_ROADS_LANES
     if (!level) return;
     const engine::AttachmentKinds& kinds = engine::attachmentKinds();
@@ -3986,25 +3959,24 @@ static void attachFurniture(engine::LevelRoadModel* level, const engine::NavGrap
     }
     for (std::size_t i = 0; i < plan.lampBases.size(); ++i) {
         const Vec3& b = plan.lampBases[i];
-        const int li = i < plan.lampLinks.size() ? plan.lampLinks[i] : -1;
-        const engine::NavLink* L = li >= 0 && li < nav.linkCount() ? &nav.links[static_cast<std::size_t>(li)] : nullptr;
-        if (!L || L->street < 0 || L->city < 0 || static_cast<std::size_t>(L->city) >= level->cities.size() ||
-            !level->cities[static_cast<std::size_t>(L->city)]) {
+        const engine::LampStreet L = i < plan.lampStreets.size() ? plan.lampStreets[i] : engine::LampStreet{};
+        if (L.street < 0 || L.city < 0 || static_cast<std::size_t>(L.city) >= level->cities.size() ||
+            !level->cities[static_cast<std::size_t>(L.city)]) {
             ++untiedLamps;
             continue;
         }
         engine::ModelAttachment at;
         at.kind = kinds.use("street_lamp");
-        at.street = engine::ModelStreetId(static_cast<uint32_t>(L->street));
+        at.street = engine::ModelStreetId(static_cast<uint32_t>(L.street));
         at.at = Vec2(b.x, b.z);
-        if (engine::attach(*level->cities[static_cast<std::size_t>(L->city)], at, &why)) ++lamps;
+        if (engine::attach(*level->cities[static_cast<std::size_t>(L.city)], at, &why)) ++lamps;
         else ++refused;
     }
     LOG_INFO << "[furniture] attached to the road model: " << poles << " signal poles and their heads (to their arms), "
-             << lamps << " lamps (to their streets; " << untiedLamps << " lamps along a stretch inside a junction, on no street)";
+             << lamps << " lamps (to their streets; " << untiedLamps << " lamps on no street)";
     if (refused) LOG_WARN << "[furniture] " << refused << " attachments refused: " << why;
 #else
-    (void)level; (void)nav; (void)plan;
+    (void)level; (void)plan;
 #endif
 }
 #ifdef RT_ROADS_LANES
@@ -4057,7 +4029,7 @@ static void clearRoomForSigns(engine::StreetFurniturePlan& plan, const std::vect
         if (nearSign(plan.lampBases[i])) {
             plan.lampBases.erase(plan.lampBases.begin() + static_cast<std::ptrdiff_t>(i));
             if (i < plan.lampHeads.size()) plan.lampHeads.erase(plan.lampHeads.begin() + static_cast<std::ptrdiff_t>(i));
-            if (i < plan.lampLinks.size()) plan.lampLinks.erase(plan.lampLinks.begin() + static_cast<std::ptrdiff_t>(i));
+            if (i < plan.lampStreets.size()) plan.lampStreets.erase(plan.lampStreets.begin() + static_cast<std::ptrdiff_t>(i));
             ++lamps;
         }
     const std::size_t trees = plan.trees.size(), props = plan.props.size();
@@ -4240,32 +4212,27 @@ static void mapStreetsOf(const engine::LevelRoadModel* level, engine::CityMapDat
 }
 
 static std::shared_ptr<engine::CityMapData> assembleCityMap(
-        World& world, const engine::NavGraph& nav,
-        const engine::StreetFurniturePlan& plan, double hubRadius) {
+        World& world, const engine::StreetFurniturePlan& plan, double hubRadius) {
     auto m = std::make_shared<engine::CityMapData>();
     {
         const engine::LevelRoadModel* roadModel = nullptr;
         world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& rm) { if (!roadModel) roadModel = &rm; });
         mapStreetsOf(roadModel, *m);
-        // Each model junction LIT when the sim signals any node tied to it (ADR-0421: what the city does, drawn)
+        // Each model junction LIT by its stated control (junctionLit, ADR-0421: what the city does, drawn), in
+        // mapStreetsOf's order (city by city)
         m->junctionLit.assign(m->junctions.size(), 0);
-        if (roadModel) {
-            std::vector<std::size_t> first;   // each city's first junction in map.junctions (mapStreetsOf's order)
-            std::size_t at = 0;
 #ifdef RT_ROADS_LANES
+        if (roadModel) {
+            std::size_t i = 0;
             for (const std::shared_ptr<engine::RoadModel>& mp : roadModel->cities) {
-                first.push_back(at);
-                at += mp ? mp->junctions.size() : 0;
-            }
-#endif
-            for (int n = 0; n < nav.streetNodeCount(); ++n) {
-                if (!nav.signalControlled(n)) continue;
-                const int c = nav.cityOf(n), j = nav.junctionOf(n);   // the node's own junction (ADR-0425)
-                if (c < 0 || j < 0 || static_cast<std::size_t>(c) >= first.size()) continue;
-                const std::size_t i = first[static_cast<std::size_t>(c)] + static_cast<std::size_t>(j);
-                if (i < m->junctionLit.size()) m->junctionLit[i] = 1;
+                if (!mp) continue;
+                for (const engine::ModelJunction& J : mp->junctions) {
+                    if (i < m->junctionLit.size()) m->junctionLit[i] = engine::junctionLit(J) ? 1 : 0;
+                    ++i;
+                }
             }
         }
+#endif
 #ifdef RT_ROADS_LANES
         // EACH JUNCTION'S CONTROL (ADR-0422), as the road file states it -- or, for a comparison picture only,
         // RT_MAP_JUNCTION_CONTROLS=<json>: a list of {id, policy} (`city_plan controls ... --compare-json`), drawn in its
@@ -4301,7 +4268,6 @@ static std::shared_ptr<engine::CityMapData> assembleCityMap(
         }
 #endif
     }
-    m->nav = nav;
     m->furniture = plan;
     m->hubRadius = hubRadius;
     world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
@@ -8118,30 +8084,25 @@ bool LevelLoader::load(const std::string& path,
                 };
             }
         }
-        // THE LEVEL'S STREET MAP (ADR-0425): the one the city sim routes on, built from the road model at load -- the
-        // furniture plans on it, so a pole's link is the sim's link
-        std::shared_ptr<const engine::NavGraph> streetMap;
-        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!streetMap && m.streetMap) streetMap = m.streetMap; });
-        if (streetMap && streetMap->linkCount() > 0) {
-            const engine::NavGraph& nav = *streetMap;
-            // THE ROAD MODEL'S JUNCTIONS AND CONTROLS (ADR-0421): the nodes lit by their junction's stated control (stated on
-            // the map when it was built), the poles one per arm of a lit junction, lamps and trees clear of the model's
-            // junctions, a street's planting by its stated run.
-            engine::LevelRoadModel* furnitureModel = nullptr;
-            world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!furnitureModel) furnitureModel = &m; });
+        // THE LEVEL'S ROAD MODEL (ADR-0421; #306: the street map it was planned on went): the poles one per arriving arm of
+        // a lit junction (its stated control), lamps and trees along the streets' kerbs, clear of the junctions, a
+        // street's planting by its stated run.
+        engine::LevelRoadModel* furnitureModel = nullptr;
+        world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!furnitureModel) furnitureModel = &m; });
+        std::vector<engine::FurnitureCity> furnitureCities;
+        if (furnitureModel)
+            for (std::size_t c = 0; c < furnitureModel->cities.size(); ++c)
+                if (furnitureModel->cities[c]) furnitureCities.push_back({furnitureModel->cities[c].get(), static_cast<int>(c)});
+        if (!furnitureCities.empty()) {
             const bool modelFurniture = furnitureModel && furnitureModel->controlsStated();
-            if (modelFurniture) {
-                int lit = 0;
-                for (uint8_t s : nav.statedSignal) lit += s ? 1 : 0;
-                LOG_INFO << "[furniture] signals from the road model's stated controls: " << lit << " street map nodes lit";
-            }
             // THE KERB PROPS THAT ARE DATA (street_props.lua, ADR-0354): the hydrants and their kind, and the bodies
             // of what the planner places
             engine::StreetPropsSpec streetProps;
 #ifdef RT_ENABLE_SCRIPTING
             {
                 std::string err;
-                if (!engine::loadStreetProps(levelDir, streetProps, &err)) LOG_WARN << "[street] " << err;
+                // (a kind whose mesh() fails is left out and the others kept: still said, so it is never silently gone)
+                if (!engine::loadStreetProps(levelDir, streetProps, &err) || !err.empty()) LOG_WARN << "[street] " << err;
                 if (const std::string sp = resolveScriptPath("street_props.lua", levelDir); !sp.empty())
                     g_loadedScriptFiles.push_back(sp);
             }
@@ -8158,38 +8119,15 @@ bool LevelLoader::load(const std::string& path,
                 [&] {
                     engine::StreetFurnitureParams fp;
                     for (const engine::StreetPropKind& k : streetProps.kinds)
-                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly});
+                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly, k.atBusStops});
+                    fp.controlsStated = modelFurniture;
 #ifdef RT_ROADS_LANES
                     if (modelFurniture) {
                         const engine::LevelRoadModel* rm = furnitureModel;
-                        fp.junctionPoints = rm->junctionPoints();
-                        // the arm a link arrives by, and the street a link runs along: its ids (ADR-0425)
-                        fp.approachArm = [rm, &nav](int li, Real* mouth) -> int64_t {
-                            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
-                            engine::LevelRoadModel::Place a;
-                            a.city = L.city;
-                            a.junction = nav.junctionOf(L.to);
-                            // (asked of the model by the link's street and far station: the link keeps no copy)
-                            const engine::RoadModel* city = rm->city(L.city);
-                            a.arm = city && L.street >= 0
-                                        ? city->armReachedAt(engine::ModelStreetId(static_cast<uint32_t>(L.street)), L.stationTo)
-                                        : -1;
-                            a.street = L.street;
-                            if (a.arm < 0 || a.junction < 0 || a.city < 0) return -1;
-                            if (mouth) {
-                                Vec2 at;
-                                const Vec2 node = nav.nodes[static_cast<std::size_t>(L.to)];
-                                const engine::RoadModel& m = *rm->cities[static_cast<std::size_t>(a.city)];
-                                *mouth = engine::armMouth(m, m.junctions[static_cast<std::size_t>(a.junction)],
-                                                          static_cast<std::size_t>(a.arm), at) ? (at - node).length() : 0.0;
-                            }
-                            return packArm(a);
-                        };
-                        fp.streetRun = [rm, &nav](int li) -> uint64_t {
-                            const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
+                        fp.streetRun = [rm](int city, int street) -> uint64_t {
                             engine::LevelRoadModel::Place s;
-                            s.city = L.city;
-                            s.street = L.street;
+                            s.city = city;
+                            s.street = street;
                             return rm->runKey(s);
                         };
                     }
@@ -8269,7 +8207,7 @@ bool LevelLoader::load(const std::string& path,
                             return c;
                         };
                     }
-                    engine::StreetFurniturePlan planned = engine::planStreetFurniture(nav, furnGround, fp);
+                    engine::StreetFurniturePlan planned = engine::planStreetFurniture(furnitureCities, furnGround, fp);
                     // A STREET TREE GROWS CLEAR OF WHAT IS DRAWN OVER IT (Glenn, 2026-10-15: "a tree going through the
                     // elevated train deck"): the planter keeps a trunk off the carriageway, but a 15 m palm on the
                     // sidewalk under a track or a viaduct grew up through the deck. A pit with anything drawn over its
@@ -8313,7 +8251,6 @@ bool LevelLoader::load(const std::string& path,
                          << " signalled approaches have no pole (both corners in asphalt):" << at;
             }
             engine::StreetFurniture sf;
-            sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;
             for (const engine::StreetTree& st : fplan.trees) sf.streetTrees.push_back(st.base);
             // ONE POLE PER APPROACH: a signalled link whose pole would stand within 2.5 m of one already placed,
@@ -8325,13 +8262,10 @@ bool LevelLoader::load(const std::string& path,
                 engine::StreetFurniture::Signal sig;
                 sig.base = s.base;
                 sig.face = s.face;
-                sig.link = s.link;
-                if (s.arm >= 0) {   // the arm attachFurniture attaches its head to, below (ADR-0456 lights it by it)
-                    const engine::LevelRoadModel::Place a = unpackArm(s.arm);
-                    sig.city = a.city;
-                    sig.junction = a.junction;
-                    sig.arm = a.arm;
-                }
+                // the arm attachFurniture attaches its head to, below (ADR-0456 lights it by it)
+                sig.city = s.city;
+                sig.junction = s.junction;
+                sig.arm = s.armIndex;
                 bool shared = false;
                 for (const auto& o : sf.signalPoles) {
                     const Vec3 d = o.base - s.base;
@@ -8346,19 +8280,18 @@ bool LevelLoader::load(const std::string& path,
                 sf.signalPoles.push_back(sig);
                 sharedPole.push_back(shared ? 1 : 0);
             }
-            if (modelFurniture) attachFurniture(furnitureModel, nav, fplan);
+            if (modelFurniture) attachFurniture(furnitureModel, fplan);
 #ifdef RT_ROADS_LANES
             if (controlSignsWanted) {
                 attachControlSigns(furnitureModel, controlSigns);
                 if (const char* dumpPath = std::getenv("RT_SIGN_DUMP")) dumpControlSigns(furnitureModel, controlSigns, dumpPath);
             }
 #endif
-            // RT_FURNITURE_DUMP=<file>: which junctions the sim's signals light and which have poles (each node's own
-            // junction, by id: ADR-0425), the poles, lamps and trees -- what a before-and-after comparison reads (ADR-0421)
+            // RT_FURNITURE_DUMP=<file>: which junctions are lit and which have poles (by id), the poles, lamps and trees --
+            // what a before-and-after comparison reads (ADR-0421)
             if (const char* dumpPath = std::getenv("RT_FURNITURE_DUMP")) {
                 nlohmann::json d;
-                auto junctionId = [&](int node) -> std::string {
-                    const int c = nav.cityOf(node), j = nav.junctionOf(node);
+                auto junctionId = [&](int c, int j) -> std::string {
                     if (!furnitureModel || c < 0 || j < 0 || static_cast<std::size_t>(c) >= furnitureModel->cities.size()) return std::string();
 #ifdef RT_ROADS_LANES
                     const engine::ModelJunction* J = furnitureModel->junctionAt(c, j);
@@ -8367,18 +8300,19 @@ bool LevelLoader::load(const std::string& path,
                     return std::string();
 #endif
                 };
-                d["signalled_nodes"] = nlohmann::json::array();
-                for (int n = 0; n < nav.streetNodeCount(); ++n)
-                    if (nav.signalControlled(n)) {
-                        const Vec2 at = nav.nodes[static_cast<std::size_t>(n)];
-                        d["signalled_nodes"].push_back({{"at", {at.x, at.y}}, {"junction", junctionId(n)}});
-                    }
+                d["lit_junctions"] = nlohmann::json::array();
+#ifdef RT_ROADS_LANES
+                for (const engine::FurnitureCity& fc : furnitureCities)
+                    for (std::size_t j = 0; j < fc.model->junctions.size(); ++j)
+                        if (engine::junctionLit(fc.model->junctions[j])) {
+                            const Vec2 at = fc.model->junctions[j].at;
+                            d["lit_junctions"].push_back({{"at", {at.x, at.y}}, {"junction", junctionId(fc.city, static_cast<int>(j))}});
+                        }
+#endif
                 d["poles"] = nlohmann::json::array();
-                for (const engine::StreetFurniture::Signal& s : sf.signalPoles) {
-                    const engine::NavLink& L = nav.links[static_cast<std::size_t>(s.link)];
-                    d["poles"].push_back({{"at", {s.base.x, s.base.z}}, {"face", {s.face.x, s.face.z}}, {"link", s.link},
-                                          {"shared", s.shared}, {"junction", junctionId(L.to)}});
-                }
+                for (const engine::StreetFurniture::Signal& s : sf.signalPoles)
+                    d["poles"].push_back({{"at", {s.base.x, s.base.z}}, {"face", {s.face.x, s.face.z}}, {"arm", s.arm},
+                                          {"shared", s.shared}, {"junction", junctionId(s.city, s.junction)}});
                 d["lamps"] = fplan.lampBases.size();
                 d["trees"] = fplan.trees.size();
                 d["unpoled_approaches"] = fplan.unpoledApproaches.size();
@@ -8389,7 +8323,7 @@ bool LevelLoader::load(const std::string& path,
                 const double hubRadius =
                     root.contains("citysim") && root["citysim"].is_object()
                         ? root["citysim"].value("hubRadius", 220.0) : 220.0;
-                engine::CityMap map{assembleCityMap(world, nav, fplan, hubRadius)};
+                engine::CityMap map{assembleCityMap(world, fplan, hubRadius)};
                 std::vector<const engine::RoadDeckField*> decks;
                 world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
                 if (const char* svgPath = std::getenv("RT_CITY_SVG")) {
@@ -8526,8 +8460,13 @@ bool LevelLoader::load(const std::string& path,
                     for (const CityControlSigns& cs : controlSigns)
                         for (const engine::PlacedSign& s : cs.plan.signs) avoid.push_back(Vec3(s.at.x, 0, s.at.y));
 #endif
+                    std::vector<engine::SignCarriageway> carriageways;
+                    for (const engine::FurnitureCity& fc : furnitureCities) {
+                        const std::vector<engine::SignCarriageway> one = engine::carriagewaysOf(*fc.model);
+                        carriageways.insert(carriageways.end(), one.begin(), one.end());
+                    }
                     const std::vector<engine::StreetSignPost> posts =
-                        engine::planStreetSigns(corners, engine::carriagewaysOf(nav), furnGround, sp, avoid);
+                        engine::planStreetSigns(corners, carriageways, furnGround, sp, avoid);
                     attachSignBlades(roadModel, posts);
                     const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
                     const engine::StreetSignMeshes sm = engine::buildStreetSignMeshes(posts, atlas, sp);
@@ -8960,18 +8899,16 @@ bool LevelLoader::load(const std::string& path,
                         }
                     LOG_INFO << "[furniture] signal heads within 1.5 m of another head: " << crowded << " of " << heads.size() << at;
                 }
-                // RT_SIGNAL_NEAR=x,z,r: every pole within r of (x, z) -- base, facing, its link's ends, width, lanes
+                // RT_SIGNAL_NEAR=x,z,r: every pole within r of (x, z) -- base, facing, its junction and arm
                 if (const char* q = std::getenv("RT_SIGNAL_NEAR")) {
                     double qx = 0, qz = 0, qr = 40;
                     std::sscanf(q, "%lf,%lf,%lf", &qx, &qz, &qr);
                     for (std::size_t i = 0; i < sf.signalPoles.size(); ++i) {
                         const auto& P = sf.signalPoles[i];
                         if ((P.base.x - qx) * (P.base.x - qx) + (P.base.z - qz) * (P.base.z - qz) > qr * qr) continue;
-                        const auto& L = nav.links[static_cast<std::size_t>(P.link)];
                         LOG_INFO << "[signal near] pole " << i << (sharedPole[i] ? " (shared)" : "") << " base " << P.base.x << " "
-                                 << P.base.y << " " << P.base.z << " face " << P.face.x << " " << P.face.z << " | link " << P.link
-                                 << " " << nav.nodes[L.from].x << "," << nav.nodes[L.from].y << " -> " << nav.nodes[L.to].x << ","
-                                 << nav.nodes[L.to].y << " width " << L.width << " lanes " << L.lanes << " layer " << L.layer;
+                                 << P.base.y << " " << P.base.z << " face " << P.face.x << " " << P.face.z << " | city " << P.city
+                                 << " junction " << P.junction << " arm " << P.arm;
                     }
                 }
             }

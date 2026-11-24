@@ -6,6 +6,10 @@
 #include "../driving/give_way.h"       // registerJunctionFacts
 #include "../driving/room.h"           // registerRoomFacts
 #include "../driving/road_rules.h"
+#include "../../engine/asset_root.h"   // assetPath: the bus service file
+#include "../../log.h"
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "../../engine/script_assets.h"   // loadScriptCode, resolveScriptPath
 #ifdef RT_ENABLE_SCRIPTING
 #include "../driving/scripting/rule_set_lua.h"
@@ -84,6 +88,12 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
         for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
         return refuse("the thing step would not register: " + all);
     }
+    // Lane changes (sitting 5): the lane the route needs, the gap beside, the move across.
+    if (!driving::registerLaneChangeFacts(facts, &problems) || !driving::registerLaneChangeAnswers(vocabulary, &err)) {
+        std::string all = err;
+        for (const std::string& p : problems) all += (all.empty() ? "" : "; ") + p;
+        return refuse("the lane change step would not register: " + all);
+    }
     if (!driving::loadRules(vm, file, facts, ruleSet, vocabulary, rules, &err)) return refuse(err);
     driving::RoadRules roadRules;
     if (!driving::buildRoadRules(*d.model(), ruleSet, facts, roadRules, &problems)) {
@@ -101,6 +111,60 @@ bool loadDrivingRules(const std::string& file, driving::Driving& d, std::string*
     if (why) *why = "this build has no scripting, so no rule set can be read";
     return false;
 #endif
+}
+
+// ---- The buses' service (ADR-0483) -------------------------------------------------------------------------------------
+
+const BusService& busService() {
+    static const BusService service = [] {
+        BusService b;
+        const std::string path = engine::assetPath("assets/data/bus_service.json");
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            LOG_WARN << "[buses] " << path << " is missing: no bus runs";
+            return b;
+        }
+        const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false);
+        if (doc.is_discarded() || !doc.contains("headway_minutes") || !doc.contains("most_buses_per_line") || !doc.contains("dwell_seconds") ||
+            !doc.contains("traffic_factor") || !doc.contains("capacity") || !doc.contains("door_seconds") ||
+            !doc.contains("doors_shut_before")) {
+            LOG_WARN << "[buses] " << path << ": not JSON, or a number is missing (headway_minutes, most_buses_per_line, dwell_seconds, "
+                                              "traffic_factor, capacity, door_seconds, doors_shut_before): no bus runs";
+            return b;
+        }
+        b.headwayMinutes = doc["headway_minutes"].get<Real>();
+        b.mostBusesPerLine = doc["most_buses_per_line"].get<int>();
+        b.dwellSeconds = doc["dwell_seconds"].get<Real>();
+        b.trafficFactor = doc["traffic_factor"].get<Real>();
+        b.capacity = doc["capacity"].get<int>();
+        b.doorSeconds = doc["door_seconds"].get<Real>();
+        b.doorsShutBefore = doc["doors_shut_before"].get<Real>();
+        b.usable = b.headwayMinutes > 0 && b.mostBusesPerLine > 0 && b.dwellSeconds >= 0 && b.trafficFactor >= 1 && b.capacity > 0 &&
+                   b.doorSeconds > 0 && b.doorsShutBefore >= 0 && 2 * b.doorSeconds + b.doorsShutBefore < b.dwellSeconds;
+        if (!b.usable) LOG_WARN << "[buses] " << path << ": a number is out of range: no bus runs";
+        return b;
+    }();
+    return service;
+}
+
+Real busDoorsOpenness(const CityBusRuns& runs) {
+    const BusService& s = busService();
+    if (!runs.standing || s.doorSeconds <= 0) return 0;
+    const Real opened = s.dwellSeconds - runs.dwellLeft;      // seconds since it stopped
+    const Real shutting = runs.dwellLeft - s.doorsShutBefore;  // seconds left before they must be shut
+    return std::clamp(std::min(opened, shutting) / s.doorSeconds, Real(0), Real(1));
+}
+
+// Where a bus stands at stop `stop` of line `line`: the kerb lane beside it (RoadModel::busStopLane). False: no such stop,
+// or no kerb lane there.
+static bool busStopPoint(const driving::Driving& d, uint32_t line, uint32_t stop, driving::PathPoint& out) {
+    const engine::RoadModel* m = d.model();
+    if (!m || line >= m->busLines.size() || stop >= m->busLines[line].stops.size()) return false;
+    const engine::KerbLanePlace k = m->busStopLane(m->busLines[line].stops[stop]);
+    if (!k.valid()) return false;
+    out.path = k.path;
+    out.along = k.along;
+    return true;
 }
 
 // ---- The hand-over ---------------------------------------------------------------------------------------------------
@@ -150,6 +214,7 @@ static void copyPose(const driving::Driving& d, const driving::Car& c, CityCarOn
     lane.speed = c.speed;
     lane.driven = c.driven;
     lane.braking = DrivingHost::braking(d, lane.car);
+    lane.signal = static_cast<int8_t>(d.signalSide(lane.car));
     lane.fresh = false;
 }
 
@@ -157,12 +222,28 @@ bool DrivingHost::putDown(driving::Driving& d, engine::Entity e, Real room) {
     const CityCarBody& body = *carWorld_->get<CityCarBody>(e);
     CityCarRoams& roams = *carWorld_->get<CityCarRoams>(e);
     const driving::CarId car(body.id);
-    const driving::TripPlacing p = driving::putCarSomewhere(d, placesFor(d, body.vehicleClass), car, body.vehicleClass,
-                                                            room, seed_, driving::PersonId(body.id), roams.startDraws,
-                                                            kPlaceTries);
-    if (!p.done) {
-        ++counts_.noRoomYet;
-        return false;
+    if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e)) {
+        // A BUS is put down at the stop it is to start from, when there is room there (a standstill gap: it pulls in at
+        // its own stop, so the room asked of a car dropped anywhere into moving traffic is not asked of it); then it
+        // drives to the next
+        (void)room;
+        driving::PathPoint at;
+        const Real length = d.vehicleClasses().at(body.vehicleClass).length;
+        if (!busStopPoint(d, bus->line, bus->stop, at) || !driving::roomFor(*d.roads(), d.pathLists(), at, length, kStartRoom) ||
+            !d.placeCar(car, body.vehicleClass, at)) {
+            ++counts_.noRoomYet;
+            return false;
+        }
+        bus->stop = (bus->stop + 1) % static_cast<uint32_t>(d.model()->busLines[bus->line].stops.size());
+        bus->standing = false;
+    } else {
+        const driving::TripPlacing p = driving::putCarSomewhere(d, placesFor(d, body.vehicleClass), car, body.vehicleClass,
+                                                                room, seed_, driving::PersonId(body.id), roams.startDraws,
+                                                                kPlaceTries);
+        if (!p.done) {
+            ++counts_.noRoomYet;
+            return false;
+        }
     }
     ++counts_.placed;
     CityCarOnLane lane;
@@ -194,6 +275,24 @@ bool DrivingHost::takenByPlayer(driving::Driving& d, engine::Entity e) {
 bool DrivingHost::sendOn(driving::Driving& d, engine::Entity e) {
     const CityCarBody& body = *carWorld_->get<CityCarBody>(e);
     CityCarRoams& roams = *carWorld_->get<CityCarRoams>(e);
+    if (const CityBusRuns* bus = carWorld_->get<CityBusRuns>(e)) {
+        // A BUS drives to the stop it is bound for
+        driving::PathPoint to;
+        const driving::TripId trip = busStopPoint(d, bus->line, bus->stop, to)
+                                         ? d.beginTrip(driving::CarId(body.id), driving::PersonId(body.id), to)
+                                         : driving::TripId();
+        if (!trip.valid()) {
+            ++counts_.routesNotFound;
+            return false;
+        }
+        CityBusRuns& runs = *carWorld_->get<CityBusRuns>(e);
+        runs.driving = 0;
+        const driving::Route* r = d.route(trip);
+        runs.freeFlow = r ? r->seconds : 0;
+        ++counts_.tripsBegun;
+        if (CityCarOnLane* lane = carWorld_->get<CityCarOnLane>(e)) lane->driven = true;
+        return true;
+    }
     const driving::TripPlacing p = driving::sendCarSomewhere(d, placesFor(d, body.vehicleClass), driving::CarId(body.id),
                                                              driving::PersonId(body.id), seed_, roams.tripDraws,
                                                              kPlaceTries);
@@ -255,6 +354,7 @@ std::string DrivingHost::begin(driving::Driving& d, engine::World& world, uint32
     const OwnCars own = ownCars();
     counts_ = DrivingCounts();
     counts_.drivers = static_cast<uint32_t>(own.size());
+    for (const std::pair<uint32_t, engine::Entity>& c : own) counts_.buses += world.has<CityBusRuns>(c.second) ? 1 : 0;
     // THE COUNTING LINES (issue #284): the line of every junction whose lights run a programme -- the end of each lane
     // that leads into its connectors -- so the measurements' queue rows see queues empty over them (before, the host
     // registered none and those rows had no data). Only lit lines: the rows' targets are a queue leaving on a green
@@ -324,11 +424,41 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
             ++counts_.arrivals;
             arrived.push_back(e.car);
         }
+        if (e.kind == driving::EventKind::WreckCleared) {
+            // (sitting 7: the driving took the wreck off the road; it is put down again below, where it can drive from)
+            const engine::Entity w = entityOf(e.car);
+            if (carWorld_ && w.valid()) carWorld_->remove<CityCarOnLane>(w);
+            --counts_.placed;
+        }
     }
-    for (const driving::CarId car : arrived) sendOn(d, entityOf(car));
+    for (const driving::CarId car : arrived) {
+        const engine::Entity e = entityOf(car);
+        if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e)) {
+            // A BUS AT ITS STOP stands there with its doors open, then drives on to the next
+            bus->standing = true;
+            bus->dwellLeft = busService().dwellSeconds;
+            ++bus->calls;
+            ++counts_.busCalls;
+            if (bus->freeFlow > 0) {
+                counts_.busDriven += bus->driving;
+                counts_.busFreeFlow += bus->freeFlow;
+            }
+            continue;
+        }
+        sendOn(d, e);
+    }
     for (const std::pair<uint32_t, engine::Entity>& c : own) {
         const driving::CarId car(c.first);
         const engine::Entity e = c.second;
+        if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e); bus && !bus->standing) bus->driving += dt;
+        if (CityBusRuns* bus = carWorld_->get<CityBusRuns>(e); bus && bus->standing && d.car(car)) {
+            bus->dwellLeft -= dt;
+            if (bus->dwellLeft > 0) continue;
+            bus->standing = false;
+            bus->stop = (bus->stop + 1) % static_cast<uint32_t>(d.model()->busLines[bus->line].stops.size());
+            sendOn(d, e);
+            continue;
+        }
         if (!d.car(car)) {
             // Not put down yet (no room was found): try again, now with moving traffic about.
             if (putDown(d, e, kMovingRoom)) sendOn(d, e);
@@ -341,8 +471,8 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
             --counts_.placed;
             ++counts_.replaced;
             if (putDown(d, e, kMovingRoom)) sendOn(d, e);
-        } else if (!d.tripOf(car).valid()) {
-            // Arrived earlier but no destination was found then: try again.
+        } else if (!d.tripOf(car).valid() && !d.isWreck(car)) {
+            // Arrived earlier but no destination was found then: try again. (A wreck stands until it is cleared.)
             sendOn(d, e);
         }
     }

@@ -94,6 +94,7 @@ struct StepContext {
     World* world = nullptr;
     WalkSkill* walk = nullptr;
     DriveSkill* drive = nullptr;
+    RideSkill* ride = nullptr;
     AgentId agent = kNoAgent;
     BrainTime now = 0;
     bool skillsRun = false;       // the person is near, so skills move them (false: far, the clock alone)

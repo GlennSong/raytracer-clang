@@ -32,6 +32,11 @@ using engine::Real;
 using engine::Vec2;
 using engine::Vec3;
 
+// A car this near (m) to pulling into a kerb space goes back to the lane, and one pulling out of one or about to pull in
+// is not taken into physics: the move across is the driving's curve (Driving::atTheKerb). [~] the curve (about 11 m),
+// a body length, and room to hand it back at a street's speed.
+constexpr engine::Real kKerbHandBack = 40.0;
+
 namespace {
 
 constexpr Real kDegrees = 57.29577951308232;
@@ -537,9 +542,14 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     int switches = 0;
     // OUT, the farthest first: beyond `leave`, back to the lane when it may (else it stays, over the cap if it must)
     std::vector<std::pair<Real, Entity>> out;
+    const driving::Driving* kerbDriving = city_.simMutable().drivingV2Mutable();
     world.each<CityNearCar, engine::Transform>([&](Entity e, CityNearCar&, engine::Transform& t) {
         const Real away = (flat(t.position) - centre).length();
         if (away > rules_.leave) out.push_back({away, e});
+        else if (world.has<CityCarCarriesPlayer>(e)) out.push_back({1e9, e});   // (the player's bus: back first)
+        // (about to pull into a kerb space: the driving drives that, on its curve -- back to the lane first)
+        else if (const CityNearCar* n = world.get<CityNearCar>(e); n && kerbDriving && kerbDriving->atTheKerb(n->car, kKerbHandBack))
+            out.push_back({1e8, e});
     });
     std::sort(out.begin(), out.end(), [](const std::pair<Real, Entity>& a, const std::pair<Real, Entity>& b) {
         return a.first > b.first;
@@ -555,7 +565,7 @@ void CityNearSystem::tierStep(engine::FrameContext& ctx) {
     std::vector<std::pair<Real, Entity>> in;
     world.each<CityCarBody, CityCarLink, CityCarOnLane, engine::Transform>(
         [&](Entity e, CityCarBody&, CityCarLink& link, CityCarOnLane& lane, engine::Transform& t) {
-            if (link.away || !lane.driven || world.has<engine::Vehicle>(e)) return;
+            if (link.away || !lane.driven || world.has<engine::Vehicle>(e) || world.has<CityCarCarriesPlayer>(e)) return;
             const Real away = (flat(t.position) - centre).length();
             if (away < rules_.enter) in.push_back({away, e});
         });
@@ -871,6 +881,7 @@ bool CityNearSystem::toPhysics(engine::World& world, engine::AssetManager& asset
     if (world.has<engine::Vehicle>(e)) return refuse("it is a physics car already");
     const driving::Car* c = d->car(lane->car);
     if (!c || !c->driven) return refuse("the driving has it on no trip");
+    if (d->atTheKerb(lane->car, kKerbHandBack)) return refuse("pulling out of or into a kerb space");
     if (c->vehicleClass >= d->vehicleClasses().size()) return refuse("its vehicle class is unknown");
     const SlotCar& slotted = slotCar(body->slot);
     if (!slotted.why.empty() || !slotted.spec) return refuse("its slot has no Jolt car", slotted.why);

@@ -104,9 +104,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/road_network.h"
 #include "engine/procgen/city/polygon.h"
 #include "apps/citysim/city_sim.h"
-#include "engine/ai/nav_graph.h"
 #include "engine/procgen/city/roads/road_model.h"   // plannedRoadModel: the street map's source (ADR-0425)
-#include "engine/procgen/city/roads/street_map.h"   // appendStreetMap
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -1386,8 +1384,10 @@ TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
     // identical under RT_LAYERS_FLAT=1 (RT_SEE_THROUGH_RAY). #142's along-the-road partner pull (2026-11-10) lifts a
     // low deck at (-38, 70) 0.3 m, which moves the eyes again: one more slab-corner tie there, 7 (the same look,
     // RT_SEE_THROUGH_RAY with the direction normalised, meets the soffit's front in both builds).
-    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 1}, {"light_rail_lab", 0},
-                                                 {"rail_loop", 0}, {"system_interchange", 7}, {"valley_viaduct", 5}};
+    // Re-pinned (ADR-0479, 2026-11-20): system_interchange 7 -> 8, freeway_cross_relief 1 -> 0, 13 in all as before. The
+    // layers opened by 1 cm bevel their convex corners, which moves the eyes again: a slab-corner tie moved scenes.
+    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 0},
+                                                 {"rail_loop", 0}, {"system_interchange", 8}, {"valley_viaduct", 5}};
     for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         const std::vector<NamedMesh> meshes = buildMeshes(r);

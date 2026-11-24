@@ -135,10 +135,17 @@ struct Car {
     engine::PathId path;              // the path its front bumper is on
     // The second path it is ALSO listed on while changing lanes (the lane it is moving into or out of); none otherwise.
     engine::PathId besidePath;
+    // ...and where its front is along THAT lane, less where it is along its own (m): the two lanes of a section are not
+    // level metre for metre on a bend (the inner lane is shorter), so it is listed there at its own place (sitting 5).
+    Real besideShift = 0;
     Real along = 0;                   // where its front bumper is: metres along `path`
     // How far its middle is to the side of the path's centre line: + toward the kerb side, - toward the offside. Zero
     // except during a lane change.
     Real offset = 0;
+    // How far its REAR's offset lags its front's (drawn only: carPose puts the rear at offset + this). Zero but in a lane
+    // change, where the rear follows the front's S-curve a body length behind, so the car turns toward the lane it
+    // moves into instead of sliding across square.
+    Real offsetRearLag = 0;
     Real speed = 0;                   // m/s along the path
     Real acceleration = 0;            // m/s2 along the path
     // The earlier paths its body still lies on, nearest first: trail[0] leads into `path`, trail[1] into trail[0], ...
@@ -243,6 +250,14 @@ struct Neighbour {
 // the split and whose front is further along than mine is also a car ahead, its rear placed where it is level with on
 // my path (the two stretches matched end to end): the car behind follows the car ahead until their paths are apart
 // (issue #283, ADR-0408).
+// WHERE A CAR ON THE OTHER PATH IS FOLLOWED (carAhead): a split's two paths leaving one lane, and a join of two lanes
+// out on the road (filed under no junction: a ramp's lane into its host's) -- over the record's stretch the car further
+// along goes first. The wait check asks the same (Driving::waitReasonHolds), so the two never disagree.
+inline bool followedAcross(const engine::CrossingPoint& rec) {
+    if (rec.otherSide != engine::OtherSide::Path) return false;
+    return rec.meeting == engine::Meeting::Split || (rec.meeting == engine::Meeting::Join && !rec.junction.valid());
+}
+
 Neighbour carAhead(const engine::LaneGraph& roads, const std::vector<Car>& cars, const PathLists& lists, CarId me,
                    const std::vector<engine::PathId>& pathsAhead, Real lookAhead);
 

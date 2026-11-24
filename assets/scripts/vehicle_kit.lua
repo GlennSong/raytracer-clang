@@ -1325,10 +1325,11 @@ function kit.build(P, level, opts)
   if P.sign then lights[#lights + 1] = { name = "dest_sign", pos = shifted(P.sign) } end
   -- the bus's other boards (city_render: the destination again on the back and the kerb side, the next stop inside)
   for _, b in ipairs(P.signs or {}) do lights[#lights + 1] = { name = b[1], pos = shifted(b[2]) } end
-  local seats, doors = nil, nil
+  local seats, doors, seat_facing = nil, nil, nil
   if saloon then
     seats, doors = {}, {}
     for i, q in ipairs(saloon.seats) do seats[i] = shifted(q) end
+    seat_facing = saloon.seat_facing   -- (directions: not shifted; the way each seat's rider faces, ADR-0485)
     for i, q in ipairs(saloon.doors) do doors[i] = shifted(q) end
   end
   -- ITS CARGO SPACE (ADR-0358): the box things are laid in, chassis frame, from the panel that opens it -- the boot
@@ -1349,6 +1350,7 @@ function kit.build(P, level, opts)
     end
   end
   return { saloon = saloon and mesh.translate(saloon.mesh, { 0, -cy, -cz }) or nil, seats = seats, doors = doors, cargo = cargo,
+           seat_facing = seat_facing,
            parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
            length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
            -- the back bench's hip point (its middle), when the cabin has one: where a back-seat rider sits

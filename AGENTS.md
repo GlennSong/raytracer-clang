@@ -388,9 +388,8 @@ model. Making another new one is unacceptable."
   there, stating it (from the road file, or derived ONCE in one function inside the model) is the first piece of
   your task, before any reader uses it. Never a private derivation "for now".
 - **No second graph of the roads.** A copy of a model fact for speed is a value attached to the model's own element
-  (by its id), never a structure with its own nodes, links or topology. The street map (`street_map.h`, the
-  `NavGraph` people route on) IS such a second graph, built from the model with nodes of its own every 60 m, and it is
-  being removed (people route on the model itself). Until it is gone, no new reader of it and no new fact on it.
+  (by its id), never a structure with its own nodes, links or topology. (The street map, the last such second graph,
+  was deleted with #306: people route on the model itself.)
 - **No new road structure outside the model.** No table mapping one road id to another, no "which crosswalk/arm/kerb
   is this" test, no merging streets by position, in apps, tests or tools. Test fixtures build roads through the
   model too.

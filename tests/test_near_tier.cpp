@@ -700,6 +700,19 @@ ThingRun runThing(ThingKind kind) {
                         static_cast<unsigned long long>(rig.d().thingCounts().anotherWays),
                         static_cast<unsigned long long>(rig.d().thingCounts().anotherWaysWanted), rig.d().passOffset(id));
     }
+    if (std::getenv("RT_THING_LOG") && rig.d().car(driving::CarId(1000)))
+    {
+        std::printf("%s\n", rig.d().describeCar(driving::CarId(1000)).substr(0, 2500).c_str());
+        if (const engine::roads::Route* rt = rig.d().route(rig.d().tripOf(driving::CarId(1000)))) {
+            for (const engine::roads::RouteLeg& l : rt->legs) {
+                std::printf("    [thing] leg lane %u, %.1f m, %.2f..%.2f, lanes:", l.lane.index, l.metres, l.enterFraction, l.leaveFraction);
+                for (uint32_t k = l.firstLane; k < l.firstLane + l.laneCount; ++k)
+                    std::printf(" %u(%u/%u, %.1f m, next %u)", rt->lanes[k].lane.index, rt->lanes[k].changes, rt->lanes[k].changesIfStaying,
+                                rt->lanes[k].length, rig.d().roads()->paths[rt->lanes[k].lane.index].next.count);
+                std::printf("\n");
+            }
+        }
+    }
     out.honked = rig.d().thingCounts().horns > 0;
     out.swerved = rig.d().thingCounts().swerves > 0;
     out.anotherWay = rig.d().thingCounts().anotherWays > 0;
@@ -836,6 +849,13 @@ constexpr int kProbeStepsPerFrame = 8;      // the clock's cap (clock.h MAX_STEP
 // person on foot or another near car (each checked: 0). The chassis hits left are the ground: car 83 scraping the road
 // under hard braking (the ground is a static body, which a driver's look never sees). A near car pushed off its line
 // steers back within kSteerBack.
+// STATE AFTER THE #306 RE-BAKE (ADR-0478, ADR-0479): the S7 bake put the near cars across sub-millimetre sidewalk slivers
+// standing as 10 cm kerb faces in traffic_lab's j7 and j19 (hits on other things 0 -> 65, the longest off its lane 9.5 ->
+// 220.7 s, car 148 resting against j19's). ADR-0479 opens the layers by 1 cm and the slivers are gone: hits on other
+// things 65 -> 3 (car 179 on s260's real kerb at 0.69 m/s, and two on a walker), the longest off its lane 220.7 -> 4.3 s.
+// STILL FAILING, left on purpose: hits on walkers 2, car 220 touching a walker on s15 at j11 (-259.8, 47.7) at 1.6 m/s,
+// then 0.15 m/s. The pins below are not retaken until it passes (now: 14 at minute 9, in 76, out 64,
+// 0x79168141d1414b43).
 constexpr uint32_t kChassisHitsKnown = 8;
 constexpr Real kOffLaneKnownWorst = 5;      // s: kSteerBack, the time a car pushed off its line takes to steer back
 
@@ -1126,12 +1146,59 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // without it (with that sweep put back, and nothing else changed, the run gives 0x032b5fd2c2071980 again). And again
     // (ADR-0456) from 12 at minute 7, 0xdf46fdec96641d00, in and out the same: the old signal clock went, so a walker at a
     // junction the model's crosswalks do not rule judges the gap instead of waiting for that clock's WALK.
-    CHECK(mostNear == 13);
+    // RE-PINNED (#306 piece 6 W3, ADR-0480) from 13 at minute 12, in 83, out 63, 0x59168988decd4c99 to 11 at minute 8,
+    // in 81, out 71, 0xb182a398296f4017: the people walk the road model's walks by the one router (their own file across
+    // the sidewalk, crossing where their routes cross, waiting at the crosswalk's kerb end), so every walker's line, and
+    // every driver's stops for them, moved. STILL FAILING, not loosened: one touch on a walker (and one on another
+    // thing) -- car 220 stands 1.47 m off its lane on s20, 9.63 m from the centre line, so the car is off its
+    // carriageway when it meets the walker on the pavement.
+    // And again (ADR-0480 W3b) from 11 at minute 8, in 81, out 71, 0xb182a398296f4017 to 11 at minute 6, in 52, out 48,
+    // 0x0fb18ec83c665a00: the crowd maker puts places where the sim's walks and the brain's kerb spaces serve them (see
+    // test_brain_crowd), so brain_crowd's households, cars and days are other ones (cars 229 -> 209, the most on the road
+    // 80 -> 57). The touches above went with that day: on walkers 1 -> 0, on other things 1 -> 0.
+    // And again (#306, the street map's deletion) from 11 at minute 6, in 52, out 48, 0x0fb18ec83c665a00 to 20 at
+    // minute 12, in 120, out 90, 0xed4281eb889d8e9b: the sim's own walkers rest at and go to walk points on the road
+    // model's walks (city_walk_points.h), not street-map nodes, so every walker's day, and every driver's stops for
+    // them, moved. STILL FAILING, not loosened, on the known-bugs list: car 10 stands 0.56 m off its lane for 14.8 s
+    // (kOffLaneKnownWorst).
+    // And its second half (the street furniture planned on the road model -- one signal pole per arriving arm, a
+    // sidewalk's width back from its mouth; lamps, trees and kerb props along each kerb -- so what the cars and walkers
+    // meet stands elsewhere): in 120 -> 113, out 90 -> 77, 0xed4281eb889d8e9b -> 0x3c4be4561e729e50 (the most near the
+    // same, 20 at minute 12). WORSE, on the known-bugs list, not loosened: contacts 0 -> 7, hits on parked cars 0 -> 1,
+    // on walkers 0 -> 5, on other things 0 -> 14, the longest off its lane 14.8 s -> 18.7 s (car 1, 1.95 m off).
+    // And again (ADR-0480, the sweep's bugs, 1: every crosswalk's walk signal walks in some phase; a near turn no longer
+    // holds its green through every phase) from out 77, 0x3c4be4561e729e50 to out 82, 0x73ed4bc5b6d8b7fd (the most near
+    // 20 at minute 12 and in 113 the same): the lights' phases moved, so every driver's day did. Contacts 7 -> 0, hits on
+    // parked cars 1 -> 0, on walkers 5 -> 0, on other things 14 -> 0. STILL FAILING, not loosened: the longest off its
+    // lane 18.7 s -> 5.6 s (car 191, 0.94 m off), against kOffLaneKnownWorst's 5 s.
+    // And again (ADR-0480, the sweep's bugs, 3: a car following another along a split's stretch can never be put before
+    // it) from 20 at minute 12, in 113, out 82, 0x73ed4bc5b6d8b7fd to 18 at minute 12, in 115, out 85,
+    // 0x53bbbe48fe67229c. Contacts and every kind of hit still 0; the longest off its lane the same (car 191, 5.6 s: the
+    // pursuit's 4 m look-ahead cutting a 7 m turn as it stops in it, left as it is by Glenn's call).
+    // And again (ADR-0480, the sweep's bugs, 4: drives priced by the driving's router, so the residents' choices of
+    // walking or driving moved) from in 115, out 85, 0x53bbbe48fe67229c to in 117, out 80, 0x2bad62395eeaee44 (the most
+    // near the same, 18 at minute 12). The collisions are BACK: contacts 0 -> 3, hits on walkers 0 -> 14, on other things
+    // 0 -> 14, the longest off its lane 5.6 s -> 38.0 s (car 10, 0.53 m). Nothing in the near cars' driving changed:
+    // the clean runs after bugs 1 and 3 were trajectories that happened to miss, not a fix. Bug 2 stays open.
+    // And again (sitting 5: parking on the driving's curve, lane changes on by default, and a car pulling out of or into
+    // a kerb space left to the driving, never taken into physics: Driving::atTheKerb, kKerbHandBack) from 18 at minute
+    // 12, in 117, out 80, 0x2bad62395eeaee44 to 20 at minute 9, in 111, out 91, 0x268c4405c1d0db48. Contacts 0, and every
+    // kind of hit 3/14/14 -> 0. STILL FAILING, not loosened: the longest off its lane 38.0 s -> 7.9 s (car 204, 1.12 m).
+    // And again (sitting 6: junctions by judgement) to in 113, out 92, 0xe9fff1fe55f83570 (the most near the same, 20
+    // at minute 9). Contacts 0; the longest off its lane 7.9 -> 2.9 s (passes); hits on walkers 0 -> 12 and on other
+    // things 0 -> 19 are BACK, as at bug 4 above: trajectories, not the change (#329).
+    // And again (sitting 7: contact and crashes; a car nobody drives standing on a lane is a thing in drivers' way) to 23
+    // at minute 12, in 113, out 89, 0xa1a0f672f35848e0. Contacts 0; hits on walkers 12 -> 8, on other things 19 -> 10 (#329).
+    // And again (the alpha review, P1-1: the lane-change safety check reads the real follower behind a gap, not a car
+    // at that record index) to in 114, out 90, 0x03fb7f921747f374 (the most near the same). STILL FAILING, not
+    // loosened: contacts 0 -> 5, the longest off its lane back over -- a lane car's box shoves physics car 204 standing
+    // inside the box at 12:21, into car 14 waiting at its line (#332).
+    CHECK(mostNear == 23);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 83u);
-    CHECK(c.intoLane == 63u);
+    CHECK(c.intoPhysics == 114u);
+    CHECK(c.intoLane == 90u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x59168988decd4c99ull);
+    CHECK(hash == 0x03fb7f921747f374ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

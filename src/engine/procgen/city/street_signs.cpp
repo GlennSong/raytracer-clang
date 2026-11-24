@@ -1,4 +1,5 @@
 #include "street_signs.h"
+#include "roads/road_model.h"   // carriagewaysOf: the streets' centre lines and widths
 
 #include "../../mesh_builder.h"
 #include "../../asset_root.h"
@@ -69,14 +70,12 @@ Real SignBlade::widthM() const {
     return hPx > 0 ? heightM * static_cast<Real>(wPx) / static_cast<Real>(hPx) : 0.0;
 }
 
-std::vector<SignCarriageway> carriagewaysOf(const NavGraph& streets) {
+std::vector<SignCarriageway> carriagewaysOf(const RoadModel& m) {
     std::vector<SignCarriageway> out;
-    std::set<std::pair<int, int>> seen;   // (a two-way street's two links: one carriageway)
-    for (int li = 0; li < streets.streetLinkCount(); ++li) {
-        const NavLink& L = streets.links[static_cast<std::size_t>(li)];
-        if (L.footpath || L.from < 0 || L.to < 0) continue;
-        if (!seen.insert({std::min(L.from, L.to), std::max(L.from, L.to)}).second) continue;
-        out.push_back({streets.nodes[static_cast<std::size_t>(L.from)], streets.nodes[static_cast<std::size_t>(L.to)], L.width});
+    for (const ModelStreet& S : m.streets) {
+        if (!S.section.carriesCars() || S.line.count < 2) continue;
+        for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i)
+            out.push_back({m.linePoints[i], m.linePoints[i + 1], S.section.travelWidth()});
     }
     return out;
 }

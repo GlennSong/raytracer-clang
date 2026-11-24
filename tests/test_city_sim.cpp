@@ -1,8 +1,7 @@
 #include "test_framework.h"
 
-#include "city_test_util.h"
+#include "model_scene.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/procgen/city/road_network.h"
 #include "../src/apps/citysim/places.h"
 
 #include <algorithm>
@@ -13,17 +12,18 @@ using namespace engine;
 using namespace citysim;
 
 namespace {
-// This file's grid town (city_test_util.h cityNav, historical dimensions/seed).
-NavGraph cityNav() { return citytest::cityNav(200, 50, 7); }
+// This file's grid town (city_test_util.h gridCity, its historical size and seed) as a road file, built as a level's roads
+// are and walked on the street map made from its road model (model_scene.h, #306 piece 6 W2).
+const citytest::ModelScene& town() { return citytest::gridScene(200, 50, 7); }
 }  // namespace
 
 // THE DRIVING (#234): a sim that holds the driving library ticks it once per sim tick, and its people do exactly what
 // they do in a sim without it.
 TEST_CASE(city_sim_driving_ticks_alongside_the_people) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim v1, v2;
-    v1.build(nav, 35, 99);
-    v2.build(nav, 35, 99);
+    scene.build(v1, 35, 99);
+    scene.build(v2, 35, 99);
     v2.useDrivingV2(true);
     CHECK(v1.drivingV2() == nullptr);
     CHECK(v2.drivingV2() != nullptr);
@@ -51,9 +51,9 @@ TEST_CASE(city_sim_driving_ticks_alongside_the_people) {
 }
 
 TEST_CASE(city_player_agent_is_not_auto_driven) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 10, 7);
+    scene.build(sim,10, 7);
     sim.setPlayerControlled(0, true);
     Vec2 start = sim.agents()[0].pos;
     bool othersMoved = false;
@@ -67,9 +67,9 @@ TEST_CASE(city_player_agent_is_not_auto_driven) {
 }
 
 TEST_CASE(city_people_commute) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 40, 55);
+    scene.build(sim,40, 55);
     bool atWork = false;
     for (int i = 0; i < 6000 && !atWork; ++i) {
         sim.step(0.1, 0.3);
@@ -80,10 +80,10 @@ TEST_CASE(city_people_commute) {
 }
 
 TEST_CASE(city_is_deterministic) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim a, b;
-    a.build(nav, 40, 4242);
-    b.build(nav, 40, 4242);
+    scene.build(a,40, 4242);
+    scene.build(b,40, 4242);
     for (int i = 0; i < 2500; ++i) { a.step(0.1, 0.3); b.step(0.1, 0.3); }
     bool same = a.agents().size() == b.agents().size();
     for (std::size_t i = 0; i < a.agents().size() && same; ++i)
@@ -105,9 +105,9 @@ TEST_CASE(city_is_deterministic) {
 // 8.5 — inside that window — the entire fleet left home on the first think and
 // the opening minutes of play were one city-wide jam.
 TEST_CASE(shift_archetypes_spread_the_departure_hours) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 2000, 11);
+    scene.build(sim,2000, 11);
 
     // Bucket by the archetype each departWork belongs to.
     int early = 0, standard = 0, swing = 0, night = 0, part = 0, other = 0;
@@ -147,9 +147,9 @@ TEST_CASE(shift_archetypes_spread_the_departure_hours) {
 // `clock >= departWork && clock < departHome` test makes that window empty and
 // the agent never goes to work at all — see inWindow() in city_sim.cpp.
 TEST_CASE(night_shift_agents_have_a_wrapping_window) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 2000, 11);
+    scene.build(sim,2000, 11);
 
     int wrapping = 0;
     for (const Agent& a : sim.agents())
@@ -171,9 +171,10 @@ TEST_CASE(night_shift_agents_have_a_wrapping_window) {
 // commuters drove a town 1.2 km across; a walker walks one 600 m across, its homes and offices at half the spacing.
 // The 1.2 km walk measured 656 s, 2.6 h at 0.004.)
 TEST_CASE(a_commute_fits_inside_the_working_day) {
-    NavGraph nav = citytest::cityNav(600, 90, 5);   // a town ~600 m across
+    const citytest::ModelScene& scene = citytest::gridScene(600, 90, 5);   // a town ~600 m across
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 400, 13);
+    scene.build(sim, 400, 13);
 
     // Places make assignPlaces (which measures the commute) meaningful.
     PlaceMap places;
@@ -181,7 +182,7 @@ TEST_CASE(a_commute_fits_inside_the_working_day) {
         places.add(PlaceType::Home, Vec2(-250 + i * 30.0, -200), nav);
     for (int i = 0; i < 6; ++i)
         places.add(PlaceType::Office, Vec2(-150 + i * 45.0, 200), nav, 9, 17);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
 
     const Real secs = sim.commuteSecondsMedian();
     CHECK(secs > 0);   // the measurement is actually wired up
@@ -210,9 +211,9 @@ TEST_CASE(a_commute_fits_inside_the_working_day) {
 // Its CAR stays where it is, drawn and collidable. Cars are state; agents are
 // the thing that can be recomputed.
 TEST_CASE(resting_agents_sleep_until_their_next_activity) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 300, 5);
+    scene.build(sim,300, 5);
 
     int peakSleeping = 0;
     long sleepingTicks = 0;
@@ -235,9 +236,9 @@ TEST_CASE(resting_agents_sleep_until_their_next_activity) {
 // so an agent that sleeps through a stretch and wakes on its window must end up
 // where one that was polled the whole time does.
 TEST_CASE(sleeping_does_not_change_the_day) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim a;
-    a.build(nav, 180, 31);
+    scene.build(a,180, 31);
 
     // Run a full in-world day and count what everyone is doing at the end.
     int atWork = 0, atHome = 0, commuting = 0;
@@ -255,7 +256,7 @@ TEST_CASE(sleeping_does_not_change_the_day) {
     CHECK(commuting < static_cast<int>(a.agents().size()));
     // Determinism survives the wake path.
     CitySim b;
-    b.build(nav, 180, 31);
+    scene.build(b,180, 31);
     for (int i = 0; i < 6000; ++i) b.step(0.1, 0.05);
     bool same = true;
     for (std::size_t i = 0; i < a.agents().size() && same; ++i)
@@ -276,12 +277,17 @@ TEST_CASE(sleeping_does_not_change_the_day) {
 // agent from the population's median travel time, not its own route, so
 // individuals legitimately differ while the shape of the day must not.
 TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 400, 17);
+    scene.build(sim,400, 17);
 
-    // Step to a definite hour, then ask the snapshot about that same hour.
-    const Real rate = 0.05;
+    // Step to a definite hour, then ask the snapshot about that same hour. THE RATE: 0.05 -> 0.02 h/s (#306 piece 6 W2).
+    // At 0.05 h/s a walk of a few minutes is most of a working day in-world: the hand-made map's town drew a median
+    // commute of 171.5 s (8.6 in-world hours); the same town built from its road file draws other home and work nodes
+    // (82 nodes, not 81; the same pairs route the same metres, measured: 95 pairs, 295.5 m mean on both) and a median of
+    // 219.6 s, 11 in-world hours, so at 14:00 nobody had arrived in the snapshot (0 at work) and the stepped sim had 304
+    // of 400 still walking. At 0.02 h/s the commute is 4.4 hours and the day's shape is the test's again.
+    const Real rate = 0.02;
     while (sim.timeOfDay() < 14.0) sim.step(0.1, rate);
     const Real clock = sim.timeOfDay();
 
@@ -304,6 +310,8 @@ TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
                 "snapshot: %d / %d / %d\n",
                 clock, simAtWork, simAtHome, simMoving,
                 snapAtWork, snapAtHome, snapMoving);
+    std::printf("    [snapshot] median commute %.1f s, %.1f in-world hours at this rate\n", sim.commuteSecondsMedian(),
+                sim.commuteSecondsMedian() * rate);
     // The same half of the day dominates in both. At 14:00 the standard and
     // early shifts are at work, so "at work" must lead in both accounts.
     CHECK(snapAtWork > 0);
@@ -314,9 +322,9 @@ TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
 // It is a PURE function of the hour: same agent, same clock, same answer, and
 // no dependence on what the sim happens to be doing.
 TEST_CASE(schedule_snapshot_is_pure_and_covers_the_whole_day) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 200, 23);
+    scene.build(sim,200, 23);
     const Agent& a = sim.agents()[0];
 
     for (Real h = 0; h < 24.0; h += 0.5) {
@@ -355,11 +363,11 @@ TEST_CASE(schedule_snapshot_is_pure_and_covers_the_whole_day) {
 // median travel time rather than each agent's own route, so individuals differ
 // while the shape of the day must not.
 TEST_CASE(seeding_produces_a_lived_in_city_at_any_hour) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
 
     auto census = [&](Real hour, int& atWork, int& atHome, int& moving) {
         CitySim sim;
-        sim.build(nav, 400, 29);
+        scene.build(sim,400, 29);
         sim.seedFromSchedule(hour);
         atWork = atHome = moving = 0;
         for (const Agent& a : sim.agents()) {
@@ -392,10 +400,10 @@ TEST_CASE(seeding_produces_a_lived_in_city_at_any_hour) {
 // Seeding is deterministic and repeatable — it is the same code path a woken
 // dormant agent will use, so an unstable seed would be an unstable world.
 TEST_CASE(seeding_is_deterministic) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim a, b;
-    a.build(nav, 280, 77);
-    b.build(nav, 280, 77);
+    scene.build(a,280, 77);
+    scene.build(b,280, 77);
     a.seedFromSchedule(9.25);
     b.seedFromSchedule(9.25);
     bool same = true;
@@ -426,11 +434,11 @@ TEST_CASE(seeding_is_deterministic) {
 // quarters of the population launched onto full-length routes the moment the
 // level loaded. It showed up as a city permanently at 60% in transit.
 TEST_CASE(seeding_respects_the_levels_clock_rate) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
 
     auto travellingAt = [&](Real rate, Real hour) {
         CitySim sim;
-        sim.build(nav, 1000, 19);
+        scene.build(sim,1000, 19);
         sim.setHoursPerSecond(rate);
         sim.seedFromSchedule(hour);
         int moving = 0;
@@ -457,9 +465,9 @@ TEST_CASE(seeding_respects_the_levels_clock_rate) {
 // are sim-seconds derived at the OLD rate; the sleeper must still wake on its
 // own in-world HOUR — slowed ten times, held, then run ten times faster.
 TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
-    NavGraph nav = cityNav();
+    const citytest::ModelScene& scene = town();
     CitySim sim;
-    sim.build(nav, 300, 5);
+    scene.build(sim,300, 5);
     for (int i = 0; i < 6000 && sim.sleepingAgents() == 0; ++i) sim.step(0.1, 0.05);
     CHECK(sim.sleepingAgents() > 0);
 
@@ -506,22 +514,23 @@ TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
 TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     const std::string dir = (std::filesystem::temp_directory_path() / "rt_population_cache_test").string();
     std::filesystem::remove_all(dir);
-    auto town = [&](CitySim& sim, NavGraph& nav, PlaceMap& places, Real shopClose) {
-        nav = citytest::cityNav(1200, 90, 5);
-        sim.build(nav, 500, 13);
+    auto town = [&](CitySim& sim, const engine::RoadModel*& nav, PlaceMap& places, Real shopClose) {
+        const citytest::ModelScene& scene = citytest::gridScene(1200, 90, 5);   // (model_scene.h, W2)
+        nav = scene.model.get();
+        scene.build(sim, 500, 13);
         for (int i = 0; i < 14; ++i) places.add(PlaceType::Home, Vec2(-500 + i * 60.0, -400), nav);
         for (int i = 0; i < 6; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 90.0, 400), nav, 9, 17);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-400 + i * 200.0, 0), nav, 8, shopClose);
         places.add(PlaceType::Park, Vec2(300, -100), nav);
         places.add(PlaceType::Cafe, Vec2(-100, 150), nav, 7, 19);
     };
-    NavGraph navA, navB, navC, navD;
+    const engine::RoadModel *navA = nullptr, *navB = nullptr, *navC = nullptr, *navD = nullptr;
     PlaceMap pA, pB, pC, pD;
     CitySim A, B, C, D;
     town(A, navA, pA, 20);
-    A.assignPlaces(pA, navA);                                           // no cache: the reference
-    town(B, navB, pB, 20); B.setPopulationCacheDir(dir); B.assignPlaces(pB, navB);   // decides, saves
-    town(C, navC, pC, 20); C.setPopulationCacheDir(dir); C.assignPlaces(pC, navC);   // reads
+    A.assignPlaces(pA);                                           // no cache: the reference
+    town(B, navB, pB, 20); B.setPopulationCacheDir(dir); B.assignPlaces(pB);   // decides, saves
+    town(C, navC, pC, 20); C.setPopulationCacheDir(dir); C.assignPlaces(pC);   // reads
     CHECK(B.populationCache().used && !B.populationCache().hit && B.populationCache().saved);
     CHECK(C.populationCache().hit);
     CHECK(C.populationCache().key == B.populationCache().key);
@@ -557,13 +566,13 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     CHECK(apart == 0);
 
     // a changed input misses
-    town(D, navD, pD, 21); D.setPopulationCacheDir(dir); D.assignPlaces(pD, navD);
+    town(D, navD, pD, 21); D.setPopulationCacheDir(dir); D.assignPlaces(pD);
     CHECK(!D.populationCache().hit && D.populationCache().key != C.populationCache().key);
 
     // VERIFY: decide again over a hit, compare
     setenv("RT_POPULATION_VERIFY", "1", 1);
-    NavGraph navE; PlaceMap pE; CitySim E;
-    town(E, navE, pE, 20); E.setPopulationCacheDir(dir); E.assignPlaces(pE, navE);
+    const engine::RoadModel* navE = nullptr; PlaceMap pE; CitySim E;
+    town(E, navE, pE, 20); E.setPopulationCacheDir(dir); E.assignPlaces(pE);
     unsetenv("RT_POPULATION_VERIFY");
     CHECK(E.populationCache().hit && E.populationCache().mismatches == 0);
     std::filesystem::remove_all(dir);

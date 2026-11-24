@@ -4,8 +4,8 @@
 #include <algorithm>
 #include "../../proc_rng.h"
 #include "../../engine/ai/agent_memory.h"
-#include "../../engine/ai/nav_graph.h"
-#include "../../engine/ai/pathfind.h"
+#include "../../engine/procgen/city/roads/route.h"   // the one router: a walker's route over the walks (W3)
+#include "city_walk_points.h"   // the sim's walk points: places on the road model's walks (the street map's nodes were)
 #include "agent_grid.h"
 #include "agent_id.h"
 #include "activities.h"
@@ -18,6 +18,7 @@
 #include "relationships.h"
 #include "../driving/driving.h"   // the driving (#234; a level that names citysim.drivingRules)
 #include "city_driving.h"         // ...and the city sim's side of it: the drivers handed over (#255)
+#include "city_buses.h"           // the people on the buses (ADR-0484)
 #include "city_poses.h"           // where the city's bodies are each fixed step (ADR-0454)
 #include <array>
 #include <cstdint>
@@ -45,12 +46,9 @@ class CityBrain;      // city_brain.h: the resident with the agent brain (ADR-04
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
-// kLayerClearance: nav_graph.h (the graph resolves a link's height above the ground with it).
-using engine::kLayerClearance;
-
-// The agent-based city simulation (ADR-0060). An Agent is a person on foot: it walks the street map (the cars are the
+// The agent-based city simulation (ADR-0060). An Agent is a person on foot: it walks the road model's walks (the cars are the
 // driving's car entities, city_car.h; a person in one is `inCar`, ADR-0444). The player is modelled as an agent too
-// (playerControlled = its brain is host input). This is the deterministic core (kinematic motion along the NavGraph).
+// (playerControlled = its brain is host input). This is the deterministic core (kinematic motion along the road model's walks).
 // (The old driving's agents in their own cars went with ADR-0461..0463.)
 
 struct Agent {
@@ -158,11 +156,8 @@ struct Agent {
     // along whatever route the director gave. This is NOT `released`, which
     // stops the agent being stepped at all, nor `playerControlled`, which hands
     // the body to the host: a directed agent is still the sim's to move.
-    // WHERE ON THE LAST LEG THE ERRAND ACTUALLY ENDS, in metres along it, or
-    // -1 for "at the node" (every ordinary trip). A route is a list of LINKS,
-    // so arrival used to mean reaching the end of the last one — which on a
-    // 40 m link leaves an agent 20 m from the door, or the car, it was sent to.
-    Real stopAtDist = -1;
+    // (Where on the last leg an errand ended, `stopAtDist`, went with the street map's routes in W3: a walk route ends
+    // at the point on the walks the destination joins, RoadModel::walkJoinNear.)
     bool directed = false;   // brain = host input; the sim won't auto-drive it
     // A DIRECTOR'S PACE ON FOOT (ADR-0441: the agent brain's walk skill, city_brain.h): while above 0, this walker moves
     // at that many times the walking speed and is drawn on `directedRide` (a board, a scooter, or nothing), whatever
@@ -216,7 +211,6 @@ struct Agent {
     int goal = 0;
     Real goalHours = 0;
     int restNode = -1;     // the node this agent last arrived at (wander departs from it)
-    int arrivedLink = -1;  // the link it arrived ALONG (wander avoids U-turning back up it)
     // INDOORS (Glenn, 2026-09-19: "agents who are at work or home should ...
     // go inside the building"). Resting at a door -- home, work, a shop, a
     // cafe -- means inside: not drawn, not a body on the pavement. Cleared the
@@ -258,13 +252,22 @@ struct Agent {
     Real thinkTimer = 0;
     Real leanTarget = 0;   // committed sideways lean (m); lateralOffset chases it
 
-    // Current trip along the lane graph.
-    engine::Route route;
+    // THE TRIP ON FOOT (#306 piece 6, W3; ADR-0480): a route over the road model's walks from the one router
+    // (roads/route.h findWalkRoute). `leg` is the step of it being walked (WalkRoute::steps), `distOnLeg` the metres
+    // walked from that step's start: along its walk, then across the gap to the next step's start (a joined walk end
+    // a few metres off, as the router measured it). Past the last step: arrived.
+    engine::roads::WalkRoute route;
     int leg = 0;
     int tripGoal = -1;   // the node the trip is really for
     int trips = 0;   // trips started so far — the ADR-0062 bridge rebuilds its
                      // pursuit path when this changes (a new route = a new path)
     Real distOnLeg = 0, speed = 0, elevation = 0;
+    // WHICH SIDE THE ROAD IS on the step being walked: +1 on the walker's right (rightOf its heading), -1 its left, 0
+    // none (a corner, a crossing, a walkway). A lean toward the road is limited on this side...
+    int8_t roadSide = 0;
+    // ...to this many metres (#314, at its cause): from where it walks on the walk to the walk's kerb edge, less half a
+    // body (refreshPose: half the walk's width plus its file's offset away from the road, less kWalkerHalfAcross).
+    float kerbRoom = 0;
     // Carriageway grade (dY/m of travel) on the current link — the render
     // pitches an ELEVATED car from this, since it cannot sample the deck the
     // way it samples the ground (device: "adhere ... with all 4 wheels").
@@ -359,20 +362,17 @@ const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
 // the body; it has no wheels, so the wheelbase and steering are vehicle_class.h's kUnknown* and the rest its defaults.
 driving::VehicleClasses builtInDrivingClasses();
 
-// How far off its final street a director's destination may sit and still be
-// walked to exactly. Beyond this it is not really "along that street" and the
-// agent arrives at the node instead.
-constexpr Real kErrandOffLink = 15.0;
 // How close you have to be to open a car door (possession's `board`, a trip's getting in). Measured rather than
 // guessed: a walker sent to a parked car stops on the PAVEMENT, and the car is parked on the far side of the
 // carriageway — 8.3 m off the street's centreline one way, the footway the other, about 20 m apart on a metro street
 // with nothing wrong. Reaching a car you can see across the road is a person crossing it, so the reach is a street's
 // width. Getting to the STREET is still the director's problem, which is the part that matters.
 constexpr Real kBoardReach = 25.0;
-// How many of the nodes nearest a walker sendAgentTo looks at for one a walkable link leaves (ADR-0446).
-constexpr int kWalkStartNodes = 8;
 // A walker's speed (m/s) before its own pace and what it rides on (Agent::speedFactor, CitySim::ridePace).
 constexpr Real kWalkSpeed = 1.4;
+// A WALKER TAKES THE BUS (ADR-0484) only when the ride, its walks and the mean wait come under this share of the walk:
+// a clear win, not a coin toss. [~] An estimate.
+constexpr Real kBusBeatsWalk = 0.8;
 // A comfortable speed to come to rest in `dist` metres at `decel`: v = sqrt(2 decel dist), capped to `maxSpeed`; zero
 // at or under the stop point. (A walker easing to a stop at a crosswalk's kerb end.)
 double approachStop(double dist, double decel, double maxSpeed);
@@ -389,9 +389,13 @@ struct SensedGhost {
 
 class CitySim {
 public:
-    // `pedCount` agents on foot over `graph`, seeded by `seed`. Deterministic (ADR-0002). Nobody is built driving: the
-    // cars are the driving's car entities (city_car.h; ADR-0461, ADR-0462).
-    void build(const engine::NavGraph& graph, int pedCount, uint32_t seed);
+    // THE PEOPLE ON THE BUSES (ADR-0484)
+    const BusRiders& buses() const { return buses_; }
+
+    // `pedCount` agents on foot over the walk points of the road model handed in (setRoads first: city_walk_points.h), seeded by
+    // `seed`. Deterministic (ADR-0002). Nobody is built driving: the cars are the driving's car entities (city_car.h;
+    // ADR-0461, ADR-0462). No road model, or one with no walks: no spots, nobody.
+    void build(int pedCount, uint32_t seed);
 
     // Adopt a fleet catalogue (vehicle_classes.lua, via the level's vehicle
     // recipes). Call BEFORE build(): drivers take their body at build time, so a
@@ -570,12 +574,13 @@ public:
     // tick (capped, and never past its link's end), so a far crowd moves rather than hopping once a second. False
     // for an agent with nothing to show: not far, indoors at rest, riding, released.
     bool farDrawPose(int agentIndex, engine::Vec2& pos, engine::Vec2& heading) const;
-    // A street-map link's lane spacing: the kerb half of its carriageway split among its lanes (the debug overlay's
-    // lane arrows; the old driving's cars drove these lanes, narrowed by its bays, until ADR-0463).
-    engine::Real laneSpacingFor(int li) const;
     int walkerFile(const Agent& a) const;       // which file across the pavement a walker keeps (0 = by the kerb)
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
-    const engine::NavGraph* graph() const { return nav_; }
+    const WalkPointMap& walkPoints() const { return walkPoints_; }
+    // The walk point of place `id` (assignPlaces gives each place's door its own); -1 none.
+    int placePoint(PlaceId id) const {
+        return id < placePoint_.size() ? placePoint_[static_cast<std::size_t>(id)] : -1;
+    }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
     // its follow gap -- the "spawn point" heaps. A CAR's (#218, the lab's mid-turn freezes): 10 a crash hold, 11 a red,
     // 12 a crossing car in the box, 13 oncoming (a turn), 14 no exit room, 15 its lane leader, 16 a body in the wedge,
@@ -684,17 +689,18 @@ public:
     // agent to the station's way in; the sim takes it from there. False when no train helps (same town, or a town
     // without a station) or the station cannot be walked to.
     bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
-        if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
+        if (walkPoints_.empty() || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
         if (rail_.tripOf(agentIndex)) return false;
-        const int origin = nav_->nearestNode(a.pos);
-        const int to = nav_->nearestNode(dest);
+        const int origin = walkPoints_.nearestNode(a.pos);
+        const int to = walkPoints_.nearestNode(dest);
         if (origin < 0 || to < 0 || origin == to) return false;
         RailTrip t;
-        if (!rail_.plan(origin, nav_->nodes[static_cast<std::size_t>(origin)], to, nav_->nodes[static_cast<std::size_t>(to)], t))
+        if (!rail_.plan(origin, walkPoints_.nodes[static_cast<std::size_t>(origin)], to, walkPoints_.nodes[static_cast<std::size_t>(to)], t))
             return false;
+        // (the station's way in can be walked to: the one router, point to point)
         const int acc = rail_.stations()[static_cast<std::size_t>(t.from)].accessNode;
-        if (acc != origin && !engine::findRoute(*nav_, origin, acc, /*pedestrian=*/true).valid()) return false;
+        if (acc != origin && !pointRoute(origin, acc).found) return false;
         rail_.start(agentIndex, t);
         ++rail_.stats.planned;
         a.wakeAt = -1;
@@ -719,7 +725,7 @@ public:
         if (inside) {
             a.moving = false;
             a.speed = 0;
-            a.route = engine::Route{};
+            a.route = engine::roads::WalkRoute{};
             a.leg = 0;
             a.distOnLeg = 0;
             a.state = Agent::State::Resting;
@@ -756,9 +762,12 @@ public:
     // Hand an agent's PLAN to a director (ADR-0091). Idempotent; -1 or an
     // out-of-range index is a no-op. Turning it off returns the agent to its
     // schedule from wherever it is standing.
+    // (a brain resident stays directed: the brain is their director, and the goal table must never wake on them when
+    // a possession lets go)
     void setAgentDirected(int agentIndex, bool on) {
-        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
-            agents_[static_cast<std::size_t>(agentIndex)].directed = on;
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        a.directed = on || a.brainOwned;
     }
     bool agentDirected(int agentIndex) const {
         return agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()) &&
@@ -791,244 +800,51 @@ public:
         agents_[agentIndex].tethered = false;
     }
 
-    // WHERE A WALK STARTS AND ENDS ON THE STREET MAP: the look-ups sendAgentTo makes, named so that a test can set them
-    // beside the road model's one answer (RoadModel::walkJoinOn / walkJoinNear, ADR-0468, issue #300). They go with the
-    // street map: piece 6 of #306 task 4 walks people by the walks, piece 10 deletes the map. No new reader of it.
-    //
-    // THE NODE A WALK FROM `p` LEAVES FROM: the nearest node, unless no walkable link leaves it (NavLink::walkable: a
-    // ramp's or a freeway's node), and a walk from it never routes -- measured on brain_crowd: people at a place beside an
-    // arterial, 10 m from a ramp's node, could not walk anywhere and stood for good (ADR-0446). Then the first of the
-    // nearest kWalkStartNodes a walkable link leaves; none: the nearest, as before. -1: no node.
-    int walkStartNode(engine::Vec2 p) const {
-        if (!nav_) return -1;
-        const int nearest = nav_->nearestNode(p);
-        if (nearest < 0) return nearest;
-        const auto walked = [&](int n) {
-            for (const int l : nav_->outLinks[static_cast<std::size_t>(n)])
-                if (nav_->links[static_cast<std::size_t>(l)].walkable) return true;
-            return false;
-        };
-        if (walked(nearest)) return nearest;
-        for (const int n : nav_->nearestNodes(p, kWalkStartNodes))
-            if (walked(n)) return n;
-        return nearest;
-    }
-    // THE LINK OF A STREET'S PAIR WHOSE PAVEMENT `p` IS ON: link `l`, or its twin (the same street the other way) where
-    // `p` lies on the twin's kerb side. A street is two links, one each way, and a walker walks a link on its kerb side
-    // (rightOf its direction). -1 stays -1.
-    int kerbSideLink(int l, engine::Vec2 p) const {
-        if (nav_ && l >= 0 && static_cast<std::size_t>(l) < twinOf_.size() && twinOf_[static_cast<std::size_t>(l)] >= 0 &&
-            !nav_->links[static_cast<std::size_t>(l)].footpath &&
-            dot(p - nav_->nodes[static_cast<std::size_t>(nav_->links[static_cast<std::size_t>(l)].from)],
-                engine::rightOf(nav_->direction(l))) < 0)
-            return twinOf_[static_cast<std::size_t>(l)];
-        return l;
-    }
-    // THE LINK A WALK FROM OR TO `p` IS ALONG: the nearest link (whatever it carries), on `p`'s pavement (kerbSideLink).
-    int kerbLinkNear(engine::Vec2 p) const { return nav_ ? kerbSideLink(nav_->nearestLink(p), p) : -1; }
+    // (The street map's look-ups a walk started and ended by -- walkStartNode, kerbSideLink, kerbLinkNear -- went with
+    // the street map's walking in #306 piece 6 W3: a walk starts and ends where the road model joins a point to its walks,
+    // RoadModel::walkJoinNear, ADR-0468.)
 
-    // Send an agent to a world position (possession, ADR-0079): route from
-    // where they are to the nearest node and walk/drive there — startTrip with
-    // snapped endpoints, in the same public index-based idiom as the tether
-    // setters. Returns false when out of range or the destination doesn't
-    // route (the agent keeps its current plan).
-    bool sendAgentTo(int agentIndex, engine::Vec2 dest) {
-        if (!nav_ || agentIndex < 0 ||
-            agentIndex >= static_cast<int>(agents_.size()))
-            return false;
-        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        // WHERE THE ERRAND STARTS. startTrip PLACES an agent on its new route's
-        // first leg, so routing from the node nearest its position teleports it
-        // — and a drawn walker's planner ghost is leashed to its physical body
-        // (ADR-0062, 5 m), so the stepper then skips it for ever: speed 0,
-        // state Waiting, a perfectly valid route, and a possessed pedestrian
-        // that never moves again. Measured: a 40 m errand moved the ghost 290 m.
-        // An agent already under way therefore finishes the leg it stands on and
-        // routes from the node AHEAD of it, and the leg is prepended below.
-        int legLink =
-            (a.moving && a.route.valid() &&
-             a.leg < static_cast<int>(a.route.links.size()))
-                ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
-        Real keepDist = a.distOnLeg;
-        int from = legLink >= 0 ? nav_->links[static_cast<std::size_t>(legLink)].to : walkStartNode(a.pos);
-        if (from < 0) return false;
-        // A DESTINATION THAT ROUTES. The single nearest node to `dest` can have
-        // no path from here at all — 394 -> 86 in metro are 32 m apart with no
-        // route for a pedestrian OR a car (different components of the graph),
-        // and every walk_to that snapped to such a node was refused. Try the
-        // nearest few and take the first that routes.
-        // ARRIVE ALONG THE STREET THE DESTINATION IS ON. A door, a parked car
-        // and a bus stop all belong to a LINK, not to a junction, so routing to
-        // the nearest node leaves the agent wherever that junction happens to
-        // be — measured at 23 m from a civic entrance it had been sent to.
-        // Routing to the near end of the destination's own link and appending
-        // that link makes the last street it walks the one it was sent to, and
-        // the stop-short below then lands it beside the address.
-        // ...ON THE DESTINATION'S SIDE OF IT. A street is two links, one each way, and a walker walks a link on
-        // its kerb side (rightOf its direction); the nearest link is either of the pair, so half the errands
-        // ended on the far pavement, a carriageway from the door (measured: 24.9 m from a civic entrance).
-        auto sideLink = [&](int l, engine::Vec2 p) { return kerbSideLink(l, p); };
-        auto stationOn = [&](int l, engine::Vec2 p) {   // metres along link l level with p
-            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(l)];
-            const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)];
-            return std::clamp(dot(p - A, nav_->direction(l)), Real(0), L.length);
-        };
-        const int dl = sideLink(nav_->nearestLink(dest), dest);
-        auto routeFrom = [&](int fromNode, engine::Route& route, int& to, int& finalLink) {
-            route = engine::Route{};
-            to = -1;
-            finalLink = -1;
-            if (dl >= 0) {
-                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(dl)];
-                if (L.from != fromNode) {
-                    engine::Route r = engine::findRoute(*nav_, fromNode, L.from, true);
-                    if (r.valid()) { route = std::move(r); to = L.from; finalLink = dl; }
-                } else if (L.to != fromNode) {
-                    engine::Route r = engine::findRoute(*nav_, fromNode, L.to, true);
-                    if (r.valid()) { route = std::move(r); to = L.to; }
-                }
-            }
-            if (to < 0) for (int cand : nearestNodesTo(dest, 8)) {
-                if (cand == fromNode) continue;
-                engine::Route r = engine::findRoute(*nav_, fromNode, cand, true);
-                if (r.valid()) { route = std::move(r); to = cand; break; }
-            }
-            return to >= 0;
-        };
-        engine::Route route;
-        int to = -1;
-        int finalLink = -1;
-        bool alongOwnLink = false;   // the whole walk is along the link they stand beside
-        if (legLink < 0 && !a.moving) {
-            // A WALKER AT REST (out of a door, out of a car) sets off along the pavement it stands on, from where it
-            // stands (ADR-0415 as built). Routed from the nearest node, startTrip put it AT that node -- 19.5 m from
-            // a front door in one jump -- and it then walked back past where it had been. Of the street's two links
-            // it takes the one whose pavement it is on, ahead, or the other (across the street) back the other way:
-            // whichever is the shorter walk.
-            const int own = sideLink(nav_->nearestLink(a.pos), a.pos);
-            Real best = std::numeric_limits<Real>::infinity();
-            for (int k = 0; k < 2 && own >= 0; ++k) {
-                const int c = k == 0 ? own
-                              : (static_cast<std::size_t>(own) < twinOf_.size() && !nav_->links[static_cast<std::size_t>(own)].footpath)
-                                  ? twinOf_[static_cast<std::size_t>(own)] : -1;
-                if (c < 0) continue;
-                const Real Lc = nav_->links[static_cast<std::size_t>(c)].length;
-                const Real at = stationOn(c, a.pos);
-                if (c == dl && stationOn(dl, dest) >= at) {   // the door is further along this very pavement
-                    const Real cost = stationOn(dl, dest) - at;
-                    if (cost < best) { best = cost; legLink = c; keepDist = at; alongOwnLink = true; }
-                    continue;
-                }
-                engine::Route r;
-                int t = -1, fl = -1;
-                if (!routeFrom(nav_->links[static_cast<std::size_t>(c)].to, r, t, fl)) continue;
-                const Real cost = (Lc - at) + r.length(*nav_) + (fl >= 0 ? stationOn(fl, dest) : Real(0));
-                if (cost < best) {
-                    best = cost; legLink = c; keepDist = at; alongOwnLink = false;
-                    route = std::move(r); to = t; finalLink = fl;
-                    from = nav_->links[static_cast<std::size_t>(c)].to;
-                }
-            }
-        }
-        if (!alongOwnLink && to < 0) routeFrom(from, route, to, finalLink);
-        // NOTHING has been mutated yet, so a refusal really does leave the agent
-        // its day. startTrip's no-path branch parks the agent, clears its route
-        // and keeps the caller's goal — validating first is what makes this
-        // function's contract ("the agent keeps its current plan") true.
-        if (!alongOwnLink && to < 0) return false;
-        if (alongOwnLink) {   // (the route is that one link: startTrip lays it, from its start)
-            from = nav_->links[static_cast<std::size_t>(legLink)].from;
-            to = nav_->links[static_cast<std::size_t>(legLink)].to;
-            finalLink = -1;
-        }
-        // WAKE THEM. A sleeping agent is not in the active list at all, so the
-        // stepper never reaches it: the errand sets moving, a valid route and a
-        // destination, and the agent stands in its doorway until its OWN alarm
-        // goes off — measured, with `stepped=0` and the ghost sitting 0.4 m
-        // from its body, so neither the leash nor the route was to blame. A
-        // director's errand overrides the day, and that includes the lie-in.
-        a.wakeAt = -1;
-        startTrip(a, from, to, /*fromRest=*/!a.moving);
-        if (!a.route.valid()) return false;
-        if (alongOwnLink) {
-            a.route.links.assign(1, legLink);
-            a.leg = 0;
-            a.distOnLeg = keepDist;
-            refreshPose(a);
-            a.tickFromPos = a.pos;
-            legLink = -1;   // (laid, not prepended)
-        }
-        if (finalLink >= 0 &&
-            (a.route.links.empty() ||
-             a.route.links.back() != finalLink))
-            a.route.links.push_back(finalLink);
-        if (legLink >= 0) {
-            // Finish the leg it is standing on (the same idiom as a bus pulling
-            // away from where it actually stopped): prepend that link and put
-            // the pose back, so the errand changes the PLAN and never the pose.
-            a.route.links.insert(a.route.links.begin(), legLink);
-            a.leg = 0;
-            a.distOnLeg = keepDist;
-            refreshPose(a);
-            a.tickFromPos = a.pos;   // (startTrip set the tick's start at the node: drawn from there, it slid back)
-        }
-        // END AT THE POINT, not at the node. Project the destination onto the
-        // last link of the route: if it lies alongside it, that is where the
-        // agent stops. A destination that is not beside its final street (a
-        // door round the corner) keeps the old behaviour and arrives at the
-        // node, which is the honest answer rather than a wrong one.
-        a.stopAtDist = -1;
-        if (!a.route.links.empty()) {
-            const engine::NavLink& last =
-                nav_->links[static_cast<std::size_t>(a.route.links.back())];
-            const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(last.from)];
-            const engine::Vec2 B = nav_->nodes[static_cast<std::size_t>(last.to)];
-            const engine::Vec2 AB(B.x - A.x, B.y - A.y);
-            const Real len2 = AB.x * AB.x + AB.y * AB.y;
-            if (len2 > 1e-6) {
-                Real t = ((dest.x - A.x) * AB.x + (dest.y - A.y) * AB.y) / len2;
-                t = std::max(Real(0), std::min(Real(1), t));
-                const engine::Vec2 foot(A.x + AB.x * t, A.y + AB.y * t);
-                const Real off = std::sqrt((dest.x - foot.x) * (dest.x - foot.x) +
-                                           (dest.y - foot.y) * (dest.y - foot.y));
-                if (off <= kErrandOffLink)
-                    a.stopAtDist = t * last.length;
-            }
-        }
-        // A DIRECTOR'S ERRAND OVERRIDES THE DAY. startTrip sets the trip
-        // (moving, indoors, route) but not the reactive state the stepper reads,
-        // so an agent sent from rest kept state=Resting and stood still holding
-        // a valid route. Its activity has to move too: left at AtHome the goal
-        // layer parks it again on its own schedule.
-        a.state = Agent::State::Walking;
-        a.activity = Activity::Outing;
-        return true;
-    }
+    // SEND AN AGENT TO A WORLD POSITION (possession, ADR-0079; the agent brain's walks, ADR-0441): a walk route over the
+    // road model's walks (findWalkRoute, ADR-0467) from where the walker is to `dest`, each end joined to the walks from
+    // its point (walkJoinNear: a director's destination states nothing; the brain's are its places' stands, themselves
+    // put on their sidewalks from their stated frontage). Under way, it starts from the point on its route it stands at
+    // (the errand changes the plan, never the pose). False when out of range, when either end joins no walk or no route
+    // leads there: the agent keeps its current plan (nothing is changed before the route is found).
+    bool sendAgentTo(int agentIndex, engine::Vec2 dest);
+    // The `k` spots nearest `p`, nearest first. Linear scan + partial sort: a director's command, not a per-frame path.
+    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const { return walkPoints_.nearestNodes(p, k); }
+    // THE WALK FROM SPOT `from` TO SPOT `to` (the one router, findWalkRoute, between their points on the walks): not
+    // found when either is out of range or no route leads there.
+    engine::roads::WalkRoute pointRoute(int from, int to) const;
 
-    // The `k` nav nodes nearest `p`, nearest first. Linear scan + partial sort:
-    // a director's command, not a per-frame path (nearestNode is a scan too).
-    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const {
-        return nav_ ? nav_->nearestNodes(p, k) : std::vector<int>{};
-    }
-
-    // Sample agent `agentIndex`'s current route as a polyline of lane-centre
-    // (driver) / sidewalk (pedestrian) points, ~`step` metres apart — the pursuit
-    // path the ADR-0062 bridge follows from the car's real pose. Empty when the
-    // agent has no active route.
+    // Sample agent `agentIndex`'s current route as a polyline, ~`step` metres apart, from the start of its route to its
+    // end, each point where refreshPose would put it (its file across the walk included). Empty when it has none.
     std::vector<engine::Vec2> lanePath(int agentIndex, Real step = 3.0) const;
     // THE WAY AN AGENT WILL BE POSED (ADR-0415, the trip lab's line): a copy of agent `agentIndex` moved along its
-    // route `step` metres at a time, from where it is to where the route ends -- its stop-short point, or the station
-    // of the bay it is driving to -- each copy placed by refreshPose, the one rule that puts a walker on its pavement
-    // and a car in its lane, round the corners and through the junction turns, as the stepper places the real one.
-    // With `route`, the copy is set off from that route's start instead, as `mode` (a leg not yet begun: a car in
-    // lane 0). `visit` sees each copy in turn (the first where the walk begins). Nothing in the sim changes.
-    void walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit,
-                   const engine::Route* route = nullptr) const;
+    // route `step` metres at a time, from where it is to where the route ends, each copy placed by refreshPose, the one
+    // rule that places a walker on its walk. `visit` sees each copy in turn (the first where it is). Nothing changes.
+    void walkPoses(int agentIndex, Real step, const std::function<void(const Agent&)>& visit) const;
 
-    // Is `pos` inside a junction box (within a junction node's widest incident
-    // half-width + `margin`)? The bridge uses this for don't-block-the-box (a
-    // physical car never idles inside one) and for spawn placement.
-    bool nearJunction(engine::Vec2 pos, Real margin = 0.0) const;
+    // THE WALK ROUTE'S GEOMETRY (W3). A step's length: along its walk, then across the gap to the next step's start.
+    Real legLength(const Agent& a, int leg) const;
+    // Metres of the route still to walk from where the agent is.
+    Real routeLeft(const Agent& a) const;
+    // Where a step of `a`'s route is at `d` metres from its start (along its walk, then across the gap to the next
+    // step's start), and which way it runs there (on the walk's line: no file across it).
+    engine::Vec2 routePoint(const Agent& a, int leg, Real d, engine::Vec2* dir = nullptr) const;
+    // Moves the agent `metres` on along its route (no rule applied: the far tier's glide, a pose preview); true once
+    // past its end, `stopShort` holding it that many metres before the end instead.
+    bool glideAlong(Agent& a, Real metres, Real stopShort = -1) const;
+    // Is the agent on a route with steps left (moving, leg in range)?
+    static bool onRoute(const Agent& a) {
+        return a.moving && a.route.found && a.leg >= 0 && a.leg < static_cast<int>(a.route.steps.size());
+    }
+    // WHERE A POINT JOINS THE WALKS for a walker (RoadModel::walkJoinNear over the walker's open walks): false when the
+    // sim holds no road model, or the point joins none. `cutOff`, when asked: the walk joined is outside the largest
+    // part of the walks a walker can get round (reachableWalks), so a walk from there reaches only its own part. The
+    // crowd maker puts places only where this joins the largest part (city_render.cpp, makeCrowd's CrowdUsable).
+    bool walkJoin(engine::Vec2 p, engine::WalkPoint& out, bool* cutOff = nullptr) const;
+
 
     // WANDER mode (ADR-0063, the agent lab): agents ignore the daily schedule and
     // start a fresh trip to a random reachable node the moment they arrive — so a
@@ -1048,12 +864,14 @@ public:
     void useDrivingV2(bool on) { if (on) drivingV2_.emplace(); else drivingV2_.reset(); }
     // ...and the kinds of vehicle it knows (#248: one class per fleet class, read with the fleet). No-op under v1.
     void setDrivingVehicleClasses(driving::VehicleClasses c) { if (drivingV2_) drivingV2_->setVehicleClasses(std::move(c)); }
-    // ...and the road it drives on: the level's road model (road_model_cache.h; its lane level is where the cars are),
-    // held here for as long as the driving reads it, with the one line that says what it holds and where it came from
-    // (the load's log, `lanegraph?`). The driving is made again on the new road, keeping its vehicle classes; it has no
-    // cars yet, so nothing else is lost. No-op under v1.
-    void setDrivingRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report);
-    const std::string& drivingRoadsReport() const { return drivingRoadsReport_; }
+    // THE LEVEL'S ROAD MODEL (ADR-0480): its built model (engine::LevelRoadModel::builtCity; its lane level holds the
+    // walks people walk by and the lanes the cars drive), handed over on EVERY level with a lane-built city, whether or not
+    // the level drives, and held here for as long as the sim and the driving read it, with the one line that says what it
+    // holds and where it came from (the load's log, `lanegraph?`). Where the level drives, the driving is made again on
+    // it, keeping its vehicle classes; it has no cars yet, so nothing else is lost. Null: the level has no built model.
+    void setRoads(std::shared_ptr<const engine::RoadModel> roads, std::string report);
+    const engine::RoadModel* roads() const { return roads_.get(); }
+    const std::string& roadsReport() const { return roadsReport_; }
     // The new model, read-only; null when the level drives v1.
     const driving::Driving* drivingV2() const { return drivingV2_ ? &*drivingV2_ : nullptr; }
     // ...and to place, send and carry cars of its own in (the near tier, city_near.h; ADR-0447). Null under v1.
@@ -1216,7 +1034,6 @@ public:
     // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
     Real debugGap(int i) const { return i >= 0 && i < static_cast<int>(gaps_.size()) ? gaps_[static_cast<std::size_t>(i)] : -1; }
     Real debugMinGap(int i) const { return i >= 0 && i < static_cast<int>(minGaps_.size()) ? minGaps_[static_cast<std::size_t>(i)] : -1; }
-    const engine::NavGraph& nav() const { static const engine::NavGraph kEmpty; return nav_ ? *nav_ : kEmpty; }
     // ACTIVITY SPOTS (activities.h; the seats were the first kind -- the furniture library, M5; Glenn: benches you can
     // sit on, and so can everyone else): one per place a body does something, its point, the way it faces, its
     // height (a seat's hip), the path node it is reached from (setSpots finds it), what it is (kind), where it is
@@ -1309,26 +1126,29 @@ public:
     // where they are, how wide (kWalkerHalfAcross) and how they move. A driver finds the ones in its way by itself, so
     // the pavement needs no telling apart from the road here. Then the things the host wrote (setExternalThings).
     void thingsForDriving(std::vector<driving::RoadThing>& out) const;
-    // CROSSWALKS (ADR-0452). The crosswalks are the road model's (road_model.h ModelCrosswalk) and so is which a walk
-    // round a junction crosses (RoadModel::crosswalksOnWalk, asked with the arms the walker's links arrive and leave by:
-    // RoadModel::armReachedAt). A person on foot WAITS AT THE CROSSWALK'S KERB END (where its route comes level with it,
-    // a step back) until they go: under lights, on WALK (a rare few, by a seeded trait, on DON'T WALK when the gap is a
+    // CROSSWALKS (ADR-0452; from the route since #306 piece 6 W3). The crosswalks are the road model's (road_model.h
+    // ModelCrosswalk), and which a walker crosses is its route's (WalkRoute::crossings: the router steps onto a crossing
+    // walk only where it means to cross there). A person on foot WAITS AT THE START OF THE CROSSING STEP (the crosswalk's
+    // kerb end) until they go: under lights, on WALK (a rare few, by a seeded trait, on DON'T WALK when the gap is a
     // jaywalker's); elsewhere, when no car that is not already slowing or stopped would reach the crosswalk inside the
-    // gap they accept (a seeded trait: people.lua `crossing`). Once started they cross. Nobody arbitrates: a driver gives
-    // way by its own rule to people on the crosswalk and waiting at it (driving/things.h).
+    // gap they accept (a seeded trait: people.lua `crossing`); where the level does not drive, at once. Once started they
+    // cross. Nobody arbitrates: a driver gives way by its own rule to people on the crosswalk and waiting at it
+    // (driving/things.h). (The finder that worked out which crosswalk a walk round a junction crossed, crossingAhead,
+    // went with the street map's walking.)
     enum class CrossingKind : uint8_t { Lights, Signs, Marked, Unmarked, AgainstTheLights };
     static constexpr uint8_t kCrossingKindCount = 5;
     static const char* crossingKindWord(CrossingKind k);
-    // THE NEXT CROSSING ON A WALKER'S WAY at the junction ahead (found: false: none; `governed`: the junction ahead has
-    // the model's crosswalks, so they, not the old signals, rule its walkers there).
+    // THE NEXT CROSSING ON A WALKER'S ROUTE, read off it (found: false: none left within kCrossingLookAhead metres).
     struct CrossingAhead {
-        bool governed = false, found = false;
+        bool found = false;
         uint32_t crosswalk = 0;
         int fromEnd = 0;
-        Real toHold = 0;   // route metres to where they wait: level with the kerb end they step off from, a step back
-        Real toFar = 0;    // ...to where they are across: level with the far kerb end
+        Real toHold = 0;   // route metres to where they wait: the crossing step's start (negative: past it, crossing)
+        Real toFar = 0;    // ...to where they are across: the crossing step's end
     };
-    CrossingAhead crossingAhead(const Agent& a) const;
+    CrossingAhead nextCrossing(const Agent& a) const;
+    // How far ahead along its route a walker looks for its next crossing (m): far enough to ease to a stop before it.
+    static constexpr Real kCrossingLookAhead = 40.0;
     // Whether a person at crosswalk `crosswalk` would step off now (the gap they accept, against the cars they see),
     // `bigger`: a jaywalker's gap; `waited`: how long they have waited (a longer wait makes them bolder).
     // `why` (optional, out): what holds them, in words (empty when they go).
@@ -1355,8 +1175,6 @@ public:
     int walkersWaitingAtKerbs() const;
     int walkersOnCrosswalks() const;
     static constexpr Real kWalkerHalfAcross = 0.3;   // m: half a person's shoulders
-    // A junction's box radius (the stop lines and a walker's wait are measured from it).
-    Real junctionBox(int node) const { return junctionRadius(node); }
     // A group member's place in its session (formations other than Roam) and the way it faces there.
     engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
 
@@ -1365,12 +1183,12 @@ public:
     // home/work commute NODES to those places' sidewalk entrances, and seed the
     // surface-level relationship table (same workplace → coworker, same home →
     // neighbor). Deterministic (draws from each agent's `brain`, not the rng, so
-    // the build stream is unchanged). Call AFTER build()/setWander with the same
-    // graph; a no-op when `places` has no homes. `graph` must be the built one.
-    void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // the build stream is unchanged). Call AFTER build()/setWander; each place's door is given a spot of its own
+    // (WalkPointMap::add, where it joins the walks). A no-op when `places` has no homes.
+    void assignPlaces(const PlaceMap& places);
     // The university's students (campus milestone 4): walkers moved into the residence hall, with class
     // in the teaching hall and the library for study. Part of assignPlaces (and so of its cache).
-    void assignStudents(const PlaceMap& places, const engine::NavGraph& graph);
+    void assignStudents(const PlaceMap& places);
     // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
     // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
     // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
@@ -1480,44 +1298,19 @@ private:
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     void rebuildRoleTables();   // every role's day, from roles_
-    // A walker on a STREET's pavement (not a walk, not a deck), clear of the junctions at either end where its
-    // crossings start: its road is on its left, and it does not step into it to get round anyone.
-    bool onStreet(const Agent& a) const {
-        if (!nav_ || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size()))
-            return false;
-        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
-        if (L.footpath || L.layer != 0 || L.elevAbsolute) return false;
-        return a.distOnLeg > junctionRadius(L.from) + 1.0 && a.distOnLeg < L.length - junctionRadius(L.to) - 1.0;
-    }
+    // A walker on a walk beside a road (a street's sidewalk or footway stretch, or a corner walk round a junction's kerb:
+    // Agent::roadSide): it does not step into that road to get round anyone (no further than Agent::kerbRoom).
+    bool onStreet(const Agent& a) const { return onRoute(a) && a.roadSide != 0; }
     void reseatOnTables();      // each agent onto its table's state wearing its label (else the entry)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
-    // advance()'s junction verdict for a walker: the speed target after the crosswalk hold, plus where it stands back
-    // from the junction (junctionAhead, stopLineBack).
-    struct JunctionGate {
-        Real cap = 0;               // speed target after the crosswalk's hold
-        int node = -1;              // the junction ahead (-1: none within reach)
-        int approachLink = -1;      // the route link that enters it (its signal)
-        Real distToNode = 0;        // route metres to the node
-        Real distToLine = 0;        // route metres to the stop line (< 0: past it)
-        // A WALKER AT THE MODEL'S CROSSWALKS (ADR-0452): they rule it here (`crossing.governed`: not the old signals),
-        // the crossing ahead, and whether it holds them at its kerb end now (distToLine is then its toHold)
-        CrossingAhead crossing;
-        bool walkHold = false;
+    // advance()'s crossing verdict for a walker: the speed target after the hold at the next crossing on its route.
+    struct CrossingGate {
+        Real cap = 0;               // speed target after the crossing's hold
+        CrossingAhead crossing;     // the next crossing on the route
+        bool walkHold = false;      // held at its start now (crossing.toHold is how far that is)
         CrossingKind kind = CrossingKind::Unmarked;   // how they would cross it, going now
     };
-    JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
-    // The next junction on the route within `horizon` route metres: the leg
-    // whose link enters it, the distance to its node, and the length of the
-    // APPROACH (back to the previous junction), which is where the stop line
-    // may sit. horizon 0 looks at the current link only.
-    struct JunctionAhead {
-        int leg = -1;
-        int node = -1;
-        Real toNode = 0;
-        Real approach = 0;
-    };
-    JunctionAhead junctionAhead(const Agent& a, Real horizon) const;
-    Real stopLineBack(const Agent& a, const JunctionAhead& ja) const;   // line, metres short of ja.node
+    CrossingGate crossingGate(const Agent& a, Real target) const;
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain or rest
     void computeGaps();
     // --- three-tier traffic (P4) ---
@@ -1536,21 +1329,26 @@ private:
     void railPass(Real dt);                        // walks in and out, boarding, riding (city_rail_riders.h)
     void enterStation(Agent& a, int self);
     void tickV(int i, Real hoursPerSecond);
-    // Advance a V agent along its REAL route at the modelled speed: link class
-    // speed shaped by fixed average junction delays (vHold). No sensing, no
-    // FSM, no signal state (ADR-0456: the old clock is gone; every junction crossed costs kVJunctionDelay).
+    // Advance a V agent along its REAL route at the modelled pace, a fixed dwell at each crossing it steps onto (vHold,
+    // kVJunctionDelay). No sensing, no FSM, no signal state.
     void vAdvance(Agent& a, Real dt);
+    // Begin agent `a` on `route` (found): the trip's state, placed at its start. The one place a trip begins.
+    void beginRoute(Agent& a, engine::roads::WalkRoute route);
+    // A walk route for a walker from point `from` to point `to`, each end joined to the walks from what its place states
+    // when it is handed in (`fromAt`, `toAt`: a door's frontage, walkJoinOn), else from the point (walkJoinNear): not
+    // found when the sim holds no road model, an end joins no walk, or no route leads there.
+    engine::roads::WalkRoute walkRouteBetween(engine::Vec2 from, engine::Vec2 to, const engine::StatedFrontage* fromAt = nullptr,
+                                              const engine::StatedFrontage* toAt = nullptr) const;
+    // Where a place states its door fronts the road, when `node` is the node of agent `a`'s home, work or shop (its
+    // place's frontage, assignPlaces); null otherwise, or when it states nothing.
+    const engine::StatedFrontage* placeFrontageAt(const Agent& a, int node) const;
+    // Each place's frontage, by its id (assignPlaces copies it from the places: Place::frontage).
+    std::vector<engine::StatedFrontage> placeFrontage_;
 
-    // Per-node junction box radius: the widest incident half-width (+ the
-    // junction pad at street intersections: the drawn mouth). Nonzero at
-    // PLAIN nodes too (their road's half-width) — launchClear reads it at
-    // arbitrary departure nodes; 0 only where a node has no out-links.
-    Real junctionRadius(int node) const;
     Real pairMinGap(int follower, int leader) const;   // a walker's follow gap
-    void measureCommute(const engine::NavGraph& graph);   // median commute (see .cpp)
+    void measureCommute();   // median commute (see .cpp)
     uint32_t tripRnd(Agent& a); // per-agent stream for TRIP decisions (see .cpp)
     void refreshPose(Agent& a) const;   // (const: it places `a` and reads the sim, so walkPoses can pose copies)
-    void steer(Agent& a) const;   // face the current leg's direction
 
     engine::Vec2 idlePose(int node, uint32_t brain) const;
     // Push a pose OUT of every at-grade carriageway (the brain stands someone getting out of a household's car with
@@ -1559,17 +1357,19 @@ private:
     uint32_t rnd();
     Real rndUnit();
 
-    const engine::NavGraph* nav_ = nullptr;
+    WalkPointMap walkPoints_;   // where the people rest, set out from and go to: places on the walks (build)
+    std::vector<int> placePoint_;   // per place (PlaceId): its walk point (assignPlaces); -1 none
     std::vector<Agent> agents_;
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
     std::vector<VehicleBody> fleet_;
-    // Each link's reverse twin (-1 if one-way), and a per-link route cost
-    // scale kept at 1 except while a wander departure prices its own twin.
-    std::vector<int> twinOf_;
-    std::vector<Real> departScale_;
-    // True while startWanderTrip has priced the U-turn in departScale_: startTrip's own searches
-    // must see the same prices, or the trip it builds could U-turn after all.
-    bool wanderPriced_ = false;
+    // THE WALKER AS THE ONE ROUTER SEES IT on this level's walks (roads/route.h bindWalker: the path users' table's
+    // "walker" row, its open walks and waits; the base walking pace), bound when the road model is handed over
+    // (setRoads); and for each walk along a street, which side of it the street runs (+1: its right walked forward;
+    // -1: its left; 0: no street beside it), worked out once from the model (RoadModel::frontageAt of its middle).
+    engine::roads::RouteWalker walker_;
+    engine::ReachableParts walkParts_;   // the parts of the walks the walker can get round (reachableWalks over walker_.open)
+    std::vector<int8_t> walkRoadSide_;
+    std::vector<float> walkKerbOff_;   // per walk beside a road: its line's distance from that kerb (m)
     std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick
     int tetherHeld_ = 0;                 // agents the leash held last tick
     std::vector<Real> gaps_;
@@ -1603,13 +1403,10 @@ private:
                 for (int k : it->second) f(staticObstacles_[static_cast<std::size_t>(k)]);
             }
     }
-    std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
-    std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)
-    Real junctionPad_ = 0;              // + this at street intersections (see setJunctionPad)
+    Real junctionPad_ = 0;              // the sidewalk's width (see setJunctionPad): how many files fit across
     // P4.1 spatial index. grid_ holds every agent (K re-hashed each step —
     // effectively free, place() early-outs on an unchanged cell; V only on its
-    // coarse tick, when its position actually moves). junctionGrid_ is a static
-    // bake of junctions_ so nearJunction() stops scanning the whole list.
+    // coarse tick, when its position actually moves).
     AgentGrid grid_;
     AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
     std::vector<int> pedGridIds_;
@@ -1617,8 +1414,6 @@ private:
     // kilometre and the promote check for far ones in 500 m -- from grid_ that was everyone there (~5,000 at 100k),
     // each loaded and sorted to read its tier
     AgentGrid vGrid_, dGrid_;
-    AgentGrid junctionGrid_;
-    Real maxJunctionRadius_ = 0;
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
     RailRiders rail_;
@@ -1701,10 +1496,22 @@ private:
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     bool daySchedule_ = true;   // false: everyone at home, held for a director (setDaySchedule)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
-    // Its road (setDrivingRoads): shared, so its address stays put while the model holds a pointer to it.
-    std::shared_ptr<const engine::RoadModel> drivingRoads_;
-    std::string drivingRoadsReport_ = "no lane graph yet";
+    // The level's road model (setRoads), the driving's road too: shared, so its address stays put while the driving
+    // holds a pointer to it.
+    std::shared_ptr<const engine::RoadModel> roads_;
+    std::string roadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
+    // THE PEOPLE ON THE BUSES (ADR-0484), made with the buses in startDrivingV2; the brain's residents' rides are reported
+    // to it (brainRideEvents_), the sim's own walkers' are its own to carry on from (rideEventsForWalkers)
+    BusRiders buses_;
+    std::vector<BusRiders::Event> brainRideEvents_;
+    void rideEventsForWalkers(const std::vector<BusRiders::Event>& events);
+    // A WALKER'S BUS RIDE (ADR-0484), by agent: 0 none, 1 walking to its stop, 2 waiting or aboard; the line and stops
+    struct WalkerRide {
+        uint8_t phase = 0;
+        uint32_t line = 0, board = 0, alight = 0;
+    };
+    std::vector<WalkerRide> walkerRides_;
     CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this

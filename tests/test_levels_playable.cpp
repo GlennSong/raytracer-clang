@@ -29,7 +29,7 @@
 #include "../src/engine/level_params.h"      // readTerrainParams (the island water check)
 #include "../src/engine/procgen/hydrology.h"   // the editor's save (road_signs round trip)
 #include "../src/engine/drawn_road.h"
-#include "../src/engine/ai/pathfind.h"
+#include "../src/engine/lights/probe_sites.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/terrain.h"
 #include "../src/engine/procgen/noise.h"
@@ -94,19 +94,33 @@ std::string levelsDir() {
 // the nodes, and every number here was tuned on the other one. RT_CITYSIM_LEVEL
 // points them at it, so "does the sim work on a lane-built city" is a measurement
 // rather than an opinion.
-// THE LEVEL'S STREET MAP (engine::LevelRoadModel::streetMap, ADR-0425: built from the road model at load, every agent routes on it) as
-// a road graph of its pieces -- a two-way street's two links once, with their widths and classes: what the measurements
-// below walk. Empty when the level has none.
-engine::RoadGraph streetMapGraph(World& world) {
+// THE LEVEL'S STREETS (engine::LevelRoadModel::cities: the road model's streets, every city) as a road graph of their
+// pieces -- each piece of each car street's centre line, at its travel width and class, the points shared where lines
+// meet (to the centimetre): what the measurements below walk. Empty when the level has none. (Was the street map, which
+// went with #306.)
+engine::RoadGraph modelStreetGraph(World& world) {
     engine::RoadGraph g;
-    std::shared_ptr<const engine::NavGraph> map;
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!map && m.streetMap) map = m.streetMap; });
-    if (!map) return g;
-    for (int n = 0; n < map->streetNodeCount(); ++n) g.nodes.push_back(engine::RoadNode{map->nodes[static_cast<std::size_t>(n)]});
-    for (int li = 0; li < map->streetLinkCount(); ++li) {
-        const engine::NavLink& L = map->links[static_cast<std::size_t>(li)];
-        if (!L.footpath) g.addEdge(L.from, L.to, L.width, L.klass);
-    }
+    std::map<std::pair<long long, long long>, int> at;
+    auto nodeOf = [&](const Vec2& v) {
+        const std::pair<long long, long long> k{std::llround(v.x * 100.0), std::llround(v.y * 100.0)};
+        const auto it = at.find(k);
+        if (it != at.end()) return it->second;
+        g.nodes.push_back(engine::RoadNode{v});
+        at.emplace(k, static_cast<int>(g.nodes.size()) - 1);
+        return static_cast<int>(g.nodes.size()) - 1;
+    };
+    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) {
+        for (const std::shared_ptr<engine::RoadModel>& c : m.cities) {
+            if (!c) continue;
+            for (const engine::ModelStreet& S : c->streets) {
+                if (!S.section.carriesCars() || S.line.count < 2) continue;
+                for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
+                    const int a = nodeOf(c->linePoints[i]), b = nodeOf(c->linePoints[i + 1]);
+                    if (a != b) g.addEdge(a, b, S.section.travelWidth(), S.section.klass);
+                }
+            }
+        }
+    });
     return g;
 }
 
@@ -773,7 +787,7 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         const CityMap* cm = nullptr;
         world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
         if (!cb || !cm || !cm->data) continue;
-        const NavGraph& rg = cm->data->nav;   // the street map (ADR-0425)
+        const RoadGraph rg = modelStreetGraph(world);   // the road model's streets (the street map went, #306)
         int offenders = 0;
         Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
         for (std::size_t i = 0; i < cb->records.size(); ++i) {
@@ -781,10 +795,9 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
             if (r.plan.size() < 3) continue;
             bool bad = false;
             for (const Vec2& v : r.plan) {
-                for (int e = 0; e < rg.streetLinkCount(); ++e) {
-                    const NavLink& ed = rg.links[static_cast<std::size_t>(e)];
-                    const Real d = distToSegment(v, rg.nodes[static_cast<std::size_t>(ed.from)],
-                                                 rg.nodes[static_cast<std::size_t>(ed.to)]);
+                for (const RoadEdge& ed : rg.edges) {
+                    const Real d = distToSegment(v, rg.nodes[static_cast<std::size_t>(ed.a)].pos,
+                                                 rg.nodes[static_cast<std::size_t>(ed.b)].pos);
                     const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
                     if (into > Real(0.25)) {
                         bad = true;
@@ -1101,7 +1114,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
         sidewalk = std::max(sidewalk, static_cast<Real>(net.look.sidewalk));
     });
-    const RoadGraph streets = streetMapGraph(world);
+    const RoadGraph streets = modelStreetGraph(world);
     const RoadGraph* graph = streets.edges.empty() ? nullptr : &streets;
     const StreetFurniture* sf = nullptr;
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
@@ -1567,15 +1580,12 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
                                           view, assets, false);
     CHECK(loaded);
     if (!loaded) return;
-    // the street map, which a post keeps clear of (as the loader plans the posts: ADR-0425)
-    std::shared_ptr<const engine::NavGraph> streetMap;
-    world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!streetMap && m.streetMap) streetMap = m.streetMap; });
-    const engine::NavGraph* graph = streetMap.get();
-    // THE NAMES AND THE JUNCTIONS ARE THE LEVEL'S ROAD MODEL'S (ADR-0420)
+    // THE NAMES, THE JUNCTIONS AND THE CARRIAGEWAYS A POST KEEPS CLEAR OF ARE THE LEVEL'S ROAD MODEL'S (ADR-0420; the
+    // carriageways were the street map's until #306)
     const engine::LevelRoadModel* level = nullptr;
     world.each<engine::LevelRoadModel>([&](Entity, engine::LevelRoadModel& m) { if (!level) level = &m; });
-    CHECK(graph && level && !level->cities.empty() && level->cities.front());
-    if (!graph || !level || level->cities.empty() || !level->cities.front()) return;
+    CHECK(level && !level->cities.empty() && level->cities.front());
+    if (!level || level->cities.empty() || !level->cities.front()) return;
     const engine::RoadModel& model = *level->cities.front();
     const engine::Font* font = engine::signFont();
     CHECK(font != nullptr);
@@ -1601,7 +1611,7 @@ TEST_CASE(metro_street_signs_fit_and_name_their_corners) {
         const std::string n = engine::streetName(model, engine::ModelStreetId(static_cast<uint32_t>(s)));
         if (!n.empty()) namedStreets.insert(n);
     }
-    const std::vector<engine::SignCarriageway> carriageways = engine::carriagewaysOf(*graph);
+    const std::vector<engine::SignCarriageway> carriageways = engine::carriagewaysOf(model);
     const std::vector<engine::StreetSignPost> posts = engine::planStreetSigns(signCorners, carriageways, nullptr, sp);
     const engine::SignAtlas atlas = engine::buildSignAtlas(*font, posts, sp);
     int fits = 0, legible = 0, abbreviated = 0, condensed = 0, wrongNames = 0, inRoad = 0;
@@ -1733,7 +1743,7 @@ CityFacts gatherCityFacts(const std::string& levelName) {
                                  assets, /*editorMode=*/false);
     if (!f.loaded) return f;
 
-    const engine::RoadGraph nav = streetMapGraph(world);
+    const engine::RoadGraph nav = modelStreetGraph(world);
     f.navNodes = nav.nodes.size();
     f.navEdges = nav.edges.size();
 
@@ -2048,6 +2058,77 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
 }
 
 // ============================================================================
+// STREET FURNITURE AND PROBES STAND ON THE DRAWN ROAD (#306 sweep bug 5): a signal pole's foot, a street tree's trunk foot
+// and a light probe's site (less its rule height)
+// at the height of the road surface drawn under it -- on a bridge or a viaduct the deck, not the ground below it. The
+// furniture planner is given the loader's drawn-road sampler; the probes read their street's road height from the road
+// model (RoadModel::streetHeightAt), handed here only the terrain, as the probe system hands them. This measures both
+// against the road as drawn (DrawnRoad::topAt: the highest drawn surface at or below a metre over the foot), a second
+// producer. A foot more than kFootOff off the surface is sunk or floating; one more than kOnADeck over the
+// terrain stands on a deck, and those are counted on their own so the deck case is seen to be measured.
+TEST_CASE(level_river_town_street_furniture_and_probes_stand_on_the_drawn_road) {
+    if (!levelPicked("river_town.json")) return;
+    constexpr double kFootOff = 0.30, kOnADeck = 2.0;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    const engine::DrawnRoad drawn = engine::gatherDrawnRoad(world, true);
+    const TerrainLodConfig* cfg = nullptr;
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+    std::unique_ptr<Noise> noise = cfg && !cfg->baked ? std::make_unique<Noise>(cfg->seed) : nullptr;
+    const auto terrain = [&](double x, double z) {
+        if (!cfg) return 0.0;
+        return cfg->baked ? cfg->baked->height(x, z) : terrainHeight(cfg->params, *noise, x, z);
+    };
+    struct Tally { const char* what; int total = 0, onDrawn = 0, sunk = 0, floating = 0, undrawn = 0, onDeck = 0, onDeckOff = 0; double worst = 0; Vec3 worstAt; };
+    Tally poles{"signal poles"}, trees{"street trees"};
+    const auto note = [&](Tally& t, const Vec3& foot) {
+        ++t.total;
+        double y = 0;
+        if (!drawn.topAt(foot.x, foot.z, &y, foot.y + 1.0)) { ++t.undrawn; return; }
+        const double off = foot.y - y;
+        const bool deck = y - terrain(foot.x, foot.z) > kOnADeck;
+        t.onDeck += deck ? 1 : 0;
+        if (std::fabs(off) <= kFootOff) { ++t.onDrawn; return; }
+        (off < 0 ? t.sunk : t.floating) += 1;
+        t.onDeckOff += deck ? 1 : 0;
+        if (std::fabs(off) > std::fabs(t.worst)) { t.worst = off; t.worstAt = foot; }
+    };
+    world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+        for (const engine::StreetFurniture::Signal& sp : sf.signalPoles) note(poles, sp.base);
+        for (const Vec3& b : sf.streetTrees) note(trees, b);
+    });
+    for (const Tally* t : {&poles, &trees})
+        std::printf("    [pavement] %-13s %d: %d on the drawn surface, %d sunk, %d floating (worst %+.2f m at %.1f %.1f %.1f), %d over "
+                    "nothing drawn; on a deck %d (%d of them off it)\n",
+                    t->what, t->total, t->onDrawn, t->sunk, t->floating, t->worst, t->worstAt.x, t->worstAt.y, t->worstAt.z,
+                    t->undrawn, t->onDeck, t->onDeckOff);
+    // ...AND THE LIGHT PROBES over the streets (engine/lights/probe_sites.h): each its rule height over the road drawn
+    // under it, a deck included (they stood at the terrain's height, under every deck)
+    Tally probes{"light probes"};
+    {
+        std::vector<engine::ProbeSite> sites;
+        const engine::ProbeRules rules;
+        world.each<LevelRoadModel>([&](Entity, LevelRoadModel& m) {
+            for (const std::shared_ptr<RoadModel>& c : m.cities)
+                if (c) engine::placeProbeSites(*c, terrain, rules, sites);
+        });
+        for (const engine::ProbeSite& site : sites) note(probes, Vec3(site.position.x, site.position.y - rules.height, site.position.z));
+    }
+    std::printf("    [pavement] %-13s %d: %d on the drawn surface, %d sunk, %d floating (worst %+.2f m at %.1f %.1f %.1f), %d over "
+                "nothing drawn; on a deck %d (%d of them off it)\n",
+                probes.what, probes.total, probes.onDrawn, probes.sunk, probes.floating, probes.worst, probes.worstAt.x,
+                probes.worstAt.y, probes.worstAt.z, probes.undrawn, probes.onDeck, probes.onDeckOff);
+    CHECK(poles.total > 0 && trees.total > 0 && probes.total > 0 && probes.onDeck > 0);
+    for (const Tally* t : {&poles, &trees, &probes}) CHECK(t->onDeckOff == 0);
+}
+
+// ============================================================================
 // A FRONT DOOR FACES ITS STREET (Glenn, 2026-09-21: "The doors of these
 // buildings should face the streets ... some of those buildings have their
 // doorways facing into the grass and clipping with other buildings.")
@@ -2072,7 +2153,7 @@ TEST_CASE(front_doors_face_their_street) {
             CHECK(false);
             continue;
         }
-        const engine::RoadGraph nav = streetMapGraph(world);
+        const engine::RoadGraph nav = modelStreetGraph(world);
         CHECK(!nav.edges.empty());
         if (nav.edges.empty()) continue;
 
@@ -2582,206 +2663,9 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
     }
 }
 
-// THE FREEWAY CENSUS (Glenn, 2026-09-21: "vehicles don't take the freeway"). The
-// questions, so a zero can be pinned on the right layer:
-//   1. is there a freeway in the sim's graph at all (links by class);
-//   2. does the ROUTER take it when it should — long cross-city pairs, travel time;
-//   3. are its carriageways one-way (no reverse twin).
-// (Whether TRAFFIC took it was the old driving's cars, gone with ADR-0462.)
-TEST_CASE(freeway_census_links_and_routes) {
-    const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
-    for (const char* name : kCities) {
-        if (!levelPicked(name)) continue;   // RT_LEVELS=a,b picks among them
-        std::unique_ptr<Renderer> renderer = Renderer::create();
-        RendererMeshUploader uploader(*renderer);
-        AssetManager assets(uploader);
-        World world;
-        RenderView view;
-        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) {
-            CHECK(false);
-            continue;
-        }
-        citysim::CityRenderSystem city;
-        CHECK(city.build(world, &assets, nullptr));
-        const engine::NavGraph& nav = city.nav();
-        auto klassName = [](engine::RoadClass k) {
-            switch (k) {
-                case engine::RoadClass::Freeway: return "freeway";
-                case engine::RoadClass::Arterial: return "arterial";
-                case engine::RoadClass::Collector: return "collector";
-                case engine::RoadClass::Local: return "local";
-                case engine::RoadClass::Ramp: return "ramp";
-            }
-            return "?";
-        };
-        // 1. The graph.
-        std::map<std::string, std::pair<int, double>> byClass;
-        for (const engine::NavLink& l : nav.links) {
-            auto& e = byClass[klassName(l.klass)];
-            ++e.first;
-            e.second += l.length;
-        }
-        std::string mix;
-        for (const auto& [k, v] : byClass) {
-            char buf[96];
-            std::snprintf(buf, sizeof buf, " %s %d (%.1f km)", k.c_str(), v.first, v.second / 1000.0);
-            mix += buf;
-        }
-        std::printf("    [freeway] %-18s links:%s\n", name, mix.c_str());
-        auto usesFreeway = [&](const engine::Route& r) {
-            for (int li : r.links)
-                if (nav.links[static_cast<std::size_t>(li)].klass == engine::RoadClass::Freeway) return true;
-            return false;
-        };
-        // 1b. CONNECTIVITY: the directed graph's strongly connected components. A car's
-        // home and work must route BOTH ways (commutable), so anything outside the biggest
-        // component can only ever host trips inside its own little island.
-        {
-            const int nn = nav.nodeCount();
-            std::vector<int> idx(nn, -1), low(nn, 0), comp(nn, -1);
-            std::vector<char> onStack(nn, 0);
-            std::vector<int> stack;
-            int counter = 0, comps = 0;
-            // Iterative Tarjan.
-            for (int s0 = 0; s0 < nn; ++s0) {
-                if (idx[s0] >= 0) continue;
-                std::vector<std::pair<int, std::size_t>> work{{s0, 0}};
-                idx[s0] = low[s0] = counter++;
-                stack.push_back(s0);
-                onStack[s0] = 1;
-                while (!work.empty()) {
-                    auto& [v, ei] = work.back();
-                    if (ei < nav.outLinks[v].size()) {
-                        const engine::NavLink& ol = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])];
-                        if (ol.footpath) continue;   // a walk joins nothing for a car
-                        const int w = ol.to;
-                        if (idx[w] < 0) {
-                            idx[w] = low[w] = counter++;
-                            stack.push_back(w);
-                            onStack[w] = 1;
-                            work.push_back({w, 0});
-                        } else if (onStack[w]) {
-                            low[v] = std::min(low[v], idx[w]);
-                        }
-                    } else {
-                        if (low[v] == idx[v]) {
-                            while (true) {
-                                const int w = stack.back();
-                                stack.pop_back();
-                                onStack[w] = 0;
-                                comp[w] = comps;
-                                if (w == v) break;
-                            }
-                            ++comps;
-                        }
-                        const int done = v;
-                        work.pop_back();
-                        if (!work.empty()) low[work.back().first] = std::min(low[work.back().first], low[done]);
-                    }
-                }
-            }
-            std::vector<int> size(comps, 0);
-            for (int v = 0; v < nn; ++v) ++size[comp[v]];
-            const int big = static_cast<int>(std::max_element(size.begin(), size.end()) - size.begin());
-            std::map<std::string, std::pair<int, int>> inBig;   // class -> (links in the big SCC, all)
-            for (const engine::NavLink& l : nav.links) {
-                auto& e = inBig[klassName(l.klass)];
-                ++e.second;
-                if (comp[l.from] == big && comp[l.to] == big) ++e.first;
-            }
-            std::string cls;
-            for (const auto& [k, v] : inBig) cls += " " + k + " " + std::to_string(v.first) + "/" + std::to_string(v.second);
-            int singles = 0;
-            for (int c = 0; c < comps; ++c) singles += size[c] == 1;
-            // Which way is the freeway cut off? Forward reach from the big component
-            // (can a street GET ON?) and backward reach to it (can the freeway GET OFF?).
-            std::vector<char> fwd(nn, 0), bwd(nn, 0);
-            std::vector<std::vector<int>> inLinks(nn);
-            for (std::size_t li = 0; li < nav.links.size(); ++li) inLinks[nav.links[li].to].push_back(static_cast<int>(li));
-            int seed = -1;
-            for (int v = 0; v < nn && seed < 0; ++v) if (comp[v] == big) seed = v;
-            if (seed >= 0) {
-                std::vector<int> q{seed};
-                fwd[seed] = 1;
-                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : nav.outLinks[v]) { int w = nav.links[li].to; if (!fwd[w]) { fwd[w] = 1; q.push_back(w); } } }
-                q = {seed};
-                bwd[seed] = 1;
-                while (!q.empty()) { int v = q.back(); q.pop_back(); for (int li : inLinks[v]) { int w = nav.links[li].from; if (!bwd[w]) { bwd[w] = 1; q.push_back(w); } } }
-            }
-            int fwOn = 0, fwOff = 0, fwLinks = 0, rampOn = 0, rampOff = 0, ramps = 0;
-            for (const engine::NavLink& l : nav.links) {
-                if (l.klass == engine::RoadClass::Freeway) { ++fwLinks; fwOn += fwd[l.from]; fwOff += bwd[l.to]; }
-                if (l.klass == engine::RoadClass::Ramp) { ++ramps; rampOn += fwd[l.from]; rampOff += bwd[l.to]; }
-            }
-            std::printf("    [freeway] %-18s reach: freeway links a street can get onto %d/%d, that can get back to a "
-                        "street %d/%d | ramps reachable %d/%d, leading back %d/%d\n",
-                        name, fwOn, fwLinks, fwOff, fwLinks, rampOn, ramps, rampOff, ramps);
-            {   // the ramps and freeway links a street cannot get onto, or that lead nowhere: where they are
-                int shown = 0;
-                for (const engine::NavLink& l : nav.links)
-                    if ((l.klass == engine::RoadClass::Ramp || l.klass == engine::RoadClass::Freeway) && (!fwd[l.from] || !bwd[l.to]) && shown++ < 8)
-                        std::printf("    [freeway] %-18s   %s %s link from (%.1f, %.1f) to (%.1f, %.1f), %d links into its start, %zu out of its end, %.1f m\n",
-                                    name, !fwd[l.from] ? "unreachable" : "dead-end", l.klass == engine::RoadClass::Ramp ? "ramp" : "freeway",
-                                    nav.nodes[l.from].x, nav.nodes[l.from].y, nav.nodes[l.to].x, nav.nodes[l.to].y,
-                                    static_cast<int>(inLinks[l.from].size()), nav.outLinks[l.to].size(), (nav.nodes[l.to] - nav.nodes[l.from]).length());
-            }
-            // THE GATE: every freeway and ramp link can be reached from the streets and
-            // leads back to them (the twin welds each ramp end to the road it merges into).
-            CHECK(fwOn == fwLinks);
-            CHECK(fwOff == fwLinks);
-            CHECK(rampOn == ramps);
-            CHECK(rampOff == ramps);
-            // one drivable network -- of the DRIVABLE links: a park's or the quad's walk (a footpath, walkers only)
-            // is not a road and no car reaches it
-            int linksInBig = 0, drivable = 0;
-            for (const engine::NavLink& l : nav.links) {
-                if (l.footpath) continue;
-                ++drivable;
-                linksInBig += comp[l.from] == big && comp[l.to] == big;
-            }
-            CHECK(linksInBig == drivable);
-            std::printf("    [freeway] %-18s connectivity: %d nodes, %d strongly connected components, the biggest "
-                        "holds %d nodes; %d nodes are islands of one | links inside it:%s\n",
-                        name, nn, comps, size[big], singles, cls.c_str());
-        }
-        // 2. The router, on long pairs.
-        uint32_t h = 2024;
-        auto rnd = [&h] { h = h * 1664525u + 1013904223u; return h >> 8; };
-        int pairs = 0, routed = 0, viaFreeway = 0;
-        const int n = nav.nodeCount();
-        for (int k = 0; k < 4000 && pairs < 200 && n > 1; ++k) {
-            const int a = static_cast<int>(rnd() % n), b = static_cast<int>(rnd() % n);
-            if ((nav.nodes[a] - nav.nodes[b]).length() < 1500.0) continue;
-            ++pairs;
-            const engine::Route r = engine::findRoute(nav, a, b);
-            if (!r.valid()) continue;
-            ++routed;
-            if (usesFreeway(r)) ++viaFreeway;
-        }
-        std::printf("    [freeway] %-18s router: %d pairs > 1.5 km apart, %d routable, %d via the freeway\n",
-                    name, pairs, routed, viaFreeway);
-        // 3. The carriageways. WHAT GLENN SAW (2026-09-21): "turning around between freeways which is not possible
-        // since there are walls": no freeway/ramp link has a reverse. (The traffic on them, the old driving's cars, was
-        // counted here until ADR-0462: their routes turning back, cars off the deck, the drivers' commutes.)
-        int deckLinks = 0, twoWayDeck = 0;
-        {
-            std::set<std::pair<int, int>> dir;
-            for (const engine::NavLink& l : nav.links) dir.insert({l.from, l.to});
-            for (const engine::NavLink& l : nav.links) {
-                if (l.klass != engine::RoadClass::Freeway && l.klass != engine::RoadClass::Ramp) continue;
-                ++deckLinks;
-                if (dir.count({l.to, l.from})) ++twoWayDeck;
-            }
-        }
-        std::printf("    [freeway] %-18s carriageways: %d freeway/ramp links, %d with a reverse twin\n", name, deckLinks,
-                    twoWayDeck);
-        CHECK(twoWayDeck == 0);
-        // A city with a freeway USES it: long pairs route over it.
-        if (byClass.count("freeway")) {
-            CHECK(viaFreeway * 4 >= routed);        // metro_lanes: 124 of 184
-        }
-    }
-}
+// (freeway_census_links_and_routes went with the street map, #306: it counted the street map's links by class, their
+// strongly connected parts, and the street map's router's use of the freeway. The driving's own lane graph and router
+// are checked by the driving's tests.)
 
 // THE BLOCK CENSUS (Glenn, 2026-09-21: "Some of the city blocks only create a lot or two. I'd be
 // curious as to why that is ... I would accept having 1 lot with a large massive building on it
@@ -3745,7 +3629,7 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     World world;
     RenderView view;
     CHECK(LevelLoader::load(levelsDir() + "/river_town.json", world, *renderer, view, assets, /*editorMode=*/false));
-    const engine::RoadGraph nav = streetMapGraph(world);
+    const engine::RoadGraph nav = modelStreetGraph(world);
     std::vector<const engine::RoadDeckField*> decks;
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
     struct Steep { double grade; engine::Vec2 at; int klass; };
@@ -3801,19 +3685,14 @@ TEST_CASE(level_traffic_lab_cars_do_not_freeze_in_a_junction) {
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
     citysim::CitySim& sim = city.simMutable();
-    const engine::NavGraph& nav = city.nav();
-    std::vector<int> junctions;
-    std::vector<Real> mouth;
-    for (int j = 0; j < nav.nodeCount(); ++j) {
-        if (!nav.isJunction(j)) continue;
-        Real r = 0;
-        for (int li : nav.outLinks[static_cast<std::size_t>(j)]) r = std::max(r, nav.links[static_cast<std::size_t>(li)].width * 0.5);
-        junctions.push_back(j);
-        mouth.push_back(r + 3.5);
-    }
+    // a junction's mouth: within 12 m of its point, the road model's junctions (the street map's junction nodes and their
+    // widest link went with it, #306)
+    const engine::RoadModel* model = sim.roads();
+    CHECK(model != nullptr);
+    if (!model) return;
     auto inBox = [&](Vec2 p) {
-        for (std::size_t j = 0; j < junctions.size(); ++j)
-            if ((p - nav.nodes[static_cast<std::size_t>(junctions[j])]).length() < mouth[j]) return true;
+        for (const engine::ModelJunction& j : model->junctions)
+            if ((p - j.at).length() < 12.0) return true;
         return false;
     };
     // THE LAB'S CARS are car entities the new driving moves (ADR-0453), each with a lane component while on the road;

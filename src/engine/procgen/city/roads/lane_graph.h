@@ -352,6 +352,9 @@ struct LaneGraph {
     Vec2 pointAt(WalkId walk, Real distanceAlong) const;
     // How high it is.
     Real heightAt(PathId path, Real distanceAlong) const;
+    // ... the same on a walk's centre line: the height of the pavement it runs on, as the lane level laid it (a sidewalk
+    // over a bridge is as high as the bridge's sidewalk). An unknown walk: 0.
+    Real heightAt(WalkId walk, Real distanceAlong) const;
     // Which way it runs, in plan, as a unit vector: the chord from polyline.h's kTangentHalfSpan before to as far
     // after (chordAtStation), so it turns smoothly through a vertex instead of jumping at it. A path with no length
     // there reads as the chord from its first point to its last, and failing that as +x.
@@ -425,6 +428,8 @@ struct ReachableParts {
 // allow, over every path. A caller asking for one kind of vehicle, or for cars that cannot change lanes yet, narrows it.
 struct ReachRules {
     bool laneChanges = true;        // follow the lane changes the lines allow (false: next lists only)
+    Real laneChangeLeast = 0;       // ...and only out of a lane at least this long (m), as the router changes lanes
+                                    // (route.h RouteClass::laneChangeLeast): the parts must agree with the routes
     std::vector<uint8_t> open;      // per path, non-zero: it may be driven; empty: every path may. A closed path is never
                                     // stepped onto and steps nowhere, so it is a part of its own.
 };

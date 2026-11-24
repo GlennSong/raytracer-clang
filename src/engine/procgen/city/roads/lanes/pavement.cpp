@@ -22,6 +22,17 @@ namespace {
 
 constexpr double kMaxEdge = 4.0;   // faces are densified to this before triangulation
 constexpr double kFootprintWeld = 0.01;   // a lane's footprint reaches 1 cm past its rails, so neighbours weld
+// A layer with its bodiless parts taken off (kNoBody, ADR-0479): opened (shrunk by kNoBody, grown back), which drops the
+// slivers and the spikes on real pieces whole. `keepNecks` (the sidewalk) closes it again (grown by kNoBody more, shrunk
+// back): two real pieces the shrink had parted at a neck under 2 cm wide are one again, as people walk them (the opening
+// alone cut sidewalks in two and corners lost their walks), and the slivers, gone at the first shrink, stay gone. Not for
+// the shoulder: there the close joins shoulders of carriageways at two levels that lie within 2 cm in plan (traffic_lab's
+// freeways, +388 m2). Corners move by under a centimetre.
+PolySet withBody(const PolySet& s, bool keepNecks) {
+    if (s.empty()) return s;
+    const PolySet opened = offsetSet(offsetSet(s, -kNoBody), kNoBody);
+    return keepNecks ? offsetSet(offsetSet(opened, kNoBody), -kNoBody) : opened;
+}
 
 Ring railRing(const std::vector<Vec2>& left, const std::vector<Vec2>& right) {
     Ring r(left.begin(), left.end()); for (size_t i = right.size(); i-- > 0;) r.push_back(right[i]); return r;
@@ -308,6 +319,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         }
         if (!isl.empty()) out.median = unionSets(out.median, unionRings(isl));
     }
+    out.median = withBody(out.median, false);   // (before it cuts the shoulders and sidewalks below)
     // SHOULDERS AND SIDEWALKS ARE CUT ONLY AT THEIR OWN LEVEL (Glenn, 2026-10-15: "where the elevated train deck goes
     // over the sidewalk it removes that part of the sidewalk underneath it"). They were the union of every band minus
     // the union of every lane, hull, median and shoulder -- in PLAN, so a track or freeway passing overhead cut the
@@ -385,6 +397,8 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         out.shoulder = sh.empty() ? PolySet{} : unionAll(sh);
         out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw);
     }
+    out.shoulder = withBody(out.shoulder, false);
+    out.sidewalk = withBody(out.sidewalk, true);
     out.islands.clear(); out.enclosedBlocks = 0;
     for (const Polygon2& p : out.surface) for (const Ring& h : p.holes) { double a = std::fabs(signedArea(h)); if (a > 1.0 && a < 2000.0) out.islands.push_back(a); else if (a >= 2000.0) ++out.enclosedBlocks; }
 }

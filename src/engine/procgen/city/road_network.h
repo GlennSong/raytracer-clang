@@ -26,6 +26,9 @@ enum class RoadClass : uint8_t { Freeway, Arterial, Collector, Local, Ramp, Alle
 // name is none of them (travel.lua names the classes a drive is told apart by, ADR-0416).
 const char* roadClassName(RoadClass k);
 bool parseRoadClass(const std::string& name, RoadClass& out);
+// A CLASS'S SPEED, m/s, for a trip's estimate (the trip planner, a bus line's time): freeway ~100 km/h, arterial ~58,
+// collector 12, local and alley 8, ramp 10.
+Real classSpeed(RoadClass klass);
 // WHAT A BUILDING MAY FRONT -- THE ONE RULE (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since
 // that's not an accessible road"): a door, its walk and a plaza's mouths reach for city streets, never a freeway or a
 // ramp, nor a street carried over the ground on a bridge (`overGround`). Asked by the lot pass when it faces a door
@@ -75,7 +78,7 @@ inline bool isGore(JunctionKind k) {
 // and STORED, so consumers stop re-deriving "freeway-ness" with their own
 // class checks. Whether pedestrians travel along an edge or a link, and
 // whether a link is a footpath, are NOT bits here: each has one home, the
-// bools `walkable` (RoadEdge, NavLink) and NavLink::footpath. (Bits 1 and 16
+// bool `walkable` (RoadEdge). (Bits 1 and 16
 // once repeated them and nothing read them: ADR-0438. The bits left keep
 // their values.)
 namespace road_access {
@@ -130,7 +133,7 @@ struct RoadEdge {
     // Roads-v2 S8: may pedestrians travel along this edge? Baked from the
     // edge's RoadSpec band list (any Sidewalk band => true) where a spec is
     // known; edges without specs keep the permissive default and rely on the
-    // class rule (pathfind's onFoot skip of Freeway/Ramp) as the backstop.
+    // class rule (no walking on a Freeway or a Ramp) as the backstop.
     bool walkable = true;
     // Semantic layer: access bits (road_access::k*), derived by
     // classifyRoadGraph from class/spec/elevation/neighbours and stored.

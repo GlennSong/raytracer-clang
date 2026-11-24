@@ -43,6 +43,7 @@ using engine::roads::Across;
 using engine::roads::kAcrossCount;
 using engine::roads::LanesToCross;
 using engine::roads::lanesToCross;
+using engine::roads::laneBeside;
 using engine::roads::LastChance;
 using engine::roads::lastChance;
 using engine::roads::wayAhead;

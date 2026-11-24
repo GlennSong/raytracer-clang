@@ -1,7 +1,8 @@
 #include "brain_fakes.h"
 
+#include <algorithm>
+
 #include "apps/citysim/brain/scripting/brain_lua.h"
-#include "engine/ai/pathfind.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/scripting/script_vm.h"
 
@@ -342,11 +343,83 @@ void FakeDrive::tick(Machine& machine) {
 }
 
 // ---- the lab -----------------------------------------------------------------------------------------------------------
-engine::NavGraph longStreet() {
+// (the road is laid along y = +h, h being how far its sidewalk's middle lies from its centre line, so the south
+// sidewalk runs along y = 0: a place at (x, 0) stands on the walk, and a walk between two of them is their
+// straight-line metres, as the stand-ins take it. The south kerb's lane runs east, toward the far places, so a car
+// standing beside a place drives to them: the street has nowhere to turn round)
+const citytest::ModelScene& longStreet() {
+    static const Real h = [] {
+        const citytest::ModelScene& probe = citytest::straightScene(2000.0);
+        Vec2 out(0, 0);
+        const engine::RoadFrontage f = probe.model->frontageAt(Vec2(1000, 5));
+        if (f.valid()) probe.model->sidewalkBeside(f, out);
+        return out.y;
+    }();
     engine::RoadGraph g;
-    for (int i = 0; i <= 20; ++i) g.nodes.push_back({Vec2(100.0 * i, 0)});
-    for (int i = 0; i < 20; ++i) g.edges.push_back(engine::RoadEdge{i, i + 1, 8, engine::RoadClass::Local, 0});
-    return engine::buildNavGraph(g);
+    g.nodes = {{Vec2(0, h)}, {Vec2(2000, h)}, {Vec2(2000, h - 30)}, {Vec2(2000, h + 30)}};
+    g.edges = {engine::RoadEdge{0, 1, 8, engine::RoadClass::Local, 0}, engine::RoadEdge{1, 2, 8, engine::RoadClass::Local, 0},
+               engine::RoadEdge{1, 3, 8, engine::RoadClass::Local, 0}};
+    return citytest::graphScene("brain_long_street", g);
+}
+
+TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get(), &buses}; }
+
+PlaceRef FakeWorld::addStop(uint32_t line, uint32_t stop, Vec2 at) {
+    const PlaceRef p = addDoor(at);
+    stops.push_back({{line, stop}, p.id});
+    return p;
+}
+bool FakeWorld::stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const {
+    for (const auto& s : stops)
+        if (s.first.first == line && s.first.second == stop) {
+            out.id = s.second;
+            return true;
+        }
+    return false;
+}
+
+bool FakeRide::waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) {
+    cancel(who);
+    --cancels;   // (not a cancel the brain asked for)
+    riders.push_back(Rider{who, line, board, alight, false});
+    ++waits;
+    return true;
+}
+bool FakeRide::aboard(AgentId who, uint32_t line, PlaceRef alight) {
+    cancel(who);
+    --cancels;
+    riders.push_back(Rider{who, line, PlaceRef(), alight, true});
+    return true;
+}
+void FakeRide::cancel(AgentId who) {
+    ++cancels;
+    riders.erase(std::remove_if(riders.begin(), riders.end(), [who](const Rider& r) { return r.who == who; }), riders.end());
+}
+void FakeRide::busAt(Machine& machine, uint32_t line, PlaceRef stop) {
+    std::vector<Rider> keep;
+    for (Rider& r : riders) {
+        if (r.line != line) {
+            keep.push_back(r);
+            continue;
+        }
+        if (r.onBoard && r.alight == stop) {
+            machine.post(r.who, alighted_);
+            continue;
+        }
+        if (!r.onBoard && r.board == stop) {
+            r.onBoard = true;
+            machine.post(r.who, boarded_);
+        }
+        keep.push_back(r);
+    }
+    riders = keep;
+}
+
+StreetNet longStreetNet() {
+    StreetNet s;
+    s.walker = engine::roads::bindWalker(*longStreet().model, "walker", 1.4);
+    s.driving = citytest::tripDriving(*longStreet().model);
+    return s;
 }
 
 TravelCatalog testTravel() {
@@ -400,7 +473,7 @@ bool shippedBrainSpec(BrainSpec& out) {
 }
 
 Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
-    nav = longStreet();
+    street = longStreetNet();
     travel = ways ? *ways : testTravel();
     registerBehaviours(behaviours);
     BrainSpec spec;
@@ -413,12 +486,14 @@ Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
     }
     walk.reset(new FakeWalk(world, travel, static_cast<EventId>(table.event("arrived"))));
     drive.reset(new FakeDrive(world, static_cast<EventId>(table.event("parked"))));
+    ride.reset(new FakeRide(static_cast<EventId>(table.event("boarded")), static_cast<EventId>(table.event("alighted"))));
     if (skills) {
         world.walk = walk.get();
         world.drive = drive.get();
     }
-    planner.reset(new TripPlanner(nav, travel, world));
+    planner.reset(new TripPlanner(street.net(), travel, world));
     machine.reset(new Machine(table, world, *planner, skills ? walk.get() : nullptr, skills ? drive.get() : nullptr));
+    if (skills) machine->setRide(ride.get());
     machine->traceTo(&trace);
 }
 

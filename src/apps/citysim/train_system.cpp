@@ -31,9 +31,9 @@ using engine::Vec3;
 namespace {
 
 constexpr Real kWalk = 1.8;               // m/s along a carriage
-constexpr Real kStandingEye = 1.62;       // eye above the floor
+constexpr Real kStandingEye = engine::kRiderStandingEye;   // eye above the floor (engine/riding.h)
 constexpr Real kWallClear = 0.28;         // how near a wall a standing body comes
-constexpr Real kSeatedEye = 0.74;         // eye above the seat's hip point
+constexpr Real kSeatedEye = engine::kRiderSeatedEye;       // eye above the seat's hip point (engine/riding.h)
 constexpr Real kSeatReach = 2.2;          // seats offered within this of where you stand
 
 Vec3 col(const Mat4& m, int c) { return Vec3(m.m[0][c], m.m[1][c], m.m[2][c]); }

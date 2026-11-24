@@ -210,9 +210,9 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     const bool ok = loadTravelCatalog(vm, cat, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
-    CHECK(cat.modes.size() == 4 && cat.find("walk") == 0 && cat.find("car") == 1);
-    CHECK(cat.find("skateboard") == 2 && cat.find("scooter") == 3);
-    if (cat.modes.size() != 4) return;
+    CHECK(cat.modes.size() == 5 && cat.find("walk") == 0 && cat.find("car") == 1);
+    CHECK(cat.find("skateboard") == 2 && cat.find("scooter") == 3 && cat.find("bus") == 4);   // (the bus: ADR-0484)
+    if (cat.modes.size() != 5) return;
     CHECK(!cat.modes[0].roads && !cat.modes[0].ownVehicle && cat.modes[0].access == -1);
     // the car fixes no way of reaching it: the cheapest way on foot the person has is used (ADR-0440)
     CHECK(cat.modes[1].roads && cat.modes[1].ownVehicle && cat.modes[1].access == -1);
@@ -250,7 +250,7 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
         CHECK(fixed.doString(readFile(std::string(RT_SOURCE_DIR) + "/assets/scripts/travel.lua") +
                                  "\ntravel.modes[2].access = 'walk'", &e));
         TravelCatalog c;
-        CHECK(loadTravelCatalog(fixed, c, &e) && c.modes.size() == 4 && c.modes[1].access == 0);
+        CHECK(loadTravelCatalog(fixed, c, &e) && c.modes.size() == 5 && c.modes[1].access == 0);
     }
     // ...but a car with no fixed way to it needs SOME way on foot that everyone has
     refused("travel.modes[1].requires = 'has_board'", "open to everyone");

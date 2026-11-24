@@ -202,7 +202,8 @@ uint32_t lampWordIndex(Lamp l);
 // all-red), any two movements whose lamps both let traffic in (green or yellow) and whose paths cross or join must be
 // allowed to by the rule set: from approaches facing each other, one of them a movement the control lets go on a plain
 // green giving way (`gives_way_on_green`). Returns each breach in plain words; empty when sound. It takes the road
-// model because which approaches face each other is the model's answer (RoadModel::facing).
+// model because which approaches face each other is the model's answer (RoadModel::facing). And every walk signal must
+// show WALK in at least one phase.
 std::vector<std::string> checkSignalProgrammes(const engine::RoadModel& model, const RuleSet& rules, const RightOfWay& row);
 
 // ONE JUNCTION'S PROGRAMME AS TEXT: each phase's green, yellow and all-red, the cycle and the offset.

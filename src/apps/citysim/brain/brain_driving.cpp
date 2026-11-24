@@ -9,6 +9,7 @@ namespace {
 // The driving's kinds of event, in its own order (driving::EventKind), as brain.lua names them.
 const char* const kDrivingEventNames[driving::kEventKindCount] = {
     "parked", "no_route", "cannot_park", "missed_turn", "crashed", "ended_early",
+    "got_up",   // (a wreck cleared: its driver gets up and goes on without the car)
 };
 constexpr uint32_t kIndexMask = (1u << RoadPlaces::kIndexBits) - 1;
 }  // namespace
@@ -91,7 +92,7 @@ bool DrivingSkill::pullOut(CarRef car, PlaceRef space) {
     const driving::CarId id(car.id);
     if (driving_.car(id)) return true;   // already on the road (left in the lane by an earlier trip)
     driving::PathPoint at;
-    return lanes_.kerbLane(space, at) && driving_.placeCar(id, vehicleClass_, at);
+    return lanes_.kerbLane(space, at) && driving_.placeCarInSpace(id, vehicleClass_, at, lanes_.kerbOffset(space));
 }
 
 bool DrivingSkill::beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real) {
@@ -100,7 +101,7 @@ bool DrivingSkill::beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, Pla
     if (!driving_.car(id) && !pullOut(car, fromSpace)) return false;
     driving::PathPoint to;
     if (!lanes_.kerbLane(toSpace, to)) return false;
-    return driving_.beginTrip(id, static_cast<driving::PersonId>(person), to).valid();
+    return driving_.beginTrip(id, static_cast<driving::PersonId>(person), to, lanes_.kerbOffset(toSpace)).valid();
 }
 
 void DrivingSkill::endTrip(CarRef car) {
@@ -120,7 +121,7 @@ bool DrivingSkill::changeDestination(CarRef car, PlaceRef toSpace) {
     // (a place off the road is refused here, so that the one way the driving can still refuse is "no route", which it
     // reports itself)
     if (to.path.index >= roads->paths.size() || to.along < 0 || to.along > roads->paths[to.path.index].length) return false;
-    if (driving_.changeDestination(trip, to)) return true;
+    if (driving_.changeDestination(trip, to, lanes_.kerbOffset(toSpace))) return true;
     refusedHere_.push_back(id);
     return false;
 }

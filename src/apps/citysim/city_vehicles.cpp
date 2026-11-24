@@ -204,7 +204,7 @@ bool CityVehicleSystem::ambientPose(const Ambient& a, Vec3& pos, Vec2& heading) 
     if (!t || !link || link->away) return false;
     const Vec2 at = carPosition(*t);
     heading = carHeading(*t);
-    pos = Vec3(at.x, city_.surfaceY(-1, 0, at), at.y);
+    pos = Vec3(at.x, city_.surfaceY(at), at.y);
     return true;
 }
 

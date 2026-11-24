@@ -162,6 +162,45 @@ void parkExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     ctx.world->leaveCar(carOf(a), ctx.agent);
 }
 
+// ---- WAITING FOR A BUS (ADR-0484): at the stop the leg before ended at, for a bus of the leg's line (its handle). Its
+// planned time is the way's start minutes, the mean wait. A near person is the ride skill's: it reports `boarded`.
+// raises: 0 missed_ride
+BrainTime busWaitLasts(const StepContext& ctx, const AgentBrain& a) {
+    const WayRow* way = legWayRow(ctx, a);
+    return way ? way->startMillis : kNever;
+}
+EventId busWaitFrom(StepContext& ctx, AgentBrain& a, Real) {
+    if (!ctx.skillsRun) return kNoId;   // far: nobody waits at a real stop; the clock stands for the wait
+    if (!ctx.ride) return raised(ctx, a, 0);
+    const PlaceRef board = ctx.machine->legStartPlace(a);
+    return ctx.ride->waitFor(ctx.agent, a.legHandle(a.legNow), board, legEndPlace(a)) ? kNoId : raised(ctx, a, 0);
+}
+EventId busWaitEnter(StepContext& ctx, AgentBrain& a) { return busWaitFrom(ctx, a, 0); }
+void busWaitExit(StepContext& ctx, AgentBrain&, ExitWhy why) {
+    // (boarded: the skill carries on with them aboard, into riding)
+    if (ctx.skillsRun && ctx.ride && why != ExitWhy::Done) ctx.ride->cancel(ctx.agent);
+}
+
+// ---- RIDING A BUS: aboard, to the leg's last stop. Its planned time is the leg's less the wait. A near person who
+// boarded is already the skill's; one raised from far part-way through is put aboard (`aboard`). The skill reports
+// `alighted`. raises: 0 missed_ride
+BrainTime busRideLasts(const StepContext& ctx, const AgentBrain& a) {
+    const WayRow* way = legWayRow(ctx, a);
+    const BrainTime leg = legMillis(a);
+    if (!way || leg == kNever) return kNever;
+    const BrainTime fixed = way->startMillis + way->endMillis;
+    return leg > fixed ? leg - fixed : 0;
+}
+EventId busRideEnter(StepContext&, AgentBrain&) { return kNoId; }   // (boarded: the skill has them aboard already)
+EventId busRideMidLeg(StepContext& ctx, AgentBrain& a, Real) {
+    if (!ctx.skillsRun) return kNoId;
+    if (!ctx.ride) return raised(ctx, a, 0);
+    return ctx.ride->aboard(ctx.agent, a.legHandle(a.legNow), legEndPlace(a)) ? kNoId : raised(ctx, a, 0);
+}
+void busRideExit(StepContext& ctx, AgentBrain&, ExitWhy why) {
+    if (ctx.skillsRun && ctx.ride && why != ExitWhy::Done) ctx.ride->cancel(ctx.agent);
+}
+
 // ---- RELEASED: the player or a director has let go. The intent takes over again at once. raises: 0 resume_intent
 EventId releasedEnter(StepContext& ctx, AgentBrain& a) { return raised(ctx, a, 0); }
 
@@ -170,6 +209,7 @@ EventId releasedEnter(StepContext& ctx, AgentBrain& a) { return raised(ctx, a, 0
 void registerBehaviours(BehaviourSet& set) {
     set.addSkill("walk");
     set.addSkill("drive");
+    set.addSkill("ride");
 
     // at a place, and held: the state itself does nothing; its row of the table says what ends it
     const StateFns waits{};
@@ -214,12 +254,26 @@ void registerBehaviours(BehaviourSet& set) {
     parking.exit = parkExit;
     set.add("parking", parking, {"cannot_park", "space_taken"});
 
+    StateFns busWaiting;
+    busWaiting.lasts = busWaitLasts;
+    busWaiting.enter = busWaitEnter;
+    busWaiting.enterMidLeg = busWaitFrom;
+    busWaiting.exit = busWaitExit;
+    set.add("waiting", busWaiting, {"missed_ride"});
+
+    StateFns busRiding;
+    busRiding.lasts = busRideLasts;
+    busRiding.enter = busRideEnter;
+    busRiding.enterMidLeg = busRideMidLeg;
+    busRiding.exit = busRideExit;
+    set.add("riding", busRiding, {"missed_ride"});
+
     StateFns released;
     released.enter = releasedEnter;
     set.add("released", released, {"resume_intent"});
 
     // in the data, not built yet
-    for (const char* name : {"waiting", "boarding", "riding", "alighting", "hailing", "using_spot", "group_activity",
+    for (const char* name : {"boarding", "alighting", "hailing", "using_spot", "group_activity",
                              "working_post", "asleep"})
         set.addNotBuilt(name);
 }

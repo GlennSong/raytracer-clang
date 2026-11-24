@@ -11,8 +11,7 @@
 
 #include "../parcel.h"
 #include "../site_plan.h"
-#include "../../../ai/nav_graph.h"
-#include "../../../ai/pathfind.h"
+#include <queue>   // the commute sample's quickest way (planScore)
 
 #include <algorithm>
 #include <cmath>
@@ -3322,9 +3321,11 @@ PlanScore evaluatePlan(CityPlan& plan) {
                 all.edges.push_back(r);
             }
         }
-        NavBuildParams np;
-        np.oneWayRamps = false;
-        const NavGraph nav = buildNavGraph(all, np);
+        // THE QUICKEST WAY over the plan's own graph (PlanGraphRouter): does it use the freeway
+        const PlanGraphRouter router(all);
+        const int N = static_cast<int>(all.nodes.size());
+        auto nearestNode = [&](const Vec2& p) { return router.nearestNode(p); };
+        auto quickest = [&](int from, int to, bool& viaFreeway) { return !router.quickest(from, to, &viaFreeway).empty(); };
         std::vector<int> homes, jobs;
         for (std::size_t i = 0; i < plan.blocks.size(); ++i) {
             const PlanBlock& b = plan.blocks[i];
@@ -3333,18 +3334,17 @@ PlanScore evaluatePlan(CityPlan& plan) {
             else homes.push_back(static_cast<int>(i));
         }
         int via = 0, routed = 0;
-        if (!homes.empty() && !jobs.empty() && nav.nodeCount() > 1) {
+        if (!homes.empty() && !jobs.empty() && N > 1) {
             for (int k = 0; k < 300; ++k) {
                 const uint32_t h = hash3(k, 91, B.seed);
                 const PlanBlock& hb = plan.blocks[static_cast<std::size_t>(homes[h % homes.size()])];
                 const PlanBlock& jb = plan.blocks[static_cast<std::size_t>(jobs[(h >> 12) % jobs.size()])];
-                const int hn = nav.nearestNode(centroid(hb.buildable)), jn = nav.nearestNode(centroid(jb.buildable));
+                const int hn = nearestNode(centroid(hb.buildable)), jn = nearestNode(centroid(jb.buildable));
                 if (hn < 0 || jn < 0 || hn == jn) continue;
-                const Route r = findRoute(nav, hn, jn);
-                if (!r.valid()) continue;
+                bool fw = false;
+                if (!quickest(hn, jn, fw)) continue;
                 ++routed;
-                for (int li : r.links)
-                    if (nav.links[static_cast<std::size_t>(li)].klass == RoadClass::Freeway) { ++via; break; }
+                via += fw ? 1 : 0;
             }
         }
         s.commutesSampled = routed;
@@ -3353,6 +3353,83 @@ PlanScore evaluatePlan(CityPlan& plan) {
     if (s.streetComponents != 1) s.notes.push_back("the street network is in " + std::to_string(s.streetComponents) + " pieces");
     if (s.coreRectilinearShare < 0.6) s.notes.push_back("the core and midtown are less than 60% rectilinear by area");
     return s;
+}
+
+// ---- the quickest way over a plan's graph ------------------------------------------------------------------------------
+PlanGraphRouter::PlanGraphRouter(const RoadGraph& g) : g_(g), at_(g.nodes.size()) {
+    const int N = static_cast<int>(g.nodes.size());
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+        if (E.a < 0 || E.b < 0 || E.a >= N || E.b >= N) continue;
+        at_[static_cast<std::size_t>(E.a)].push_back(e);
+        at_[static_cast<std::size_t>(E.b)].push_back(e);
+    }
+}
+
+int PlanGraphRouter::nearestNode(const Vec2& p) const {
+    int best = -1;
+    Real bd = 1e30;
+    for (std::size_t i = 0; i < at_.size(); ++i) {
+        if (at_[i].empty()) continue;
+        const Real d = (g_.nodes[i].pos - p).length();
+        if (d < bd) {
+            bd = d;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
+}
+
+std::vector<int> PlanGraphRouter::quickest(int from, int to, bool* viaFreeway) const {
+    const int N = static_cast<int>(at_.size());
+    if (from < 0 || to < 0 || from >= N || to >= N) return {};
+    std::vector<Real> cost(static_cast<std::size_t>(N), 1e30);
+    std::vector<int> byEdge(static_cast<std::size_t>(N), -1);
+    using Item = std::pair<Real, int>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+    cost[static_cast<std::size_t>(from)] = 0;
+    open.push({0, from});
+    while (!open.empty()) {
+        const Item it = open.top();
+        open.pop();
+        const int u = it.second;
+        if (it.first > cost[static_cast<std::size_t>(u)]) continue;
+        if (u == to) break;
+        for (int e : at_[static_cast<std::size_t>(u)]) {
+            const RoadEdge& E = g_.edges[static_cast<std::size_t>(e)];
+            const int v = E.a == u ? E.b : E.a;
+            const Real len = (g_.nodes[static_cast<std::size_t>(v)].pos - g_.nodes[static_cast<std::size_t>(u)].pos).length();
+            // (a street edge into a street junction waits there; a freeway or a ramp does not)
+            const bool street = E.klass != RoadClass::Freeway && E.klass != RoadClass::Ramp;
+            const Real wait = street && v != to && at_[static_cast<std::size_t>(v)].size() >= 3 ? 6.0 : 0.0;
+            const Real c = it.first + len / classSpeed(E.klass) + wait;
+            if (c < cost[static_cast<std::size_t>(v)]) {
+                cost[static_cast<std::size_t>(v)] = c;
+                byEdge[static_cast<std::size_t>(v)] = e;
+                open.push({c, v});
+            }
+        }
+    }
+    if (cost[static_cast<std::size_t>(to)] >= 1e29) return {};
+    std::vector<int> nodes{to};
+    bool fw = false;
+    for (int v = to; v != from && byEdge[static_cast<std::size_t>(v)] >= 0;) {
+        const RoadEdge& E = g_.edges[static_cast<std::size_t>(byEdge[static_cast<std::size_t>(v)])];
+        fw = fw || E.klass == RoadClass::Freeway;
+        v = E.a == v ? E.b : E.a;
+        nodes.push_back(v);
+    }
+    std::reverse(nodes.begin(), nodes.end());
+    if (viaFreeway) *viaFreeway = fw;
+    return nodes;
+}
+
+std::vector<Vec2> PlanGraphRouter::quickestLine(const Vec2& from, const Vec2& to) const {
+    const std::vector<int> nodes = quickest(nearestNode(from), nearestNode(to));
+    std::vector<Vec2> out{from};
+    for (int n : nodes) out.push_back(g_.nodes[static_cast<std::size_t>(n)].pos);
+    out.push_back(to);
+    return out;
 }
 
 // ---- output --------------------------------------------------------------------------------

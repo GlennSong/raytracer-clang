@@ -714,6 +714,17 @@ void Application::registerPlayerVerbs() {
         return publishRequest(eventBus, r, "train_board", "ok staged");
     });
 
+    // `bus_board <bus>`: aboard a bus, standing inside its first door (ADR-0486)
+    commandTable.add("bus_board", "bus_board <bus>",
+                     "Put the player aboard a bus (its number, as buses? gives it), standing inside its first door.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        BusBoardRequest r;
+        double v;
+        if (cmd.args.size() != 1 || !num(cmd.args[0], v) || v < 0) return "err usage: bus_board <bus>";
+        r.bus = static_cast<int>(v);
+        return publishRequest(eventBus, r, "bus_board", "ok staged");
+    });
+
     commandTable.add("interact?", "interact?",
                      "What the interaction focus is on.",
                      unanswered("an InteractBrokerSystem: play mode"));
@@ -878,6 +889,10 @@ void Application::registerCityVerbs() {
                      "Shops' OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.",
                      unanswered("a CityRenderSystem: play mode on a city level"));
 
+    commandTable.add("buses?", "buses?",
+                     "The buses on the road file's lines (ADR-0485): each bus's number, line, the stop it is going to (or standing at), where it is, and the riders' counts.",
+                     unanswered("a CityRenderSystem: play mode on a city level with bus lines"));
+
     // the trains (citysim train_system): lines, stops, every train's place, speed and doors, and whether you are aboard
     commandTable.add("trains?", "trains?",
                      "The trains: lines, stops, every train's place, speed and doors, and whether you are aboard.",
@@ -1040,25 +1055,27 @@ void Application::registerGroundVerbs() {
         const CityMap* map = nullptr;
         worldState.each<CityMap>([&](Entity, CityMap& m) { if (!map) map = &m; });
         if (map && map->data) {
-            // the street map's street links (ADR-0425; a two-way street's two links lie on one line, so either answers)
-            const engine::NavGraph& g = map->data->nav;
+            // the streets' centre lines (the road model's, CityMapData::streets)
             double bestD = 1e30, bestW = 0;
             int bestE = -1;
-            for (int e = 0; e < g.streetLinkCount(); ++e) {
-                const engine::NavLink& ed = g.links[static_cast<std::size_t>(e)];
-                const engine::Vec2& A = g.nodes[static_cast<std::size_t>(ed.from)];
-                const engine::Vec2& B = g.nodes[static_cast<std::size_t>(ed.to)];
-                engine::Vec2 ab = B - A;
-                const double l2 = ab.x * ab.x + ab.y * ab.y;
-                double t = l2 > 1e-12 ? ((q.x - A.x) * ab.x + (q.y - A.y) * ab.y) / l2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                const engine::Vec2 P(A.x + ab.x * t, A.y + ab.y * t);
-                const double d = std::sqrt((q.x - P.x) * (q.x - P.x) + (q.y - P.y) * (q.y - P.y));
-                if (d < bestD) { bestD = d; bestW = ed.width; bestE = e; }
+            for (std::size_t e = 0; e < map->data->streets.size(); ++e) {
+                const engine::CityMapData::Street& s = map->data->streets[e];
+                if (s.footway || s.track) continue;
+                for (std::size_t i = 0; i + 1 < s.line.size(); ++i) {
+                    const engine::Vec2& A = s.line[i];
+                    const engine::Vec2& B = s.line[i + 1];
+                    engine::Vec2 ab = B - A;
+                    const double l2 = ab.x * ab.x + ab.y * ab.y;
+                    double t = l2 > 1e-12 ? ((q.x - A.x) * ab.x + (q.y - A.y) * ab.y) / l2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const engine::Vec2 P(A.x + ab.x * t, A.y + ab.y * t);
+                    const double d = std::sqrt((q.x - P.x) * (q.x - P.x) + (q.y - P.y) * (q.y - P.y));
+                    if (d < bestD) { bestD = d; bestW = s.width; bestE = static_cast<int>(e); }
+                }
             }
             if (bestE >= 0) {
                 const double into = bestW * 0.5 - bestD;
-                out += " | street link " + std::to_string(bestE) + " width " +
+                out += " | street " + std::to_string(bestE) + " width " +
                        std::to_string(bestW) + " centreline " + std::to_string(bestD) + " m";
                 out += into > 0 ? (" -- IN THE CARRIAGEWAY by " + std::to_string(into) + " m")
                                 : (" (clear by " + std::to_string(-into) + " m)");

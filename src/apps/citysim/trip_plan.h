@@ -11,15 +11,24 @@
 // moves the person differently, its execution (the agent brain's skills, city_brain.h). This module names no way of
 // travelling.
 //
-// Pure: the nav graph and the table in, the plan out. No sim, no world, no Lua (the reader is
+// Pure: the road model, the walker and the table in, the plan out. No sim, no world, no Lua (the reader is
 // scripting/travel_lua.h), so it is unit-tested headless.
+//
+// THE NETWORK (#306, the street map's deletion): every leg is routed over the road model's walks by the one router
+// (findWalkRoute). A leg on the roads is the driving's own lane route (Driving::routeBetween), timed at each lane's
+// posted limit (the rule set's, capped by the class's top speed) -- the same time the car's route was chosen by; a leg
+// on foot is at the way's speed.
 
-#include "../../engine/ai/nav_graph.h"
-#include "../../engine/ai/pathfind.h"
+#include "../../engine/procgen/city/road_network.h"   // RoadClass
+#include "../../engine/procgen/city/roads/route.h"     // findWalkRoute, WalkRoute, RouteWalker
 
 #include <cstdint>
 #include <string>
 #include <vector>
+
+namespace driving {
+class Driving;
+}
 
 namespace citysim {
 
@@ -35,7 +44,8 @@ constexpr int kMaxTraits = 8;
 // ONE WAY OF TRAVELLING (a row of travel.lua).
 struct TravelMode {
     std::string name;            // "walk", "car"
-    bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)
+    bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)...
+    bool bus = false;            // ...or the bus lines (ADR-0484): walked to a stop, waited for, ridden round the line
     // WHO HAS IT (travel.lua `requires`): the trait a person must have for this row to be priced for them
     // ("has_board"), and its place in TravelCatalog::traits. Empty and -1: anyone.
     std::string needs;
@@ -47,8 +57,8 @@ struct TravelMode {
     // not read it; the agent brain does (brain/brain_table.h).
     std::string beginsIn;
     // m/s, door to door, on the FOOTPATHS (the table says km/h). A way on the roads has none: its minutes are the
-    // router's own time for the route (engine::routeSeconds: each road class at its speed, a few seconds a street
-    // junction), the time it chose the route by (ADR-0416).
+    // driving router's own time for the route (Driving::routeBetween: each lane and turn at its free-flow speed), the
+    // time it chose the route by.
     Real speed = 1.4;
     Real startMinutes = 0;       // fixed minutes at the start of a leg of it (unlocking, pulling out)
     Real endMinutes = 0;         // ...and at its end (finding the space, parking, locking)
@@ -92,23 +102,26 @@ struct TravelCatalog {
 
 // WHAT A LEG ENDS AT, so a reader that keeps places as handles (the agent brain) knows which handle each leg's end is
 // without comparing points: the door the trip is for, the vehicle where it stands, or where the vehicle is left.
-enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft };
+enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft, Stop };   // Stop: a bus stop (its line and index on the leg)
 
 // One leg: a single way of travelling from one point to another.
 struct TripLeg {
     int mode = -1;               // row in the catalog
     LegEnd end = LegEnd::Door;
     Vec2 from, to;
-    engine::Route route;         // links of the leg's network (empty when from and to share a node)
-    int fromNode = -1, toNode = -1;
-    Real metres = 0;             // the route plus the bits off the network at each end
-    // On foot: metres at the way's speed. On the roads: the router's time for the route (engine::routeSeconds),
-    // the bits off the network at a local street's speed. Plus the way's start and end minutes either way.
+    engine::roads::WalkRoute route;   // the walks of a leg on foot (not found when from and to join the walks at one
+                                      // point, nor for a leg on the roads)
+    Real metres = 0;             // the route (on foot, plus the bits off the walks at each end)
+    // On foot: metres at the way's speed. On the roads: the driving router's time for the route, kerb lane to kerb lane
+    // (into and out of a space is the way's start and end minutes). Plus the way's start and end minutes either way.
     Real minutes = 0;
-    // ON THE ROADS: metres on each of the catalog's road kinds (roadKinds' order; the bits off the network count as
-    // the street they join), and how many separate stretches of each
+    // ON THE ROADS: metres on each of the catalog's road kinds (roadKinds' order), and how many separate stretches of
+    // each
     std::vector<Real> kindMetres;
     std::vector<int> kindStretches;
+    // A LEG THAT ENDS AT A BUS STOP (LegEnd::Stop; ADR-0484): the line and the stop's index in it. A bus leg also names
+    // the stop it is boarded at (`busFrom`).
+    int busLine = -1, busTo = -1, busFrom = -1;
 };
 
 // One way of making the whole trip.
@@ -147,6 +160,10 @@ struct OwnedVehicle {
     Vec2 leaveAt;
     bool free = true;
     bool inHand = false;
+    uint32_t vehicleClass = 0;   // the driving's class it is driven as (its route is found for that class)
+    // IN HAND ON THE ROAD: where it is on its lane (its drive is priced from there, not from the kerb lane beside `at`)
+    bool onLane = false;
+    engine::PathPoint lane;
 };
 
 struct TripRequest {
@@ -164,6 +181,8 @@ struct FixedLeg {
     uint8_t way = 0;             // row in the catalog
     LegEnd end = LegEnd::Door;
     uint16_t seconds = 0;        // the leg's minutes, in whole seconds
+    uint8_t busLine = 0;         // LegEnd::Stop: the line ...
+    uint16_t busStop = 0;        // ... and the stop the leg ends at
 };
 struct FixedLegs {
     FixedLeg legs[kMaxPlanLegs];
@@ -175,12 +194,50 @@ constexpr long kMaxLegSeconds = 65535;
 // more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
 bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
-// One leg by `mode` from `from` to `to`: routed on the way's network between the nearest nodes that connect. False
-// (leg untouched) when nothing near the two ends routes.
-bool planLeg(const engine::NavGraph& nav, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out);
+// THE BUS LINES AS THE PLANNER PRICES THEM (ADR-0484): for each line of the road model, each stop's waiting place (where
+// it joins the walks, RoadModel::busStopWalk) and the seconds from it to the next stop (the bus's route there at the
+// free-flow speed, and its wait at a stop). Made by the host from the road model, the driving and the bus service.
+struct BusTimetable {
+    struct Stop {
+        Vec2 wait;
+        Real toNextSeconds = 0;
+    };
+    std::vector<std::vector<Stop>> lines;
+    Real walkReach = 800;   // a stop is considered only this far (straight line) from where a trip begins or ends
+};
+
+// THE BEST BUS RIDE between two points (ADR-0484): the line and the two stops (each within the timetable's walk reach of
+// its end, in a straight line) whose estimate is least -- the two walks in a straight line at `walkPace`, and the ride
+// round the line by the timetable from the first stop to the second. The wait is not in it (the caller's). What the trip
+// planner and the sim's own walkers choose a bus by. Not found: no line has a stop near both ends.
+struct BusRide {
+    int line = -1, board = -1, alight = -1;
+    Real rideSeconds = 0;   // the timetable's, from `board` to `alight`
+    Real estimate = 0;      // the two walks and the ride
+    bool found() const { return line >= 0; }
+};
+BusRide bestBusRide(const BusTimetable& tt, Vec2 from, Vec2 to, Real walkPace);
+
+// The network a plan is routed on: the road model, the walker on its walks (route.h bindWalker), the driving, whose
+// router prices a leg on the roads (none: no leg on the roads can be made), and the buses' timetable (none: no bus).
+struct TripNetwork {
+    const engine::RoadModel* model = nullptr;
+    const engine::roads::RouteWalker* walker = nullptr;
+    const driving::Driving* driving = nullptr;
+    const BusTimetable* buses = nullptr;
+    bool valid() const;
+};
+
+// One leg by `mode` from `from` to `to`. ON FOOT: each end joined to the walks by position (RoadModel::walkJoinNear),
+// routed between them by the walker. ON THE ROADS: each end at the kerb lane beside it (frontageAt, kerbLaneBeside),
+// routed between them by the driving's router for a car of `vehicleClass` (Driving::routeBetween): its lanes, its
+// turns and its free-flow time, freeways included; a car already on the road from where it is (`fromLane`). False (leg
+// untouched) when an end joins nothing or no route leads there.
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out,
+             uint32_t vehicleClass = 0, const engine::PathPoint* fromLane = nullptr);
 
 // Every option, and the choice.
-TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const TripRequest& req);
+TripPlan planTrip(const TripNetwork& net, const TravelCatalog& cat, const TripRequest& req);
 
 // "car 6.0 min (2.0 walk + 3.0 car + 1.0 walk)", or "car -- no car" when it is not possible.
 std::string describeOption(const TravelCatalog& cat, const TripOption& o);

@@ -31,9 +31,6 @@
 #include "engine/procgen/city/roads/lanes/road_design.h"   // planCrossings: the planner's crossing policy
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // the scene's junctions and streets, with ids (ADR-0417)
 #include "engine/procgen/city/street_names.h"
-#include "engine/ai/nav_graph.h"
-#include "engine/ai/pathfind.h"
-#include "apps/citysim/city_bus.h"
 
 #include <nlohmann/json.hpp>
 
@@ -290,7 +287,6 @@ int main(int argc, char** argv) {
         std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
         std::vector<std::pair<int, std::vector<engine::Vec2>>> arterialNodes;
         std::map<int, std::vector<std::string>> arterialNames;
-        std::vector<engine::NavGraph> navs(w.sites.size());   // each place's streets, for its buses
         std::vector<CityPlan> plans(w.sites.size());          // each place's plan, for the 3D level (--level)
         w.centres.assign(w.sites.size(), engine::Vec2(0, 0));
         engine::IslandMapLayer locals, collectors, arterials, freeways;
@@ -377,15 +373,17 @@ int main(int argc, char** argv) {
                     for (const auto& e : plan.streets.edges)
                         for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(std::string()); }
                 arterialNodes.push_back({static_cast<int>(k), art});
-                // its streets as a nav graph, and its CENTRE: the node nearest the middle of its core blocks
-                navs[k] = engine::buildNavGraph(plan.streets);
+                // its CENTRE: the node nearest the middle of its core blocks
                 engine::Vec2 mid(0, 0);
                 double n = 0;
                 for (const auto& blk : plan.blocks)
                     if (blk.district == 0 && !blk.buildable.empty()) { for (const auto& q : blk.buildable) mid = mid + q; n += static_cast<double>(blk.buildable.size()); }
                 mid = n > 0 ? mid * (1.0 / n) : b.center;
-                const int cn = navs[k].nodes.empty() ? -1 : navs[k].nearestNode(mid);
-                w.centres[k] = cn >= 0 ? navs[k].nodes[static_cast<std::size_t>(cn)] : b.center;
+                // (the plan's street node nearest it: the street map built over the plan went with #306)
+                w.centres[k] = b.center;
+                double bestD = 1e30;
+                for (const auto& nd : plan.streets.nodes)
+                    if ((nd.pos - mid).length() < bestD) { bestD = (nd.pos - mid).length(); w.centres[k] = nd.pos; }
                 arterialNames[static_cast<int>(k)] = names;
             }
             sites.push_back({b.name, b.center, b.size * 0.5 + 250.0});
@@ -442,7 +440,6 @@ int main(int argc, char** argv) {
                     std::string why;
                     const int k = engine::addBeachTown(w, at, bk->name, nm, &why);
                     if (k < 0) { std::printf("beach town at (%.0f, %.0f): %s\n", at.x, at.y, why.c_str()); continue; }
-                    navs.resize(w.sites.size());
                     plans.resize(w.sites.size());
                     w.centres.resize(w.sites.size(), engine::Vec2(0, 0));
                     planSite(static_cast<std::size_t>(k));
@@ -463,7 +460,6 @@ int main(int argc, char** argv) {
                 if (!fk) { std::printf("foothill towns: settlements.lua has no high-road kind\n"); break; }
                 const std::vector<engine::FoothillSite> hills = engine::findFoothillSites(w);
                 auto grow = [&](int k) {
-                    navs.resize(w.sites.size());
                     plans.resize(w.sites.size());
                     w.centres.resize(w.sites.size(), engine::Vec2(0, 0));
                     // a place grown over its land (not a strip) is levelled where it GROWS: planned once dry, its limits
@@ -536,31 +532,14 @@ int main(int argc, char** argv) {
                 for (const auto& e : pl.streets.edges)
                     streetSegs.push_back({pl.streets.nodes[static_cast<std::size_t>(e.a)].pos, pl.streets.nodes[static_cast<std::size_t>(e.b)].pos});
             engine::islandInterchanges(w, streetSegs);
-            // BUSES: local loops in each place (the city sim's own network builder), then the intercity lines
-            for (std::size_t k = 0; k < w.sites.size(); ++k) {
-                const engine::SettlementKind& sk = w.kinds.of(w.sites[k].kind);
-                if (navs[k].nodes.empty() || sk.busRoutes <= 0) continue;
-                citysim::BusNetwork bn;
-                bn.build(navs[k], sk.busRoutes, sk.busStops, 1000u + static_cast<uint32_t>(k));
-                for (int r = 0; r < bn.routeCount(); ++r) {
-                    const citysim::BusRoute& br = bn.route(r);
-                    if (!br.valid() || br.regional) continue;
-                    engine::IslandBusLine line;
-                    line.name = w.sites[k].name + " " + std::to_string(r + 1);
-                    line.kind = "local";
-                    line.site = static_cast<int>(k);
-                    line.path = br.path;
-                    for (const citysim::BusStop& stop : br.stops) { line.stops.push_back(stop.pos); line.stopNames.push_back(""); }
-                    w.busLines.push_back(line);
-                }
-            }
+            // BUSES: the intercity lines, inside each place the quickest way over its plan's own streets
+            // (PlanGraphRouter, ADR-0482; a straight line since #306 took the street map). The places' local loops are
+            // laid on each place's road model and written into its road file (lanes_tool buslines, ADR-0482), not here.
+            std::vector<std::unique_ptr<engine::plan::PlanGraphRouter>> placeRouters;
+            for (const CityPlan& pl : plans) placeRouters.push_back(std::make_unique<engine::plan::PlanGraphRouter>(pl.streets));
             engine::planIntercityBuses(w, [&](int site, const engine::Vec2& from, const engine::Vec2& to) {
-                const engine::NavGraph& nav = navs[static_cast<std::size_t>(site)];
-                if (nav.nodes.empty()) return std::vector<engine::Vec2>{from, to};
-                const engine::Route r = engine::findRouteBetween(nav, from, to);
-                std::vector<engine::Vec2> p = engine::routePolyline(nav, r, 10.0);
-                if (p.empty()) p = {from, to};
-                return p;
+                if (site < 0 || static_cast<std::size_t>(site) >= placeRouters.size()) return std::vector<engine::Vec2>{from, to};
+                return placeRouters[static_cast<std::size_t>(site)]->quickestLine(from, to);
             });
             {
                 int local = 0;

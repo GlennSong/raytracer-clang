@@ -138,7 +138,7 @@ wishes with.
 | `citysim/city_near.h/.cpp` | The near tier (ADR-0447..0450): the cars nearest the player as Jolt cars carrying out their drivers' intent, switched on one entity; physics sweeps answer "what is in my way" for them (ADR-0451). |
 | `citysim/city_crowd.h/.cpp` | A crowd of residents made from the road model and `crowd.lua` (ADR-0446): places beside streets, households, cars, days. |
 | `citysim/city_brain.h/.cpp` | The residents with the agent brain: what they want, their trips, carried out with the sim's walking and the new driving. |
-| `citysim/city_sim.h/.cpp` (parts) | The old sim, which still walks every person on foot on the street map: `thingsForDriving` writes them into the driving's things each tick; `crossingAhead`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
+| `citysim/city_sim.h/.cpp` (parts) | The sim, which walks every person on foot over the road model's walks by the one router (`findWalkRoute`; ADR-0480 W3): `thingsForDriving` writes them into the driving's things each tick; `nextCrossing` (the crossings their routes hold), `crossingGate`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
 | `citysim/city_render.h/.cpp` (parts) | The signal heads (ADR-0456): one `SignalHead` per post the loader placed (`StreetFurniture::Signal`, which carries the model arm the head is attached to), tied to the new driving's lane junction there (`tieSignalHeads`, by `RoadModel::laneJunctionOf`), lit each bake from `headAt` (the face as the post instance's number, `headFaceNumber`; the arrow as a lens beside it). |
 
 ## 4. Who reads what
@@ -172,12 +172,8 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 
 ## 6. Known faults and open work
 
-- The old sim's people walk the street map's kerb-side line, not a pavement of the model, and cross through the
-  junction's corner blend; their places waiting at a crosswalk are where their route comes level with its kerb end.
-- The sim's `junctionRadius` still measures the roads from the street map (`nodeBoxRadius_`, the widest street at a
-  node, worked out at build: a road fact computed outside `roads/`). Its car readers went with ADR-0463; the walkers read
-  it (`onStreet`, `stopLineBack`, the place a walker stands back from a junction), so taking it away moves the walkers
-  (and the pinned hashes): that part is task 4's (people route on the road model), not a deletion.
+- (The sim's people walk the road model's walks and the street map is gone, #306: the two faults listed here -- people
+  on the street map's kerb-side line, and `junctionRadius` measured from it -- went with it.)
 - A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
   never reached: `refreshPose` returns for every walker before it (an explicit `return` since ADR-0463, commented).
   Found in ADR-0461, not fixed (it moves the walkers and every pinned hash); likely part of brain_crowd's

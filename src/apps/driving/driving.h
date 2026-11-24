@@ -39,7 +39,8 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/announce.h"        // the board: who will be on which crossing point, and when
-#include "apps/driving/conflict.h"        // who goes first where two cars' paths meet: the one resolver
+#include "apps/driving/conflict.h"        // who goes first where two cars' paths meet: the questions
+#include "apps/driving/contact.h"         // body against body: contacts and crashes (sitting 7)
 #include "apps/driving/decide.h"
 #include "apps/driving/give_way.h"        // judging the gaps a driver gives way by
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
@@ -47,6 +48,7 @@
 #include "apps/driving/right_of_way.h"    // who gives way to whom, worked out at load
 #include "apps/driving/room.h"            // room beyond a junction, granted one car at a time
 #include "apps/driving/things.h"          // what is in a driver's way, whatever it is (ADR-0451)
+#include "apps/driving/lane_change.h"     // lane changes (sitting 5)
 #include "apps/driving/signal_programme.h"   // the traffic lights' clock: a pure function of the time
 #include "apps/driving/road_rules.h"
 #include "apps/driving/route.h"
@@ -61,6 +63,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -82,6 +85,9 @@ struct Trip {
     PathPoint destination;
     std::vector<Hold> holds;     // sorted by name
     uint64_t beganAtTick = 0;    // the tick count when the host began it
+    // What it was planned as when begun: its route's length and free-flow time (for the delay a trip met, measured;
+    // routed again later, these stay what it set out to do).
+    Real plannedMetres = 0, plannedSeconds = 0;
     Route route;                 // from where the car was when it was last routed, to the destination
     // How far along the route the car has got: the first leg its front can be on (route.h's `fromLeg`). Moved on at
     // each decision; back to 0 whenever the trip is routed again.
@@ -89,6 +95,20 @@ struct Trip {
     // ANOTHER WAY (issue #284): the tick its driver last asked for another way, refused room at a junction for longer
     // than the rule set's room_refused_another_way (0: never). It asks again no sooner than that long after.
     uint64_t askedAnotherWayTick = 0;
+    // A MISSED TURN (sitting 5): the lane it last passed its last chance to change lanes in, with no gap; routed again
+    // from there, the other lanes of that stretch closed to the route (asked once from a lane, not again).
+    engine::PathId missedOn;
+    // ...and nothing led on from that lane: the driver waits in it for a gap (LaneChangeView::mustWait) until it moves
+    // across or is routed again.
+    bool waitToChange = false;
+    // PULLING IN AT THE END (sitting 5): the trip ends in a kerb space beside its destination's lane, its middle this
+    // far from the lane's line (+ toward the kerb; 0: it ends in the lane). The car moves across on the lane change's
+    // curve, laid so that its front reaches the space's line a body length before the destination and its rear is on it
+    // by then too: it stands straight in the space. Begun once (pullInBegun); a trip that began too near its end for the
+    // curve to fit ends in the lane instead (pullInMissed, counted: KerbMoveCounts::stoppedInLane).
+    Real pullInOffset = 0;
+    bool pullInBegun = false;
+    bool pullInMissed = false;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
     // again, its path at that moment first. The move step never takes the car past the end of the last of them.
     WayAhead way;
@@ -203,10 +223,11 @@ enum class EventKind : uint8_t {
     NoRoute,       // there is no way from where the car is to the destination
     CannotPark,    // the car reached its destination and found nowhere to leave it
     MissedTurn,    // the car missed a turn and was routed again (for the driver card; the host need not act)
-    Crashed,       // the car hit something
+    Crashed,       // the car hit something: its trip is over, and it stands where it is as a wreck
     EndedEarly,    // the host ended the trip before it arrived (endTrip)
+    WreckCleared,  // a wreck's time is up: the driving has taken it off the road (the host puts the car back somewhere)
 };
-constexpr uint8_t kEventKindCount = 6;
+constexpr uint8_t kEventKindCount = 7;
 
 struct Event {
     EventKind kind = EventKind::Parked;
@@ -324,6 +345,20 @@ public:
     // kMaxTrail, or the body does not fit on the path and the trail.
     bool placeCar(CarId car, uint32_t vehicleClass, const PathPoint& front,
                   const std::vector<engine::PathId>& trail = {}, std::string* why = nullptr);
+    // PLACE A CAR STANDING IN A KERB SPACE beside its lane, ready to pull out (sitting 5): as placeCar, its front level
+    // with `front` and its middle `offset` metres from the lane's line (+ toward the kerb). Its move out onto the line
+    // is laid at once, on the lane change's curve at the tightest its turning circle allows, and is driven as the car
+    // moves off (laid by distance: it never steps sideways at rest). Listed in the lane from now: the host places it when
+    // the lane has room for it to come out into.
+    bool placeCarInSpace(CarId car, uint32_t vehicleClass, const PathPoint& front, Real offset,
+                         std::string* why = nullptr);
+    // HOW FAR `point` IS TO THE SIDE OF THE LANE'S LINE at `at` (m), as a car's offset reads (Car::offset: + toward the
+    // kerb side of the way the lane runs): for a host to say where a kerb space lies beside its lane.
+    Real offsetBeside(const PathPoint& at, engine::Vec2 point) const;
+    // AT THE KERB: the car is pulling out of a kerb space, stands beside its lane, or its trip ends by pulling into a
+    // space no more than `within` metres on along its way. A host carrying cars itself (the near tier's physics) leaves
+    // these to the driving: the move across is the driving's curve, which a car following its lane's line cannot drive.
+    bool atTheKerb(CarId car, Real within) const;
     // REMOVE A CAR from the road. Refused (false, with the reason) when it is not placed or is on a trip (end the trip
     // first).
     bool removeCar(CarId car, std::string* why = nullptr);
@@ -393,6 +428,59 @@ public:
         uint64_t anotherWaysWanted = 0;
     };
     const ThingCounts& thingCounts() const { return thingCounts_; }
+    // LANE CHANGES (lane_change.h; sitting 5): moves begun and finished, and last chances missed (the car carried on in
+    // its lane and was routed again from there).
+    struct LaneChangeCounts {
+        uint64_t wanted = 0;     // decisions whose route needed another lane
+        uint64_t begun = 0;      // moves across begun
+        uint64_t finished = 0;   // ...and done
+        uint64_t missed = 0;     // last chances passed without a gap: routed again from the lane it was in
+        uint64_t missedNoRoute = 0;   // ...of which no route was found from there (it waits in its lane for a gap)
+        uint64_t backedOff = 0;  // changes given up at the last moment: a car before it in the tick's order took the gap
+        uint64_t letIn = 0;      // times a driver began to let an indicating car in ahead of it
+        uint64_t droppedBack = 0;   // times a driver began to drop back behind the car closing its gap
+    };
+    const LaneChangeCounts& laneChangeCounts() const { return laneChangeCounts_; }
+    // PULLING OUT OF AND INTO KERB SPACES (sitting 5).
+    struct KerbMoveCounts {
+        uint64_t pulledOut = 0;       // cars placed in a space that drove out of it onto their lane's line
+        uint64_t pulledIn = 0;        // trips that ended standing in their space
+        uint64_t stoppedInLane = 0;   // trips meant to end in a space that began too near it to pull in: ended in the lane
+    };
+    const KerbMoveCounts& kerbMoveCounts() const { return kerbMoveCounts_; }
+    // CONTACT AND CRASHES (two-drivers-meeting-design.md section 8, sitting 7), in the middle tier: every tick the bodies
+    // of the cars on the road are tested against each other (contact.h). A new contact -- two bodies that were apart last
+    // tick, one of them driven -- is counted, then a seeded roll (the pair and the tick) against the rule set's
+    // crash_chance says whether it is a crash. A crash ends each driven car's trip (a Crashed event for its person) and
+    // leaves it standing where it is as a WRECK: an undriven car in the road, which drivers behind see as a thing in
+    // their way (things.h) and follow to a stop, go round, or find another way past. After the rule set's wreck_seconds
+    // it is cleared: taken off the road, a WreckCleared event for the host. Off when the rule set lacks the numbers.
+    struct CrashCounts {
+        uint64_t contacts = 0;   // new contacts between two bodies (one of them driven)
+        uint64_t crashes = 0;    // ...of which rolled a crash
+        uint64_t wrecks = 0;     // cars left as wrecks
+        uint64_t cleared = 0;    // wrecks cleared
+    };
+    const CrashCounts& crashCounts() const { return crashCounts_; }
+    bool isWreck(CarId car) const { return wrecks_.count(car) != 0; }
+    bool crashStep() const { return crashesOn_; }
+    // TRIPS ARRIVED, and the time they took against their routes' free-flow time when begun (a measure that compares two
+    // runs sending cars on different trips: arrivals alone do not).
+    struct TripTimes {
+        uint64_t arrived = 0;
+        double seconds = 0;          // summed, begun to arrived
+        double freeFlowSeconds = 0;  // summed, as planned when begun
+        double metres = 0;           // summed, as planned when begun
+    };
+    const TripTimes& tripTimes() const { return tripTimes_; }
+    // THE SIDE A CAR SIGNALS (its indicator, sitting 5): -1 its driver's left, +1 its right, 0 none. On while it
+    // indicates into the lane beside (it wants it and has no gap yet) and while its front moves across.
+    int signalSide(CarId car) const;
+    bool laneChangeStep() const { return laneChangesOn_; }
+    // Lane changes under way: the step is there AND routes plan them (DrivingSettings::laneChanges). Everything lane
+    // changes alter -- the moves, the way's end, a line's speed, what the state hash folds -- waits on this, so a level
+    // whose routes do not plan them drives exactly as before them.
+    bool changingLanes() const { return laneChangesOn_ && settings_.laneChanges; }
     // THE CROSSWALK A DRIVER GAVE WAY AT in its last decision (the road model's id; kNoIndex: none), ADR-0452.
     uint32_t crosswalkGivingWayAt(CarId car) const {
         const std::map<CarId, uint32_t>::const_iterator it = crosswalkOf_.find(car);
@@ -406,7 +494,8 @@ public:
     // Refused (a null handle) when the car has not been placed, is already on a trip, or the destination is not a
     // place on the road (an unknown path, or a distance off its ends). Refused too when the destination is on the road
     // but there is no route there for the car's class: then a NoRoute event is queued for the car (with a null trip).
-    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination);
+    // `pullInOffset`: the trip ends in the kerb space that far beside the destination (Trip::pullInOffset; 0: in the lane).
+    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset = 0);
     // The trip, or null when the handle is null or stale (its trip has ended).
     const Trip* trip(TripId id) const;
     std::size_t tripCount() const { return trips_.size(); }
@@ -419,6 +508,21 @@ public:
     // turnsClosedForRoom). A host that
     // finds places to send cars uses the same, so it never picks a place only a closed turn reaches.
     RouteClass routeClass(uint32_t vehicleClass) const;
+    // LANE CHANGES (lane_change.h; sitting 5)
+    Real followAcceleration(const Car& who, Real gap, Real speedAhead) const;
+    bool sameSection(engine::PathId a, engine::PathId b) const;
+    // How far short of its last chance (beyond its stopping distance, m) a car gives up looking for a gap and is
+    // routed again from its lane: [~] about the room a car pulls up in, so it never stands in a through lane to wait.
+    static constexpr Real kLastChanceMargin = 2.0;
+    // A ROUTE FOR A CAR OF `vehicleClass` from `from` to `to` (routeClass: as its trips are routed), with no car on the
+    // road: what a trip planner prices a drive by before the car sets off.
+    Route routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const;
+    // THE BUS LINES THE ROAD MODEL HOLDS, CHECKED FOR A CLASS (the buses plan, step 1): each stop has a kerb lane for its
+    // bus to pull into and a walk for its people to wait on, and every leg -- each stop to the next, and the last round
+    // to the first -- routes for a car of `vehicleClass`. Each fault in words, naming
+    // the line and the stops (a leg needing a U-turn nothing states, or a turn too tight for the class, has no route).
+    // Empty: every line can be driven.
+    std::vector<std::string> busLineProblems(uint32_t vehicleClass) const;
     // THE CLASS'S VEHICLE TAGS on the road (route.h RouteClass::tags): which crossing points concern its cars
     // (CrossingPoint::concerns, ADR-0412). Every record concerns a class the road has not bound.
     engine::TagMask tagsOf(uint32_t vehicleClass) const {
@@ -429,7 +533,7 @@ public:
     // place not on the road.
     // A new destination (a cab given a new fare, a bus's next stop), routed from where the car is now. When there is
     // no route there, the trip keeps its old destination and route, a NoRoute event is queued, and the answer is false.
-    bool changeDestination(TripId id, const PathPoint& destination);
+    bool changeDestination(TripId id, const PathPoint& destination, Real pullInOffset = 0);
     // ROUTE AGAIN from where the car is now to the same destination (after a missed turn). When there is no route, the
     // old one is kept, a NoRoute event is queued, and the answer is false.
     bool reroute(TripId id);
@@ -501,12 +605,14 @@ private:
     Car* findPlaced(CarId id);
     // The route for a placed car from its front to `to`, for its class.
     Route routeFor(const Car& c, const PathPoint& to) const;
+    Route routeFromWhereItIs(const Car& c, RouteClass cls, const PathPoint& to) const;
     void queueEvent(EventKind kind, CarId car, TripId trip, PersonId person);
     // Each record's trip (a null handle for a car not on one), by its place in cars_: walks cars_ and tripOfCar_
     // side by side, both in car-id order.
     void findTripsOfRecords();
     // A car whose trip has ended (arrived, or ended by the host): undriven, at rest where it is, nothing held.
     static void leaveParked(Car& c);
+    void layPullOut(const Car& c);
     // What the driver of car record `record` on trip `t` decided this tick, before it is applied.
     struct Planned {
         std::size_t record = 0;
@@ -530,8 +636,16 @@ private:
         // WHAT WAS IN ITS WAY and what it decided about it (the thing step only)
         ThingAhead thing;
         bool horn = false, pass = false, anotherWay = false;
+        // ITS LANE (the lane change step only): what it saw, and whether it decided to move over now
+        bool laneSeen = false;
+        LaneChangeView lane;
+        bool changeLane = false;
+        bool letIn = false;
+        bool dropBack = false;
     };
     // Counts and traces what one update of a car's plans did.
+    void changeLanes(Car& c, Trip& t, const Planned& p);
+    bool landsInAMeeting(const Car& c, const LaneGap& gap, Real length) const;
     void notePlanUpdate(const PlanUpdate& u, CarId car, Trip& t, const JunctionPlans& plans);
     // Records on the trip's plans what the driver decided (give_way.h), counting and tracing each change, and fixes the
     // arrival at each line it judged for the first time (`lineIn`, by plan).
@@ -629,6 +743,58 @@ private:
     std::map<CarId, ThingWatch> watch_;
     std::vector<CarId> horns_;
     ThingCounts thingCounts_;
+    bool laneChangesOn_ = false;
+    Real laneChangeBrake_ = 0, laneChangeSeconds_ = 0;
+    TripTimes tripTimes_;
+    IntentionKindId laneKind_ = kNoIntentionKind;
+    IntentionKindId letInKind_ = kNoIntentionKind;
+    IntentionKindId gapKind_ = kNoIntentionKind;
+    // DROPPING BACK (sitting 5): a driver -> the car in the lane beside that closes its gap, and where its own front is
+    // in that lane's terms (front there = along + shift): it keeps behind that car's rear there, or below its speed while
+    // that car is level or behind, until it has passed.
+    struct DropBack {
+        CarId behind;
+        engine::PathId into;
+        Real shift = 0;
+    };
+    std::map<CarId, DropBack> droppingBack_;
+    // INDICATING (sitting 5): a driver that wants the lane beside and has no safe gap -- it must wait for one, or its last
+    // chance nears -- shows it; `shift` puts its front in that lane's terms (front there = along + shift).
+    struct Indicating {
+        engine::PathId into;
+        Real shift = 0;
+        bool towardKerb = false;
+        bool merging = false;   // waiting to merge where its lane joins another (no side to signal: the road's shape shows it)
+    };
+    std::map<CarId, Indicating> indicating_;
+    // LETTING IN: a driver -> the indicating car it keeps behind (as if already ahead in its lane), until that one is across.
+    std::map<CarId, CarId> lettingIn_;
+    // Where car `who` would be in lane `into` if it is indicating into it: its front's and rear's distance along it.
+    bool indicatedInto(CarId who, engine::PathId into, Real* front, Real* rear) const;
+    Indicating mergeWait(const Car& c) const;
+    LaneChangeCounts laneChangeCounts_;
+    KerbMoveCounts kerbMoveCounts_;
+    // CONTACT AND CRASHES (sitting 7)
+    struct Wreck {
+        uint64_t clearAtTick = 0;
+        PersonId person = 0;
+    };
+    void crash();                                    // the step, after the move
+    void wreck(Car& c);                              // a driven car in a crash: its trip over, a wreck where it stands
+    bool crashesOn_ = false;
+    Real crashChance_ = 0, wreckSeconds_ = 0;
+    CrashCounts crashCounts_;
+    std::map<CarId, Wreck> wrecks_;
+    std::set<std::pair<uint32_t, uint32_t>> touching_;   // the pairs of bodies touching last tick
+    std::vector<PlanBody> crashBodies_;
+    std::vector<std::size_t> crashBodyRecord_, crashSweep_;
+    std::vector<BodyContact> crashContacts_;
+    std::vector<RoadThing> seenThings_;              // the host's things and the undriven cars standing on the roads
+    // the cars moving across into the lane beside, or out of or into a kerb space, and each one's move
+    std::map<CarId, LaneMove> laneMoves_;
+    std::set<CarId> inSpace_;   // the undriven cars whose last trip ended in a kerb space (they drive out of it first)
+    std::vector<std::vector<engine::PathId>> pathsBefore_;   // per path, the paths leading into it (lane changes look back)
+    std::vector<CarId> decideNext_;          // cars that decide again on the next tick whatever their turn (moved lanes)
     IntentionKindId passKind_ = kNoIntentionKind, wayKind_ = kNoIntentionKind;
     ActionId hornAction_ = kNoAction;
     void askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing);

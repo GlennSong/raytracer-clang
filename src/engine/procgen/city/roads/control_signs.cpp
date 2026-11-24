@@ -1,6 +1,6 @@
 #include "engine/procgen/city/roads/control_signs.h"
 
-#include "engine/ai/nav_graph.h"                       // rightOf: the kerb side of traffic going a way
+#include "engine/procgen/city/polygon.h"               // rightOf: the kerb side of traffic going a way
 
 #include <algorithm>
 #include <cmath>

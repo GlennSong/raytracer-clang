@@ -56,6 +56,36 @@ props[#props + 1] = {
   spray = { effect = "splash", rate = 260, up = 7.5 },
 }
 
+-- A BUS STOP (ADR-0485): a post with the stop's flag on top, its face to the street, and a bench beside it, its back to
+-- the buildings. Placed at each stop the roads state (`at_bus_stops`: the road file's bus lines, ADR-0481), on the
+-- stop's kerb, not marched. The post 2.9 m to the top of the flag; the bench 1.8 m long, seat at 0.45 m.
+local function bus_stop()
+  local metal, flag, band, wood = { 0.30, 0.31, 0.33 }, { 0.95, 0.78, 0.12 }, { 0.10, 0.25, 0.55 }, { 0.48, 0.32, 0.18 }
+  local parts = {
+    mesh.paint(at(mesh.cylinder(0.04, 2.6), -1.3, 1.3, 0), metal),                  -- the post
+    mesh.paint(at(mesh.box({ 0.50, 0.36, 0.03 }), -1.3, 2.62, -0.02), flag),            -- the flag, facing the street
+    mesh.paint(at(mesh.box({ 0.50, 0.08, 0.035 }), -1.3, 2.52, -0.02), band),           -- its band, where the line goes
+    mesh.paint(at(mesh.box({ 1.80, 0.05, 0.42 }), 0.3, 0.45, 0.35), wood),              -- the seat
+    mesh.paint(at(mesh.box({ 1.80, 0.40, 0.04 }), 0.3, 0.70, 0.55), wood),              -- the back
+  }
+  for _, sx in ipairs({ -0.5, 1.1 }) do
+    parts[#parts + 1] = mesh.paint(at(mesh.box({ 0.05, 0.45, 0.42 }), sx, 0.225, 0.35), metal)   -- the legs
+  end
+  return mesh.merge(parts)
+end
+
+props[#props + 1] = {
+  name = "bus_stop",
+  at_bus_stops = true,
+  verge = 0.9,
+  junction = 0,
+  main_only = false,
+  mesh = bus_stop,
+  collider = { half = { 1.25, 0.45, 0.30 } },
+  -- (no breaks_at: a car stops at a bus stop's post and bench, as it does at a tree)
+  mass = 120,
+}
+
 -- WHAT THE PLANNER ALREADY PLACES, as bodies: a car knocks the light pieces loose and stops at the rest
 props.legacy = {
   bin = { collider = { half = { 0.24, 0.50, 0.24 } }, breaks_at = 2.0, mass = 25 },          -- a steel bin, 1.0 m

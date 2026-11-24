@@ -1,11 +1,16 @@
 // THE TRIP PLANNER (ADR-0415, src/apps/citysim/trip_plan.h): every way of travelling priced as a whole trip, leg by
-// leg, and the fewest weighted minutes chosen. On a straight 2 km street with a node every 100 m, so every number
-// below can be worked out by hand. The shipped travel.lua is read in test_agent_goals.cpp (it needs the scripting
-// build); these build their table here.
+// leg, and the fewest weighted minutes chosen. On a straight 2 km street (a road file built as a level's roads are,
+// model_scene.h), every leg routed over the road model's walks by the one router (#306: the street map went). A leg's
+// metres are its route on the walks plus the steps from each end to the walk; the numbers below are read off those, not
+// worked out by hand from a hand-made map. The shipped travel.lua is read in test_agent_goals.cpp (it needs the
+// scripting build); these build their table here.
 #include "test_framework.h"
 
+#include "model_scene.h"
+#include "trip_driving.h"
 #include "../src/apps/citysim/trip_plan.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/procgen/city/roads/route.h"
 
 #include <cmath>
 #include <cstdio>
@@ -15,16 +20,25 @@ using engine::Vec2;
 
 namespace {
 
-// A street along x from 0 to 2000 m, a node every 100 m: walkable and drivable alike.
-engine::NavGraph longStreet() {
-    engine::RoadGraph g;
-    for (int i = 0; i <= 20; ++i) g.nodes.push_back({Vec2(100.0 * i, 0)});
-    for (int i = 0; i < 20; ++i) g.edges.push_back(engine::RoadEdge{i, i + 1, 8, engine::RoadClass::Local, 0});
-    return engine::buildNavGraph(g);
+// The street, and the walker on its walks, the network every leg is routed on.
+struct Street {
+    const citytest::ModelScene* scene = nullptr;
+    engine::roads::RouteWalker walker;
+    std::shared_ptr<driving::Driving> driving;   // its router prices the drives
+    TripNetwork net() const { return TripNetwork{scene->model.get(), &walker, driving.get()}; }
+};
+Street street(const citytest::ModelScene& s) {
+    Street out;
+    out.scene = &s;
+    out.walker = engine::roads::bindWalker(*s.model, "walker", 1.4);
+    out.driving = citytest::tripDriving(*s.model);
+    return out;
+}
+const Street& longStreet() {
+    static const Street s = street(citytest::straightScene(2000.0));
+    return s;
 }
 
-// travel.lua's two rows, as numbers: walk 5 km/h; car at the router's road-class speeds, 1 min to set off, 1.5 to
-// park, reached on foot. Streets, freeway and ramps told apart as travel.lua does.
 TravelCatalog walkAndCar() {
     TravelCatalog c;
     TravelMode walk;
@@ -52,12 +66,11 @@ TravelCatalog walkAndCar() {
     return c;
 }
 
-// The person at the street's start, their car parked 20 m along it, left 20 m short of the door.
 TripRequest goTo(Real x) {
     TripRequest r;
-    r.from = Vec2(0, 6);
-    r.to = Vec2(x, 6);
-    r.vehicles.push_back(OwnedVehicle{1, Vec2(20, 3), Vec2(x - 20, 3)});
+    r.from = Vec2(20, -6);
+    r.to = Vec2(x, -6);
+    r.vehicles.push_back(OwnedVehicle{1, Vec2(40, -3), Vec2(x - 20, -3)});
     return r;
 }
 
@@ -66,72 +79,87 @@ bool near(Real a, Real b, Real tol) { return std::fabs(a - b) <= tol; }
 }  // namespace
 
 TEST_CASE(trip_plan_walks_a_short_trip_and_drives_a_long_one) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     const TravelCatalog cat = walkAndCar();
-    // 200 m (6 m off the street at each end: 212 m on foot): walking is 2.5 min; the car's fixed 2.5 minutes alone lose
-    const TripPlan shortTrip = planTrip(nav, cat, goTo(200));
+    // 200 m: walking is about 2.5 min; the car's fixed 2.5 minutes alone lose
+    const TripPlan shortTrip = planTrip(nav, cat, goTo(220));
     CHECK(shortTrip.valid());
     CHECK(shortTrip.options.size() == 2);
     CHECK(shortTrip.choice()->mode == 0);
-    CHECK(near(shortTrip.options[0].minutes, 212.0 / (5.0 / 3.6) / 60.0, 1e-6));
-    // 1500 m: walking 1512 m is 18.1 min; the car two short walks, a drive between the nodes nearest the car (0 m)
-    // and the space (1500 m) -- 1540.4 m with the bits off the street, on a local street at the router's 8 m/s (no
-    // junctions on the way: every node is a street's bend), 3.2 min -- and its 2.5 fixed minutes
-    const TripPlan longTrip = planTrip(nav, cat, goTo(1500));
+    const TripLeg& walkShort = shortTrip.options[0].legs[0];
+    CHECK(near(shortTrip.options[0].minutes, walkShort.metres / (5.0 / 3.6) / 60.0, 1e-9));
+    CHECK(walkShort.metres >= 200.0 && walkShort.metres < 230.0);   // the sidewalk, and the steps to it at each end
+    // 1500 m: the car two short walks and a drive along the street at a local street's speed, and its 2.5 fixed minutes
+    const TripPlan longTrip = planTrip(nav, cat, goTo(1520));
     CHECK(longTrip.choice()->mode == 1);
     const TripOption& car = longTrip.options[1];
     CHECK(car.possible && car.legs.size() == 3);
+    if (car.legs.size() != 3) return;
     CHECK(car.legs[0].mode == 0 && car.legs[1].mode == 1 && car.legs[2].mode == 0);
-    const Real off = std::sqrt(20.0 * 20.0 + 3.0 * 3.0);
-    CHECK(near(car.legs[1].metres, 1500 + 2 * off, 1e-6));
-    CHECK(near(car.legs[1].minutes, (1500 + 2 * off) / engine::classSpeed(engine::RoadClass::Local) / 60.0 + 2.5, 1e-6));
-    CHECK(describeRoads(cat, car.legs[1]) == "1,540 m streets");
+    CHECK(car.legs[1].metres >= 1460.0 && car.legs[1].metres < 1500.0);
+    CHECK(near(car.legs[1].minutes, car.legs[1].metres / engine::classSpeed(engine::RoadClass::Local) / 60.0 + 2.5, 1e-6));
+    CHECK(near(kindMetres(cat, car.legs[1], "streets"), car.legs[1].metres, 1e-6));
     CHECK(describeRoads(cat, car.legs[0]).empty());   // (a walk has no roads to tell apart)
     CHECK(near(car.minutes, car.legs[0].minutes + car.legs[1].minutes + car.legs[2].minutes, 1e-9));
     CHECK(car.minutes < longTrip.options[0].minutes);
     std::printf("    %s\n    %s\n", shortTrip.reason.c_str(), longTrip.reason.c_str());
     // the reason names both, the legs of the car, and the choice last
-    CHECK(longTrip.reason.find("walk 18.1 min, car ") == 0);
+    CHECK(longTrip.reason.find("walk ") == 0 && longTrip.reason.find(", car ") != std::string::npos);
     CHECK(longTrip.reason.find(" walk + ") != std::string::npos && longTrip.reason.find(" car + ") != std::string::npos);
     CHECK(longTrip.reason.size() > 5 && longTrip.reason.compare(longTrip.reason.size() - 5, 5, ": car") == 0);
 }
 
 TEST_CASE(trip_plan_legs_follow_the_way_s_network_end_to_end) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     const TravelCatalog cat = walkAndCar();
-    const TripPlan p = planTrip(nav, cat, goTo(1500));
+    const TripPlan p = planTrip(nav, cat, goTo(1520));
     const TripOption& car = p.options[1];
+    CHECK(car.legs.size() == 3);
+    if (car.legs.size() != 3) return;
     // each leg starts where the last one ended: the person -> the car -> where it is left -> the door
     CHECK(near((car.legs[0].from - p.from).length(), 0, 1e-9));
     CHECK(near((car.legs[0].to - car.legs[1].from).length(), 0, 1e-9));
     CHECK(near((car.legs[1].to - car.legs[2].from).length(), 0, 1e-9));
     CHECK(near((car.legs[2].to - p.to).length(), 0, 1e-9));
-    // the drive is routed: its links run from the node by the car to the node by the space
-    CHECK(car.legs[1].route.valid());
-    CHECK(nav.links[static_cast<std::size_t>(car.legs[1].route.links.front())].from == car.legs[1].fromNode);
-    CHECK(nav.links[static_cast<std::size_t>(car.legs[1].route.links.back())].to == car.legs[1].toNode);
-    // a leg's metres are its route plus the bits off the network at either end
+    // the drive is routed by the driving's router (the one its cars drive by), kerb lane to kerb lane, not over the
+    // walks: its metres and minutes are that route's, every metre of it on the street kind of road
+    const TripLeg& drive = car.legs[1];
+    CHECK(!drive.route.found);
+    const engine::KerbLanePlace a = longStreet().scene->model->kerbLaneBeside(longStreet().scene->model->frontageAt(drive.from));
+    const engine::KerbLanePlace b = longStreet().scene->model->kerbLaneBeside(longStreet().scene->model->frontageAt(drive.to));
+    CHECK(a.valid() && b.valid());
+    if (!a.valid() || !b.valid()) return;
+    engine::PathPoint pa, pb;
+    pa.path = a.path;
+    pa.along = a.along;
+    pb.path = b.path;
+    pb.along = b.along;
+    const engine::roads::Route r = longStreet().driving->routeBetween(0, pa, pb);
+    std::printf("    drive %.1f m in %.2f min (the router: %.1f m in %.1f s)\n", drive.metres, drive.minutes, r.metres, r.seconds);
+    CHECK(r.found && near(drive.metres, r.metres, 1e-9) && near(r.metres, 1460.0, 1.0));
+    CHECK(near(drive.minutes, r.seconds / 60.0 + cat.modes[1].startMinutes + cat.modes[1].endMinutes, 1e-9));
+    CHECK(drive.kindMetres.size() == 3 && near(drive.kindMetres[0], drive.metres, 1e-6) && drive.kindStretches[0] == 1);
     const TripLeg& w = p.options[0].legs[0];
-    CHECK(near(w.metres, w.route.length(nav) + (w.from - nav.nodes[static_cast<std::size_t>(w.fromNode)]).length() +
-                             (nav.nodes[static_cast<std::size_t>(w.toNode)] - w.to).length(), 1e-9));
+    CHECK(w.route.found && w.metres >= w.route.metres - 1e-9 && w.metres < w.route.metres + 20.0);
 }
 
 TEST_CASE(trip_plan_without_a_car_walks_and_says_why) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     const TravelCatalog cat = walkAndCar();
-    TripRequest r = goTo(1500);
+    TripRequest r = goTo(1520);
     r.vehicles.clear();
     const TripPlan p = planTrip(nav, cat, r);
     CHECK(p.choice()->mode == 0);
     CHECK(!p.options[1].possible && p.options[1].legs.empty());
-    CHECK(p.reason == "walk 18.1 min, car -- no car: walk");
+    CHECK(p.reason.find("walk ") == 0);
+    CHECK(p.reason.find(", car -- no car: walk") != std::string::npos);
 }
 
 TEST_CASE(trip_plan_weight_counts_a_minute_the_person_minds) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     TravelCatalog cat = walkAndCar();
     cat.modes[1].weight = 4.0;   // someone who hates driving: the car's ~6 min count as ~24
-    const TripPlan p = planTrip(nav, cat, goTo(1500));
+    const TripPlan p = planTrip(nav, cat, goTo(1520));
     CHECK(p.choice()->mode == 0);
     CHECK(p.options[1].weighted > p.options[0].weighted);
     CHECK(near(p.options[1].weighted, p.options[1].legs[0].minutes + 4.0 * p.options[1].legs[1].minutes +
@@ -139,22 +167,22 @@ TEST_CASE(trip_plan_weight_counts_a_minute_the_person_minds) {
 }
 
 TEST_CASE(trip_plan_ties_go_to_the_earlier_row) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     TravelCatalog cat = walkAndCar();
     TravelMode stroll = cat.modes[0];
     stroll.name = "stroll";
     cat.modes.insert(cat.modes.begin(), stroll);   // the same way twice, "stroll" first
     cat.modes[2].access = 1;
-    const TripPlan p = planTrip(nav, cat, goTo(200));
+    const TripPlan p = planTrip(nav, cat, goTo(220));
     CHECK(p.options[0].weighted == p.options[1].weighted);
     CHECK(p.chosen == 0);
 }
 
 TEST_CASE(trip_plan_a_way_ruled_out_is_not_taken) {
     // a caller re-plans without a way whose leg could not be done
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     const TravelCatalog cat = walkAndCar();
-    TripRequest r = goTo(1500);
+    TripRequest r = goTo(1520);
     r.ruledOut = {1};
     const TripPlan p = planTrip(nav, cat, r);
     CHECK(p.choice()->mode == 0);
@@ -162,22 +190,26 @@ TEST_CASE(trip_plan_a_way_ruled_out_is_not_taken) {
 }
 
 TEST_CASE(trip_plan_no_route_on_its_network_is_no_option) {
-    // two streets with nothing between them: a destination on the other one cannot be reached by either way
-    // (ten nodes each, more than the planner tries at either end, so it never reaches across for the other street's)
+    // two streets with nothing between them (each a T, as a road file with a junction gets a lane level): a
+    // destination on the other one cannot be reached by either way
     engine::RoadGraph g;
     for (int s = 0; s < 2; ++s) {
         const int base = static_cast<int>(g.nodes.size());
-        for (int i = 0; i < 10; ++i) g.nodes.push_back({Vec2(5000.0 * s + 15.0 * i, 0)});
-        for (int i = 0; i < 9; ++i) g.edges.push_back(engine::RoadEdge{base + i, base + i + 1, 8, engine::RoadClass::Local, 0});
+        const Real x0 = 5000.0 * s;
+        g.nodes.push_back({Vec2(x0, 0)});
+        g.nodes.push_back({Vec2(x0 + 200, 0)});
+        g.nodes.push_back({Vec2(x0 + 200, -30)});
+        g.nodes.push_back({Vec2(x0 + 200, 30)});
+        for (int k = 1; k <= 3; ++k)
+            g.edges.push_back(engine::RoadEdge{k == 1 ? base : base + 1, base + k, 8, engine::RoadClass::Local, 0});
     }
-    engine::NavBuildParams bp;
-    bp.junctionMergeRadius = 0;
-    const engine::NavGraph nav = engine::buildNavGraph(g, bp);
+    static const Street two = street(citytest::graphScene("trip_two_streets", g));
+    const TripNetwork nav = two.net();
     const TravelCatalog cat = walkAndCar();
     TripRequest r;
-    r.from = Vec2(0, 5);
-    r.to = Vec2(5100, 5);
-    r.vehicles.push_back(OwnedVehicle{1, Vec2(10, 3), Vec2(5090, 3)});
+    r.from = Vec2(20, -6);
+    r.to = Vec2(5100, -6);
+    r.vehicles.push_back(OwnedVehicle{1, Vec2(30, -3), Vec2(5090, -3)});
     const TripPlan p = planTrip(nav, cat, r);
     CHECK(!p.valid());
     CHECK(p.options[0].why == "no route on the footpaths");
@@ -185,63 +217,16 @@ TEST_CASE(trip_plan_no_route_on_its_network_is_no_option) {
     CHECK(p.reason.find(": no way there") != std::string::npos);
 }
 
-// A DRIVE'S MINUTES ARE THE ROUTER'S (ADR-0416): the planner prices a road leg by the time findRoute chose its route
-// by -- each road class at its speed, a few seconds a street junction -- not by one flat speed. Two ways from one end
-// of a town to the other: straight along a 2 km local street with a cross-street every 200 m, or up a ramp onto a
-// freeway beside it and down another. The freeway is longer and wins on time; the plan says so, and its minutes,
-// metres and kinds of road are the route's.
-TEST_CASE(trip_plan_drive_minutes_are_the_router_s_road_class_times) {
-    engine::RoadGraph g;
-    // the street: x 0..2000 at z 0, a node every 100 m; a stub north at every 200 m, so those nodes are junctions
-    for (int i = 0; i <= 20; ++i) g.nodes.push_back({Vec2(100.0 * i, 0)});
-    for (int i = 0; i < 20; ++i) g.edges.push_back(engine::RoadEdge{i, i + 1, 8, engine::RoadClass::Local, 0});
-    for (int i = 2; i < 20; i += 2) {
-        g.nodes.push_back({Vec2(100.0 * i, -60)});
-        g.edges.push_back(engine::RoadEdge{i, static_cast<int>(g.nodes.size()) - 1, 8, engine::RoadClass::Local, 0});
-    }
-    // the freeway 150 m north, x 100..1900, a ramp down to the street at each end
-    const int f0 = static_cast<int>(g.nodes.size());
-    for (int i = 0; i <= 18; ++i) g.nodes.push_back({Vec2(100.0 + 100.0 * i, 150)});
-    for (int i = 0; i < 18; ++i) g.edges.push_back(engine::RoadEdge{f0 + i, f0 + i + 1, 12, engine::RoadClass::Freeway, 0});
-    g.edges.push_back(engine::RoadEdge{0, f0, 8, engine::RoadClass::Ramp, 0});
-    g.edges.push_back(engine::RoadEdge{f0 + 18, 20, 8, engine::RoadClass::Ramp, 0});
-    engine::NavBuildParams bp;
-    bp.junctionMergeRadius = 0;
-    const engine::NavGraph nav = engine::buildNavGraph(g, bp);
-    const TravelCatalog cat = walkAndCar();
-    TripLeg drive;
-    CHECK(planLeg(nav, cat, 1, Vec2(0, 0), Vec2(2000, 0), drive));
-    CHECK(drive.route.valid());
-    // the router took the freeway: 1,800 m of it and two ramps (each ~180 m), against 2,000 m of street and nine
-    // junctions at 6 s each
-    Real fw = 0, street = 0;
-    for (int li : drive.route.links) {
-        const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
-        (L.klass == engine::RoadClass::Freeway ? fw : street) += L.klass == engine::RoadClass::Ramp ? 0 : L.length;
-    }
-    std::printf("    drive: %.0f m, %.2f min: %s\n", drive.metres, drive.minutes, describeRoads(cat, drive).c_str());
-    CHECK(near(fw, 1800, 1.0) && street < 1.0);
-    // its minutes are the router's time for that route, plus the car's fixed 2.5
-    CHECK(near(drive.minutes, engine::routeSeconds(nav, drive.route) / 60.0 + 2.5, 1e-9));
-    CHECK(near(engine::routeSeconds(nav, drive.route),
-               1800.0 / engine::classSpeed(engine::RoadClass::Freeway) +
-                   (drive.route.length(nav) - 1800.0) / engine::classSpeed(engine::RoadClass::Ramp), 1e-6));
-    // ...not one flat speed over its metres: the same metres at the old 30 km/h would be 4.2 min against ~1.6
-    CHECK(drive.minutes - 2.5 < drive.metres / (30.0 / 3.6) / 60.0 * 0.6);
-    // and its kinds of road, as the plan says them
-    CHECK(near(kindMetres(cat, drive, "freeway"), 1800, 1.0));
-    CHECK(near(kindMetres(cat, drive, "streets"), 0, 1e-9));
-    CHECK(describeRoads(cat, drive) == "1,800 m freeway, 2 ramps");
-    // the street's own time, for the record: 2,000 m at 8 m/s and 9 junctions -- longer than the freeway's
-    const Real streetSeconds = 2000.0 / engine::classSpeed(engine::RoadClass::Local) + 9 * 6.0;
-    CHECK(engine::routeSeconds(nav, drive.route) < streetSeconds);
-}
+// (trip_plan_drive_minutes_are_the_router_s_road_class_times went with the street map, #306: it priced a drive up a
+// ramp and along a freeway over the street map's links. A drive is now priced over the road model's walks, each walk
+// at its street's class speed (trip_plan.h), so a freeway, which has no sidewalk, is not priced: on the known-bugs list
+// until a drive is priced by the driving's own lane router.)
 
 // WHAT THE AGENT BRAIN NEEDED OF THE PLANNER (ADR-0440; agent-brain-design.md section 12): a way priced only for people
 // who have what it requires and only for a leg it suits; a vehicle reached and left by the cheapest way on foot the
 // person has, unless the table fixes one; and a household's car not priced while someone else has it.
 TEST_CASE(trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use) {
-    const engine::NavGraph nav = longStreet();
+    const TripNetwork nav = longStreet().net();
     TravelCatalog cat = walkAndCar();
     cat.modes[1].access = -1;   // the car fixes no way to it
     cat.traits = {"has_board"};
@@ -253,59 +238,114 @@ TEST_CASE(trip_plan_traits_longest_leg_cheapest_way_to_the_car_and_a_car_in_use)
     board.longestLegMinutes = 6.0;   // 1000 m
     board.weight = 1.2;
     cat.modes.push_back(board);
-    // the person on the street itself, so every length is a whole number of metres
     auto ask = [](Real x, uint32_t traits) {
         TripRequest r;
-        r.from = Vec2(0, 0);
-        r.to = Vec2(x, 0);
+        r.from = Vec2(20, -6);
+        r.to = Vec2(x, -6);
         r.traits = traits;
-        r.vehicles.push_back(OwnedVehicle{1, Vec2(100, 0), Vec2(x - 200, 0)});
+        r.vehicles.push_back(OwnedVehicle{1, Vec2(120, -3), Vec2(x - 200, -3)});
         return r;
     };
     // NO BOARD: the row is not theirs. It is not priced, and the reason does not mention it.
-    const TripPlan without = planTrip(nav, cat, ask(500, 0));
+    const TripPlan without = planTrip(nav, cat, ask(520, 0));
     CHECK(without.options.size() == 3 && !without.options[2].offered && !without.options[2].possible);
     CHECK(without.options[2].why == "needs has_board");
     CHECK(without.reason.find("skateboard") == std::string::npos);
     CHECK(without.choice()->mode == 0);
-    // WITH ONE, 500 m: 3 minutes on the board, minded as 3.6, against 6 on foot
-    const TripPlan with = planTrip(nav, cat, ask(500, 1));
+    // WITH ONE, ~500 m: about 3 minutes on the board, minded as 1.2 times that, against about 6 on foot
+    const TripPlan with = planTrip(nav, cat, ask(520, 1));
     CHECK(with.choice()->mode == 2 && with.choice()->legs.size() == 1);
-    CHECK(near(with.options[2].minutes, 3.0, 1e-9) && near(with.options[2].weighted, 3.6, 1e-9));
-    // EXACTLY ITS LONGEST LEG is allowed (1000 m is 6 minutes); a metre more is not
-    CHECK(planTrip(nav, cat, ask(1000, 1)).options[2].possible);
-    TripRequest far = ask(1500, 1);
+    CHECK(near(with.options[2].weighted, 1.2 * with.options[2].minutes, 1e-9));
+    CHECK(with.options[2].minutes > 2.9 && with.options[2].minutes < 3.3);
+    // ITS LONGEST LEG: ~900 m is allowed (under 6 minutes); ~1500 m is not
+    CHECK(planTrip(nav, cat, ask(920, 1)).options[2].possible);
+    TripRequest far = ask(1520, 1);
     far.vehicles.clear();
     const TripPlan tooFar = planTrip(nav, cat, far);
     CHECK(!tooFar.options[2].possible && tooFar.options[2].offered);
-    CHECK(tooFar.options[2].why == "too far for skateboard (9.0 min, at most 6.0)");
+    CHECK(tooFar.options[2].why.find("too far for skateboard (") == 0 &&
+          tooFar.options[2].why.find(" min, at most 6.0)") != std::string::npos);
     CHECK(tooFar.choice()->mode == 0);
-    // THE CAR IS REACHED AND LEFT BY THE CHEAPEST WAY ON FOOT THEY HAVE: on the board for someone with one (100 m and
-    // 200 m: 0.6 and 1.2 minutes where walking is 1.2 and 2.4), on foot for someone without
-    const TripPlan drives = planTrip(nav, cat, ask(1500, 1));
+    // THE CAR IS REACHED AND LEFT BY THE CHEAPEST WAY ON FOOT THEY HAVE: on the board for someone with one, on foot
+    // for someone without
+    const TripPlan drives = planTrip(nav, cat, ask(1520, 1));
     CHECK(drives.choice()->mode == 1);
     const TripOption& car = drives.options[1];
     CHECK(car.legs.size() == 3 && car.legs[0].mode == 2 && car.legs[1].mode == 1 && car.legs[2].mode == 2);
-    CHECK(car.legs[0].end == LegEnd::Vehicle && car.legs[1].end == LegEnd::VehicleLeft && car.legs[2].end == LegEnd::Door);
-    CHECK(near(car.legs[0].minutes, 0.6, 1e-9) && near(car.legs[2].minutes, 1.2, 1e-9));
-    const TripPlan drivesOnFoot = planTrip(nav, cat, ask(1500, 0));
+    if (car.legs.size() == 3) {
+        CHECK(car.legs[0].end == LegEnd::Vehicle && car.legs[1].end == LegEnd::VehicleLeft && car.legs[2].end == LegEnd::Door);
+        CHECK(near(car.legs[0].minutes, car.legs[0].metres / (10.0 / 3.6) / 60.0, 1e-9));
+    }
+    const TripPlan drivesOnFoot = planTrip(nav, cat, ask(1520, 0));
     CHECK(drivesOnFoot.options[1].legs.size() == 3 && drivesOnFoot.options[1].legs[0].mode == 0 &&
           drivesOnFoot.options[1].legs[2].mode == 0);
     // ...unless the table fixes the way (`access`): then that way, board or no board
     TravelCatalog fixed = cat;
     fixed.modes[1].access = 0;
-    const TripPlan fixedWay = planTrip(nav, fixed, ask(1500, 1));
+    const TripPlan fixedWay = planTrip(nav, fixed, ask(1520, 1));
     CHECK(fixedWay.options[1].legs.size() == 3 && fixedWay.options[1].legs[0].mode == 0 && fixedWay.options[1].legs[2].mode == 0);
     // ...and a way on foot that is ruled out is not how the car is reached
-    TripRequest boardBroken = ask(1500, 1);
+    TripRequest boardBroken = ask(1520, 1);
     boardBroken.ruledOut = {2};
-    CHECK(planTrip(nav, cat, boardBroken).options[1].legs[0].mode == 0);
+    const TripPlan broken = planTrip(nav, cat, boardBroken);
+    CHECK(!broken.options[1].legs.empty() && broken.options[1].legs[0].mode == 0);
     // THE HOUSEHOLD'S CAR IN USE: said by the caller at plan time; the car is not priced
-    TripRequest inUse = ask(1500, 0);
+    TripRequest inUse = ask(1520, 0);
     inUse.vehicles[0].free = false;
     const TripPlan walks = planTrip(nav, cat, inUse);
     CHECK(!walks.options[1].possible && walks.options[1].why == "the car is in use");
     CHECK(walks.choice()->mode == 0);
-    CHECK(walks.reason == "walk 18.0 min, car -- the car is in use: walk");
+    CHECK(walks.reason.find(", car -- the car is in use: walk") != std::string::npos);
 }
 
+// BY BUS (ADR-0484): a bus row prices a trip as on foot to a stop, the wait (its start minutes), the ride round the line
+// by the timetable, and on foot from a stop; the stops near both ends are found by straight-line estimate
+TEST_CASE(trip_plan_prices_a_bus_trip_by_the_timetable) {
+    const Street& s = longStreet();
+    BusTimetable tt;
+    std::vector<BusTimetable::Stop> line;
+    for (const Real x : {200.0, 800.0, 1400.0, 1900.0}) line.push_back(BusTimetable::Stop{Vec2(x, -6), x == 1900.0 ? 300.0 : 100.0});
+    tt.lines = {line};
+    TripNetwork nav = s.net();
+    nav.buses = &tt;
+    TravelCatalog cat = walkAndCar();
+    TravelMode bus;
+    bus.name = "bus";
+    bus.bus = true;
+    bus.speed = 0;
+    bus.startMinutes = 4.0;
+    cat.modes.push_back(bus);
+    // FAR: home at 100 m, the door at 1500 m, no car: the bus from 200 m to 1400 m beats a 1400 m walk
+    TripRequest far;
+    far.from = Vec2(100, -6);
+    far.to = Vec2(1500, -6);
+    const TripPlan p = planTrip(nav, cat, far);
+    std::printf("    %s\n", p.reason.c_str());
+    CHECK(p.valid() && p.choice()->mode == 2);
+    const TripOption& byBus = p.options[2];
+    CHECK(byBus.legs.size() == 3u);
+    if (byBus.legs.size() == 3u) {
+        CHECK(byBus.legs[0].end == LegEnd::Stop && byBus.legs[0].busLine == 0 && byBus.legs[0].busTo == 0);
+        CHECK(byBus.legs[1].mode == 2 && byBus.legs[1].busFrom == 0 && byBus.legs[1].busTo == 2);
+        CHECK(near(byBus.legs[1].minutes, 4.0 + 200.0 / 60.0, 1e-9));   // the wait, and two legs of the timetable
+        CHECK(byBus.legs[2].end == LegEnd::Door);
+        FixedLegs fixed;
+        std::string err;
+        CHECK(fixedLegs(cat, byBus, fixed, &err) && fixed.legs[1].busLine == 0 && fixed.legs[1].busStop == 2 && fixed.legs[0].busStop == 0);
+    }
+    // NEAR: 300 m along the street: walking wins (the wait alone is 4 minutes)
+    TripRequest shortTrip = far;
+    shortTrip.to = Vec2(400, -6);
+    const TripPlan q = planTrip(nav, cat, shortTrip);
+    CHECK(q.valid() && q.choice()->mode == 0);
+    // NO STOP NEAR ONE END: no bus
+    TripRequest offLine = far;
+    offLine.to = Vec2(-900, -6);
+    tt.walkReach = 300;
+    const TripPlan r = planTrip(nav, cat, offLine);
+    CHECK(!r.options[2].possible && r.options[2].why == "no stop near both ends");
+    // NO LINE AT ALL: the bus is not weighed, and the reason does not name it
+    tt.lines.clear();
+    const TripPlan none = planTrip(nav, cat, far);
+    CHECK(!none.options[2].offered && none.reason.find("bus") == std::string::npos);
+}

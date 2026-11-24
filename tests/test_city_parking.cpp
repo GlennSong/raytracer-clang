@@ -1,11 +1,9 @@
-// Parking stalls of a lot (engine::surfaceStallsOf), and the trip lab's walker on a parked-along cross. (The old
-// driving's kerb bays and garage stalls, and the tests of its cars parking in them, went with it: ADR-0462.)
+// Parking stalls of a lot (engine::surfaceStallsOf), and the trip lab's walker on a cross. (The old driving's kerb bays
+// and garage stalls, and the tests of its cars parking in them, went with it: ADR-0462.)
 #include "test_framework.h"
 
+#include "model_scene.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/procgen/city/roads/road_entity.h"
-#include "../src/engine/procgen/city/road_spec.h"
-#include "city_test_util.h"
 #include "../src/engine/procgen/city/city_lots.h"
 
 #include <algorithm>
@@ -14,30 +12,6 @@
 
 using namespace engine;
 using namespace citysim;
-
-namespace {
-
-// A wide 4-way cross (12 m carriageways, 100 m arms) whose streets carry a REAL
-// cross-section: sidewalk | curb | parking 2.5 | travel 3.5 | travel 3.5 |
-// parking 2.5 | curb | sidewalk, resolved the way a generated street does.
-NavGraph wideCross() {
-    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25, 2.5, 3.2);
-    double off = 0, w = 0;
-    roadSpecParkingBand(spec, +1, off, w);
-    RoadGraph g;
-    g.nodes = { { Vec2(0, 0) }, { Vec2(0, 100) }, { Vec2(0, -100) },
-                { Vec2(100, 0) }, { Vec2(-100, 0) } };
-    for (int arm = 1; arm <= 4; ++arm) {
-        RoadEdge e{ 0, arm, static_cast<Real>(spec.carriagewayWidth()),
-                    RoadClass::Local, 0 };
-        e.parkOffset = static_cast<Real>(off);
-        e.parkWidth = static_cast<Real>(w);
-        g.edges.push_back(e);
-    }
-    return buildNavGraph(g);
-}
-
-}  // namespace
 
 // A BIG BOX'S OR A MALL'S PARKING LOT is stalls for the drivers (engine::surfaceStallsOf): every stall on the lot, none
 // on another, nose-in off the aisles, and its way in on the street edge. A shallow lot runs its rows along the store
@@ -67,32 +41,42 @@ TEST_CASE(a_parking_lot_is_stalls_for_the_drivers) {
 // the line the lab draws for them (walkPoses: the stepper's own placing, sampled) starts where they are and runs on
 // without a jump or a turn back, to where they stop.
 TEST_CASE(trip_plan_walker_sets_off_where_it_stands_and_its_line_is_its_way) {
-    NavGraph nav = wideCross();
+    // a cross of 100 m local roads, built as a level's roads are (model_scene.h); the places are on its east pavement
+    // of the north arm, as the model places a sidewalk point (W2: was a hand-made street map with a parking band, the
+    // points written at x = 9)
+    const citytest::ModelScene& s = citytest::crossScene(100);
+    CHECK(s.problems.empty());
+    const Vec2 half = s.sidewalkBeside(Vec2(9, 50)), up = s.sidewalkBeside(Vec2(9, 85));
     CitySim sim;
-    sim.build(nav, 1, 5);
+    s.build(sim, 1, 5);
     CHECK(sim.agents().size() == 1);
     if (sim.agents().size() != 1) return;
     sim.setAgentDirected(0, true);
     // to the east pavement of the north arm, halfway up it; then wait for them to stop there
-    CHECK(sim.sendAgentTo(0, Vec2(9, 50)));
+    CHECK(sim.sendAgentTo(0, half));
     for (int i = 0; i < 6000 && sim.agents()[0].moving; ++i) sim.step(0.05);
     const Agent& a = sim.agents()[0];
     CHECK(!a.moving);
     const Vec2 rest = a.pos;
     CHECK(std::fabs(rest.y - 50.0) < 3.0);
-    // further up the same pavement: set off from right here, along the one link beside them
-    CHECK(sim.sendAgentTo(0, Vec2(9, 85)));
+    // further up the same pavement: set off from right here
+    CHECK(sim.sendAgentTo(0, up));
     CHECK((a.pos - rest).length() < 0.5);
-    CHECK(a.route.links.size() == 1);
     std::vector<Vec2> line;
     sim.walkPoses(0, 2.0, [&](const Agent& c) { line.push_back(c.pos); });
     CHECK(line.size() > 10);
     if (line.empty()) return;
     CHECK((line.front() - a.pos).length() < 1e-6);
+    // NO JUMP: each 2 m of walk is at most kStepWithFile from the last pose (W3: 2.0 -> 2.25 m: a walker takes up its file
+    // across the walk over its step's first 4 m, so a 2 m step along can carry it up to half a metre sideways too)
+    constexpr Real kStepWithFile = 2.25;
+    Real longest = 0;
     for (std::size_t i = 1; i < line.size(); ++i) {
-        CHECK((line[i] - line[i - 1]).length() <= 2.0 + 1e-6);   // no jump
+        longest = std::max(longest, (line[i] - line[i - 1]).length());
+        CHECK((line[i] - line[i - 1]).length() <= kStepWithFile);   // no jump
         CHECK(line[i].y >= line[i - 1].y - 1e-6);                 // never back the way it came
     }
+    std::printf("[trip lab] the longest pose to pose %.2f m (2 m steps)\n", longest);
     CHECK(std::fabs(line.back().y - 85.0) < 1.0);   // ...to beside the point it is for
     // and walking it, the person keeps to that line
     Real worst = 0;

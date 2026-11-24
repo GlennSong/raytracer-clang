@@ -31,7 +31,7 @@ using GroundFn = std::function<double(double, double)>;
 void classifyRoadGraph(RoadGraph& g, const GroundFn& groundAt = nullptr);
 
 // True when any node is still JunctionKind::Auto — the self-heal test the
-// direct consumers (buildNavGraph, buildRoadNetLattice) use so hand-built
+// direct consumers (buildRoadNetLattice) use so hand-built
 // test graphs classify on entry.
 bool roadGraphUnclassified(const RoadGraph& g);
 

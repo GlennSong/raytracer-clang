@@ -1,5 +1,6 @@
 #include "places.h"
 #include "../../hash.h"   // lowbias32
+#include "../../engine/procgen/city/roads/road_model.h"   // walkJoinNear: where a door joins the walks
 
 #include <cmath>
 #include <cstring>
@@ -57,42 +58,13 @@ bool Place::openAt(Real clock) const {
     return clock >= openHour || clock < closeHour;   // window wraps midnight
 }
 
-Vec2 snapToSidewalk(const engine::NavGraph& graph, Vec2 site,
-                    int& outLink, Real& outT, Real verge) {
-    outLink = -1;
-    outT = 0;
-    if (graph.linkCount() == 0) return site;
-
-    // Scan every link, project the site onto its centreline segment, and keep
-    // the sidewalk point closest to the building. Scanning (rather than trusting
-    // NavGraph::nearestLink alone) is what puts the door on the FRONTAGE side: a
-    // two-way road is two opposite-direction links whose sidewalks sit on
-    // opposite kerbs, so the nearer sidewalk is the one the building faces.
-    Real bestDist2 = -1;
-    for (int li = 0; li < graph.linkCount(); ++li) {
-        const engine::NavLink& link = graph.links[li];
-        const Vec2 a = graph.nodes[link.from];
-        const Vec2 b = graph.nodes[link.to];
-        const Vec2 ab = b - a;
-        const Real len2 = ab.lengthSquared();
-        Real t = 0;
-        if (len2 > 1e-9) {
-            t = dot(site - a, ab) / len2;
-            if (t < 0) t = 0;
-            else if (t > 1) t = 1;
-        }
-        const Vec2 door = graph.sidewalkPoint(li, t, verge);
-        const Real d2 = (door - site).lengthSquared();
-        if (bestDist2 < 0 || d2 < bestDist2) {
-            bestDist2 = d2;
-            outLink = li;
-            outT = t;
-        }
-    }
-    return graph.sidewalkPoint(outLink, outT, verge);
+Vec2 snapToSidewalk(const engine::RoadModel* roads, Vec2 site) {
+    if (!roads || !roads->built) return site;
+    const engine::WalkJoin j = roads->walkJoinNear(site);   // the one fallback by position (ADR-0468)
+    return j.valid() ? j.point : site;
 }
 
-PlaceId PlaceMap::add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
+PlaceId PlaceMap::add(PlaceType type, Vec2 site, const engine::RoadModel* roads,
                       Real openHour, Real closeHour, int capacity,
                       std::string name, const Vec2* entranceHint) {
     Place p;
@@ -103,7 +75,7 @@ PlaceId PlaceMap::add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
     // entrance lands on the sidewalk in front of the door, not wherever is
     // nearest the footprint centroid (which can be around a corner).
     p.door = entranceHint ? *entranceHint : site;
-    p.entrance = snapToSidewalk(graph, p.door, p.entranceLink, p.entranceT);
+    p.entrance = snapToSidewalk(roads, p.door);
     p.openHour = openHour;
     p.closeHour = closeHour;
     p.capacity = capacity;
@@ -121,33 +93,6 @@ const std::vector<PlaceId>& PlaceMap::ofType(PlaceType type) const {
     static const std::vector<PlaceId> kEmpty;
     if (ti < 0 || ti >= static_cast<int>(PlaceType::Count)) return kEmpty;
     return byType_[ti];
-}
-
-int PlaceMap::snapToWalks(const engine::NavGraph& graph, Real reach, Real farFromStreet) {
-    int moved = 0;
-    std::vector<int> walks;
-    for (int li = 0; li < graph.linkCount(); ++li) if (graph.links[li].footpath) walks.push_back(li);
-    if (walks.empty()) return 0;
-    for (Place& p : places_) {
-        if ((p.entrance - p.door).length() < farFromStreet) continue;   // the street is at its door already
-        Real best = reach;
-        int bl = -1;
-        Real bt = 0;
-        for (int li : walks) {
-            const engine::NavLink& L = graph.links[li];
-            const Vec2 ab = L.footB - L.footA;
-            const Real len2 = ab.lengthSquared();
-            const Real t = len2 > 1e-9 ? std::clamp(dot(p.door - L.footA, ab) / len2, Real(0), Real(1)) : 0;
-            const Real d = (L.footA + ab * t - p.door).length();
-            if (d < best) { best = d; bl = li; bt = t; }
-        }
-        if (bl < 0) continue;
-        p.entranceLink = bl;
-        p.entranceT = bt;
-        p.entrance = graph.sidewalkPoint(bl, bt, 0);
-        ++moved;
-    }
-    return moved;
 }
 
 PlaceId PlaceMap::nearest(PlaceType type, Vec2 from) const {

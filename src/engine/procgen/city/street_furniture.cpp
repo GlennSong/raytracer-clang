@@ -1,4 +1,5 @@
 #include "street_furniture.h"
+#include "roads/road_model.h"
 #include "../../../proc_rng.h"
 
 #include <unordered_map>
@@ -140,288 +141,236 @@ Real KerbLine::depth(const Vec2& at) const {
     return best;
 }
 
+namespace {
+
+// ONE PIECE OF A STREET'S CENTRE LINE (two neighbouring points of its line, RoadModel::linePoints): the planner marches
+// along these, a kerb at a time. Read off the road model; nothing is kept but what the placements ask.
+struct StreetPiece {
+    Vec2 a, b;
+    Real half = 0;            // the spine to the carriageway's edge (ModelSection::carriagewayHalfWidth)
+    RoadClass klass = RoadClass::Local;
+    bool cars = true;         // cars drive it (not a footway or a track)
+    bool sidewalk[2] = {false, false};   // a sidewalk along the +1 kerb, the -1 kerb (ModelSection::sidewalkOnKerb)
+    int city = 0, street = -1;
+};
+
+uint64_t mix64(uint64_t k) {
+    k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
+    return k;
+}
+
+}  // namespace
+
 StreetFurniturePlan planStreetFurniture(
-    const NavGraph& nav, const std::function<Real(Real, Real)>& ground,
+    const std::vector<FurnitureCity>& cities, const std::function<Real(Real, Real)>& ground,
     const StreetFurnitureParams& p) {
     StreetFurniturePlan out;
     auto gy = [&](Real x, Real z) { return ground ? ground(x, z) : Real(0); };
-    // Grade-separated links ride a bridge deck this far up per layer — the same
-    // constant CityRenderSystem uses, so poles on a bridge stand on its deck.
-    const Real kLayerLift = 5.8;
-    // How far a pole looks for asphalt that is not its own junction's, and how far it may be
-    // walked to escape it before the placement is abandoned as not-a-corner.
-    const Real kPoleSearch = 26.0, kPoleMaxWalk = 12.0, kPoleDropInside = 1.5;
+    // How far a pole may be walked to escape asphalt before the placement is abandoned as not-a-corner.
+    const Real kPoleMaxWalk = 12.0, kPoleDropInside = 1.5, kPoleSearch = 26.0;
 
-    // WALK A PLACEMENT OFF THE ASPHALT. `out` is the direction away from the road it
-    // belongs to (its kerb normal); stepping along that keeps a pole on its own corner
-    // and a lamp on its own verge instead of teleporting it somewhere arbitrary.
-    // Returns how deep it still is when it gives up — 0 means clear.
+    // THE STREETS AS PIECES, and every junction's centre and arm mouths (lamps, trees and kerb props keep clear)
+    std::vector<StreetPiece> pieces;
+    std::vector<Vec2> junctionPoints;
+    for (const FurnitureCity& fc : cities) {
+        if (!fc.model || !fc.model->built) continue;
+        const RoadModel& m = *fc.model;
+        for (uint32_t s = 0; s < m.streets.size(); ++s) {
+            const ModelStreet& S = m.streets[s];
+            if (S.line.count < 2) continue;
+            for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
+                StreetPiece pc;
+                pc.a = m.linePoints[i];
+                pc.b = m.linePoints[i + 1];
+                if ((pc.b - pc.a).length() < Real(1e-3)) continue;
+                pc.half = S.section.carriagewayHalfWidth();
+                pc.klass = S.section.klass;
+                pc.cars = S.section.carriesCars();
+                pc.sidewalk[0] = S.section.sidewalkOnKerb(1);
+                pc.sidewalk[1] = S.section.sidewalkOnKerb(-1);
+                pc.city = fc.city;
+                pc.street = static_cast<int>(s);
+                pieces.push_back(pc);
+            }
+        }
+        for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+            const ModelJunction& J = m.junctions[j];
+            junctionPoints.push_back(J.at);
+            for (std::size_t ai = 0; ai < J.arms.size(); ++ai) {
+                Vec2 at;
+                if (armMouth(m, J, ai, at)) junctionPoints.push_back(at);
+            }
+        }
+    }
+
+    // WALK A PLACEMENT OFF THE ASPHALT. `outDir` is the direction away from the road it belongs to (its kerb normal);
+    // stepping along that keeps a pole on its own corner and a lamp on its own verge. Returns how deep it still is when
+    // it gives up -- 0 means clear.
     const KerbLine kerb(p.kerbLoops);
-    auto kerbDepth = [&](const Vec2& at) { return kerb.depth(at); };
-    auto walkOffDeck = [&](Vec2& at, const Vec2& out, Real limit) -> Real {
+    auto depthAt = [&](const Vec2& q) {
+        return std::max(p.deck ? static_cast<Real>(p.deck->depthInside(q.x, q.y)) : Real(0), kerb.depth(q));
+    };
+    auto walkOffDeck = [&](Vec2& at, const Vec2& outDir, Real limit) -> Real {
         if (!p.deck && !p.kerbLoops) return 0;
-        auto depthAt = [&](const Vec2& q) {
-            return std::max(p.deck ? static_cast<Real>(p.deck->depthInside(q.x, q.y)) : Real(0), kerbDepth(q));
-        };
         Real moved = 0;
         for (int i = 0; i < 24; ++i) {
             const Real depth = depthAt(at);
             if (depth <= 0) return 0;
             const Real step = std::min(Real(0.5) + depth, limit - moved);
             if (step <= Real(1e-3)) return depth;
-            at = at + out * step;
+            at = at + outDir * step;
             moved += step;
         }
         return depthAt(at);
     };
 
-    // Every link bucketed by cell, so "what asphalt is near this point" is a few dozen
-    // segment tests rather than the city's thousands.
-    const Real kLinkCell = 32.0;
-    std::unordered_map<long long, std::vector<int>> poleGrid;
-    auto cellOf = [](int cx, int cz) {
-        return static_cast<long long>(cx) * 73856093LL ^ static_cast<long long>(cz) * 19349663LL;
-    };
-    for (int li2 = 0; li2 < nav.linkCount(); ++li2) {
-        const NavLink& L2 = nav.links[li2];
-        const Vec2 a = nav.nodes[L2.from], b = nav.nodes[L2.to];
-        const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / kLinkCell));
-        const int x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / kLinkCell));
-        const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / kLinkCell));
-        const int z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / kLinkCell));
-        for (int cx = x0; cx <= x1; ++cx)
-            for (int cz = z0; cz <= z1; ++cz) poleGrid[cellOf(cx, cz)].push_back(li2);
+    // EVERY CARRIAGEWAY, bucketed by cell, so a candidate can ask "am I inside ANY road's carriageway?" (device, metro
+    // map: "some of the street lights are actually sitting right in the middle of the road") -- clear every street's
+    // half-width by curbGap
+    auto cellKey = [](int cx, int cz) { return static_cast<long long>(cx) * 73856093LL ^ static_cast<long long>(cz) * 19349663LL; };
+    const Real lcell = 20.0;
+    std::unordered_map<long long, std::vector<int>> pieceGrid;
+    for (int i = 0; i < static_cast<int>(pieces.size()); ++i) {
+        const StreetPiece& K = pieces[static_cast<std::size_t>(i)];
+        const int x0 = static_cast<int>(std::floor(std::min(K.a.x, K.b.x) / lcell)) - 1;
+        const int x1 = static_cast<int>(std::floor(std::max(K.a.x, K.b.x) / lcell)) + 1;
+        const int z0 = static_cast<int>(std::floor(std::min(K.a.y, K.b.y) / lcell)) - 1;
+        const int z1 = static_cast<int>(std::floor(std::max(K.a.y, K.b.y) / lcell)) + 1;
+        for (int cz = z0; cz <= z1; ++cz)
+            for (int cx = x0; cx <= x1; ++cx) pieceGrid[cellKey(cx, cz)].push_back(i);
     }
-    auto forEachLinkNear = [&](const Vec2& q, Real radius, const std::function<void(int)>& fn) {
-        const int r = static_cast<int>(std::ceil(radius / kLinkCell));
-        const int cx = static_cast<int>(std::floor(q.x / kLinkCell));
-        const int cz = static_cast<int>(std::floor(q.y / kLinkCell));
+    auto forEachPieceNear = [&](const Vec2& q, Real radius, const std::function<void(int)>& fn) {
+        const int r = static_cast<int>(std::ceil(radius / lcell));
+        const int cx = static_cast<int>(std::floor(q.x / lcell)), cz = static_cast<int>(std::floor(q.y / lcell));
+        std::vector<int> seen;
         for (int dx = -r; dx <= r; ++dx)
             for (int dz = -r; dz <= r; ++dz) {
-                auto it = poleGrid.find(cellOf(cx + dx, cz + dz));
-                if (it == poleGrid.end()) continue;
-                for (int li2 : it->second) fn(li2);
+                auto it = pieceGrid.find(cellKey(cx + dx, cz + dz));
+                if (it == pieceGrid.end()) continue;
+                for (int i : it->second)
+                    if (std::find(seen.begin(), seen.end(), i) == seen.end()) {
+                        seen.push_back(i);
+                        fn(i);
+                    }
             }
     };
+    auto insideAnyCarriageway = [&](const Vec2& v) {
+        auto it = pieceGrid.find(cellKey(static_cast<int>(std::floor(v.x / lcell)), static_cast<int>(std::floor(v.y / lcell))));
+        if (it == pieceGrid.end()) return false;
+        for (int i : it->second) {
+            const StreetPiece& K = pieces[static_cast<std::size_t>(i)];
+            const Vec2 ab = K.b - K.a;
+            const Real l2 = ab.lengthSquared();
+            const Real t = l2 > 1e-12 ? std::clamp(dot(v - K.a, ab) / l2, Real(0), Real(1)) : Real(0);
+            if ((K.a + ab * t - v).length() < K.half + p.curbGap) return true;
+        }
+        return false;
+    };
 
-    // SIGNALS: one per (junction, approach BEARING) — matching the sim's
-    // SignalController for real this time. Two mismatches used to break the
-    // "poles and phases agree" claim:
-    //   - the controller only signalises 4+-approach junctions (T-junctions
-    //     stay uncontrolled, by device feedback), but poles were planted at
-    //     EVERY junction — a dark, dead head on every T;
-    //   - the unified graph can hold OVERLAPPING COLLINEAR edges (a long
-    //     edge plus a stub riding it), and per-LINK placement stood two heads
-    //     on one arm (device: "double stoplights which is bizarre").
-    // So: skip junctions the controller leaves uncontrolled, quantise each
-    // approach bearing to a 15-degree bin per node, and keep ONE pole per
-    // bin — the widest approach, then the longest, then the lowest link
-    // index (deterministic). Phases stay per-LINK in the sim (stateForLink),
-    // so a deduped twin still resolves its phase; only its redundant pole is
-    // gone. The pole stands on the near-right curb corner, backed off by the
-    // widest crossing road (and a knot-merged junction's spread) so it never
-    // lands in a carriageway.
-    // With the road model (p.approachArm, ADR-0421): ONE pole per ARM OF THE MODEL JUNCTION -- the approach nearest the
-    // arm's mouth, then the widest, longest, lowest index -- so a junction the plan spread over several nav nodes stands
-    // one set, not one per node; an approach no arm takes gets no pole (it is still phased).
-    std::map<std::pair<int64_t, int>, int> armBest;   // (node, bearing bin) or (model arm, -1) -> link
-    std::map<int, Real> mouthOf;                        // link -> its node's distance from the arm's mouth
-    std::map<int, int64_t> armOfLink;
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const NavLink& L = nav.links[li];
-        // Semantic signal predicate (#17/S5), shared with the controller and
-        // the render markings so all three agree exactly.
-        if (!(L.access & road_access::kSignalable)) continue;
-        if (!nav.signalControlled(L.to)) continue;
-        Vec2 d = nav.direction(li);
-        std::pair<int64_t, int> key;
-        if (p.approachArm) {
-            Real mouth = 0;
-            const int64_t arm = p.approachArm(li, &mouth);
-            if (arm < 0) {
-                ++out.unarmedApproaches;
-                continue;
-            }
-            key = std::make_pair(arm, -1);
-            mouthOf[li] = mouth;
-            armOfLink[li] = arm;
-        } else {
-            int bin = static_cast<int>(std::lround(std::atan2(d.y, d.x) /
-                                                   (PI / 12.0)));
-            bin = ((bin % 24) + 24) % 24;
-            key = std::make_pair(static_cast<int64_t>(L.to), bin);
-        }
-        std::map<std::pair<int64_t, int>, int>::iterator it = armBest.find(key);
-        if (it != armBest.end()) {
-            const NavLink& W = nav.links[it->second];
-            const Real mL = p.approachArm ? mouthOf[li] : 0, mW = p.approachArm ? mouthOf[it->second] : 0;
-            const bool better =
-                mL < mW - 1.0 ||
-                (std::fabs(mL - mW) <= 1.0 &&
-                 (L.width > W.width ||
-                  (L.width == W.width &&
-                   (L.length > W.length ||
-                    (L.length == W.length && li < it->second)))));
-            if (!better) continue;
-            it->second = li;
-        } else {
-            armBest.emplace(key, li);
-        }
-    }
-    // Every ARM at every node — outward unit direction + carriageway half —
-    // from ALL links (an inbound-only one-way arm is not in outLinks).
-    struct Arm { Vec2 dir; Real half; };
-    std::vector<std::vector<Arm>> armsAt(nav.nodes.size());
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const NavLink& K = nav.links[li];
-        const Vec2 kd = nav.direction(li);
-        if (K.from >= 0 && K.from < static_cast<int>(armsAt.size()))
-            armsAt[K.from].push_back({kd, K.width * Real(0.5)});
-        if (K.to >= 0 && K.to < static_cast<int>(armsAt.size()))
-            armsAt[K.to].push_back({Vec2(-kd.x, -kd.y), K.width * Real(0.5)});
-    }
-    for (const auto& kv : armBest) {
-        const int li = kv.second;
-        const NavLink& L = nav.links[li];
-        Vec2 d = nav.direction(li);
-        Vec2 node = nav.nodes[L.to];
-        Vec2 right(d.y, -d.x);
-        Real thisHalf = L.width * 0.5;
-        Real crossHalf = thisHalf;
-        for (int ol : nav.outLinks[L.to])
-            crossHalf = std::max(crossHalf, nav.links[ol].width * 0.5);
-        Real spread = L.to < static_cast<int>(nav.nodeSpread.size())
-                          ? nav.nodeSpread[L.to] : Real(0);
-        // ON the kerb, not in the box: the drawn junction pad fills the disc
-        // out to (crossHalf + sidewalk), so the back-off must clear THAT — the
-        // old (crossHalf + curbGap) planted the pole ~a sidewalk-width inside
-        // the asphalt. Laterally the pole hugs the kerb on the sidewalk band;
-        // the street_kit mast arm (4.2 m) then reaches over the near lane,
-        // which is the whole point of the arm.
-        const Real w = thisHalf + p.curbGap;
-        Real t = crossHalf + p.sidewalkWidth + spread + p.curbGap;
-        // ACUTE-CORNER CLEARANCE (device, metro: "stoplights show up in the
-        // middle of the street and not on the corners"). The back-off above
-        // assumes a right-angle cross: it clears the pad DISC and hugs the
-        // pole's OWN kerb, but says nothing about the NEIGHBOURING arm. Where
-        // two arms meet at an acute angle the neighbour's carriageway sweeps
-        // through the "corner" — at 60 degrees the pole stood ~5.5 m from
-        // its centreline, inside a 6 m half-width, squarely on the pad. The
-        // kerb corner of an acute block is FURTHER back along the approach
-        // (the same reason road_net's acute-pair trim extends a body until
-        // its centreline clears the sibling's ribbon), so: walk the pole back
-        // along its own kerb line until it clears EVERY arm at the node by
-        // (that arm's half + curbGap). Per arm the clearance |a t + b| < h is
-        // one interval in t; raising t past one arm's interval can land in
-        // another's, so iterate to a fixed point (a few passes suffice).
-        const std::vector<Arm>& arms = armsAt[L.to];
-        for (int pass = 0; pass < 4; ++pass) {
-            Real tNext = t;
-            for (const Arm& arm : arms) {
-                // P(t) - node = (-d) t + right w; perp to arm = a t + b.
-                const Real a = arm.dir.x * (-d.y) - arm.dir.y * (-d.x);
-                const Real b = (arm.dir.x * right.y - arm.dir.y * right.x) * w;
-                const Real h = arm.half + p.curbGap;
-                if (std::fabs(a) < 1e-6) continue;   // own / opposite arm
-                const Real along = arm.dir.x * (-d.x * t + right.x * w) +
-                                   arm.dir.y * (-d.y * t + right.y * w);
-                if (along <= 0) continue;            // behind the node
-                if (std::fabs(a * t + b) >= h) continue;
-                const Real root = -b / a, halfBad = h / std::fabs(a);
-                tNext = std::max(tNext, root + halfBad);
-            }
-            if (tNext <= t + 1e-9) break;
-            t = std::min(tNext, Real(30.0));         // a fork this sharp is a
-                                                     // gore, not a corner
-        }
-        // TRY BOTH KERBS (Glenn, 2026-09-21: "the stoplights aren't showing up in some
-        // places"). A pole goes on the approach's right-hand corner; where that corner lies
-        // inside somebody else's carriageway — a freeway past the end of a street, a ramp
-        // gore — it used to be DROPPED, and the junction was left with no drawn signal while
-        // the sim went on phasing it (16 of metro_lanes' 292). The left-hand corner, across
-        // the same approach, is usually fine. Only when both are buried is there no pole.
-        auto tryCorner = [&](Real side, Real reach, Vec2& out) -> bool {
-            const Vec2 sideDir = right * side;
-            Vec2 corner = node + d * reach + sideDir * w;
-            // ...AND OUT OF EVERY OTHER ROAD'S CARRIAGEWAY. The back-off above reasons about
-            // the ARMS AT THIS NODE, which is all a lattice city has near a corner. A lane-built
-            // city puts a freeway carriageway or a ramp gore right past the end of a street —
-            // no arm of this node, and 18 m of asphalt the pole stood in the middle of. Push it
-            // clear of any link it is inside, iterating because clearing one can enter another,
-            // and giving up rather than walking a pole across the city.
-            Real residual = 0;
-            for (int pass = 0; pass < 5; ++pass) {
-                Vec2 push(0, 0);
-                Real worst = 0;
-                forEachLinkNear(corner, kPoleSearch, [&](int ol) {
-                    if (ol == li) return;
-                    const engine::NavLink& O = nav.links[ol];
-                    const Vec2 a = nav.nodes[O.from], b = nav.nodes[O.to];
-                    const Vec2 ab = b - a;
-                    const Real L2 = ab.lengthSquared();
-                    const Real u = L2 < Real(1e-9) ? Real(0) : std::clamp(dot(corner - a, ab) / L2, Real(0), Real(1));
-                    const Vec2 foot = a + ab * u;
-                    Vec2 away = corner - foot;
-                    const Real dist = away.length();
-                    const Real need = O.width * Real(0.5) + p.curbGap;
-                    if (dist >= need) return;
-                    if (dist < Real(1e-6)) {
-                        const Vec2 n2(-ab.y, ab.x);
-                        const Real nl = n2.length();
-                        away = nl > Real(1e-9) ? n2 * (Real(1) / nl) : Vec2(1, 0);
-                    } else {
-                        away = away * (Real(1) / dist);
+    // SIGNALS: one pole per ARRIVING ARM of every lit junction (its stated control, junctionLit; with none stated, a
+    // junction of four arms or more), on the arm's kerb corner at its mouth, facing the traffic arriving; where that
+    // corner is somebody else's asphalt, the other kerb, then the far side of the junction. (Was: one per street-map
+    // link entering a lit node, deduplicated to one per arm.)
+    for (const FurnitureCity& fc : cities) {
+        if (!fc.model || !fc.model->built) continue;
+        const RoadModel& m = *fc.model;
+        for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+            const ModelJunction& J = m.junctions[j];
+            const bool lit = p.controlsStated ? junctionLit(J) : J.arms.size() >= 4;
+            if (!lit) continue;
+            for (std::size_t ai = 0; ai < J.arms.size(); ++ai) {
+                const ModelArm& arm = J.arms[ai];
+                if (!arm.street.valid() || arm.street.index >= m.streets.size()) {
+                    ++out.unarmedApproaches;
+                    continue;
+                }
+                const ModelSection& sec = m.streets[arm.street.index].section;
+                if (!sec.carriesCars() || sec.lanesArriving(arm.spineIn) == 0) continue;   // nothing arrives by it
+                // THE MOUTH: where the junction's area begins along the arm's street (ModelArm::boxEdge; not stated:
+                // 10 m back from the arm's end), on the street's centre line (frontageOn)
+                const Real back = arm.spineIn ? Real(-1) : Real(1);   // (along the spine, away from the junction)
+                const Real mouthStation = !std::isnan(arm.boxEdge) && std::fabs(arm.boxEdge - arm.station) > Real(0.5)
+                                              ? arm.boxEdge : arm.station + back * 10.0;
+                const RoadFrontage mf = m.frontageOn(arm.street, mouthStation, 1);
+                const RoadFrontage af = m.frontageOn(arm.street, mouthStation + back * 5.0, 1);
+                if (!mf.valid() || !af.valid()) {
+                    ++out.unarmedApproaches;
+                    continue;
+                }
+                const Vec2 mouth = mf.on;
+                Vec2 d = mf.on - af.on;   // the way traffic arrives (toward the junction)
+                const Real step = d.length();
+                if (step < Real(1e-3)) {
+                    ++out.unarmedApproaches;
+                    continue;
+                }
+                d = d * (Real(1) / step);
+                const Real dl = (J.at - mouth).length();
+                const Vec2 right = rightOf(d);
+                const Real w = sec.carriagewayHalfWidth() + p.curbGap;
+                auto tryCorner = [&](Real side, Vec2 from, Vec2& at) -> bool {
+                    const Vec2 sideDir = right * side;
+                    Vec2 corner = from + sideDir * w;
+                    // ...out of every other street's carriageway, pushed clear (iterating: clearing one can enter
+                    // another), giving up rather than walking a pole across the city
+                    Real residual = 0;
+                    for (int pass = 0; pass < 5; ++pass) {
+                        Vec2 push(0, 0);
+                        Real worst = 0;
+                        forEachPieceNear(corner, kPoleSearch, [&](int oi) {
+                            const StreetPiece& O = pieces[static_cast<std::size_t>(oi)];
+                            if (O.city == fc.city && O.street == static_cast<int>(arm.street.index)) return;
+                            const Vec2 ab = O.b - O.a;
+                            const Real L2 = ab.lengthSquared();
+                            const Real u = L2 < Real(1e-9) ? Real(0) : std::clamp(dot(corner - O.a, ab) / L2, Real(0), Real(1));
+                            Vec2 away = corner - (O.a + ab * u);
+                            const Real dist = away.length();
+                            const Real need = O.half + p.curbGap;
+                            if (dist >= need) return;
+                            away = dist < Real(1e-6) ? normalize(Vec2(-ab.y, ab.x)) : away * (Real(1) / dist);
+                            if (need - dist > worst) {
+                                worst = need - dist;
+                                push = away * worst;
+                            }
+                        });
+                        residual = worst;
+                        if (worst <= Real(1e-3)) break;
+                        if ((corner + push - from).length() > kPoleMaxWalk) break;   // not a corner any more
+                        corner = corner + push;
+                        residual = 0;
                     }
-                    const Real gap = need - dist;
-                    if (gap > worst) { worst = gap; push = away * gap; }
-                });
-                residual = worst;
-                if (worst <= Real(1e-3)) break;
-                if ((corner + push - node).length() > kPoleMaxWalk) break;   // not a corner any more
-                corner = corner + push;
-                residual = 0;
+                    if (residual > kPoleDropInside) return false;
+                    if (walkOffDeck(corner, sideDir, kPoleMaxWalk) > Real(0)) return false;
+                    at = corner;
+                    return true;
+                };
+                // back from the mouth past the corner's kerb round (a sidewalk's width and the kerb gap), on the arm
+                const Vec2 near = mouth - d * (p.sidewalkWidth + p.curbGap);
+                const Vec2 far = J.at + d * dl;            // the far side, where the arm's line runs on across
+                Vec2 corner;
+                if (!tryCorner(Real(1), near, corner) && !tryCorner(Real(-1), near, corner) && !tryCorner(Real(1), far, corner) &&
+                    !tryCorner(Real(-1), far, corner)) {
+                    out.unpoledApproaches.push_back(J.at);
+                    continue;
+                }
+                SignalSpot s;
+                s.base = Vec3(corner.x, gy(corner.x, corner.y), corner.y);
+                s.face = Vec3(-d.x, 0, -d.y);   // the head faces its arriving traffic
+                s.arm = packFurnitureArm(fc.city, static_cast<int>(j), static_cast<int>(ai));
+                s.city = fc.city;
+                s.junction = static_cast<int>(j);
+                s.armIndex = static_cast<int>(ai);
+                out.signals.push_back(s);
             }
-            // A corner a few centimetres inside its OWN street is just a kerb — a two-way road
-            // is two links sharing one centreline, so every correct pole reads as marginally
-            // inside the opposite direction's carriageway. Only a pole genuinely BURIED fails.
-            if (residual > kPoleDropInside) return false;
-            // ...and off the DRAWN asphalt, which the link widths above only approximate —
-            // ALL the way off. The kerb allowance is for the link-width estimate (two links on
-            // one centreline); the deck has no such ambiguity, and every lattice pole ends at
-            // exactly 0 here. A pole still inside it (one on metro_lanes, 0.30 m into a
-            // carriageway after a 12 m walk) tries the other corner instead.
-            if (walkOffDeck(corner, sideDir, kPoleMaxWalk) > Real(0)) return false;
-            out = corner;
-            return true;
-        };
-        Vec2 corner;
-        // ...and then ACROSS the junction. A far-side signal — on the exit corner, facing the
-        // approaching traffic — is the ordinary North American arrangement, and it is where a
-        // light goes when both near corners are asphalt (a ramp gore on one side, a freeway
-        // past the end of the street on the other).
-        const Real farReach = crossHalf + p.sidewalkWidth + spread + p.curbGap;
-        if (!tryCorner(Real(1), -t, corner) && !tryCorner(Real(-1), -t, corner) &&
-            !tryCorner(Real(1), farReach, corner) && !tryCorner(Real(-1), farReach, corner)) {
-            out.unpoledApproaches.push_back(node);
-            continue;
         }
-        SignalSpot s;
-        s.base = Vec3(corner.x, gy(corner.x, corner.y) + L.layer * kLayerLift,
-                      corner.y);
-        s.face = Vec3(-d.x, 0, -d.y);   // head faces its approaching traffic
-        s.link = li;
-        const std::map<int, int64_t>::const_iterator armIt = armOfLink.find(li);
-        s.arm = armIt == armOfLink.end() ? -1 : armIt->second;
-        out.signals.push_back(s);
     }
 
-    // THE MODEL'S JUNCTIONS (p.junctionPoints, ADR-0421): how far a point is from the nearest junction's centre or arm
-    // mouth, bucketed by 20 m cells; with none given, the nav graph's junction nodes as before.
+    // HOW FAR a point is from the nearest junction's centre or arm mouth, bucketed by 20 m cells
     constexpr Real kJunctionCell = 20.0;
     std::map<std::pair<int, int>, std::vector<Vec2>> junctionCells;
-    for (const Vec2& j : p.junctionPoints)
+    for (const Vec2& j : junctionPoints)
         junctionCells[{static_cast<int>(std::floor(j.x / kJunctionCell)), static_cast<int>(std::floor(j.y / kJunctionCell))}].push_back(j);
-    auto modelJunctionDist = [&](const Vec2& v) {
+    auto junctionDist = [&](const Vec2& v) {
         Real d = 1e30;
         const int cx = static_cast<int>(std::floor(v.x / kJunctionCell)), cz = static_cast<int>(std::floor(v.y / kJunctionCell));
         for (int dx = -2; dx <= 2; ++dx)
@@ -432,136 +381,66 @@ StreetFurniturePlan planStreetFurniture(
             }
         return d;   // (exact within 40 m: every clearance here is under that)
     };
-    const bool modelJunctions = !p.junctionPoints.empty();
+    // THE KERB AS DRAWN: from the centre line out past the carriageway (and any parking band the deck holds), then the
+    // verge. `n` the unit normal toward the kerb.
+    auto kerbPoint = [&](const StreetPiece& K, Vec2 c, Vec2 n, Real verge) {
+        Real s = K.half;
+        if (p.deck)
+            while (s < 16.0 && p.deck->depthInside(c.x + n.x * s, c.y + n.y * s) > 0.0) s += 0.25;
+        return c + n * (s + verge);
+    };
 
-    // LAMPS: march each link's RIGHT sidewalk — a two-way road contributes one
-    // directed link per direction, so both sides light up and the pattern
-    // alternates naturally. Freeway-width carriageways have no sidewalk to
-    // stand on; junction mouths are left to the signal poles.
-    // LAMPS every `lampSpacing` metres of KERB — measured along the street,
-    // NOT per graph link. A nav link is a tessellation segment: on this city
-    // they average 6.7 m, and the old per-link rule ("one lamp at the middle
-    // of any link longer than 0.6 * spacing") therefore threw away 7120 of
-    // 7288 links and lit only the rare long straight. That is why the city
-    // was dark. Sampling each kerb finely and enforcing the spacing with a
-    // grid gives even lighting whatever the tessellation does.
-    //
-    // The spacing test is DIRECTION AWARE: the two kerbs of a two-way street
-    // are only a carriageway apart (12-17 m, inside the spacing), so a plain
-    // radius test would let one side suppress the other and light every
-    // street down one side only. Lamps facing opposite ways are different
-    // kerbs and never suppress each other.
+    // LAMPS every `lampSpacing` metres of KERB, measured along the street; each kerb of a street with a sidewalk there,
+    // sampled finely and spaced with a grid (direction-aware: the two kerbs of a street are lamps facing opposite ways and
+    // never suppress each other). No lamps on freeways and ramps (their lighting is its own pass), near junctions (the
+    // signal poles' corners), in any carriageway or on the drawn asphalt.
     struct PlacedLamp { Vec2 at; Vec2 dir; };
     std::unordered_map<long long, std::vector<PlacedLamp>> grid;
     const Real cell = std::max(Real(1), p.lampSpacing);
-    auto cellKey = [](int cx, int cz) {
-        return static_cast<long long>(cx) * 73856093LL ^
-               static_cast<long long>(cz) * 19349663LL;
-    };
     auto tooClose = [&](Vec2 v, Vec2 d) {
-        const int cx = static_cast<int>(std::floor(v.x / cell));
-        const int cz = static_cast<int>(std::floor(v.y / cell));
+        const int cx = static_cast<int>(std::floor(v.x / cell)), cz = static_cast<int>(std::floor(v.y / cell));
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx) {
                 auto it = grid.find(cellKey(cx + dx, cz + dz));
                 if (it == grid.end()) continue;
                 for (const PlacedLamp& q : it->second)
-                    if (dot(q.dir, d) > 0 &&
-                        (q.at - v).length() < p.lampSpacing * Real(0.85))
-                        return true;
+                    if (dot(q.dir, d) > 0 && (q.at - v).length() < p.lampSpacing * Real(0.85)) return true;
             }
         return false;
     };
-
-    // EVERY carriageway, hashed, so a candidate can ask "am I inside ANY
-    // road's ribbon?" (device, metro map: "some of the street lights are
-    // actually sitting right in the middle of the road"). The junction-clear
-    // radius below is measured from the NODE; at a T or an acute corner the
-    // neighbouring arm's carriageway reaches past that radius, and a kerb
-    // lamp of one street stood in the middle of the other — 75 of the
-    // metro's 1739 lamps, the worst 5.8 m inside a 12 m road. The rule the
-    // signal poles already obey (9176f6a) applied to lamps: clear every
-    // link's half-width by curbGap. A lamp's OWN link passes trivially
-    // (it stands lampVerge > curbGap beyond that kerb).
-    const Real lcell = 20.0;   // >= widest half-width + curbGap, so 3x3 covers
-    std::unordered_map<long long, std::vector<int>> linkGrid;
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const NavLink& K = nav.links[li];
-        const Vec2 a = nav.nodes[K.from], b = nav.nodes[K.to];
-        const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / lcell)) - 1;
-        const int x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / lcell)) + 1;
-        const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / lcell)) - 1;
-        const int z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / lcell)) + 1;
-        for (int cz = z0; cz <= z1; ++cz)
-            for (int cx = x0; cx <= x1; ++cx)
-                linkGrid[cellKey(cx, cz)].push_back(li);
-    }
-    auto insideAnyCarriageway = [&](const Vec2& v) {
-        const int cx = static_cast<int>(std::floor(v.x / lcell));
-        const int cz = static_cast<int>(std::floor(v.y / lcell));
-        auto it = linkGrid.find(cellKey(cx, cz));
-        if (it == linkGrid.end()) return false;
-        for (int li : it->second) {
-            const NavLink& K = nav.links[li];
-            const Vec2 a = nav.nodes[K.from], b = nav.nodes[K.to];
-            const Vec2 ab = b - a;
-            const Real l2 = ab.lengthSquared();
-            Real t = l2 > 1e-12 ? dot(v - a, ab) / l2 : Real(0);
-            t = t < 0 ? 0 : (t > 1 ? 1 : t);
-            if ((a + ab * t - v).length() < K.width * Real(0.5) + p.curbGap)
-                return true;
-        }
-        return false;
-    };
-
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const NavLink& L = nav.links[li];
-        if (L.klass == RoadClass::Freeway || L.klass == RoadClass::Ramp)
-            continue;   // corridor lighting is its own pass, not lamps
-        if (L.width > p.maxLampRoadWidth) continue;
-        const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
-        const Real len = (b - a).length();
-        if (len < Real(0.5)) continue;
-        const Vec2 dir = (b - a) * (Real(1) / len);
-        // Sample finely along the segment; the grid decides what survives.
+    auto pieceDir = [](const StreetPiece& K) { return normalize(K.b - K.a); };
+    for (const StreetPiece& K : pieces) {
+        if (K.klass == RoadClass::Freeway || K.klass == RoadClass::Ramp || !K.cars) continue;
+        if (K.half * 2 > p.maxLampRoadWidth) continue;
+        const Real len = (K.b - K.a).length();
+        const Vec2 dir = pieceDir(K);
         const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(2.5))));
-        for (int k = 0; k <= steps; ++k) {
-            const Real t = static_cast<Real>(k) / steps;
-            const Vec2 sp = nav.sidewalkPoint(li, t, p.lampVerge);
-            // Clear of real JUNCTIONS only — a nav node is usually just a
-            // curve vertex, and treating those as junctions blanked the
-            // curved avenues that make up most of this city.
-            const bool nearJunction =
-                modelJunctions ? modelJunctionDist(sp) < p.junctionClear :
-                ((nav.isJunction(L.to) &&
-                  (sp - nav.nodes[L.to]).length() < p.junctionClear) ||
-                 (nav.isJunction(L.from) &&
-                  (sp - nav.nodes[L.from]).length() < p.junctionClear));
-            if (nearJunction) continue;
-            if (insideAnyCarriageway(sp)) continue;
-            // ...and off the DRAWN asphalt. insideAnyCarriageway reasons from link
-            // WIDTHS, which is its own road's width — a lamp clears the street it is
-            // marching along and stands on the junction pad or on the wider road
-            // crossing behind it. Lamps are sampled every 2.5 m along a kerb, so
-            // dropping one costs nothing; a signal pole gets walked out instead.
-            if (p.deck && p.deck->depthInside(sp.x, sp.y) > 0.0) continue;
-            if (kerb.depth(sp) > 0.0) continue;   // (the junction corners the deck field does not hold)
-            if (tooClose(sp, dir)) continue;
-            const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
-            out.lampBases.push_back(Vec3(sp.x, y, sp.y));
-            out.lampHeads.push_back(Vec3(sp.x, y + p.lampHeight, sp.y));
-            out.lampLinks.push_back(li);
-            const int cx = static_cast<int>(std::floor(sp.x / cell));
-            const int cz = static_cast<int>(std::floor(sp.y / cell));
-            grid[cellKey(cx, cz)].push_back({sp, dir});
+        for (int side = 0; side < 2; ++side) {
+            if (!K.sidewalk[side]) continue;
+            const Real sgn = side == 0 ? Real(1) : Real(-1);
+            const Vec2 n = rightOf(dir) * sgn, kerbDir = dir * sgn;
+            for (int k = 0; k <= steps; ++k) {
+                const Vec2 c = K.a + (K.b - K.a) * (static_cast<Real>(k) / steps);
+                const Vec2 sp = c + n * (K.half + p.lampVerge);
+                if (junctionDist(sp) < p.junctionClear) continue;
+                if (insideAnyCarriageway(sp)) continue;
+                if (p.deck && p.deck->depthInside(sp.x, sp.y) > 0.0) continue;
+                if (kerb.depth(sp) > 0.0) continue;   // (the junction corners the deck field does not hold)
+                if (tooClose(sp, kerbDir)) continue;
+                const Real y = gy(sp.x, sp.y);
+                out.lampBases.push_back(Vec3(sp.x, y, sp.y));
+                out.lampHeads.push_back(Vec3(sp.x, y + p.lampHeight, sp.y));
+                out.lampStreets.push_back(LampStreet{K.city, K.street});
+                grid[cellKey(static_cast<int>(std::floor(sp.x / cell)), static_cast<int>(std::floor(sp.y / cell)))].push_back({sp, kerbDir});
+            }
         }
     }
     if (!p.kerbLife) return out;
 
-    // KERB LIFE: every city street that has a pavement and fronts lots (not a freeway, a ramp, a bridge, the road
-    // between towns): street trees in pits at treeSpacing, kept off the lamps, the signal poles and the junctions'
-    // sightlines; a litter bin by each corner; bike racks and news boxes along the main streets. The same sampling and
-    // the same "off the asphalt" rules as the lamps, each kind spaced along its own kerb (direction-aware).
+    // KERB LIFE: every city street that has a pavement (not a freeway, a ramp, the road between towns): street trees in
+    // pits at their spacing, kept off the lamps, the signal poles and the junctions' sightlines; a litter bin by each
+    // corner; bike racks and news boxes along the main streets. The same sampling and the same "off the asphalt" rules as
+    // the lamps, each kind spaced along its own kerb (direction-aware).
     struct Placed { Vec2 at, dir; };
     auto keyOf = [&](const Vec2& v, Real c) { return cellKey(static_cast<int>(std::floor(v.x / c)), static_cast<int>(std::floor(v.y / c))); };
     struct Spaced {
@@ -584,49 +463,26 @@ StreetFurniturePlan planStreetFurniture(
     Spaced lamps{12.0, {}}, poles{12.0, {}};
     for (const Vec3& b : out.lampBases) add(lamps, Vec2(b.x, b.z), Vec2(0, 0));
     for (const SignalSpot& s : out.signals) add(poles, Vec2(s.base.x, s.base.z), Vec2(0, 0));
-    auto streetWithPavement = [&](const NavLink& L) {
-        return (L.klass == RoadClass::Local || L.klass == RoadClass::Collector || L.klass == RoadClass::Arterial) &&
-               L.layer == 0 && !L.elevAbsolute && L.walkable && (L.access & road_access::kFrontage) && L.width <= p.maxLampRoadWidth;
+    auto streetWithPavement = [&](const StreetPiece& K) {
+        return (K.klass == RoadClass::Local || K.klass == RoadClass::Collector || K.klass == RoadClass::Arterial) && K.cars &&
+               K.half * 2 <= p.maxLampRoadWidth;
     };
     auto clearOfRoad = [&](const Vec2& v, Real margin) {
         if (insideAnyCarriageway(v)) return false;
         if (!p.deck) return true;
-        // depthInside is 0 off the deck: the point and four around it at `margin` must all be off it
         for (const Vec2 o : {Vec2(0, 0), Vec2(margin, 0), Vec2(-margin, 0), Vec2(0, margin), Vec2(0, -margin)})
             if (p.deck->depthInside(v.x + o.x, v.y + o.y) > 0.0) return false;
         return true;
     };
-    auto distToJunction = [&](const NavLink& L, const Vec2& v) {
-        if (modelJunctions) return modelJunctionDist(v);
-        Real d = 1e30;
-        if (nav.isJunction(L.to)) d = std::min(d, (v - nav.nodes[L.to]).length());
-        if (nav.isJunction(L.from)) d = std::min(d, (v - nav.nodes[L.from]).length());
-        return d;
-    };
-    // THE KERB AS DRAWN: a link's width is its travel lanes, and a street with parking bands has its kerb a
-    // band further out -- so walk out from the centreline until off the asphalt, then add the verge
-    auto kerbPoint = [&](int li, Real t, Real verge) {
-        const Vec2 c = nav.pointOnLink(li, t);
-        const Vec2 s1 = nav.sidewalkPoint(li, t, 1.0);
-        if (!p.deck || (s1 - c).length() < 1e-6) return nav.sidewalkPoint(li, t, verge);
-        const Vec2 n = normalize(s1 - c);
-        Real s = nav.links[li].width * 0.5;
-        while (s < 16.0 && p.deck->depthInside(c.x + n.x * s, c.y + n.y * s) > 0.0) s += 0.25;
-        return c + n * (s + verge);
-    };
     ProcRng hRng(0x5EED7u);
-    for (int li = 0; li < nav.linkCount(); ++li) {
-        const NavLink& L = nav.links[li];
-        if (!streetWithPavement(L)) continue;
-        const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
-        const Real len = (b - a).length();
-        if (len < Real(0.5)) continue;
-        const Vec2 dir = (b - a) * (Real(1) / len);
-        const bool main = L.klass != RoadClass::Local;
+    for (const StreetPiece& K : pieces) {
+        if (!streetWithPavement(K)) continue;
+        const Real len = (K.b - K.a).length();
+        const Vec2 dir = pieceDir(K);
+        const bool main = K.klass != RoadClass::Local;
         const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(1.5))));
-        // THIS STREET'S PLANTING: by its character, and the same all along it -- the draw is keyed on the street's
-        // LINE (its bearing to 10 degrees, its offset across to 30 m, 700 m stretches along it, its class), so both
-        // directions of a two-way street and every block of a straight one agree, and the next street over may not
+        // THIS STREET'S PLANTING: by its character, and the same all along its stated run (streetRun), else along its
+        // line (its bearing to 10 degrees, its offset across to 30 m, 700 m stretches along it, its class)
         StreetPlanting pl;
         pl.spacing = p.treeSpacing;
         Vec2 lineDir = dir;
@@ -638,62 +494,62 @@ StreetFurniturePlan planStreetFurniture(
             if (ang >= kPi) ang -= kPi;
             const int ab = static_cast<int>(std::lround(ang / kBear)) % 18;
             lineDir = Vec2(std::cos(ab * kBear), std::sin(ab * kBear));
-            const Vec2 mid = (a + b) * Real(0.5);
+            const Vec2 mid = (K.a + K.b) * Real(0.5);
             const long long off = static_cast<long long>(std::llround(dot(mid, Vec2(-lineDir.y, lineDir.x)) / 30.0));
             const long long along = static_cast<long long>(std::floor(dot(mid, lineDir) / 700.0));
-            // With the road model (p.streetRun, ADR-0421) the key is the street's stated RUN, not its bearing: every
-            // street of one run planted one way, round its bends too
-            const uint64_t run = p.streetRun ? p.streetRun(li) : 0;
-            uint64_t k = run != 0
-                ? 0x9E3779B97F4A7C15ull ^ (run * 0xBF58476D1CE4E5B9ull) ^ static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull
+            const uint64_t run = p.streetRun ? p.streetRun(K.city, K.street) : 0;
+            const uint64_t k = mix64(run != 0
+                ? 0x9E3779B97F4A7C15ull ^ (run * 0xBF58476D1CE4E5B9ull) ^ static_cast<uint64_t>(K.klass) * 0x2545F4914F6CDD1Dull
                 : 0x9E3779B97F4A7C15ull ^ (static_cast<uint64_t>(ab) * 0xBF58476D1CE4E5B9ull) ^
                   (static_cast<uint64_t>(off) * 0x94D049BB133111EBull) ^ (static_cast<uint64_t>(along) * 0xD6E8FEB86659FD93ull) ^
-                  static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull;
-            k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
-            pl = choosePlanting(p.character(mid), L.klass, (k & 0xFFFF) / 65536.0, ((k >> 16) & 0xFFFF) / 65536.0);
+                  static_cast<uint64_t>(K.klass) * 0x2545F4914F6CDD1Dull);
+            pl = choosePlanting(p.character(mid), K.klass, (k & 0xFFFF) / 65536.0, ((k >> 16) & 0xFFFF) / 65536.0);
             ++out.planted[std::min<int>(pl.scheme, 7)];
         }
-        const bool plantHere = !p.character || (pl.scheme != StreetPlanting::None && (!pl.oneSide || dot(dir, lineDir) > 0));
-        for (int k = 0; k <= steps; ++k) {
-            const Real t = static_cast<Real>(k) / steps;
-            const Real dj = distToJunction(L, kerbPoint(li, t, p.treeVerge));
-            // A STREET TREE
-            {
-                const Vec2 sp = kerbPoint(li, t, p.treeVerge);
-                if (plantHere && dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, dir, pl.spacing * 0.92, true) &&
-                    !near(lamps, sp, dir, 3.2, false) && !near(poles, sp, dir, 3.5, false) && !near(bins, sp, dir, 2.0, false) &&
-                    !near(props, sp, dir, 2.5, false)) {
-                    const uint32_t h = hRng.bits();
-                    if (!p.character) {
-                        const uint32_t v = (h >> 16) % 3u;
-                        out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, v,
-                                             static_cast<StreetSpecies>(v)});
-                    } else if ((h >> 24) / 256.0 >= pl.gaps) {   // (a gap keeps its place in the row: the pit stays empty)
-                        const uint32_t h2 = h * 2654435761u;
-                        out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y),
-                                             pl.scaleLo + (pl.scaleHi - pl.scaleLo) * ((h >> 8) & 0xFF) / 255.0, (h2 >> 20) % 3u,
-                                             pl.species[(h >> 16) % static_cast<uint32_t>(std::max(1, pl.kinds))]});
+        for (int side = 0; side < 2; ++side) {
+            if (!K.sidewalk[side]) continue;
+            const Real sgn = side == 0 ? Real(1) : Real(-1);
+            const Vec2 n = rightOf(dir) * sgn, kerbDir = dir * sgn;
+            const bool plantHere = !p.character || (pl.scheme != StreetPlanting::None && (!pl.oneSide || dot(kerbDir, lineDir) > 0));
+            for (int k = 0; k <= steps; ++k) {
+                const Vec2 c = K.a + (K.b - K.a) * (static_cast<Real>(k) / steps);
+                const Real dj = junctionDist(kerbPoint(K, c, n, p.treeVerge));
+                {   // A STREET TREE
+                    const Vec2 sp = kerbPoint(K, c, n, p.treeVerge);
+                    if (plantHere && dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, kerbDir, pl.spacing * 0.92, true) &&
+                        !near(lamps, sp, kerbDir, 3.2, false) && !near(poles, sp, kerbDir, 3.5, false) && !near(bins, sp, kerbDir, 2.0, false) &&
+                        !near(props, sp, kerbDir, 2.5, false)) {
+                        const uint32_t h = hRng.bits();
+                        if (!p.character) {
+                            const uint32_t v = (h >> 16) % 3u;
+                            out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, v,
+                                                 static_cast<StreetSpecies>(v)});
+                        } else if ((h >> 24) / 256.0 >= pl.gaps) {   // (a gap keeps its place in the row: the pit stays empty)
+                            const uint32_t h2 = h * 2654435761u;
+                            out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y),
+                                                 pl.scaleLo + (pl.scaleHi - pl.scaleLo) * ((h >> 8) & 0xFF) / 255.0, (h2 >> 20) % 3u,
+                                                 pl.species[(h >> 16) % static_cast<uint32_t>(std::max(1, pl.kinds))]});
+                        }
+                        add(trees, sp, kerbDir);
                     }
-                    add(trees, sp, dir);
                 }
-            }
-            // A LITTER BIN by the corner, just past the junction's clear zone, near the kerb
-            {
-                const Vec2 sp = kerbPoint(li, t, 1.0);   // (past curbGap: insideAnyCarriageway pads every kerb by it)
-                if (dj >= p.junctionClear && dj < p.junctionClear + 4.0 && clearOfRoad(sp, 0.2) && !near(bins, sp, dir, 25.0, true) &&
-                    !near(trees, sp, dir, 1.6, false) && !near(lamps, sp, dir, 1.2, false) && !near(poles, sp, dir, 1.5, false)) {
-                    out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)), KerbProp::Bin});
-                    add(bins, sp, dir);
+                {   // A LITTER BIN by the corner, just past the junction's clear zone, near the kerb
+                    const Vec2 sp = kerbPoint(K, c, n, 1.0);
+                    if (dj >= p.junctionClear && dj < p.junctionClear + 4.0 && clearOfRoad(sp, 0.2) && !near(bins, sp, kerbDir, 25.0, true) &&
+                        !near(trees, sp, kerbDir, 1.6, false) && !near(lamps, sp, kerbDir, 1.2, false) && !near(poles, sp, kerbDir, 1.5, false)) {
+                        out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), n, KerbProp::Bin});
+                        add(bins, sp, kerbDir);
+                    }
                 }
-            }
-            // A BIKE RACK or NEWS BOXES along a main street, mid-block
-            if (main && dj > 25.0) {
-                const Vec2 sp = kerbPoint(li, t, 1.0);
-                if (clearOfRoad(sp, 0.3) && !near(props, sp, dir, p.propSpacing, true) && !near(trees, sp, dir, 2.6, false) &&
-                    !near(lamps, sp, dir, 2.0, false) && !near(poles, sp, dir, 2.5, false)) {
-                    const uint32_t h = hRng.bits();
-                    out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)), static_cast<uint8_t>((h >> 12) % 3u ? KerbProp::BikeRack : KerbProp::NewsBoxes)});
-                    add(props, sp, dir);
+                if (main && dj > 25.0) {   // A BIKE RACK or NEWS BOXES along a main street, mid-block
+                    const Vec2 sp = kerbPoint(K, c, n, 1.0);
+                    if (clearOfRoad(sp, 0.3) && !near(props, sp, kerbDir, p.propSpacing, true) && !near(trees, sp, kerbDir, 2.6, false) &&
+                        !near(lamps, sp, kerbDir, 2.0, false) && !near(poles, sp, kerbDir, 2.5, false)) {
+                        const uint32_t h = hRng.bits();
+                        out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), n,
+                                             static_cast<uint8_t>((h >> 12) % 3u ? KerbProp::BikeRack : KerbProp::NewsBoxes)});
+                        add(props, sp, kerbDir);
+                    }
                 }
             }
         }
@@ -704,27 +560,50 @@ StreetFurniturePlan planStreetFurniture(
     for (const StreetFurnitureParams::KerbKind& kk : p.kerbKinds) kinds.push_back(Spaced{std::max(kk.every, Real(8)), {}});
     for (std::size_t ki = 0; ki < p.kerbKinds.size(); ++ki) {
         const StreetFurnitureParams::KerbKind& kk = p.kerbKinds[ki];
-        for (int li = 0; li < nav.linkCount(); ++li) {
-            const NavLink& L = nav.links[li];
-            if (!streetWithPavement(L) || (kk.mainOnly && L.klass == RoadClass::Local)) continue;
-            const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
-            const Real len = (b - a).length();
-            if (len < Real(0.5)) continue;
-            const Vec2 dir = (b - a) * (Real(1) / len);
+        if (kk.atBusStops) {
+            // AT EACH BUS STOP (ADR-0485): on the stop's own kerb, level with it, `verge` out from the kerb line, facing the
+            // pavement (+Z from the kerb to the buildings), as the stop states it (ADR-0481) -- never marched
+            for (const FurnitureCity& fc : cities) {
+                if (!fc.model || !fc.model->built) continue;
+                for (const ModelBusLine& line : fc.model->busLines)
+                    for (const ModelBusStop& stop : line.stops) {
+                        if (!stop.street.valid()) continue;
+                        const RoadFrontage f = fc.model->frontageOn(stop.street, stop.station, stop.kerb);
+                        if (!f.valid()) continue;
+                        const Vec2 sp = f.on + f.towards * (f.section->carriagewayHalfWidth() + kk.verge);
+                        // (a stop keeps its spot clear: a street tree planted there gives way to it)
+                        constexpr Real kStopClear = 3.0;   // m: the post, the bench and room to stand. [~] An estimate.
+                        out.trees.erase(std::remove_if(out.trees.begin(), out.trees.end(),
+                                                       [&](const StreetTree& t) { return (Vec2(t.base.x, t.base.z) - sp).length() < kStopClear; }),
+                                        out.trees.end());
+                        out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), f.towards, static_cast<uint8_t>(KerbProp::kFirstDataKind + ki)});
+                        add(kinds[ki], sp, f.towards);
+                    }
+            }
+            continue;
+        }
+        for (const StreetPiece& K : pieces) {
+            if (!streetWithPavement(K) || (kk.mainOnly && K.klass == RoadClass::Local)) continue;
+            const Real len = (K.b - K.a).length();
+            const Vec2 dir = pieceDir(K);
             const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(1.5))));
-            for (int k = 0; k <= steps; ++k) {
-                const Real t = static_cast<Real>(k) / steps;
-                const Vec2 sp = kerbPoint(li, t, kk.verge);
-                if (distToJunction(L, sp) < kk.junction || !clearOfRoad(sp, 0.25)) continue;
-                bool crowded = near(kinds[ki], sp, dir, kk.every, true) || near(trees, sp, dir, 1.6, false) ||
-                               near(lamps, sp, dir, 1.4, false) || near(poles, sp, dir, 1.8, false) ||
-                               near(bins, sp, dir, 1.6, false) || near(props, sp, dir, 2.0, false);
-                for (std::size_t kj = 0; kj < kinds.size() && !crowded; ++kj)
-                    if (kj != ki) crowded = near(kinds[kj], sp, dir, 2.0, false);
-                if (crowded) continue;
-                out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)),
-                                     static_cast<uint8_t>(KerbProp::kFirstDataKind + ki)});
-                add(kinds[ki], sp, dir);
+            for (int side = 0; side < 2; ++side) {
+                if (!K.sidewalk[side]) continue;
+                const Real sgn = side == 0 ? Real(1) : Real(-1);
+                const Vec2 n = rightOf(dir) * sgn, kerbDir = dir * sgn;
+                for (int k = 0; k <= steps; ++k) {
+                    const Vec2 c = K.a + (K.b - K.a) * (static_cast<Real>(k) / steps);
+                    const Vec2 sp = kerbPoint(K, c, n, kk.verge);
+                    if (junctionDist(sp) < kk.junction || !clearOfRoad(sp, 0.25)) continue;
+                    bool crowded = near(kinds[ki], sp, kerbDir, kk.every, true) || near(trees, sp, kerbDir, 1.6, false) ||
+                                   near(lamps, sp, kerbDir, 1.4, false) || near(poles, sp, kerbDir, 1.8, false) ||
+                                   near(bins, sp, kerbDir, 1.6, false) || near(props, sp, kerbDir, 2.0, false);
+                    for (std::size_t kj = 0; kj < kinds.size() && !crowded; ++kj)
+                        if (kj != ki) crowded = near(kinds[kj], sp, kerbDir, 2.0, false);
+                    if (crowded) continue;
+                    out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), n, static_cast<uint8_t>(KerbProp::kFirstDataKind + ki)});
+                    add(kinds[ki], sp, kerbDir);
+                }
             }
         }
     }

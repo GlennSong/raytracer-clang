@@ -5,7 +5,6 @@
 #include "road_mesh.h"   // RoadDeckField: the built asphalt the conflicts census measures against
 #include "polygon.h"
 #include "street_furniture.h"
-#include "../../ai/nav_graph.h"
 
 #include <string>
 #include <vector>
@@ -47,7 +46,6 @@ struct CityMapData {
     struct Hub { Vec2 pos; int kind = 0; std::string name; };
     std::vector<Hub> hubs;                 // district hubs (polycentric zoning)
     double hubRadius = 220.0;
-    NavGraph nav;                          // the street map (ADR-0425): the sidewalk census labels a place with its links
     StreetFurniturePlan furniture;         // signal poles + lamp posts
     // The mesher's curb/sidewalk band: closed loops around every asphalt
     // union (exterior outlines and block-interior holes), the band riding

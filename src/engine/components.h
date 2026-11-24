@@ -11,7 +11,7 @@
 #include "player/seat_geometry.h"   // SeatGeometry (Vehicle: where the rider's hands and feet go)
 #include "player/seat_motion.h"     // RideJolt, SeatSway (Passenger: what the seat does to its rider)
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
-#include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
+#include "procgen/city/road_network.h"   // RoadGraph (plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "weather_cycle.h"               // WeatherClimate (DayNightConfig)
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
@@ -992,11 +992,10 @@ struct CityMap {
 // road model for a level. What the readers that only label the roads read: the
 // street names (the model's name attachments), the name signs (attached to the junction arms they stand at, as the
 // loader plans them), the map, and a bus stop's street; and (ADR-0421) which junctions are lit -- the street furniture's
-// signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. Since ADR-0425 the
-// street map carries every node's junction and every link's street, so nothing is tied to the model by position.
+// signal poles, the city sim's signals -- and the junctions and streets the lamps and trees keep to. (The street map
+// made from it, ADR-0425, went with #306: every reader asks the model.)
 struct RoadModel;
 struct ModelJunction;
-struct NavGraph;
 struct LevelRoadModel {
     std::vector<std::shared_ptr<RoadModel>> cities;
     // THE ROAD MODEL OF CITY `c`, and THE JUNCTION `junction` OF IT, by the numbers the street map's nodes and the
@@ -1005,15 +1004,13 @@ struct LevelRoadModel {
         return c >= 0 && static_cast<std::size_t>(c) < cities.size() ? cities[static_cast<std::size_t>(c)].get() : nullptr;
     }
     const ModelJunction* junctionAt(int c, int junction) const;
+    // THE BUILT MODEL (its lanes and lane level, the walks among them): the first city's, when it was built; null when
+    // the level has no lane-built city or its first city is only the planned layer. The one the city sim's people walk
+    // by and its driving drives on (CitySim::setRoads), whether or not the level drives (ADR-0480).
+    std::shared_ptr<RoadModel> builtCity() const;
     // What making the first city's lane level found, in one line (the load's log line and the `lanegraph?` answer):
     // its counts and where it came from, or why there is none.
     std::string laneLevelReport;
-    // THE LEVEL'S STREET MAP (docs/road-model-design.md step 7, ADR-0425): the level-wide routing table, the one graph
-    // every agent routes, drives and walks on. It covers every city in `cities`, in their order, and is built once at
-    // load from each city's planned layer and the drawn deck (roads/street_map.h appendStreetMap). It is shared: the
-    // furniture plan reads it, the city sim copies it and appends its walks. A look-up table: every link and node carries
-    // its ids into the model; nothing in it is saved. Null on a level with no lane-built city.
-    std::shared_ptr<NavGraph> streetMap;
     // The named street nearest `p` over every city (its name; empty when none is within `reach` metres): the model's
     // own question (road_model.h streetNameNear), for a label (a bus stop's street).
     std::string streetNameNear(const Vec2& p, Real reach = 40.0) const;
@@ -1031,11 +1028,6 @@ struct LevelRoadModel {
     bool controlsStated() const;
     // Is this junction's stated control one the signal poles stand for (road_attachments.json, "signal_pole")?
     bool lit(const Place& j) const;
-    // THE SIM'S SIGNALS FROM THE STATED CONTROLS (ADR-0425): each intersection node of the street map `nav` gets its own
-    // junction's light (by the junction id it carries); every other node none. A road file that states no control at all
-    // lights nothing (`stated` out: false then; the loader says what to run). `untied`: intersection nodes carrying no
-    // junction (none on a street map built from the model).
-    void stateSignals(NavGraph& nav, int* untied = nullptr, bool* stated = nullptr) const;
 };
 
 struct AuthoredPlace {
@@ -1312,8 +1304,8 @@ struct CitySimConfig {
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.
     // Empty for levels that don't author any (the generator emits them later).
     std::vector<AuthoredPlace> places;
-    // (THE WALKS -- parks' paths, the campus quad's -- are the road model's walkways, ADR-0476: the citysim reads them
-    // there, street_map.h appendWalkways)
+    // (THE WALKS -- parks' paths, the campus quad's -- are the road model's walkways, ADR-0476: the citysim walks them
+    // as walks of its lane level)
     // LOOPS to run (a sports field's track), closed polylines world XZ: the citysim's jog spots.
     std::vector<std::vector<std::array<double, 2>>> jogLoops;
     // AREAS an activity happens on (a pitch): kind, centre x z, long axis x z, half length, half width.
@@ -1356,8 +1348,7 @@ struct StreetFurniture {
     struct Signal {
         Vec3 base;      // pole foot (on the road deck)
         Vec3 face;      // head faces this way (toward its approaching traffic)
-        int link = -1;  // NavGraph link the signal governs
-        bool shared = false;   // an earlier signal's pole and head (two links on one approach): no head of its own
+        bool shared = false;   // an earlier signal's pole and head (two arms on one approach): no head of its own
         // THE ARM ITS HEAD IS ATTACHED TO in the road model (attachFurniture's `signal_head`, ADR-0421): the city (an
         // index into LevelRoadModel::cities), the model junction and its arm. -1: none (a hand-made road graph, or an
         // approach no arm takes). The ids only: what the head shows is asked of the new driving's lamps there (ADR-0456).
@@ -1366,7 +1357,6 @@ struct StreetFurniture {
     std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
     std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)
     std::vector<Vec3> streetTrees;   // street-tree trunk feet, in their pits on the sidewalk (Scenery instances)
-    int navLinkCount = 0;         // consumer sanity check: same nav build?
     Entity postGroup{};           // the loader's signal-post InstanceGroup
 };
 

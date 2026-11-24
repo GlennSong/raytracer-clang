@@ -23,6 +23,7 @@
 #include "../src/apps/citysim/city_brain.h"
 #include "../src/apps/citysim/city_car.h"
 #include "../src/apps/citysim/city_render.h"
+#include "../src/apps/citysim/trip_plan.h"
 #include "../src/apps/driving/wait_graph.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
@@ -92,6 +93,63 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 "%d with a board, %d with a scooter\n",
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), withBoard, withScooter);
 
+    // A DRIVE ACROSS TOWN BETWEEN THE FREEWAY'S RAMPS IS PRICED ON THE FREEWAY (#306 sweep bug 4: a drive was priced over
+    // the sidewalks, and no walk runs along a freeway). From the street feeding one on-ramp to the street an off-ramp
+    // leads to, the farthest such pair: the trip planner's car leg (planLeg, by the driving's router) has freeway metres.
+    {
+        const engine::RoadModel& m = *d.model();
+        const engine::LaneGraph& g = m.laneLevel;
+        const auto klassOf = [&](uint32_t path) {
+            const engine::ModelStreet* st = m.streetOf(engine::PathId(path));
+            return st ? st->section.klass : engine::RoadClass::Local;
+        };
+        std::vector<uint32_t> feeders, outlets;   // a lane leading onto an on-ramp; a lane an off-ramp leads onto
+        for (uint32_t r = 0; r < g.paths.size(); ++r) {
+            if (klassOf(r) != engine::RoadClass::Ramp || g.paths[r].kind != engine::PathKind::Lane) continue;
+            for (uint32_t n = g.paths[r].next.first; n < g.paths[r].next.end() && n < g.nextPaths.size(); ++n) {
+                const uint32_t o = g.nextPaths[n].index;
+                if (klassOf(o) != engine::RoadClass::Freeway) {
+                    outlets.push_back(o);
+                    continue;
+                }
+                for (uint32_t j = 0; j < g.paths.size(); ++j)
+                    for (uint32_t k = g.paths[j].next.first; k < g.paths[j].next.end() && k < g.nextPaths.size(); ++k)
+                        if (g.nextPaths[k].index == r && klassOf(j) != engine::RoadClass::Ramp && klassOf(j) != engine::RoadClass::Freeway)
+                            feeders.push_back(j);
+            }
+        }
+        engine::Vec2 from, to;
+        engine::Real apart = -1;
+        for (const uint32_t f : feeders)
+            for (const uint32_t o : outlets) {
+                const engine::Vec2 a = g.pointAt(engine::PathId(f), g.paths[f].length * 0.5);
+                const engine::Vec2 c = g.pointAt(engine::PathId(o), g.paths[o].length * 0.5);
+                if ((a - c).length() > apart) {
+                    apart = (a - c).length();
+                    from = a;
+                    to = c;
+                }
+            }
+        citysim::TravelCatalog cat;
+        citysim::TravelMode car;
+        car.name = "car";
+        car.roads = true;
+        cat.modes = {car};
+        citysim::RoadKind streets, freeway;
+        streets.name = "streets";
+        streets.classes = {engine::RoadClass::Arterial, engine::RoadClass::Collector, engine::RoadClass::Local, engine::RoadClass::Ramp};
+        freeway.name = "freeway";
+        freeway.classes = {engine::RoadClass::Freeway};
+        cat.roadKinds = {streets, freeway};
+        const engine::roads::RouteWalker walker = engine::roads::bindWalker(m, "walker", 1.4);
+        citysim::TripLeg leg;
+        const bool priced = apart > 0 && citysim::planLeg(citysim::TripNetwork{&m, &walker, &d}, cat, 0, from, to, leg);
+        const engine::Real onFreeway = priced ? citysim::kindMetres(cat, leg, "freeway") : 0;
+        std::printf("    [crowd] across town by the freeway: %zu on-ramp feeders, %zu off-ramp outlets; (%.0f %.0f) -> (%.0f %.0f), "
+                    "%.0f m apart: a drive of %.0f m in %.2f min, %.0f m of it on the freeway\n",
+                    feeders.size(), outlets.size(), from.x, from.y, to.x, to.y, apart, leg.metres, leg.minutes, onFreeway);
+        CHECK(priced && onFreeway > 0);
+    }
     // THE DAY, minute by minute
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
     int mostOnRoad = 0, mostOnRoadAt = 0, ringsSeen = 0, busyMinutes = 0;
@@ -160,7 +218,7 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 if (off > farthestFromKerb) {
                     farthestFromKerb = off;
                     farthestFromKerbWho = static_cast<int>(&a - sim.agents().data());
-                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+                    const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
                     char line[200];
                     std::snprintf(line, sizeof line, "minute %d: hold why %d, crosswalk %d, to hold %.2f m, to far %.2f m", minute,
                                   sim.holdWhyOf(farthestFromKerbWho), a.crosswalkAt, x.toHold, x.toFar);
@@ -239,6 +297,14 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                     static_cast<unsigned long long>(tc.crosswalkStandOffs), longestLitTicks * kStep, longestLitCar,
                     longestLitJunction);
     }
+    // WHAT THE PLANS PUT ON THE FREEWAY (#306 sweep bug 4): legs by car priced and chosen, and those with metres on it
+    {
+        const citysim::brain::PlanRoadCounts rc = b.planRoadCounts();
+        std::printf("    [crowd] legs by car: priced %llu (on the freeway %llu, %.1f km), chosen %llu (on the freeway %llu, %.1f km)\n",
+                    static_cast<unsigned long long>(rc.pricedLegs), static_cast<unsigned long long>(rc.pricedOnFreeway),
+                    rc.pricedFreewayMetres / 1000.0, static_cast<unsigned long long>(rc.chosenLegs),
+                    static_cast<unsigned long long>(rc.chosenOnFreeway), rc.chosenFreewayMetres / 1000.0);
+    }
     const driving::WaitReport end = d.waitReport();
     const uint64_t hash = crowdHash(b, sim, world);
     std::printf("    [crowd] at the end: %zu rings of waits (%u gridlocks, %u deadlocks); the most cars on the road at once %d "
@@ -249,6 +315,16 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused), static_cast<unsigned long long>(hash));
+    {
+        const driving::Driving::KerbMoveCounts& k = d.kerbMoveCounts();
+        std::printf("    [crowd] kerb spaces: pulled out of %llu, pulled into %llu, trips that ended in the lane instead %llu; "
+                    "handed between space and driving, the farthest moved %.3f m (put in a space, not driven in: %u)\n",
+                    static_cast<unsigned long long>(k.pulledOut), static_cast<unsigned long long>(k.pulledIn),
+                    static_cast<unsigned long long>(k.stoppedInLane), static_cast<double>(b.counts().worstKerbHandOver), b.counts().putInSpace);
+    }
+    std::printf("    [crowd] contact: %llu new contacts, %llu crashes, %llu wrecks, %llu cleared\n",
+                static_cast<unsigned long long>(d.crashCounts().contacts), static_cast<unsigned long long>(d.crashCounts().crashes),
+                static_cast<unsigned long long>(d.crashCounts().wrecks), static_cast<unsigned long long>(d.crashCounts().cleared));
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
 
     // NO RING OF WAITS AT ANY MINUTE: a ring is cars each waiting on the next, which nothing can end (the wait-for graph,
@@ -260,7 +336,7 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 static_cast<unsigned long long>(kerbWaitSamples), farthestFromKerb, farthestFromKerbWho);
     if (farthestFromKerb > kAtTheKerbEnd && farthestFromKerbWho >= 0) {
         const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(farthestFromKerbWho)];
-        const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
+        const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
         std::printf("    [crowd]   then: %s\n", farthestFromKerbWhy.c_str());
         std::printf("    [crowd]   it: %s | crossing ahead: found %d crosswalk %u from end %d, to hold %.2f, to far %.2f; at %d on %d; hold why %d\n",
                     sim.describeAgent(farthestFromKerbWho).substr(0, 200).c_str(), x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold,
@@ -303,24 +379,88 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // -> 426, hash 0xf0003605a4cb6ba2 -> 0xb67879f5b6ec7210; rings still 0. Walkers waiting away from a kerb end 75.45%
     // -> 62.68% (still failing, above). Not pinned, looked at: the longest stand 341 s (car 123) -> 563 s (car 159,
     // junction 93, from minute 15).
+    // AND AGAIN at the switch to the one router (#306 piece 6 W3, ADR-0480): people walk the road model's walks by
+    // findWalkRoute, from and to their places' frontage, and wait at a crosswalk's kerb end where their route crosses, so
+    // every walker's day and every driver's stops for them moved. The most on the road 88 at minute 11 -> 80 at minute
+    // 10, busy minutes 12 -> 8, trips 233 -> 263, parked 179 -> 217, walks blocked 1 -> 0, arrivals 426 -> 455, hash
+    // 0xb67879f5b6ec7210 -> 0xcb6bf4524e6ee584; rings, no plan, another place, errors, refused still 0. Walkers waiting
+    // away from a kerb end 62.68% -> 4.38%, so the under-5% check above passes for the first time. Not pinned, looked
+    // at: the longest stand 563 s -> 166 s (car 169).
+    // AND AGAIN when the crowd maker was made to ask what the brain and the sim ask (ADR-0480, W3b): a place is put
+    // only where its stand joins the largest part of the walks (CitySim::walkJoin; it asked the street map, which
+    // nobody walks any more), and a home only where its household's cars have kerb spaces free in the brain's own list
+    // (kerbSpacesOffered, from the marker's stated frontage), which it then holds. Places drawn again draw the seeded
+    // stream on, so the households' car counts moved: cars 229 -> 209 (with one 246 -> 222). The most on the road 80 ->
+    // 57, both at minute 10; busy minutes 8 -> 3; trips 263 -> 201; parked 217 -> 164; arrivals 455 -> 487; hash
+    // 0xcb6bf4524e6ee584 -> 0xbacfb8b215f04aa1 (with walkers on a crossing never held behind a queue past it,
+    // computeGaps; without that, the same counts and 0xe7299b584c61b745). Rings, no plan, another place, blocked,
+    // errors, refused still 0. Away from a kerb end 4.38% -> 3.24%. Not pinned, looked at: the longest stand 166 s ->
+    // 193 s (car 176).
+    // AND AGAIN when the street map went (#306, the sweep): the sim's own walkers -- the city's people besides the
+    // brain's residents -- rest at and go to walk points on the road model's walks (city_walk_points.h), not
+    // street-map nodes, so their days, and the drivers' stops for them, moved. The most on the road 57 at minute 10
+    // -> 87 at minute 9; busy minutes 3 -> 16; trips 201 -> 313; parked 164 -> 238; arrivals 487 -> 470; hash
+    // 0xbacfb8b215f04aa1 -> 0xf0e62a8d7fffa45b. Away from a kerb end 3.24% -> 1.93%. STILL FAILING, on the known-bugs
+    // list: ONE RING OF WAITS (a deadlock) from about minute 30 (the rings checks above), and the longest stand
+    // 193 s -> 1247.6 s (car 109).
+    // And its second half (the street furniture planned on the road model: one signal pole per arriving arm, a
+    // sidewalk's width back from its mouth; lamps and kerb life along each kerb, so the walkers' obstacles stand
+    // elsewhere): the most on the road 87 at minute 9 -> 89 at minute 10; parked 238 -> 234; arrivals 470 -> 472; hash
+    // 0xf0e62a8d7fffa45b -> 0xec0a6a6e55e90ddc; away from a kerb end 1.93% -> 1.95%. The ring of waits and the longest
+    // stand (1247.6 s, car 109) are the same.
+    // RE-PINNED (ADR-0480, the sweep's bugs, 1: every crosswalk's walk signal walks in some phase): trips 313 -> 315,
+    // parked 234 -> 237, arrivals 472 -> 476, hash 0xec0a6a6e55e90ddc -> 0xd88b08b351744711; away from a kerb end 1.95% ->
+    // 2.06%; the most on the road (89 at minute 10) and busy minutes (16) the same. The ring of waits and the longest
+    // stand (1247.6 s, car 109) are the same (the next bug on the list).
+    // RE-PINNED (ADR-0480, the sweep's bugs, 3): the ring is gone. Car 102 turning far from the south waited inside
+    // junction 7 to give way, further on, to car 136 going straight on, which stood behind it on the stretch the two
+    // connectors share as they leave one lane; car 109 then waited for car 102. A car following another along a split's
+    // stretch is now an arrow the resolver never turns round. Rings 1 -> 0 (from minute 11); the longest stand 1247.6 s
+    // (car 109) -> 685.6 s (car 68: junction 7's north arm, losing its greens to people crossing, a give-way and no room
+    // beyond -- no ring); trips 315 -> 321; parked 237 -> 257; arrivals 476 -> 490; busy minutes 16 -> 14 (the most on
+    // the road the same, 89 at minute 10); away from a kerb end 2.06% -> 2.31%; hash 0xd88b08b351744711 ->
+    // 0x108c0a6b2babd46b.
+    // RE-PINNED (ADR-0480, the sweep's bugs, 4: a drive priced by the driving's router, kerb lane to kerb lane, at the
+    // limit each road is driven at): the most on the road 89 -> 90 (still minute 10); trips 321 -> 322; parked 257 ->
+    // 261; arrivals the same, 490; away from a kerb end 2.31% -> 2.16%; hash 0x108c0a6b2babd46b -> 0xa7a50cd8f2bb2c29.
+    // 463 car legs priced, 365 chosen, none on the freeway: the day's trips never pay for its 420 m ramps (the drive
+    // across town between them, checked above, does).
+    // RE-PINNED (sitting 5: pulling out of and into kerb spaces on the driving's own curve, not a drawn 2.5 s slide): a car
+    // is placed standing in its space and sets off at once, driving out on the lane change's curve; a trip ends with the
+    // car driven into its space and left where it came to rest. Trips 322 -> 326, arrivals 490 -> 494 (no 2.5 s slide
+    // before each trip); parked the same, 261; the most on the road (90 at minute 10) and busy minutes (14) the same;
+    // rings still 0; away from a kerb end 2.16% -> 2.30%; hash 0xa7a50cd8f2bb2c29 -> 0xe8da33de4e20c514. Pinned now too:
+    // every trip ended in its space (none in the lane) and no car moved more than a centimetre between its space and the
+    // driving (4 mm). Not pinned, looked at: the longest stand 685.6 s -> 690.4 s (the same car 68, junction 7).
+    // RE-PINNED (sitting 5: lane changes on by default): homes are placed where a class's routes reach, which lane
+    // changes widen, so cars 209 -> 215 (with one 222 -> 233); trips 326 -> 337, parked 261 -> 272, arrivals 494 -> 473
+    // (more drive, fewer walk), the most on the road 90 at minute 10 -> 98 at minute 8, busy minutes 14; rings 0; every
+    // trip still ends in its space; hash 0xe8da33de4e20c514 -> 0x76038c965dbef7af. Longest stand 690.4 -> 457.3 s.
+    // RE-PINNED (sitting 6: junctions by judgement, no ring order, no room grants): parked 272 -> 271, the rest the same;
+    // rings 0; hash 0x76038c965dbef7af -> 0xf7e7889934759abd.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
-        CHECK(b.cars().size() == 229u);
-        CHECK(withCar == 246);
+        CHECK(b.cars().size() == 215u);
+        CHECK(withCar == 233);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 88);
-        CHECK(mostOnRoadAt == 11);
-        CHECK(busyMinutes == 12);
-        CHECK(b.counts().tripsBegun == 233u);
-        CHECK(b.counts().parkedReports == 179u);
-        CHECK(b.counts().walksBlocked == 1u);
+        CHECK(mostOnRoad == 98);
+        CHECK(mostOnRoadAt == 8);
+        CHECK(busyMinutes == 14);
+        CHECK(b.counts().tripsBegun == 334u);
+        CHECK(b.counts().parkedReports == 269u);
+        CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 426u);
+        CHECK(b.machine()->counts().arrivals == 470u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xb67879f5b6ec7210ull);
+        // 0xf7e7889934759abd -> 0x5dba6ae139896c49 (the alpha review, P1-1): the lane-change safety check looked a car up
+        // by its id as if it were its record, so with the crowd's sparse ids it read a stranger (or no one) as the
+        // follower behind a gap -- now the real follower: trips 337 -> 334, parked 271 -> 269, arrivals 473 -> 470
+        CHECK(hash == 0x5dba6ae139896c49ull);
+        CHECK(d.kerbMoveCounts().pulledIn == 269u && d.kerbMoveCounts().stoppedInLane == 0u);
+        CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
     // longest, in full
@@ -331,16 +471,12 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
             if (b.stateName(who) == "no_way") {
                 const Vec2 at = sim.agents()[static_cast<std::size_t>(b.residentAgent(who))].pos;
                 const engine::RoadFrontage f = d.model()->frontageAt(at);
-                const int node = sim.graph()->nearestNode(at);
-                int walkLinks = 0, links = 0;
-                for (const engine::NavLink& L : sim.graph()->links)
-                    if (L.from == node || L.to == node) {
-                        ++links;
-                        walkLinks += L.walkable ? 1 : 0;
-                    }
-                std::printf("    [crowd] nearest node %d at (%.1f, %.1f): %d links, %d walkable\n", node,
-                            sim.graph()->nodes[static_cast<std::size_t>(node)].x, sim.graph()->nodes[static_cast<std::size_t>(node)].y, links,
-                            walkLinks);
+                engine::WalkPoint joined;
+                bool cutOff = false;
+                const bool joins = sim.walkJoin(at, joined, &cutOff);
+                std::printf("    [crowd] where it stands joins %s%s\n",
+                            joins ? ("walk " + std::to_string(joined.walk.index)).c_str() : "no walk",
+                            joins && cutOff ? " (cut off from the largest part)" : "");
                 std::printf("    [crowd] no way: %s | street %s, class %s\n      trace: %s\n", b.describe(who).c_str(),
                             f.street.valid() ? d.model()->streets[f.street.index].id.c_str() : "?",
                             f.section ? f.section->roadClass.c_str() : "?", b.traceText(who).c_str());
@@ -372,15 +508,14 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                 if (sim.agents()[i].uid == t->id) {
                     const citysim::Agent& a = sim.agents()[i];
                     std::printf("    [crowd]   agent %zu: %s\n", i, sim.describeAgent(static_cast<int>(i)).c_str());
-                    const citysim::CitySim::CrossingAhead x = sim.crossingAhead(a);
-                    std::printf("    [crowd]   its crossing ahead: governed %d found %d crosswalk %u from end %d, to hold %.2f m, to far %.2f m; "
-                                "hold why %d\n", x.governed ? 1 : 0, x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold, x.toFar,
+                    const citysim::CitySim::CrossingAhead x = sim.nextCrossing(a);
+                    std::printf("    [crowd]   its next crossing: found %d crosswalk %u from end %d, to hold %.2f m, to far %.2f m; "
+                                "hold why %d\n", x.found ? 1 : 0, x.crosswalk, x.fromEnd, x.toHold, x.toFar,
                                 sim.holdWhyOf(static_cast<int>(i)));
-                    for (std::size_t k = 0; k < a.route.links.size(); ++k) {
-                        const engine::NavLink& L = sim.graph()->links[static_cast<std::size_t>(a.route.links[k])];
-                        std::printf("    [crowd]     leg %zu: link %d, street %d, junction %d, %.1f m, from node %d (junction %d) to %d "
-                                    "(junction %d)\n", k, a.route.links[k], L.street, L.junction, L.length, L.from,
-                                    sim.graph()->junctionOf(L.from), L.to, sim.graph()->junctionOf(L.to));
+                    for (std::size_t k = 0; k < a.route.steps.size(); ++k) {
+                        const engine::roads::WalkStep& s = a.route.steps[k];
+                        std::printf("    [crowd]     step %zu: walk %u (%s), %.1f to %.1f m%s\n", k, s.walk.index,
+                                    sim.roads()->walkKind(s.walk).c_str(), s.from, s.to, s.forward ? "" : ", walked back");
                     }
                 }
         }

@@ -4,6 +4,9 @@
 
 #include "test_framework.h"
 
+#include <nlohmann/json.hpp>
+#include <cmath>
+
 #include "brain_fakes.h"
 #include "include_walk.h"
 
@@ -89,16 +92,18 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     // (20 events and 2 intents since ADR-0441: `space_taken`, and `be_outside_at` for a place with no building)
     // (22 states and 22 events since ADR-0443: `no_way`, a person with no way there who tries again; its clock's
     // `try_again`; and `things_changed`, sent when something a person plans with changes)
-    CHECK(table.states.size() == 22u && table.events.size() == 22u && table.intents.size() == 2u);
+    // (24 events since ADR-0484: `boarded` and `alighted`, the ride skill's reports)
+    CHECK(table.states.size() == 22u && table.events.size() == 24u && table.intents.size() == 2u);
     CHECK(table.intents[0].name == "be_at" && table.intents[1].name == "be_outside_at");
     CHECK(table.states[table.intents[1].arrive].name == "standing");
     CHECK(table.on[table.state("parking")][table.event("space_taken")].verb == Verb::Go);
     CHECK(table.on[table.state("parking")][table.event("space_taken")].state == table.state("driving"));
     std::string built, notBuilt;
     for (const StateRow& s : table.states) (s.fns.built ? built : notBuilt) += s.name + " ";
-    CHECK(built == "walking on_small_wheels pulling_out driving parking indoors standing no_way knocked_down stuck crashed "
-                   "possessed released ");
-    CHECK(notBuilt == "waiting boarding riding alighting hailing using_spot group_activity working_post asleep ");
+    // (`waiting` and `riding` built since ADR-0484: the bus)
+    CHECK(built == "walking on_small_wheels pulling_out driving parking waiting riding indoors standing no_way knocked_down "
+                   "stuck crashed possessed released ");
+    CHECK(notBuilt == "boarding alighting hailing using_spot group_activity working_post asleep ");
     CHECK(table.states[table.start].name == "indoors" && table.states[table.noPlan].name == "no_way");
     // ADR-0443: a person with no way there waits a minute (the data's `seconds`) and plans again with every way allowed;
     // they plan again at once when something they plan with changes; everyone else ignores that
@@ -144,8 +149,18 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     const bool read = engine::loadTravelCatalog(vm, travel, &err);
     if (!read) std::printf("    %s\n", err.c_str());
     CHECK(read);
-    CHECK(travel.modes.size() == 4u && travel.find("skateboard") == 2 && travel.find("scooter") == 3);
-    if (travel.modes.size() != 4u) return;
+    // (and the bus since ADR-0484: on the bus lines, beginning by waiting at a stop)
+    CHECK(travel.modes.size() == 5u && travel.find("skateboard") == 2 && travel.find("scooter") == 3 && travel.find("bus") == 4);
+    if (travel.modes.size() != 5u) return;
+    CHECK(travel.modes[4].bus && !travel.modes[4].roads && travel.modes[4].beginsIn == "waiting" && travel.modes[4].speed == 0);
+    // ...its start minutes the mean wait: half the bus service's headway (assets/data/bus_service.json), the two files
+    // held together
+    {
+        const nlohmann::json service = nlohmann::json::parse(fileText("assets/data/bus_service.json"), nullptr, false);
+        CHECK(!service.is_discarded() && service.contains("headway_minutes"));
+        if (!service.is_discarded() && service.contains("headway_minutes"))
+            CHECK(std::fabs(travel.modes[4].startMinutes - service["headway_minutes"].get<double>() * 0.5) < 1e-9);
+    }
     CHECK(travel.traits.size() == 2u && travel.trait("has_board") == 0 && travel.trait("has_scooter") == 1);
     CHECK(travel.modes[2].needsTrait == 0 && travel.modes[3].needsTrait == 1 && travel.modes[0].needsTrait == -1);
     CHECK(!travel.modes[2].roads && !travel.modes[2].ownVehicle && !travel.modes[3].roads && !travel.modes[3].ownVehicle);
@@ -156,8 +171,9 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     const bool bound = bindWays(travel, table, &err);
     if (!bound) std::printf("    %s\n", err.c_str());
     CHECK(bound);
-    CHECK(table.ways.size() == 4u);
-    if (table.ways.size() != 4u) return;
+    CHECK(table.ways.size() == 5u);
+    if (table.ways.size() != 5u) return;
+    CHECK(table.states[table.ways[4].begins].name == "waiting");   // (the bus, ADR-0484)
     CHECK(table.states[table.ways[0].begins].name == "walking");
     CHECK(table.states[table.ways[1].begins].name == "pulling_out");
     CHECK(table.states[table.ways[2].begins].name == "on_small_wheels");
@@ -299,7 +315,8 @@ TEST_CASE(brain_data_that_disagrees_with_the_code_is_refused_by_file_and_key) {
 }
 
 TEST_CASE(brain_a_plan_over_the_cap_is_refused_and_the_next_cheapest_taken) {
-    const engine::NavGraph nav = longStreet();
+    const StreetNet street = longStreetNet();
+    const TripNetwork nav = street.net();
     const TravelCatalog travel = testTravel();
     // the fixed form holds 8 legs: a 9-leg way is refused, by the file and the row
     TripRequest ask;
@@ -353,7 +370,7 @@ TEST_CASE(brain_a_state_that_is_not_built_refuses_entry_and_says_so) {
     // person goes another way
     {
         TravelCatalog travel = testTravel();
-        travel.modes[kSkateboard].beginsIn = "riding";
+        travel.modes[kSkateboard].beginsIn = "boarding";
         Lab lab(true, nullptr, &travel);
         CHECK(lab.ok);
         if (!lab.ok) return;
@@ -365,7 +382,7 @@ TEST_CASE(brain_a_state_that_is_not_built_refuses_entry_and_says_so) {
         CHECK(lab.stateName(who) == "walking");
         CHECK(lab.machine->agent(who).ruledOut == (1u << kSkateboard));
         CHECK(lab.machine->counts().errors == 1u && lab.machine->counts().plans == 2u);
-        CHECK(std::string(lab.machine->lastError()) == "brain: agent 0: `riding` is not built yet, so its way is ruled out");
+        CHECK(std::string(lab.machine->lastError()) == "brain: agent 0: `boarding` is not built yet, so its way is ruled out");
     }
 }
 
@@ -374,9 +391,8 @@ TEST_CASE(brain_a_state_that_is_not_built_refuses_entry_and_says_so) {
 // the renderer, the entity world and the physics wrapper are not on it.
 TEST_CASE(brain_includes_nothing_past_its_boundary) {
     const std::vector<std::string> allowed = {
-        "apps/citysim/trip_plan.h",                 // THE trip planner, which the brain plans with
-        "engine/ai/nav_graph.h",                    // ... the street map it plans on
-        "engine/ai/pathfind.h",                     // ... and its router
+        "apps/citysim/trip_plan.h",                 // THE trip planner, which the brain plans with (over the road
+                                                    // model's walks, by the one router below)
         "engine/procgen/city/road_network.h", "engine/procgen/city/road_spec.h", "engine/procgen/city/polygon.h",
         "engine/procgen/city/roads/road_model.h", "engine/procgen/city/roads/road_model_parts.h",
         "engine/procgen/city/roads/walkway.h",      // the road model's walkways (ADR-0475; their own header since ADR-0476)

@@ -99,22 +99,21 @@ struct CityCarLink {
 enum class CityCarPhase : uint8_t {
     Standing,         // in a kerb space, or left standing in a lane
     WaitingForRoom,   // in its space, its driver aboard, waiting for the kerb lane to be clear
-    EasingOut,        // placed in the kerb lane; drawn sliding out of the space
-    OnRoad,           // the driving's
-    EasingIn,         // out of the driving; drawn sliding into its space
+    OnRoad,           // the driving's (pulling out of its space and into one included: on the driving's curve)
 };
 struct CityCarKept {
     brain::PlaceRef standing;                 // where it stands, or last stood (not valid: an outsider has it)
     brain::AgentId heldBy = brain::kNoAgent;  // a resident, the brain's outsider (city_brain.cpp kOutsider), or nobody
     bool stranded = false;                    // left where no lane is beside it: nobody can drive it from there
     CityCarPhase phase = CityCarPhase::Standing;
-    // the slide between its space and the lane (while EasingOut or EasingIn)
-    Vec2 easeFromPos, easeFromHeading, easeToPos, easeToHeading;
-    Real easeT = 0;
     // a trip to begin once it is in the lane: who drives it, from and to where
     bool tripWanted = false;
     brain::AgentId tripPerson = brain::kNoAgent;
     brain::PlaceRef tripFrom, tripTo;
+    // WHERE THE DRIVING LEFT IT in its space (its front on the kerb lane, as it came to rest pulling in): it pulls out
+    // from there, so it never moves between the two. Not valid: it was put in its space some other way, and pulls out
+    // from the space's own place.
+    driving::PathPoint spaceFront;
 };
 
 struct CityCarOnLane {
@@ -122,6 +121,7 @@ struct CityCarOnLane {
     Real roadYFrom = 0, roadY = 0;   // the lane graph's height under the body's middle: as the tick began, and now
     Real speed = 0;                  // the driving's, after the last tick
     bool braking = false;            // its brake lamps are lit (city_driving.h kBrakeLampDecel)
+    int8_t signal = 0;               // its indicator: -1 its driver's left, +1 its right (Driving::signalSide)
     bool driven = false;             // on a trip (a car left standing in a lane is not)
     bool fresh = true;               // just put on the road: its road height is not blended from an earlier one
 };
@@ -141,6 +141,25 @@ struct CityCarRoams {
     uint32_t startDraws = 0;   // places picked to put the car down
     uint32_t tripDraws = 0;    // ...and destinations picked
 };
+
+// A BUS ON ITS LINE (ADR-0483): one of the hand-over's own cars (it has a CityCarRoams too) whose trips are not picked
+// at random: it is put down at a stop of its line (the road model's busStopLane) and drives to the next, stands there
+// `dwell` seconds with its doors open, and drives on, round its line for ever. `line` indexes the road model's
+// busLines; `stop` is the stop it is driving to (or standing at, while `standing`).
+struct CityBusRuns {
+    uint32_t line = 0;
+    uint32_t stop = 0;
+    bool standing = false;   // at `stop`, its doors open
+    Real dwellLeft = 0;      // seconds left standing there
+    uint64_t calls = 0;      // stops called at since it was put down
+    Real driving = 0;        // seconds since it set off for `stop` (the leg's time so far, on the road)
+    Real freeFlow = 0;       // ...and the leg's time at the free-flow speed (its route's), for the timetable's measure
+};
+
+// THE PLAYER RIDES IN IT (ADR-0486): a bus with the player aboard as a passenger (BusRideSystem sets and clears it). The
+// near tier leaves it on the driving -- never a physical car, which would push the passenger's capsule out of its solid
+// body -- and hands it back if it was one.
+struct CityCarCarriesPlayer {};
 
 // A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.
 bool carNowhere(engine::World& world, engine::Entity e);

@@ -760,7 +760,8 @@ int l_path_length(lua_State* L) { lua_pushnumber(L, MeshBuilder::pathLength(chec
 // mesh.cabin_interior{ front_z, rear_z, half_width, floor_y, roof_y, rows = 2 (0: a city bus's saloon), seat_pitch,
 //   back_angle, hip_height, steer_diameter, trim_color, seat_color, driver_on_left = true, standing = false (a bus's
 //   standing-room layout: benches along the walls) }
-//   -> { mesh =, driver_seat = {x,y,z}, seats = { {x,y,z}... }, doors = { ... }, rear_hip = {x,y,z} | nil }
+//   -> { mesh =, driver_seat = {x,y,z}, seats = { {x,y,z}... }, seat_facing = { {x,y,z}... }, doors = { ... },
+//        rear_hip = {x,y,z} | nil }
 // The cabin furniture (car_interior.h buildCarInterior) for a kit body's hollow: a car's seats, dash and wheel, or a
 // bus's saloon -- the driver's cab, the seat pairs either side of the aisle, the doors, the stanchions -- and the hip
 // and door points riders are posed from.
@@ -783,8 +784,8 @@ int l_mesh_cabin_interior(lua_State* L) {
     ip.driverOnLeft = optBoolField(L, 1, "driver_on_left", ip.driverOnLeft);
     ip.busStanding = optBoolField(L, 1, "standing", ip.busStanding);
     Vec3 sgrp(0, 0, 0);
-    std::vector<Vec3> seats, doors, rearHip;
-    auto m = std::make_shared<RenderMesh>(buildCarInterior(cabin, ip, &sgrp, &seats, &doors, &rearHip));
+    std::vector<Vec3> seats, doors, rearHip, facing;
+    auto m = std::make_shared<RenderMesh>(buildCarInterior(cabin, ip, &sgrp, &seats, &doors, &rearHip, &facing));
     lua_createtable(L, 0, 5);
     pushMesh(L, m);
     lua_setfield(L, -2, "mesh");
@@ -799,6 +800,7 @@ int l_mesh_cabin_interior(lua_State* L) {
         lua_setfield(L, -2, key);
     };
     list(seats, "seats");
+    list(facing, "seat_facing");   // (beside each seat: the way its rider faces, ADR-0485)
     list(doors, "doors");
     if (!rearHip.empty()) {
         pushVec3(L, rearHip.front());

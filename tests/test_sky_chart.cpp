@@ -14,7 +14,7 @@ using namespace engine;
 // Positions as numbers: bearing and altitude, the day's arcs, the horizon
 // crossings — held against the analytic sun and the moon's phase geometry.
 
-TEST_CASE(sky_chart_point_uses_the_street_maps_orientation) {
+TEST_CASE(sky_chart_point_uses_the_city_maps_orientation) {
     // East is right, north is up the page (south down), zenith the centre.
     ChartPoint e = skyChartPoint(Vec3(1, 0, 0));
     CHECK_APPROX(e.x, 1.0, 1e-9);

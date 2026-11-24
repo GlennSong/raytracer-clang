@@ -11,7 +11,8 @@
 -- from the numbers below (issue #261): stop at a red, stop at a yellow if you comfortably can, turn on red after a full
 -- stop where `turn_on_red` allows; a far turn on a plain green may wait inside the junction for a gap. Nobody enters a
 -- junction it cannot leave (issue #264): room beyond is asked for and granted one car at a time, and a car refused it
--- waits at the line (the "no room beyond" rule). No lane changes yet.
+-- waits at the line (the "no room beyond" rule). A car whose route needs another lane moves over into a safe gap (the
+-- "change lanes for my route" rule, sitting 5).
 --
 -- Every number says where it came from. "[~]" marks a guess to tune against the lab's measurements, not a figure
 -- from a source. The California Vehicle Code (CVC) is read with near turn / far turn and kerb side in place of its
@@ -269,6 +270,25 @@ rule_set = {
     -- the crossing is stopped for however hard that takes). The same comfortable braking the yellow is timed with.
     crosswalk_deceleration = { 10.0, unit = "ft/s2",
       source = "ITE kinematic change interval's deceleration (10 ft/s2), as signal_deceleration above: a comfortable stop; [~] its use here a judgement" },
+    -- LANE CHANGES (sitting 5; src/apps/driving/lane_change.h). A change is safe when, after it, the car behind in the new
+    -- lane need brake no harder than this to keep behind me by its own following, and nor need I behind the car ahead:
+    -- MOBIL's safety criterion.
+    lane_change_safe_brake = { 4.0, unit = "m/s2",
+      source = "Kesting, Treiber & Helbing 2007, General lane-changing model MOBIL for car-following models (TRR 1999), eq. 2 (the new follower's acceleration >= -b_safe) and table 1 (b_safe = 4 m/s2, well below the 9 m/s2 a car can brake on a dry road)" },
+    -- The move across, from one lane's line to the next.
+    lane_change_seconds = { 4.0, unit = "s",
+      source = "[~] driving-model-design.md section 10's 3-4 s; field studies of lane-change duration report means of 4-5 s (from memory, unverified): to tune against what the lab shows" },
+    -- Within this of my last chance with no gap, I come level with one by dropping back behind the car closing it
+    -- (design section 6: a joining car slows or speeds up along a ramp instead of stopping at its end).
+    drop_back_within = { 150, unit = "m",
+      source = "[~] a judgement: about a ramp's acceleration lane (UK motorway slip roads run ~200 m, from memory); to tune against the lab" },
+    -- CONTACT AND CRASHES (sitting 7; src/apps/driving/contact.h, driving.h CrashCounts). A contact between two cars'
+    -- bodies is a crash with this chance (a seeded roll); otherwise they go on. A crash leaves the cars as wrecks where
+    -- they stand, for this long, then they are cleared.
+    crash_chance = { 0.02, unit = "ratio",
+      source = "Glenn, 2026-11-16 (two-drivers-meeting-design.md section 12, sitting 7): a 1-in-50 roll" },
+    wreck_seconds = { 600, unit = "s",
+      source = "Glenn, 2026-11-16 (sitting 7): wrecks stand 10 game minutes, then are cleared (a tow truck later)" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts
@@ -362,6 +382,23 @@ rule_set = {
       when = { all = { "thing_ahead", { "not", "room_to_pass" }, { "waited_for_it", ">=", "wait_before_another_way" },
                        { "thing_stood", ">=", "wait_before_another_way" } } },
       give = { way = "another" } },
+    -- CHANGE LANES FOR MY ROUTE (sitting 5): my route needs the lane beside, and there is a safe gap in it. With no gap,
+    -- I keep to my lane; past my last chance I am routed again from it (the move step's, not a rule: I do not stop in a
+    -- through lane to wait for one while another way on exists).
+    { name = "change lanes for my route", when = { all = { "wrong_lane", "gap_beside" } }, give = { lane = "change" } },
+    -- ...save where nothing leads on from my lane at all: then I stop where a move across still fits and wait there for
+    -- a gap, as a driver boxed into a lane that ends must.
+    { name = "wait to change lanes", when = "must_wait_to_change", give = { stop_at = "change_wait_line" } },
+    -- LETTING IN (design section 6): a car just ahead in the lane beside indicates into mine -- it must get over, and
+    -- has no gap -- so I ease off and keep behind where it would be, one car at a time (zipper: having let one in, not
+    -- the next until that one is across). UK Highway Code rule 134 (in queues, let a merging car in; take turns where
+    -- lanes merge), from memory. [~] every driver lets in; by personality is owed.
+    { name = "let in", when = "car_wanting_in", give = { let_in = "yes" } },
+    -- DROPPING BACK FOR A GAP: my route needs the lane beside, my last chance nears, and a car there closes the gap; I
+    -- ease back behind it rather than drive on to my lane's end (zipper: the car behind it lets me in, "let in" above).
+    { name = "drop back for a gap",
+      when = { all = { "wrong_lane", "car_blocking_my_gap", { "last_chance", "<", "drop_back_within" } } },
+      give = { gap = "drop_back" } },
   },
 
   -- THE PLACEMENT POLICY (issue #240; ADR-0422): how the city planner chooses each junction's control and each road's

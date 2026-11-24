@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
+#include <tuple>
 
 namespace citysim {
 
@@ -42,8 +44,8 @@ struct Run {
 
 }  // namespace
 
-bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const CrowdUsable& usable, uint32_t seed, CrowdMade& out,
-               std::string* why) {
+bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const CrowdUsable& usable, const CrowdSpaces& spaces,
+               uint32_t seed, CrowdMade& out, std::string* why) {
     const auto refuse = [&](const std::string& reason) {
         if (why) *why = "crowd: " + reason;
         return false;
@@ -76,11 +78,29 @@ bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const Crow
     // ...dealt to the places in a seeded order (Fisher-Yates, one draw a place)
     for (std::size_t i = kindOfPlace.size(); i > 1; --i) std::swap(kindOfPlace[i - 1], kindOfPlace[static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
 
+    // THE MOST CARS A HOUSEHOLD OF `members` CAN BE DEALT (below): what a home holds kerb spaces for
+    int mostCars = 0;
+    for (const CrowdShare& c : spec.carsPerHousehold)
+        if (c.share > 0) mostCars = std::max(mostCars, c.value);
+    // the kerb spaces held by the homes taken so far (CrowdSpaces), and those the home being looked for would hold
+    using SpaceKey = std::tuple<uint32_t, int, uint32_t>;
+    std::set<SpaceKey> heldSpaces;
+    std::vector<SpaceKey> holding;
     // WHERE ON A STREET A PERSON STANDS, beside `station` on the kerb `dir`: the road model's sidewalk there, and the
-    // caller's word that people can walk to it
-    const auto standing = [&](uint32_t street, Real station, int dir, bool cars, engine::Vec2& stand) {
+    // caller's word that people can walk to it; for a home, `holds` of the kerb spaces its cars can start in free
+    // (`holding` set to them)
+    const auto standing = [&](uint32_t street, Real station, int dir, bool cars, int holds, engine::Vec2& stand) {
         const engine::RoadFrontage f = model.frontageOn(engine::ModelStreetId(street), station, dir);
-        return f.valid() && model.sidewalkBeside(f, stand) && (!usable || usable(stand, cars));
+        if (!f.valid() || !model.sidewalkBeside(f, stand) || (usable && !usable(stand, f, cars))) return false;
+        holding.clear();
+        if (holds <= 0 || !spaces) return true;
+        for (const engine::KerbSpace& s : spaces(f)) {
+            const SpaceKey key{s.street.index, s.dir, s.index};
+            if (heldSpaces.count(key) > 0) continue;
+            holding.push_back(key);
+            if (static_cast<int>(holding.size()) >= holds) return true;
+        }
+        return false;
     };
     // THE STREETS THE PLACES ARE SPREAD ALONG, end to end: those with a sidewalk, room for a place, and people able to
     // walk to their middle
@@ -91,7 +111,7 @@ bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const Crow
         if (!(S.section.sidewalk > 0)) continue;
         const Real length = (S.to - S.from) - 2 * spec.keepFromEnds;
         engine::Vec2 middle;
-        if (!(length > 0) || !standing(s, S.from + spec.keepFromEnds + length * Real(0.5), 1, false, middle)) continue;
+        if (!(length > 0) || !standing(s, S.from + spec.keepFromEnds + length * Real(0.5), 1, false, 0, middle)) continue;
         runs.push_back(Run{s, S.from + spec.keepFromEnds, length});
         total += length;
     }
@@ -122,6 +142,10 @@ bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const Crow
         const int k = kindOfPlace[i];
         // (households' cars start beside a home; a kind people drive to says so)
         const bool cars = spec.places[static_cast<std::size_t>(k)].homes || spec.places[static_cast<std::size_t>(k)].parking;
+        // (a home is the next household's, in order: it holds kerb spaces for as many cars as that household can have)
+        const int holds = spec.places[static_cast<std::size_t>(k)].homes
+                              ? std::min(mostCars, sizes[static_cast<std::size_t>(placesOf[static_cast<std::size_t>(k)])])
+                              : 0;
         const Real way = rng.next();
         const Real sideDraw = rng.next();
         int dir = sideDraw < 0.5 ? 1 : -1;
@@ -131,20 +155,23 @@ bool makeCrowd(const CrowdSpec& spec, const engine::RoadModel& model, const Crow
         engine::Vec2 stand;
         // (a point the caller refuses: drawn again along its piece, then looked for along the rest of the line, a
         // quarter piece at a time, both sides)
-        bool found = standing(street, station, dir, cars, stand);
+        bool found = standing(street, station, dir, cars, holds, stand);
         for (int again = 0; again < kStandTries && !found; ++again) {
             const Real redraw = rng.next();
             onLine((static_cast<Real>(i) + redraw) * piece, street, station);
-            found = standing(street, station, dir, cars, stand);
+            found = standing(street, station, dir, cars, holds, stand);
         }
         for (Real step = 0; !found && step < total; step += piece * Real(0.25))
             for (const int side : {1, -1}) {
                 if (found) break;
                 onLine((static_cast<Real>(i) + way) * piece + step, street, station);
                 dir = side;
-                found = standing(street, station, dir, cars, stand);
+                found = standing(street, station, dir, cars, holds, stand);
             }
-        if (!found) return refuse("nowhere along the streets is a place for a " + spec.places[static_cast<std::size_t>(k)].kind);
+        if (!found)
+            return refuse("nowhere along the streets is a place for a " + spec.places[static_cast<std::size_t>(k)].kind +
+                          (holds > 0 ? " with " + std::to_string(holds) + " kerb spaces free for its household's cars" : std::string()));
+        heldSpaces.insert(holding.begin(), holding.end());
         engine::CityMarker m;
         m.name = spec.places[static_cast<std::size_t>(k)].kind + "_" + std::to_string(placesOf[static_cast<std::size_t>(k)]++);
         // (a home is its own household's: another home is not the same kind of place to them, so it has no kind a

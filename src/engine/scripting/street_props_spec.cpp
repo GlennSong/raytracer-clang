@@ -55,6 +55,7 @@ bool loadStreetProps(const std::string& levelDir, StreetPropsSpec& out, std::str
             kind.verge = numField(L, k, "verge", kind.verge);
             kind.junction = numField(L, k, "junction", kind.junction);
             kind.mainOnly = boolField(L, k, "main_only", false);
+            kind.atBusStops = boolField(L, k, "at_bus_stops", false);
             kind.collider = readCollider(L, k);
             lua_getfield(L, k, "mesh");
             if (lua_isfunction(L, -1)) {

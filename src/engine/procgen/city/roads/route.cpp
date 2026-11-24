@@ -222,6 +222,8 @@ Route noRoute(Route r, NoRouteWhy why, const std::string& words) {
 
 }  // namespace
 
+PathId laneBeside(const LaneGraph& g, PathId lane, bool towardKerb) { return sidestep(g, lane, towardKerb); }
+
 // ---- ways on closed to a class (issue #284) -------------------------------------------------------------------------
 
 namespace {
@@ -325,7 +327,8 @@ bool mayUse(const LaneGraph& roads, const RouteClass& cls, PathId path) {
 
 Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, PathId path) {
     if (!knownPath(model.laneLevel, path)) return 0;
-    const Real limit = model.postedLimit(path);
+    const Real stated = cls.limits && path.index < cls.limits->size() ? (*cls.limits)[path.index] : Real(0);
+    const Real limit = stated > 0 ? stated : model.postedLimit(path);
     if (limit <= 0) return cls.topSpeed;
     return cls.topSpeed > 0 ? std::min(limit, cls.topSpeed) : limit;
 }
@@ -478,8 +481,12 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
         const Real whole = pathSeconds(model, cls, p, sectionSeconds);
         if (whole >= 0 && path.length > 0) {
             const Real perMetre = whole / path.length;
-            // The destination, when it lies ahead on this path.
-            if (p == to.path && to.along + kAlongTolerance >= entry)
+            // The destination, when it lies ahead on this path -- and, on a lane come to by a lane change, far enough
+            // ahead for the move across to be made before it (a destination 7 m into the lane beside a car's next one
+            // was "reached" by a move no car can make so short, and the car stood at its lane's end for good)
+            const bool bySidestep = search.how[u] == 1;
+            if (p == to.path && to.along + kAlongTolerance >= entry &&
+                (!bySidestep || to.along - entry >= cls.laneChangeLeast))
                 search.reach(destNode, u, cost + perMetre * std::max(Real(0), to.along - entry), 0);
             // On along the path's end (a turn that completes a closed chain is not taken).
             const Real toEnd = cost + perMetre * (path.length - entry);
@@ -495,12 +502,14 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
             });
         }
         // Sideways, into the lane beside (a start node goes to the start node beside it), when the class may.
-        if (cls.laneChanges && path.kind == PathKind::Lane) {
+        if (cls.laneChanges && path.kind == PathKind::Lane && path.length >= cls.laneChangeLeast) {
             for (const bool towardKerb : {false, true}) {
                 const PathId beside = sidestep(roads, p, towardKerb);
                 if (!beside.valid() || !mayUse(roads, cls, beside)) continue;
                 const bool startNode = u >= n && u < destNode;
-                if (startNode && !startInSection) continue;
+                if (startNode && (!startInSection || cls.keepLaneAtStart)) continue;
+                // (keeping its lane through the stretch it starts in: from no lane of that stretch, by any node)
+                if (cls.keepLaneAtStart && path.section.valid() && path.section == startPath.section) continue;
                 const uint32_t v = startNode ? n + roads.paths[beside.index].indexInSection : nodeFor(beside, nodeState(u));
                 search.reach(v, u, cost + kLaneChangeCostSeconds, 1);
             }
@@ -704,6 +713,16 @@ LanesToCross lanesToCross(const Route& route, PathId lane, uint32_t fromLeg) {
     const RouteLeg& leg = route.legs[static_cast<std::size_t>(legIndex)];
     const uint32_t k = static_cast<uint32_t>(laneSlot(route, leg, lane));
     const uint32_t mine = route.lanes[leg.firstLane + k].changes;
+    for (uint32_t d = 0; mine != kCannotFinish && d < leg.laneCount; ++d) {
+        const auto leadsOn = [&](uint32_t at) {
+            const uint32_t staying = route.lanes[leg.firstLane + at].changesIfStaying;
+            return staying != kCannotFinish && staying + d == mine;
+        };
+        if ((k + d < leg.laneCount && leadsOn(k + d)) || (k >= d && leadsOn(k - d))) {
+            out.inLeg = d;
+            break;
+        }
+    }
     for (uint32_t d = 1; d < leg.laneCount; ++d) {
         const uint32_t kerbward = k + d < leg.laneCount ? route.lanes[leg.firstLane + k + d].changes : kCannotFinish;
         const uint32_t offward = k >= d ? route.lanes[leg.firstLane + k - d].changes : kCannotFinish;

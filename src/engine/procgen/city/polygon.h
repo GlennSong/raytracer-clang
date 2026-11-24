@@ -41,6 +41,10 @@ inline Vec2 normalize(const Vec2& v) {
 // right normal (e.y, -e.x) is the outward one — what every skirt/step emitter
 // uses); see inset(), which wants the inward direction explicitly.
 inline Vec2 perp(const Vec2& v) { return {-v.y, v.x}; }
+// The KERB side of travel along `dir`. Named for the maths, not the road: in world x/z (y up) (dir.y, -dir.x)
+// points to the driver's LEFT -- traffic keeps left, UK/Japan style (Glenn, 2026-10-02: "I want to keep it that
+// way"). Lanes fill this half of a two-way road, and a bus stop's kerb is on this side.
+inline Vec2 rightOf(const Vec2& dir) { return {dir.y, -dir.x}; }
 inline Real distance(const Vec2& a, const Vec2& b) { return (a - b).length(); }
 inline Vec2 lerp(const Vec2& a, const Vec2& b, Real t) { return a + (b - a) * t; }
 // Two plan points are the same place within the tolerance: the DISTANCE between them is no more than `eps` (a circle,

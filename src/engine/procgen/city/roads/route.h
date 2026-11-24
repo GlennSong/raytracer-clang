@@ -85,9 +85,20 @@ struct RouteClass {
     engine::TagMask tags = 0;          // the graph's vehicle-tag bits for the class's tag names
     Real tightestTurnRadius = 0;       // a path bending tighter than this is refused
     Real topSpeed = 0;                 // m/s; caps every speed limit
+    // THE LIMIT EACH PATH IS DRIVEN AT, by path index (the driving's rules: RoadRules::limitOfPath -- the posted limit,
+    // else the rule set's default for the road's class), so a route is timed as its car will drive it. Null, or a
+    // path with no entry or 0: the limit the road model posts.
+    const std::vector<Real>* limits = nullptr;
     // Routes may change lanes. Off, a route keeps to the lane the car is in and the lanes that lane leads into, so a car
     // that cannot change lanes yet can drive every route it is given (Driving sets it from DrivingSettings::laneChanges).
     bool laneChanges = true;
+    // ...and only out of a lane at least this long (m; 0: any): a move across needs room, the shortest its turning circle
+    // allows and its own length (the driving's lane_change.h laneMoveShortest), so a short stretch is not changed in.
+    Real laneChangeLeast = 0;
+    // ...but never within the stretch (section) it starts in: the car keeps its lane to the stretch's end, and is free
+    // to change past it (a driver that missed its lane, routed again from where it is: the driving's missed turn,
+    // sitting 5). Not in that stretch at all, should the route come back along it.
+    bool keepLaneAtStart = false;
     // Connectors CLOSED to the class, sorted: turns it could never (or too seldom) be granted room beyond (room.h
     // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).
     // Driving fills it once it has the rules; bindRouteClass leaves it empty.
@@ -102,9 +113,9 @@ struct RouteClass {
 // lane path for a footway, so the car search does not yet ask RoadModel::openTo: ADR-0467.)
 bool mayUse(const engine::LaneGraph& roads, const RouteClass& cls, engine::PathId path);
 
-// The speed a class drives a path at with nothing in the way: the limit the road model posts on the path
-// (RoadModel::postedLimit), capped by the class's top speed. A path with no posted limit (0) is driven at the top speed.
-// Zero for an unknown path.
+// The speed a class drives a path at with nothing in the way: the limit it is driven at (RouteClass::limits, else the
+// limit the road model posts on the path, RoadModel::postedLimit), capped by the class's top speed. A path with no limit
+// (0) is driven at the top speed. Zero for an unknown path.
 Real freeFlowSpeed(const engine::RoadModel& model, const RouteClass& cls, engine::PathId path);
 
 // WHAT THE LOWER BOUND NEEDS TO KNOW ABOUT A GRAPH, measured once per graph (studyRoads). The bound is the straight
@@ -227,6 +238,11 @@ RoutePlace placeOnRoute(const Route& route, const engine::LaneGraph& roads, cons
 enum class Across : uint8_t { None, TowardKerb, TowardOffside };
 constexpr uint8_t kAcrossCount = 3;
 
+// THE LANE BESIDE `lane` in its section, toward the kerb or toward the offside, when the line between may be crossed from
+// this lane's side; none otherwise (no such lane, a solid line, no sound section). The router's own sidestep: the one
+// answer to "which lane runs beside mine here, and may I cross into it" (the driving's lane changes ask it too).
+engine::PathId laneBeside(const engine::LaneGraph& g, engine::PathId lane, bool towardKerb);
+
 // HOW MANY LANES OVER the nearest lane with strictly fewer changes still needed is, and which way. Zero lanes (and
 // None) when this lane is already as good as any in its section, or when the lane is in no leg at or after `fromLeg`
 // (onRoute false). Two lanes as near on both sides: the one needing fewer changes, then the one toward the kerb.
@@ -234,6 +250,10 @@ struct LanesToCross {
     bool onRoute = false;
     uint32_t lanes = 0;
     Across toward = Across::None;
+    // The lane changes still needed IN THIS LEG: how many lanes over the nearest lane is that leads on to the next leg
+    // and finishes the route with the changes left (0 when this one does). A car two lanes from its turn needs room for
+    // two moves before its last chance, not one.
+    uint32_t inLeg = 0;
 };
 LanesToCross lanesToCross(const Route& route, engine::PathId lane, uint32_t fromLeg = 0);
 

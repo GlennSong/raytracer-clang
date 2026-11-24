@@ -103,4 +103,4 @@ TEST_CASE(generated_net_carries_classes) {
 }
 
 // (lanes_for_class_single_source, the gate on road_rules' lanesForClass, went with it, ADR-0418: the one lane count is
-// the road class table's -- test_nav_graph's nav_lane_count_is_the_road_class_table_s, test_road_model's street sections.)
+// the road class table's -- test_road_model's street sections.)

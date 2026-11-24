@@ -124,7 +124,7 @@ void classifyRoadGraph(RoadGraph& g, const GroundFn& groundAt) {
         if (street) access |= road_access::kSignalable;
         e.access = access;
         // (bool e.walkable is the one home of "pedestrians travel along it":
-        // nav and pathfind read it, and no access bit repeats it.)
+        // its readers read it there, and no access bit repeats it.)
     }
 }
 

@@ -12,6 +12,11 @@ namespace driving {
 
 namespace {
 
+// Is car `who` queued behind me (GiveWayInputs::behind)?
+bool queuedBehindMe(const GiveWayInputs& in, uint64_t who) {
+    return in.behind && std::binary_search(in.behind->begin(), in.behind->end(), std::make_pair(static_cast<uint64_t>(in.me.id.index), who));
+}
+
 bool knownPath(const engine::LaneGraph& roads, engine::PathId p) { return p.valid() && p.index < roads.paths.size(); }
 
 FactNeed need(const char* name, UnitFamily family) {
@@ -87,7 +92,9 @@ bool judgeMeetings(const GiveWayInputs& in, const JunctionPlan& p, Real patience
             // Not an order between the two (conflict.h says why it is kept out of the resolver); never a body on the
             // stretch, nor a car that cannot stop short of it (announce.h).
             if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
-            // Who goes first is the resolver's; the one that goes first never looks at the other.
+            // Who goes first is the questions' (conflict.h); the one that goes first never looks at the other. A car
+            // queued behind me cannot pass me: never given way to.
+            if (queuedBehindMe(in, e.who)) continue;
             Question by = Question::None;
             if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;
             if (judgeOne(e, cid, otherPath, by, gapTo(*mine, e, by), needed, tightest, j)) return true;
@@ -130,8 +137,21 @@ bool judgeLanes(const GiveWayInputs& in, Real hard, Real patience, GiveWayJudgem
                                              in.numbers.atLineWithin;
                 const Real need = stoppedHere ? comfortableGap(in.numbers, 0, patience, hard) : hard;
                 bool tightest = false;
+                // A DRIVER ON THE OTHER LANE HOLDING BACK TO LET ME IN is not coming, nor is anybody queued behind it
+                // in its lane (arriving no sooner): they cannot pass it (#323, the zipper at a merge).
+                Real heldBackFrom = kNever;
+                if (in.lettingIn)
+                    for (const Announcement& e : in.board.on(cid)) {
+                        if (e.onPath != otherPath) continue;
+                        const std::map<CarId, CarId>::const_iterator li = in.lettingIn->find(CarId(e.who));
+                        // (one already on the stretch is not holding back: it is there)
+                        if (li != in.lettingIn->end() && li->second == in.me.id && e.arriveIn > 0)
+                            heldBackFrom = std::min(heldBackFrom, e.arriveIn);
+                    }
                 for (const Announcement& e : in.board.on(cid)) {
                     if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
+                    if (e.arriveIn >= heldBackFrom) continue;
+                    if (queuedBehindMe(in, e.who)) continue;
                     Question by = Question::None;
                     if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;
                     if (judgeOne(e, cid, otherPath, by, gapTo(*mine, e, by), need, tightest, j)) {

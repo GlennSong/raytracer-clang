@@ -453,47 +453,6 @@ void OverlapRow::note(const std::vector<std::pair<OverlapPair, engine::PathId>>&
 
 // ---- Body against body -----------------------------------------------------------------------------------------------
 
-PlanBody planBody(CarId car, const CarPose& pose, double length, double width) {
-    // The lane graph's one body rule (engine::bodyOnPlan), so what is measured here is what the road builder swept.
-    const engine::PlanRectangle r =
-        engine::bodyOnPlan(engine::Vec2(pose.front.x, pose.front.z), engine::Vec2(pose.rear.x, pose.rear.z),
-                           engine::Vec2(pose.travel.x, pose.travel.z), length, width);
-    PlanBody b;
-    b.car = car;
-    b.x = r.middle.x;
-    b.z = r.middle.y;
-    b.height = (pose.front.y + pose.rear.y) * 0.5;
-    b.ux = r.forward.x;
-    b.uz = r.forward.y;
-    b.halfLength = r.halfLength;
-    b.halfWidth = r.halfWidth;
-    return b;
-}
-
-namespace {
-
-// How far a body reaches along a unit direction (dx, dz) from its middle (half its extent projected on the direction).
-double reachAlong(const PlanBody& b, double dx, double dz) {
-    return b.halfLength * std::fabs(b.ux * dx + b.uz * dz) + b.halfWidth * std::fabs(-b.uz * dx + b.ux * dz);
-}
-
-}  // namespace
-
-double bodyOverlapDepth(const PlanBody& a, const PlanBody& b) {
-    // The four axes of two rectangles: each one's length and width directions. The depth on an axis is how far the
-    // two projections overlap; the shallowest is the push that parts them, and any axis with none parts them already.
-    const double axes[4][2] = {{a.ux, a.uz}, {-a.uz, a.ux}, {b.ux, b.uz}, {-b.uz, b.ux}};
-    const double cx = b.x - a.x, cz = b.z - a.z;
-    double depth = std::numeric_limits<double>::infinity();
-    for (const double* axis : axes) {
-        const double apart = std::fabs(cx * axis[0] + cz * axis[1]);
-        const double d = reachAlong(a, axis[0], axis[1]) + reachAlong(b, axis[0], axis[1]) - apart;
-        if (!(d > 0)) return 0;
-        depth = std::min(depth, d);
-    }
-    return depth;
-}
-
 namespace {
 
 struct TouchKindWords {
@@ -1178,6 +1137,7 @@ Measurements::Seen Measurements::seeCar(const Driving& d, const Car& c) const {
     s.odometer = c.odometer;
     s.front.path = c.path;
     s.front.along = c.along;
+    s.offset = c.offset;
     s.speed = c.speed;
     s.atRest = c.speed < kStandingBelow;
     s.restCameAt = s.atRest ? d.clockSeconds() : kNotYet;
@@ -1272,8 +1232,14 @@ void Measurements::lookAtCar(const Driving& d, const Car& c, const Seen* before,
     if (sameDrive) {
         const double moved = c.odometer - before->odometer;
         const double dx = out.frontAt.x - before->frontAt.x, dz = out.frontAt.z - before->frontAt.z;
-        const double chord = std::sqrt(dx * dx + dz * dz);
-        rows_.jumps.note(c.id, tick, now, std::max(chord, moved), before->speed, c.speed, dt);
+        // (the sideways part of a swerve or a move across is a real motion its speed along the lane leaves out: the
+        // front's move along the lane is what its speed must account for)
+        const double sideways = std::fabs(out.offset - before->offset);   // (carried across a path's end with it)
+        const double chord = std::sqrt(std::max(0.0, dx * dx + dz * dz - sideways * sideways));
+        // (off its lane's line on a bend its odometer, in the lane's metres, runs ahead of or behind what its front
+        // really covers: then the front's own move is the one to judge)
+        const bool offLine = std::fabs(before->offset) > kOffsetOnLine || std::fabs(out.offset) > kOffsetOnLine;
+        rows_.jumps.note(c.id, tick, now, offLine ? chord : std::max(chord, moved), before->speed, c.speed, dt);
         const double tightest =
             c.vehicleClass < d.vehicleClasses().size() ? d.vehicleClasses().at(c.vehicleClass).tightestTurnRadius : 0;
         rows_.turns.note(c.id, tick, now, planAngle(before->bodyX, before->bodyZ, out.bodyX, out.bodyZ), moved,
@@ -1387,53 +1353,33 @@ void Measurements::lookForTouches(const Driving& d, double now) {
         bodies_.push_back(planBody(c.id, carPose(*roads, classes, d.ruleSet(), c), length, width));
         bodyRecord_.push_back(r);
     }
-    // THE BROAD PHASE: bodies in order of the lowest x their box on the plan reaches (then car id); sweeping along x,
-    // each is tested only against those whose boxes it reaches into.
-    sweep_.resize(bodies_.size());
-    for (std::size_t i = 0; i < sweep_.size(); ++i) sweep_[i] = i;
-    const auto lowX = [&](std::size_t i) { return bodies_[i].x - reachAlong(bodies_[i], 1, 0); };
-    std::sort(sweep_.begin(), sweep_.end(), [&](std::size_t p, std::size_t q) {
-        const double lp = lowX(p), lq = lowX(q);
-        return lp != lq ? lp < lq : bodies_[p].car < bodies_[q].car;
-    });
-    for (std::size_t s = 0; s < sweep_.size(); ++s) {
-        const PlanBody& a = bodies_[sweep_[s]];
-        const double highX = a.x + reachAlong(a, 1, 0);
-        const double reachZ = reachAlong(a, 0, 1);
-        for (std::size_t t = s + 1; t < sweep_.size() && lowX(sweep_[t]) <= highX; ++t) {
-            const PlanBody& b = bodies_[sweep_[t]];
-            if (std::fabs(b.z - a.z) > reachZ + reachAlong(b, 0, 1)) continue;
-            if (std::fabs(b.height - a.height) > kTouchSameLevelMetres) continue;
-            const double depth = bodyOverlapDepth(a, b);
-            if (!(depth > kTouchToleranceMetres)) continue;
-            const bool aFirst = a.car < b.car;
-            const Car& ca = d.cars()[bodyRecord_[aFirst ? sweep_[s] : sweep_[t]]];
-            const Car& cb = d.cars()[bodyRecord_[aFirst ? sweep_[t] : sweep_[s]]];
-            const PlanBody& pa = aFirst ? a : b;
-            const PlanBody& pb = aFirst ? b : a;
-            TouchSpell spell;
-            const auto side = [&](const Car& c, const PlanBody& p) {
-                TouchSide o;
-                o.car = c.id;
-                o.path = c.path;
-                o.along = c.along;
-                o.speed = c.speed;
-                o.driven = c.driven;
-                o.binding = c.binding;
-                const VehicleClass& cls = classes.at(c.vehicleClass);
-                o.drawnBigger = p.halfLength * 2 > cls.length + kTouchToleranceMetres ||
-                                p.halfWidth * 2 > cls.width + kTouchToleranceMetres;
-                return o;
-            };
-            spell.a = side(ca, pa);
-            spell.b = side(cb, pb);
-            spell.kind = sortTouch(*roads, classes, d.pathLists(), ca, cb, &spell.crossing, &spell.junction,
-                                   &spell.bandGap);
-            spell.x = (pa.x + pb.x) * 0.5;
-            spell.z = (pa.z + pb.z) * 0.5;
-            spell.worstDepth = depth;
-            touchesFound_.push_back(spell);
-        }
+    findContacts(bodies_, sweep_, contacts_);
+    for (const BodyContact& k : contacts_) {
+        const PlanBody& pa = bodies_[k.a];
+        const PlanBody& pb = bodies_[k.b];
+        const Car& ca = d.cars()[bodyRecord_[k.a]];
+        const Car& cb = d.cars()[bodyRecord_[k.b]];
+        TouchSpell spell;
+        const auto side = [&](const Car& c, const PlanBody& p) {
+            TouchSide o;
+            o.car = c.id;
+            o.path = c.path;
+            o.along = c.along;
+            o.speed = c.speed;
+            o.driven = c.driven;
+            o.binding = c.binding;
+            const VehicleClass& cls = classes.at(c.vehicleClass);
+            o.drawnBigger = p.halfLength * 2 > cls.length + kTouchToleranceMetres ||
+                            p.halfWidth * 2 > cls.width + kTouchToleranceMetres;
+            return o;
+        };
+        spell.a = side(ca, pa);
+        spell.b = side(cb, pb);
+        spell.kind = sortTouch(*roads, classes, d.pathLists(), ca, cb, &spell.crossing, &spell.junction, &spell.bandGap);
+        spell.x = k.x;
+        spell.z = k.z;
+        spell.worstDepth = k.depth;
+        touchesFound_.push_back(spell);
     }
     std::sort(touchesFound_.begin(), touchesFound_.end(), [](const TouchSpell& p, const TouchSpell& q) {
         return p.a.car != q.a.car ? p.a.car < q.a.car : p.b.car < q.b.car;

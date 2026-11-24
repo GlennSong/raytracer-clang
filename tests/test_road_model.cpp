@@ -41,8 +41,7 @@
 #include "lane_level_scene.h"                               // a scene with the lane level's facts, in memory
 #include "engine/procgen/city/roads/control_signs.h"   // the signs that follow from the facts (ADR-0424)
 #include "engine/procgen/city/roads/route.h"   // the one route-finder: cars and walkers (ADR-0467)
-#include "engine/procgen/city/roads/street_map.h"      // appendStreetMap: what routing reads
-#include "engine/ai/nav_graph.h"                        // rightOf: the kerb side
+#include "engine/procgen/city/polygon.h"                // rightOf: the kerb side
 #include "engine/script_assets.h"                       // loadScriptCode: the rule set's file
 #include "apps/citysim/control_policy_file.h"   // loadControlPolicy: the shared placement policy (ADR-0422)
 #ifdef RT_ENABLE_SCRIPTING
@@ -1023,19 +1022,7 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
         const ModelArm& arm = turned.junctions[static_cast<std::size_t>(s.junction)].arms[static_cast<std::size_t>(s.arm)];
         CHECK(arm.road == "o0" && !arm.spineIn);   // at the T, its exit end: where its spine runs OUT of the junction
     }
-    // ROUTING: one link, one way, from its far end (200, 150) into the T
-    engine::NavGraph map;
-    engine::StreetMapReport rep;
-    CHECK(engine::appendStreetMap(map, turned, 0, nullptr, &rep));
-    int along = 0;
-    for (const engine::NavLink& L : map.links) {
-        if (L.street != static_cast<int>(o0.index)) continue;
-        ++along;
-        CHECK(L.oneWay);
-        CHECK_APPROX(L.width, 3.5, 1e-12);
-        CHECK(map.nodes[static_cast<std::size_t>(L.from)].y > map.nodes[static_cast<std::size_t>(L.to)].y);   // toward the T at y = 0
-    }
-    CHECK(along >= 1);
+    // (ROUTING over the street map's one-way link went with the street map, #306: the section above says it once.)
 
     // ONE WIDTH. A road with two lanes forward and one back, 3.5 m lanes and a 1 m median gap: 3 x 3.5 + 1 = 11.5 m across
     // (the street map said 1 + 2 x 2 x 3.5 = 15). A one-way road that states a gap has no median to put it in: 2 x 3.5 = 7
@@ -1052,8 +1039,6 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
     }
     const RoadLabGraph graph = RoadLabGraph::fromJson(g);
     const RoadModel m = plannedRoadModel(graph);
-    engine::NavGraph widths;
-    CHECK(engine::appendStreetMap(widths, m, 0, nullptr, &rep));
     struct RoadWidth { const char* road; double width; };
     for (const RoadWidth& x : {RoadWidth{"l2", 11.5}, RoadWidth{"o0", 7.0}}) {
         const ModelStreetId s = streetNamed(m, x.road);
@@ -1064,13 +1049,6 @@ TEST_CASE(road_model_9b_one_way_is_asked_of_the_cross_section_whichever_way_its_
         for (const LaneSlot& slot : laneSlots(graph.cls(*graph.find(x.road)), graph.find(x.road)->lanes))
             outermost = std::max(outermost, std::fabs(slot.offset) + 1.75);
         CHECK_APPROX(outermost, x.width / 2, 1e-5);
-        int links = 0;
-        for (const engine::NavLink& L : widths.links) {
-            if (L.street != static_cast<int>(s.index)) continue;
-            ++links;
-            CHECK_APPROX(L.width, x.width, 1e-12);
-        }
-        CHECK(links >= 1);
     }
 }
 
@@ -1931,9 +1909,13 @@ TEST_CASE(road_model_19_the_layout_written_again_into_a_shipped_file_changes_not
     struct Shipped { const char* file; std::size_t streetsCarryingOn, carryOnEnds, junctionsWithNodes; };
     // (river_town / agent_lab junctions listing their nodes 30 -> 31, ADR-0477: j14 stated as two, each over two of its
     // points (j14, j144); j0's split-off T, j145, is over one point and lists none)
+    // (ADR-0480 "river_town slivers": streets carrying on 22 -> 23 and their ends 32 -> 34, junctions listing their nodes
+    // 31 -> 29. s8, s9, s10 and s169 are gone, so j7 and j91 are each one point now (s12 was inside j7, s168 inside j91).
+    // s12 is a street that carries on as s287. s168 runs on as s170 at a junction of two arms, j146, so it is not a
+    // carry-on.)
     const Shipped files[] = {{"planned/traffic_lab_lanelab.json", 0, 0, 15},
-                             {"planned/river_town_lanelab.json", 22, 32, 31},
-                             {"planned/agent_lab_lanelab.json", 22, 32, 31}};
+                             {"planned/river_town_lanelab.json", 23, 34, 29},
+                             {"planned/agent_lab_lanelab.json", 23, 34, 29}};
     for (const Shipped& f : files) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/" + f.file;
         const std::string text = slurp(path);
@@ -2024,44 +2006,24 @@ TEST_CASE(road_model_20_one_answer_for_the_arm_a_street_is_and_where_its_ends_ar
     CHECK(m.streetOf(stray) == nullptr);
 }
 
-// THE ARM A LINK OF THE STREET MAP ARRIVES BY IS ASKED OF THE MODEL (ADR-0437): the link carries its street and the
-// station at its far end, and the model says which arm that is (RoadModel::armReachedAt). The link once kept a copy of
-// the arm, written when the map was built; a junction whose arms are stated again then left the copy pointing at
-// another road's arm.
-TEST_CASE(road_model_21_the_arm_a_street_map_link_arrives_by_is_the_models) {
+// THE ARM A STREET ARRIVES BY AT A STATION IS ASKED OF THE MODEL (ADR-0437): a reader holding a street and a station asks
+// the model which arm that is (RoadModel::armReachedAt), and keeps no copy -- a junction whose arms are stated again then
+// answers the new way at once. (Was asked by the street map's links, which went with #306.)
+TEST_CASE(road_model_21_the_arm_a_street_arrives_by_is_the_models) {
     // the signed scene: the arterial a0 runs 200 m from its dead end at (-200, 0) to the crossing at (0, 0)
     RoadModel m = plannedRoadModel(RoadLabGraph::fromJson(signedGraph()));
     const ModelStreetId a0 = streetNamed(m, "a0");
     CHECK(a0.valid());
     if (!a0.valid()) return;
-    engine::NavGraph map;
-    engine::StreetMapReport rep;
-    CHECK(engine::appendStreetMap(map, m, 0, nullptr, &rep));
-    const auto armsReached = [&](std::vector<int>& atCrossing, std::vector<int>& elsewhere) {
-        atCrossing.clear();
-        elsewhere.clear();
-        for (const engine::NavLink& L : map.links) {
-            if (L.street != static_cast<int>(a0.index)) continue;
-            const int arm = m.armReachedAt(ModelStreetId(static_cast<uint32_t>(L.street)), L.stationTo);
-            (approxEqual(L.stationTo, 200.0, kWrittenStation) ? atCrossing : elsewhere).push_back(arm);
-        }
-    };
-    std::vector<int> atCrossing, elsewhere;
-    armsReached(atCrossing, elsewhere);
-    // one link arrives at the crossing, by arm 2 (road a0, its spine running in); every other link of the street
-    // arrives at no junction arm (along the street, or at its dead end)
-    CHECK(atCrossing == std::vector<int>{2});
-    CHECK(!elsewhere.empty());
-    for (int arm : elsewhere) CHECK(arm == -1);
+    // at the crossing, by arm 2 (road a0, its spine running in); anywhere else along the street, or at its dead end, none
+    CHECK(m.armReachedAt(a0, 200.0) == 2);
     CHECK(m.armReachedAt(a0, 100.0) == -1 && m.armReachedAt(a0, 0.0) == -1 && m.armReachedAt(a0, 200.004) == 2);
     CHECK(m.armReachedAt(ModelStreetId(9999), 200.0) == -1);
-    // THE CROSSING'S ARMS STATED AGAIN, its first arm now listed last: a0's arm is 1, and the same links say so with no
-    // new map built
+    // THE CROSSING'S ARMS STATED AGAIN, its first arm now listed last: a0's arm is 1, asked the same way
     ModelJunction& cross = m.junctions[m.streets[a0.index].junctions[1].index];
     std::rotate(cross.arms.begin(), cross.arms.begin() + 1, cross.arms.end());
     CHECK(cross.arms[1].road == "a0" && cross.arms[1].spineIn);
-    armsReached(atCrossing, elsewhere);
-    CHECK(atCrossing == std::vector<int>{1});
+    CHECK(m.armReachedAt(a0, 200.0) == 1);
 }
 
 // ---- 22. the regulations along a path are the model's (ADR-0437) -----------------------------------------------------------
@@ -3772,13 +3734,18 @@ TEST_CASE(road_model_33_the_shipped_levels_walks_in_the_lane_level) {
         // (ADR-0473, the road files: traffic_lab's meets another road 2 -> 0, s208 now j95's fourth arm; river_town's
         // carry-ons 16 -> 8 and sidewalks cut off 14 -> 10, tn0 and tn1 now ramps with no sidewalks, so only bv0's and bv1's
         // sidewalks end where they run on as the freeway.)
+        // (ADR-0480 "river_town slivers": kerb end out 22 -> 16 and sidewalks cut off 10 -> 6, river_town only. The 8 kerb
+        // ends out at j7, j8, j75 and j91 were the inner kerbs between s10 and s13 and between s169 and s172. Those roads
+        // were two streets alongside one another, and s10 and s169 are gone. The 4 islands between them went with them.
+        // 2 are new: the inner corner of j146, where s170 runs on as s168 at a 63-degree bend. Its arm 0's kerb end lies
+        // 5.7 m from the nearest drawn sidewalk.)
         const bool lab = std::string(level) == "traffic_lab";
         const std::map<std::string, uint32_t> pinned =
             lab ? std::map<std::string, uint32_t>{{"kerb end out", 4}}
-                : std::map<std::string, uint32_t>{{"kerb end out", 22}, {"two pieces", 1}, {"carry-on", 8}};
+                : std::map<std::string, uint32_t>{{"kerb end out", 16}, {"two pieces", 1}, {"carry-on", 8}};
         CHECK(cause == pinned);
         CHECK(kinds.count("turn_round") && kinds.at("turn_round") == (lab ? 16u : 31u));
-        CHECK(sidewalks - inLargest == (lab ? 0u : 10u));
+        CHECK(sidewalks - inLargest == (lab ? 0u : 6u));
     }
 }
 
@@ -4509,8 +4476,11 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         {"traffic_lab", {"j0:5", "j0:6", "j22:0", "j24:0", "j37:3", "j70:0", "j70:1", "j84:3", "j84:4"}},
         // (ADR-0477: j14:0 (s21, too close to j13) -> gone, j14 stated as two and s21 now its arm 3 with the room the
         // square rule gives; j0:5 (s274_0, too close to j145) new, j0's T stated apart 28.6 m along s274_0)
+        // (ADR-0480 "river_town slivers": 26 -> 18. j7:0, j7:1, j8:2, j8:3, j75:0, j75:2, j91:2 and j91:3 are gone. They
+        // were the pairs s10/s13 and s169/s172, running between the same two junctions at 7 and 29 degrees; s10 and s169 are
+        // gone, so the arterials s13 and s172 have their junctions to themselves.)
         {"river_town", {"j135:4", "j135:5", "j0:5", "j35:2", "j35:3", "j37:0", "j37:1", "j43:0", "j43:4", "j56:0", "j56:1", "j68:0", "j6:3",
-                        "j72:0", "j72:1", "j73:0", "j75:0", "j75:2", "j7:0", "j7:1", "j8:2", "j8:3", "j90:0", "j90:4", "j91:2", "j91:3"}}};
+                        "j72:0", "j72:1", "j73:0", "j90:0", "j90:4"}}};
     for (const char* level : {"traffic_lab", "river_town", "agent_lab"}) {
         const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/" + level + "_lanelab.json";
         RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/')));
@@ -4560,7 +4530,10 @@ TEST_CASE(road_model_39_the_shipped_stop_lines_stand_short_of_the_next_junction)
         // (ADR-0477, the one stated exception: Glenn split river_town's j14 into j14 and j144, whose facing stop lines on
         // Redwood Parkway's s313 leave 3.9 m between them, less than the 6.5 m storage -- the reason the grouping had made
         // them one junction. Was none.)
-        const std::set<std::string> knownShort = known == "river_town" ? std::set<std::string>({"j14:2", "j144:0"}) : std::set<std::string>();
+        // (ADR-0480 "river_town slivers": + j146:0 and j91:3, the two ends of s168, the 27.2 m street from j91 to j146, the
+        // junction of two arms where it runs on as s170. Their stop lines leave less than the storage between them.)
+        const std::set<std::string> knownShort =
+            known == "river_town" ? std::set<std::string>({"j14:2", "j144:0", "j146:0", "j91:3"}) : std::set<std::string>();
         CHECK(pairs > 500u && short_ == knownShort && past == 0u);
         CHECK(squeezed == knownSqueezed.at(known));
     }
@@ -5284,7 +5257,9 @@ TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
         const std::string dir = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned";
         const std::string text = slurp(dir + "/" + level + "_lanelab.json");
         const RoadLabGraph g = RoadLabGraph::fromJson(nlohmann::json::parse(text), dir);
-        CHECK(g.junctions.size() == 146u);
+        // (146 -> 147, ADR-0480 "river_town slivers": j146, the two-arm junction where s170 runs on as s168 at j91's old
+        // point A, written at the list's end)
+        CHECK(g.junctions.size() == 147u);
         for (std::size_t i = 0; i < g.junctions.size(); ++i) CHECK(g.junctions[i].id == "j" + std::to_string(i));
         std::map<std::string, const ModelJunction*> J;
         for (const ModelJunction& j : g.junctions) J[j.id] = &j;
@@ -5322,4 +5297,107 @@ TEST_CASE(road_model_46_the_staggered_junctions_are_stated_apart) {
         CHECK(insertSplitJunctionText(text, g, "j90", {"s999"}, nullptr, &err).empty());
         CHECK(err.find("do not split in two") != std::string::npos);
     }
+}
+
+// ---- 47. the layers hold no part without a body (ADR-0479) --------------------------------------------------------------
+
+// THE DRAWN SIDEWALK, SHOULDER AND MEDIAN ON traffic_lab HOLD NOTHING NARROWER THAN 2 cm. The cuts that make the layers
+// round each cutter to the 1 mm grid on its own, so two cutters whose edges lie on one line left seams under a millimetre
+// wide: 50 slivers and spikes of sidewalk, up to 12 m long, many in a carriageway (j7's at (-364, -29) and j19's at
+// (-334, 179) are where the near crowd's physics cars on traffic_lab hit a 10 cm kerb face). Each is a NEEDLE in a layer's outline: a corner
+// whose two sides, each 5 cm or longer, leave it within 2 degrees of each other (a sliver has one at each end, a spike at
+// its tip). Each layer is drawn opened by kNoBody, so no outline has one; the sharpest real corner, a mitre cut at
+// kMitreLimit, is tens of degrees.
+TEST_CASE(road_model_47_the_layers_hold_no_part_without_a_body) {
+    constexpr Real kSide = 0.05;              // m: both sides of a needle corner at least this long (a bevel's are under 1 cm)
+    constexpr Real kNeedle = 2 * DEG_TO_RAD;  // a corner sharper than this is a needle
+    const std::string path = std::string(RT_SOURCE_DIR) + "/assets/lanelab/planned/traffic_lab_lanelab.json";
+    const std::unique_ptr<Result> r =
+        build(RoadLabGraph::fromJson(nlohmann::json::parse(slurp(path)), path.substr(0, path.find_last_of('/'))));
+    const std::pair<const char*, const PolySet*> layers[] = {
+        {"sidewalk", &r->pavement.sidewalk}, {"shoulder", &r->pavement.shoulder}, {"median", &r->pavement.median}};
+    for (const std::pair<const char*, const PolySet*>& layer : layers) {
+        const PolySet& L = *layer.second;
+        uint32_t needles = 0;
+        Real sharpest = PI;
+        Vec2 at;
+        auto look = [&](const Ring& ring) {
+            const std::size_t n = ring.size();
+            for (std::size_t i = 0; i < n && n >= 3; ++i) {
+                const Vec2 a = ring[(i + n - 1) % n] - ring[i], b = ring[(i + 1) % n] - ring[i];
+                if (a.length() < kSide || b.length() < kSide) continue;
+                // (only a corner the material fills: the ring has the material on its left, so it turns left there. A
+                // corner pointing into the material is a crack, which no kerb face stands in the road for)
+                if (cross(ring[i] - ring[(i + n - 1) % n], ring[(i + 1) % n] - ring[i]) <= 0) continue;
+                const Real angle = std::fabs(std::atan2(cross(a, b), dot(a, b)));
+                needles += angle < kNeedle ? 1u : 0u;
+                if (angle < sharpest) {
+                    sharpest = angle;
+                    at = ring[i];
+                }
+            }
+        };
+        for (const Polygon2& p : L) {
+            look(p.outer);
+            for (const Ring& h : p.holes) look(h);
+        }
+        std::printf("      traffic_lab %s: %zu polygons, %.1f m2; %u needle corners; the sharpest corner %.2f degrees at (%.1f, %.1f)\n",
+                    layer.first, L.size(), setArea(L), needles, sharpest * RAD_TO_DEG, at.x, at.y);
+        CHECK(!L.empty());
+        CHECK(needles == 0u);
+    }
+}
+
+// ---- 48. how high a walk is: the pavement it runs on, read along it (ADR-0480) --------------------------------------------
+
+TEST_CASE(road_model_48_a_walk_is_as_high_as_the_pavement_it_runs_on) {
+    // TWO ROADS CROSSING ON A DECK over flat ground: `ew` climbs steadily from 6 m at its west end to 12 m at its east end
+    // (3 cm a metre), `ns` runs level at 9 m, where `ew` meets it at the junction. A person on `ew`'s sidewalk is up on
+    // the deck: the walk's height, read along it, follows the deck's rise point by point, a kerb's height above it.
+    nlohmann::json f;
+    f["name"] = "walk_heights";
+    constexpr double kWest = 6.0, kRise = 0.03, kLevel = 9.0;   // the deck: metres, metres a metre, metres
+    auto road = [](const std::string& id, const Vec2& a, const Vec2& b, const std::vector<double>& z) {
+        return nlohmann::json{{"id", id}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{a.x, a.y}, {b.x, b.y}}}}},
+                              {"profile", {{"step", 1.0}, {"z", z}}}};
+    };
+    std::vector<double> climb(201), level(201, kLevel);
+    for (std::size_t i = 0; i < climb.size(); ++i) climb[i] = kWest + kRise * static_cast<double>(i);
+    f["edges"] = nlohmann::json::array({road("ew", Vec2(-100, 0), Vec2(100, 0), climb), road("ns", Vec2(0, -100), Vec2(0, 100), level)});
+    writeLayout(f, deriveLayout(RoadLabGraph::fromJson(f), LayoutSource::Inferred));
+    BuiltScene s = builtScene(f);
+    CHECK(s.report.error.empty());
+    const LaneGraph& G = s.m.laneLevel;
+    // the deck's height level with plan point x on `ew` (its spine runs west to east from x = -100)
+    auto deck = [&](Real x) { return kWest + kRise * (x + 100.0); };
+    // How far the pavement may stand above the deck it is on: a kerb, with room (m); and how much that may vary along one
+    // walk, where the deck is a plane (m): the lane level samples the pavement's heights at its own points.
+    constexpr Real kKerbAtMost = 0.5, kSameRise = 0.02;
+    uint32_t walksOnEw = 0;
+    Real lowest = 1e9, highest = -1e9, rise0 = 0, worstSpread = 0;
+    for (uint32_t w = 0; w < G.walks.size(); ++w) {
+        const Walk& k = G.walks[w];
+        if (k.street == kNoIndex || s.m.streets[k.street].road != "ew") continue;
+        ++walksOnEw;
+        Real lo = 1e9, hi = -1e9;
+        for (int i = 0; i <= 10; ++i) {
+            const Real along = k.length * static_cast<Real>(i) / 10.0;
+            const Real h = G.heightAt(WalkId(w), along);
+            const Real above = h - deck(G.pointAt(WalkId(w), along).x);
+            lo = std::min(lo, above);
+            hi = std::max(hi, above);
+            lowest = std::min(lowest, h);
+            highest = std::max(highest, h);
+            if (walksOnEw == 1u && i == 0) rise0 = above;
+        }
+        worstSpread = std::max(worstSpread, hi - lo);
+        CHECK(lo >= -kSameRise && hi <= kKerbAtMost);
+    }
+    std::printf("      ew's sidewalks on the deck: %u walks, %.2f to %.2f m high; above the deck by %.3f m, varying by at most %.3f m\n",
+                walksOnEw, lowest, highest, rise0, worstSpread);
+    CHECK(walksOnEw == 4u);                     // two kerbs, each cut at the junction
+    CHECK(worstSpread <= kSameRise);            // the walk climbs with the deck, point by point
+    CHECK(lowest > kWest - kSameRise && highest > kLevel + 2.0);   // up on the deck, well above the ground, at both ends
+    // a walk the lane level does not hold reads 0, as an unknown path does
+    CHECK(G.heightAt(WalkId(static_cast<uint32_t>(G.walks.size())), 1.0) == 0.0);
 }

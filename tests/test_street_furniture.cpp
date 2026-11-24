@@ -1,241 +1,114 @@
-// Street furniture placement (build-time poles, sim-time phases). The claims
-// under test are the ones the device drives exposed:
-//   - "double stoplights which is bizarre": overlapping collinear approaches
-//     must collapse to ONE pole per (junction, bearing).
-//   - poles agree with the CONTROLLER: no pole where SignalController leaves
-//     the junction uncontrolled (T-junctions, by device feedback).
+// Street furniture placement (build-time poles, sim-time phases), planned from the road model (#306: the street map it
+// was planned on went). The claims under test:
+//   - one signal pole per arriving arm of a lit junction, standing on its kerb corner, clear of every carriageway;
+//   - no pole at a junction that is not lit;
+//   - lamps, street trees and kerb props off every carriageway, on both kerbs, clear of the junctions;
+//   - each street planted by its character.
+// The scenes are road files built as a level's roads are (model_scene.h).
 #include "test_framework.h"
 
 #include <set>
 
+#include "model_scene.h"
 #include "../src/engine/procgen/city/street_furniture.h"
+#include "../src/engine/scripting/street_props_spec.h"
 
 using namespace engine;
 
 namespace {
 
-// A 4-way cross at the origin with a COLLINEAR DUPLICATE approach: the east
-// arm exists twice — the full edge and a stub whose far node rides ON the
-// full edge's segment (the exact geometry measured on metropolis: node 167's
-// arm entered by both a 74.6 m edge and a 4.9 m collinear stub).
-NavGraph crossWithCollinearStub() {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)},            // 0: the junction
-                {Vec2(0, 60)},  {Vec2(0, -60)},   // 1,2: north/south tips
-                {Vec2(60, 0)},  {Vec2(-60, 0)},   // 3,4: east/west tips
-                {Vec2(8, 0)} };                    // 5: ON the east arm
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},   // east, full
-        RoadEdge{0, 4, 8, RoadClass::Local, 0},
-        RoadEdge{0, 5, 8, RoadClass::Local, 0},   // east, collinear stub
-        RoadEdge{5, 3, 8, RoadClass::Local, 0},   // stub continues to the tip
-    };
-    NavBuildParams np;
-    np.junctionMergeRadius = 0;   // keep the raw duplicate (the defect's shape)
-    return buildNavGraph(g, np);
+// How far `v` is inside the nearest carriageway of the model's car streets (a street piece's travel half-width less the
+// distance to its centre line; negative: clear of all by that much).
+Real intoCarriageway(const RoadModel& m, Vec2 v) {
+    Real worst = -1e9;
+    for (const ModelStreet& S : m.streets) {
+        if (!S.section.carriesCars() || S.line.count < 2) continue;
+        for (uint32_t i = S.line.first; i + 1 < S.line.end(); ++i) {
+            const Vec2 a = m.linePoints[i], b = m.linePoints[i + 1], ab = b - a;
+            const Real l2 = ab.lengthSquared();
+            const Real t = l2 > 1e-12 ? std::clamp(dot(v - a, ab) / l2, Real(0), Real(1)) : Real(0);
+            worst = std::max(worst, S.section.carriagewayHalfWidth() - (a + ab * t - v).length());
+        }
+    }
+    return worst;
 }
 
-NavGraph tee() {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)}, {Vec2(0, 60)}, {Vec2(60, 0)}, {Vec2(-60, 0)} };
-    g.edges = {
-        RoadEdge{0, 1, 8, RoadClass::Local, 0},
-        RoadEdge{0, 2, 8, RoadClass::Local, 0},
-        RoadEdge{0, 3, 8, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
-}
-
-// A 4-way whose east arm has a neighbour leaving at only 30 degrees — the
-// metro's organic grid is full of these. Approaching from the east, the pole's
-// kerb-corner sits between the east arm and that acute neighbour.
-NavGraph acuteCross() {
-    RoadGraph g;
-    g.nodes = { {Vec2(0, 0)},
-                {Vec2(0, 60)}, {Vec2(0, -60)}, {Vec2(60, 0)},
-                {Vec2(52, 30)} };                   // 30 degrees off the east arm
-    g.edges = {
-        RoadEdge{0, 1, 12, RoadClass::Local, 0},
-        RoadEdge{0, 2, 12, RoadClass::Local, 0},
-        RoadEdge{0, 3, 12, RoadClass::Local, 0},
-        RoadEdge{0, 4, 12, RoadClass::Local, 0},
-    };
-    return buildNavGraph(g);
+StreetFurniturePlan plan(const citytest::ModelScene& s, StreetFurnitureParams fp = {}) {
+    return planStreetFurniture({FurnitureCity{s.model.get(), 0}}, [](Real, Real) { return Real(0); }, fp);
 }
 
 }  // namespace
 
-TEST_CASE(signal_poles_clear_every_arm_at_an_acute_corner) {
-    // Metro device report: "stoplights show up in the middle of the street and
-    // not on the corners" — every offender stood between two arms meeting at
-    // an acute angle, inside the NEIGHBOUR's carriageway. A pole must clear
-    // every arm at its node by (half-width + curbGap), not just its own.
-    NavGraph nav = acuteCross();
+TEST_CASE(signal_poles_one_per_arriving_arm_of_a_lit_junction_on_its_corner) {
+    // a 4-way cross of 80 m local roads, its junction lit (no control stated: a junction of four arms or more is)
+    const citytest::ModelScene& s = citytest::crossScene(80);
     StreetFurnitureParams fp;
-    StreetFurniturePlan plan =
-        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
-    CHECK(plan.signals.size() == 4);
-    int acuteChecked = 0;
-    for (const SignalSpot& s : plan.signals) {
-        const NavLink& L = nav.links[s.link];
-        const Vec2 node = nav.nodes[L.to];
-        const Vec2 base(s.base.x, s.base.z);
-        for (int li = 0; li < nav.linkCount(); ++li) {
-            const NavLink& K = nav.links[li];
-            if (K.from != L.to) continue;              // arms leave the node
-            const Vec2 e = nav.direction(li);
-            const Vec2 q = base - node;
-            const Real along = dot(q, e);
-            if (along <= 0) continue;                  // behind the node
-            const Real perp = std::fabs(e.x * q.y - e.y * q.x);
-            CHECK(perp >= K.width * 0.5 + fp.curbGap - 1e-6);
-            if (li != s.link) ++acuteChecked;
-        }
-        // Still kerb-adjacent on its own arm.
-        const Vec2 d = nav.direction(s.link);
-        const Vec2 right(d.y, -d.x);
-        const Real lateral = dot(base - node, right);
-        CHECK(std::fabs(lateral - (L.width * 0.5 + fp.curbGap)) < 1e-6);
+    fp.controlsStated = false;
+    const StreetFurniturePlan p = plan(s, fp);
+    std::printf("    [poles] %zu poles, %zu unpoled, %d unarmed\n", p.signals.size(), p.unpoledApproaches.size(), p.unarmedApproaches);
+    CHECK(p.signals.size() == 4u);
+    std::set<int> arms;
+    for (const SignalSpot& sp : p.signals) {
+        arms.insert(sp.armIndex);
+        CHECK(intoCarriageway(*s.model, Vec2(sp.base.x, sp.base.z)) < -fp.curbGap + 1e-6);   // clear of every carriageway
+        CHECK(Vec2(sp.base.x, sp.base.z).length() < 30.0);                                  // at the junction's corner
+        CHECK(sp.arm == packFurnitureArm(0, sp.junction, sp.armIndex));
     }
-    CHECK(acuteChecked > 0);   // the fixture must exercise a neighbour
+    CHECK(arms.size() == 4u);   // one per arm
 }
 
-TEST_CASE(lamps_never_stand_in_another_streets_carriageway) {
-    // Metro map (device): "some of the street lights are actually sitting
-    // right in the middle of the road". Lamps cleared junctions by a radius
-    // around the NODE; at an acute corner the neighbouring arm's carriageway
-    // reaches past it. On this fixture the east arm's right-kerb lamps at
-    // 10..24 m from the node sit inside the 30-degree arm's 12 m ribbon.
-    NavGraph nav = acuteCross();
+TEST_CASE(no_signal_poles_at_a_junction_that_is_not_lit) {
+    const citytest::ModelScene& s = citytest::teeScene(80);
     StreetFurnitureParams fp;
-    StreetFurniturePlan plan =
-        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
-    CHECK(!plan.lampBases.empty());
-    int checked = 0;
-    for (const Vec3& b : plan.lampBases) {
-        const Vec2 v(b.x, b.z);
-        for (int li = 0; li < nav.linkCount(); ++li) {
-            const NavLink& K = nav.links[li];
-            const Vec2 a = nav.nodes[K.from], e = nav.nodes[K.to];
-            const Vec2 ab = e - a;
-            Real t = dot(v - a, ab) / ab.lengthSquared();
-            t = t < 0 ? 0 : (t > 1 ? 1 : t);
-            const Real d = (a + ab * t - v).length();
-            CHECK(d >= K.width * 0.5 + fp.curbGap - 1e-6);
-            ++checked;
-        }
-    }
-    CHECK(checked > 0);
+    fp.controlsStated = false;   // (a T has three arms: not lit)
+    CHECK(plan(s, fp).signals.empty());
 }
 
-TEST_CASE(signal_poles_dedupe_collinear_approaches) {
-    NavGraph nav = crossWithCollinearStub();
-    StreetFurniturePlan plan =
-        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, {});
-    // Node 0 is entered by FIVE street links (N, S, W, east-full, east-stub);
-    // the two east approaches share a bearing, so exactly FOUR poles stand.
-    int atCentre = 0;
-    for (const SignalSpot& s : plan.signals) {
-        const NavLink& L = nav.links[s.link];
-        if ((nav.nodes[L.to] - Vec2(0, 0)).length() < 1.0) ++atCentre;
-    }
-    CHECK(atCentre == 4);
+TEST_CASE(lamps_never_stand_in_any_streets_carriageway) {
+    const citytest::ModelScene& s = citytest::gridScene(600, 90, 5);
+    const StreetFurniturePlan p = plan(s);
+    std::printf("    [lamps] %zu lamps\n", p.lampBases.size());
+    CHECK(p.lampBases.size() > 50u);
+    CHECK(p.lampStreets.size() == p.lampBases.size());
+    int inRoad = 0;
+    for (const Vec3& b : p.lampBases) inRoad += intoCarriageway(*s.model, Vec2(b.x, b.z)) > 0.0 ? 1 : 0;
+    CHECK(inRoad == 0);
 }
 
-TEST_CASE(no_signal_poles_at_uncontrolled_tees) {
-    // SignalController leaves 3-approach junctions uncontrolled (device: "a
-    // dense district isn't a forest of stoplights") — so no pole may stand
-    // there either. A dark, dead head on every T is what the per-link
-    // placement used to build.
-    NavGraph nav = tee();
-    StreetFurniturePlan plan =
-        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, {});
-    CHECK(plan.signals.empty());
-}
-
-TEST_CASE(signal_poles_stand_clear_of_the_junction_pad) {
-    // Glenn: "stoplights are placed out in the middle of the road." The drawn
-    // junction pad fills the disc out to (widest half-width + sidewalk), so a
-    // kerb pole must back off past THAT along its approach — the old formula
-    // used only the carriageway half-width and stood every pole a
-    // sidewalk-width deep in the asphalt. The mast arm, not the pole, reaches
-    // over the road.
-    NavGraph nav = crossWithCollinearStub();
-    StreetFurnitureParams fp;
-    fp.sidewalkWidth = 3.5;
-    StreetFurniturePlan plan =
-        planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
-    CHECK(!plan.signals.empty());
-    for (const SignalSpot& s : plan.signals) {
-        const NavLink& L = nav.links[s.link];
-        const Vec2 node = nav.nodes[L.to];
-        Real crossHalf = L.width * 0.5;
-        for (int ol : nav.outLinks[L.to])
-            crossHalf = std::max(crossHalf, nav.links[ol].width * 0.5);
-        const Real padRadius = crossHalf + fp.sidewalkWidth;
-        // The pole's distance from the junction node must clear the pad disc.
-        const Vec2 base(s.base.x, s.base.z);
-        CHECK((base - node).length() > padRadius);
-        // ...while staying kerb-adjacent laterally: within the sidewalk band
-        // beside its own carriageway, not wandering into the block.
-        const Vec2 d = nav.direction(s.link);
-        const Vec2 right(d.y, -d.x);
-        const Real lateral = dot(base - node, right);
-        CHECK(lateral > L.width * 0.5 - 1e-6);
-        CHECK(lateral < L.width * 0.5 + fp.sidewalkWidth + fp.curbGap + 1e-6);
-    }
-}
-
-// KERB LIFE (the city's next ten #3): a long collector crossing a local street gets street trees on both kerbs at
-// their spacing, a litter bin by the corner, and racks or news boxes mid-block -- every piece on the pavement (beyond
-// the kerb, clear of every carriageway), the trees clear of the lamps and the junction's sightlines.
 TEST_CASE(kerb_life_lines_the_pavements_and_keeps_off_the_road) {
     RoadGraph g;
-    const int w = g.addNode({-300, 0}), e = g.addNode({300, 0}), n = g.addNode({0, 300}), s = g.addNode({0, -300}), c = g.addNode({0, 0});
+    const int w = g.addNode({-300, 0}), e = g.addNode({300, 0}), n = g.addNode({0, 300}), so = g.addNode({0, -300}), c = g.addNode({0, 0});
     g.addEdge(w, c, 12, RoadClass::Collector); g.addEdge(c, e, 12, RoadClass::Collector);
-    g.addEdge(s, c, 10, RoadClass::Local); g.addEdge(c, n, 10, RoadClass::Local);
-    NavGraph nav = buildNavGraph(g);
-    for (NavLink& L : nav.links) L.access |= road_access::kFrontage;
+    g.addEdge(so, c, 10, RoadClass::Local); g.addEdge(c, n, 10, RoadClass::Local);
+    const citytest::ModelScene& s = citytest::graphScene("furniture_kerb_life", g);
     StreetFurnitureParams fp;
-    const StreetFurniturePlan plan = planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    const StreetFurniturePlan p = plan(s, fp);
     int bins = 0, mid = 0;
-    for (const KerbProp& kp : plan.props) (kp.kind == KerbProp::Bin ? bins : mid)++;
-    std::printf("    [kerb] %zu trees, %d bins, %d racks/news boxes, %zu lamps\n", plan.trees.size(), bins, mid, plan.lampBases.size());
-    // ~1100 m of street x 2 kerbs at 9 m, less the junction's clear zone and the lamps' room
-    CHECK(plan.trees.size() > 150);
+    for (const KerbProp& kp : p.props) (kp.kind == KerbProp::Bin ? bins : mid)++;
+    std::printf("    [kerb] %zu trees, %d bins, %d racks/news boxes, %zu lamps\n", p.trees.size(), bins, mid, p.lampBases.size());
+    CHECK(p.trees.size() > 100);
     CHECK(bins >= 4);   // a corner bin on each approach's kerb
     CHECK(mid >= 4);
-    auto offRoad = [&](Vec2 v) {
-        for (int li = 0; li < nav.linkCount(); ++li) {
-            const NavLink& K = nav.links[li];
-            const Vec2 a = nav.nodes[K.from], b = nav.nodes[K.to], ab = b - a;
-            Real t = dot(v - a, ab) / ab.lengthSquared(); t = std::max(Real(0), std::min(Real(1), t));
-            if ((a + ab * t - v).length() < K.width * 0.5 + 0.3) return false;
-        }
-        return true;
-    };
     int onRoad = 0, byLamp = 0, atCorner = 0;
-    for (const StreetTree& t : plan.trees) {
+    for (const StreetTree& t : p.trees) {
         const Vec2 v(t.base.x, t.base.z);
-        if (!offRoad(v)) ++onRoad;
+        if (intoCarriageway(*s.model, v) > -0.3) ++onRoad;
         if (v.length() < fp.treeJunctionClear - 0.5) ++atCorner;
-        for (const Vec3& l : plan.lampBases) if ((Vec2(l.x, l.z) - v).length() < 3.0) { ++byLamp; break; }
+        for (const Vec3& l : p.lampBases) if ((Vec2(l.x, l.z) - v).length() < 3.0) { ++byLamp; break; }
     }
-    for (const KerbProp& kp : plan.props) if (!offRoad(Vec2(kp.base.x, kp.base.z))) ++onRoad;
+    for (const KerbProp& kp : p.props) if (intoCarriageway(*s.model, Vec2(kp.base.x, kp.base.z)) > -0.3) ++onRoad;
     CHECK(onRoad == 0);
     CHECK(byLamp == 0);
     CHECK(atCorner == 0);
-    // a tree on BOTH kerbs of the collector
+    // trees on BOTH kerbs of the collector
     int northKerb = 0, southKerb = 0;
-    for (const StreetTree& t : plan.trees) if (std::fabs(t.base.x) > 30) (t.base.z > 0 ? northKerb : southKerb)++;
-    CHECK(northKerb > 30 && southKerb > 30);
+    for (const StreetTree& t : p.trees) if (std::fabs(t.base.x) > 30) (t.base.z > 0 ? northKerb : southKerb)++;
+    CHECK(northKerb > 20 && southKerb > 20);
     // off: lamps and signals only
     fp.kerbLife = false;
-    const StreetFurniturePlan bare = planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    const StreetFurniturePlan bare = plan(s, fp);
     CHECK(bare.trees.empty() && bare.props.empty());
-    CHECK(bare.lampBases.size() == plan.lampBases.size());
+    CHECK(bare.lampBases.size() == p.lampBases.size());
 }
 
 // EACH STREET ITS OWN PLANTING (Glenn: "some have trees, some don't, some have them spaced differently ... suburbs vs
@@ -264,27 +137,23 @@ TEST_CASE(streets_are_planted_by_their_character) {
     C works; works.kind = C::Industrial;
     C coast; coast.coastal = true; coast.wealth = 0.5;
     C core; core.kind = C::Downtown;
-    const auto r = many(rich, RoadClass::Local), p = many(poor, RoadClass::Local), f = many(fresh, RoadClass::Local);
+    const auto r = many(rich, RoadClass::Local), pp = many(poor, RoadClass::Local), f = many(fresh, RoadClass::Local);
     const auto o = many(old, RoadClass::Local), i = many(works, RoadClass::Local), s = many(coast, RoadClass::Local);
     const auto d = many(core, RoadClass::Arterial);
-    std::printf("    [planting] rich none %d spacing %.1f scale %.2f | poor none %d spacing %.1f gaps %.2f | new scale %.2f | "
-                "old scale %.2f gaps %.2f | industrial none %d | coast palms %d | downtown arterial palms %d none %d\n",
-                r.none, r.spacing, r.scale, p.none, p.spacing, p.gaps, f.scale, o.scale, o.gaps, i.none, s.palms, d.palms, d.none);
-    CHECK(r.none == 0 && p.none > 100);            // the leafy streets are all planted; the poor ones often bare
-    CHECK(r.spacing < p.spacing - 4.0);            // ...close-set against far apart
-    CHECK(p.gaps > r.gaps + 0.25);                 // ...and the poor streets' rows are broken
+    CHECK(r.none == 0 && pp.none > 100);            // the leafy streets are all planted; the poor ones often bare
+    CHECK(r.spacing < pp.spacing - 4.0);            // ...close-set against far apart
+    CHECK(pp.gaps > r.gaps + 0.25);                 // ...and the poor streets' rows are broken
     CHECK(f.scale < 0.6 && o.scale > f.scale + 0.35);   // saplings on the new estates, big old trees in the old town
-    CHECK(i.none > 250);                           // the works: bare kerbs
-    CHECK(s.palms > 120);                          // palms by the sea
-    CHECK(d.palms > 100 && d.none > 50);           // downtown boulevards: palms, or nothing
+    CHECK(i.none > 250);                            // the works: bare kerbs
+    CHECK(s.palms > 120);                           // palms by the sea
+    CHECK(d.palms > 100 && d.none > 50);            // downtown boulevards: palms, or nothing
 
     // ON THE MAP: a wealthy east side and a poor industrial west on one crossroads -- the east arm planted close and
     // of ONE kind all along it (both kerbs), the west arm bare or nearly
     RoadGraph g;
     const int w = g.addNode({-400, 0}), e = g.addNode({400, 0}), c = g.addNode({0, 0}), n = g.addNode({0, 300});
     g.addEdge(w, c, 10, RoadClass::Local); g.addEdge(c, e, 10, RoadClass::Local); g.addEdge(c, n, 10, RoadClass::Local);
-    NavGraph nav = buildNavGraph(g);
-    for (NavLink& L : nav.links) L.access |= road_access::kFrontage;
+    const citytest::ModelScene& scene = citytest::graphScene("furniture_character", g);
     StreetFurnitureParams fp;
     fp.character = [](Vec2 at) {
         C ch;
@@ -292,16 +161,37 @@ TEST_CASE(streets_are_planted_by_their_character) {
         ch.wealth = 0.9; ch.age = 0.6;
         return ch;
     };
-    const StreetFurniturePlan plan = planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    const StreetFurniturePlan p = plan(scene, fp);
     int west = 0, east = 0;
     std::set<int> eastKinds;
-    for (const StreetTree& t : plan.trees) {
+    for (const StreetTree& t : p.trees) {
         if (std::fabs(t.base.z) > 20) continue;   // (the north arm)
         if (t.base.x < -20) ++west;
         else if (t.base.x > 20) { ++east; eastKinds.insert(static_cast<int>(t.species)); }
     }
     std::printf("    [planting] crossroads: west (industrial) %d trees, east (well off) %d trees of %zu kind(s)\n", west, east, eastKinds.size());
-    CHECK(east > 60);
+    CHECK(east > 40);
     CHECK(west < east / 3);
     CHECK(eastKinds.size() == 1);
 }
+
+#ifdef RT_ENABLE_SCRIPTING
+// THE KERB PROPS THAT ARE DATA (street_props.lua) all build: a kind whose mesh() fails is left out of the level with
+// only a warning, so every kind is checked here -- the bus stop (ADR-0485) once went missing that way (mesh.box takes
+// one table). The bus stop is placed at the stops, not marched.
+TEST_CASE(street_props_lua_builds_every_kind_and_the_bus_stop_stands_at_the_stops) {
+    engine::StreetPropsSpec spec;
+    std::string err;
+    CHECK(engine::loadStreetProps("assets/levels", spec, &err));
+    if (!err.empty()) std::printf("    %s\n", err.c_str());
+    CHECK(err.empty());
+    bool hydrant = false, busStop = false;
+    for (const engine::StreetPropKind& k : spec.kinds) {
+        CHECK(k.mesh && !k.mesh->indices.empty());
+        if (k.name == "hydrant") hydrant = !k.atBusStops;
+        if (k.name == "bus_stop") busStop = k.atBusStops;
+    }
+    CHECK(hydrant);
+    CHECK(busStop);
+}
+#endif

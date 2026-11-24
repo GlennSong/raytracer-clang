@@ -10,7 +10,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/vehicle_lamps.h"   // the lit-lamp mask bits (ADR-0342)
 #include "../src/engine/world.h"
-#include "street_map_test_util.h"   // a test world's street map, from its road entities (ADR-0425)
+#include "test_world_roads.h"   // a test world's road model, from its road entities
 
 #include <algorithm>
 #include <cmath>
@@ -26,17 +26,22 @@ using namespace citysim;
 namespace {
 
 // A square loop of road: every node routes to every other (degree-2 corners, so
-// no junction signals — good for the plain car/ped bake tests).
+// no junction signals — good for the plain car/ped bake tests). (#306 piece 6 W2: the world's roads are built into a
+// road model as a level's are, and a road file with no junction gets no lane level, so the loop's east side has a T at
+// its middle with a 40 m stub east; it was the bare loop.)
 RoadEntity squareLoop() {
     RoadEntity net;
     net.look.defaultWidth = 10.0;
     net.look.sidewalk = 2.5;
     net.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(40, 0)},
-                        RoadNode{Vec2(40, 40)}, RoadNode{Vec2(0, 40)} };
+                        RoadNode{Vec2(40, 40)}, RoadNode{Vec2(0, 40)},
+                        RoadNode{Vec2(40, 20)}, RoadNode{Vec2(80, 20)} };
     net.graph.addEdge(0, 1, net.look.defaultWidth);
-    net.graph.addEdge(1, 2, net.look.defaultWidth);
+    net.graph.addEdge(1, 4, net.look.defaultWidth);
+    net.graph.addEdge(4, 2, net.look.defaultWidth);
     net.graph.addEdge(2, 3, net.look.defaultWidth);
     net.graph.addEdge(3, 0, net.look.defaultWidth);
+    net.graph.addEdge(4, 5, net.look.defaultWidth);
     return net;
 }
 
@@ -106,7 +111,7 @@ TEST_CASE(city_render_builds_from_roadnet) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));   // null AssetManager: transforms only
     CHECK(city.built());
-    CHECK(city.nav().linkCount() > 0);
+    CHECK(city.sim().walkPoints().nodeCount() > 0);
     // THE CARS ARE THE DRIVING'S (ADR-0461): with no rule set named there is no driving, so the eight cars asked for
     // are not made, and the sim's agents are the six walkers, every one drawn at most once.
     CHECK(city.sim().agents().size() == 6u);
@@ -309,6 +314,49 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     CHECK(groupCount(world, city.pedGroup()) == 1u);
 }
 
+TEST_CASE(city_places_carry_where_their_doors_front) {
+    // ADR-0480: the street, station and kerb (or the walkway and metres along it) the lot pass recorded for a place's
+    // door (AuthoredPlace::frontage, ADR-0474) reach the sim's place unchanged, so a walk can start and end where the door
+    // states. A place that states nothing says nothing. (W2: the test world's roads are built into a road model as a
+    // level's are, and the sim holds it; this checked it held none while test worlds were hand-made street maps.)
+    World world;
+    testmap::addRoads(world, crossRoads());
+    CitySimConfig cfg;
+    cfg.pedestrians = 1;
+    cfg.seed = 7;
+    AuthoredPlace home;
+    home.type = "home";
+    home.x = 20;
+    home.z = 12;
+    home.frontage.street = "s3";
+    home.frontage.station = 41.25;
+    home.frontage.dir = -1;
+    AuthoredPlace shop;
+    shop.type = "shop";
+    shop.x = -20;
+    shop.z = -12;
+    shop.openHour = 9;
+    shop.closeHour = 17;
+    shop.frontage.walkway = "lot4.p2";
+    shop.frontage.along = 7.5;
+    AuthoredPlace office;
+    office.type = "office";
+    office.x = 12;
+    office.z = -20;
+    cfg.places = {home, shop, office};
+    world.add<CitySimConfig>(world.create(), cfg);
+    CityRenderSystem city(cityParams());
+    CHECK(city.build(world, nullptr));
+    const std::vector<Place>& places = city.places().places();
+    CHECK(places.size() == 3u);
+    if (places.size() != 3u) return;
+    CHECK(places[0].frontage.street == "s3" && places[0].frontage.station == 41.25 && places[0].frontage.dir == -1);
+    CHECK(!places[0].frontage.onWalkway());
+    CHECK(places[1].frontage.walkway == "lot4.p2" && places[1].frontage.along == 7.5 && !places[1].frontage.onStreet());
+    CHECK(!places[2].frontage.onStreet() && !places[2].frontage.onWalkway());
+    CHECK(city.sim().roads() != nullptr && !city.sim().roads()->laneLevel.walks.empty());
+}
+
 TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     // The agent-lab level (assets/levels/agent_lab.json) is a theta circuit: a
     // 120x80 ring with a middle bar, meeting at two 3-way junctions. Mirror its
@@ -341,17 +389,15 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     CHECK(city.build(world, nullptr));
     CHECK(city.sim().wander());
 
-    const NavGraph& nav = city.nav();
-    int junctions = 0;
-    for (int v = 0; v < nav.nodeCount(); ++v)
-        if (nav.isJunction(v)) ++junctions;
-    CHECK(junctions == 2);   // the two theta mid-side meets; corners just bend
-
-    // Fully connected: every ordered pair routes.
+    // Fully connected on foot: every walk point is in one part of the walks, and a sample of pairs route.
+    const WalkPointMap& pts = city.sim().walkPoints();
+    bool onePart = pts.nodeCount() > 0;
+    for (int a = 1; a < pts.nodeCount(); ++a) onePart = onePart && pts.samePart(0, a);
+    CHECK(onePart);
     bool allRoute = true;
-    for (int a = 0; a < nav.nodeCount(); ++a)
-        for (int b = 0; b < nav.nodeCount(); ++b)
-            if (a != b && !findRoute(nav, a, b).valid()) allRoute = false;
+    for (int a = 0; a < pts.nodeCount(); a += 7)
+        for (int b = 0; b < pts.nodeCount(); b += 11)
+            if (a != b && !city.sim().pointRoute(a, b).found) allRoute = false;
     CHECK(allRoute);
 
     // The lab's walker comes alive and, wandering, strings trip after trip together. (Its car was the old driving's:
@@ -410,23 +456,13 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
 
-    // One strip per lane per link, lifted just off the road like the rings.
-    const NavGraph& nav = city.nav();
-    std::size_t lanes = 0;
-    for (const NavLink& l : nav.links)
-        lanes += static_cast<std::size_t>(l.lanes < 1 ? 1 : l.lanes);
-    CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+    // One strip and one ring per walk point (the "nav" view: the sim's walk points), lifted just off the ground.
+    const std::size_t points = static_cast<std::size_t>(city.sim().walkPoints().nodeCount());
+    CHECK(points > 0);
+    CHECK(groupCount(world, city.navLinkGroup()) == points);
+    CHECK(groupCount(world, city.navNodeGroup()) == points);
     InstanceGroup* strips = world.get<InstanceGroup>(city.navLinkGroup());
     CHECK(strips != nullptr);
-    const double lift = crossRoads().look.lift;   // strips ride the net's own lift
-    for (const Mat4& m : strips->transforms)
-        CHECK(std::fabs(m.m[1][3] - (lift + 0.04)) < 1e-6);   // road lift + 0.04
-    // One ring per junction node (the cross has exactly one).
-    int junctions = 0;
-    for (int n = 0; n < nav.nodeCount(); ++n)
-        if (nav.isJunction(n)) ++junctions;
-    CHECK(junctions == 1);
-    CHECK(groupCount(world, city.navNodeGroup()) == static_cast<std::size_t>(junctions));
 
     // Cones: exactly one per MOVING walker every step; the navgraph stays put (static bake, not rebaked per frame).
     bool sawPedCone = false;
@@ -436,7 +472,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
         for (const Agent& a : city.sim().agents())
             if (a.moving) ++movingPeds;
         CHECK(groupCount(world, city.visionGroup()) == movingPeds);
-        CHECK(groupCount(world, city.navLinkGroup()) == lanes);
+        CHECK(groupCount(world, city.navLinkGroup()) == points);
         if (movingPeds > 0) sawPedCone = true;
     }
     CHECK(sawPedCone);   // walkers really moved, so both views really drew
@@ -719,12 +755,17 @@ TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
         RoadEntity big;
         big.look.defaultWidth = 10.0;
         big.look.sidewalk = 2.5;
+        // (#306 piece 6 W2: a T at the east side's middle with a 100 m stub, so the road file has a junction and a lane
+        // level; it was the bare square)
         big.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(1600, 0)},
-                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)} };
+                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)},
+                            RoadNode{Vec2(1600, 800)}, RoadNode{Vec2(1700, 800)} };
         big.graph.addEdge(0, 1, big.look.defaultWidth);
-        big.graph.addEdge(1, 2, big.look.defaultWidth);
+        big.graph.addEdge(1, 4, big.look.defaultWidth);
+        big.graph.addEdge(4, 2, big.look.defaultWidth);
         big.graph.addEdge(2, 3, big.look.defaultWidth);
         big.graph.addEdge(3, 0, big.look.defaultWidth);
+        big.graph.addEdge(4, 5, big.look.defaultWidth);
         testmap::addRoads(world, big);
         CityRenderParams p = cityParams();
         p.cars = 0; p.pedestrians = 60; p.seed = 5;

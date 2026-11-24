@@ -856,102 +856,6 @@
   },
   {
    "class": "local",
-   "id": "s8",
-   "path": {
-    "points": [
-     [
-      -381.95,
-      475.91
-     ],
-     [
-      -382.74,
-      478.07
-     ],
-     [
-      -383.17,
-      479.24
-     ]
-    ]
-   }
-  },
-  {
-   "class": "collector",
-   "id": "s9",
-   "path": {
-    "points": [
-     [
-      -381.95,
-      475.91
-     ],
-     [
-      -386.79,
-      475.33
-     ],
-     [
-      -400.82,
-      473.28
-     ],
-     [
-      -412.94,
-      471.72
-     ]
-    ]
-   }
-  },
-  {
-   "class": "collector",
-   "id": "s10",
-   "path": {
-    "points": [
-     [
-      -381.95,
-      475.91
-     ],
-     [
-      -372.53,
-      477.03
-     ],
-     [
-      -358.15,
-      478.32
-     ],
-     [
-      -343.73,
-      479.17
-     ],
-     [
-      -329.4,
-      479.61
-     ],
-     [
-      -316.33,
-      479.7
-     ],
-     [
-      -303.51,
-      479.55
-     ],
-     [
-      -290.96,
-      479.24
-     ],
-     [
-      -278.76,
-      478.87
-     ],
-     [
-      -266.88,
-      478.51
-     ],
-     [
-      -259.77,
-      478.35
-     ]
-    ]
-   }
-  },
-  {
-   "class": "local",
    "id": "s11",
    "path": {
     "points": [
@@ -11310,42 +11214,6 @@
      [
       152.33,
       448.29
-     ]
-    ]
-   }
-  },
-  {
-   "class": "collector",
-   "id": "s169",
-   "path": {
-    "points": [
-     [
-      161.21,
-      422.58
-     ],
-     [
-      156.46,
-      423.32
-     ],
-     [
-      144.26,
-      425.37
-     ],
-     [
-      131.81,
-      427.53
-     ],
-     [
-      119.07,
-      429.76
-     ],
-     [
-      106.07,
-      431.98
-     ],
-     [
-      105.42,
-      432.08
      ]
     ]
    }
@@ -31821,13 +31689,6 @@
    "arms": [
     {
      "at": 0.0,
-     "road": "s10",
-     "spine": "out",
-     "street": "s10",
-     "heading": 6.17
-    },
-    {
-     "at": 0.0,
      "road": "s13",
      "spine": "out",
      "street": "s13",
@@ -31842,37 +31703,19 @@
     },
     {
      "at": 0.0,
-     "road": "s287",
+     "road": "s12",
      "spine": "out",
-     "street": "s287",
-     "heading": 195.22
+     "street": "s12",
+     "heading": 193.86
     }
    ],
    "at": [
-    -387.25,
-    477.69
+    -383.17,
+    479.24
    ],
    "id": "j7",
-   "inside": [
-    {
-     "from": 0.0,
-     "road": "s8",
-     "to": 3.55
-    },
-    {
-     "from": 0.0,
-     "road": "s9",
-     "to": 31.27
-    },
-    {
-     "from": 0.0,
-     "road": "s12",
-     "to": 30.71
-    }
-   ],
    "control": "signal",
-   "through": [[1,3]],
-   "nodes": [{"at":[-381.95,475.91],"points":[{"at":0.0,"road":"s8"},{"at":0.0,"road":"s9"},{"at":0.0,"road":"s10"}]},{"at":[-383.17,479.24],"points":[{"at":3.55,"road":"s8"},{"at":0.0,"road":"s11"},{"at":0.0,"road":"s12"},{"at":0.0,"road":"s13"},{"at":0.82,"road":"s9"}]},{"at":[-412.94,471.72],"points":[{"at":31.27,"road":"s9"},{"at":30.71,"road":"s12"},{"at":0.0,"road":"s287"}]}]
+   "through": [[0,2]]
   },
   {
    "arms": [
@@ -31896,13 +31739,6 @@
      "spine": "in",
      "street": "s13",
      "heading": 196.14
-    },
-    {
-     "at": 122.35,
-     "road": "s10",
-     "spine": "in",
-     "street": "s10",
-     "heading": 178.48
     },
     {
      "at": 105.58,
@@ -31932,8 +31768,8 @@
     }
    ],
    "control": "signal",
-   "through": [[0,2],[1,4],[3,5]],
-   "nodes": [{"at":[-259.77,478.35],"points":[{"at":122.35,"road":"s10"},{"at":105.58,"road":"s44"},{"at":0.0,"road":"s47"},{"at":0.0,"road":"s48"}]},{"at":[-269.83,507.53],"points":[{"at":116.84,"road":"s13"},{"at":30.87,"road":"s47"},{"at":0.0,"road":"s49"},{"at":0.0,"road":"s50"}]}]
+   "through": [[0,2],[1,3]],
+   "nodes": [{"at":[-259.77,478.35],"points":[{"at":105.58,"road":"s44"},{"at":0.0,"road":"s47"},{"at":0.0,"road":"s48"}]},{"at":[-269.83,507.53],"points":[{"at":116.84,"road":"s13"},{"at":30.87,"road":"s47"},{"at":0.0,"road":"s49"},{"at":0.0,"road":"s50"}]}]
   },
   {
    "arms": [
@@ -34704,13 +34540,6 @@
      "spine": "in",
      "street": "s140",
      "heading": 170.92
-    },
-    {
-     "at": 56.59,
-     "road": "s169",
-     "spine": "in",
-     "street": "s169",
-     "heading": 350.33
     }
    ],
    "at": [
@@ -34719,7 +34548,7 @@
    ],
    "id": "j75",
    "control": "unmarked",
-   "through": [[1,2]]
+   "through": [[0,1]]
   },
   {
    "arms": [
@@ -35359,35 +35188,20 @@
      "heading": 199.05
     },
     {
-     "at": 0.0,
-     "road": "s169",
-     "spine": "out",
-     "street": "s169",
-     "heading": 170.68
-    },
-    {
-     "at": 0.0,
-     "road": "s170",
-     "spine": "out",
-     "street": "s170",
-     "heading": 351.63
+     "at": 27.2,
+     "road": "s168",
+     "spine": "in",
+     "street": "s168",
+     "heading": 289.06
     }
    ],
    "at": [
-    156.77,
-    435.44
+    152.33,
+    448.29
    ],
    "id": "j91",
-   "inside": [
-    {
-     "from": 0.0,
-     "road": "s168",
-     "to": 27.2
-    }
-   ],
    "control": "signal",
-   "through": [[0,2],[3,4]],
-   "nodes": [{"at":[161.21,422.58],"points":[{"at":0.0,"road":"s168"},{"at":0.0,"road":"s169"},{"at":0.0,"road":"s170"}]},{"at":[152.33,448.29],"points":[{"at":27.2,"road":"s168"},{"at":0.0,"road":"s171"},{"at":0.0,"road":"s172"},{"at":0.0,"road":"s173"}]}]
+   "through": [[0,2],[1,3]]
   },
   {
    "arms": [
@@ -37568,9 +37382,39 @@
    "control": "unmarked",
    "id": "j145",
    "through": [[2,1]]
+  },
+  {
+   "arms": [
+    {
+     "at": 0.0,
+     "road": "s168",
+     "spine": "out",
+     "street": "s168",
+     "heading": 109.06
+    },
+    {
+     "at": 0.0,
+     "road": "s170",
+     "spine": "out",
+     "street": "s170",
+     "heading": 351.63
+    }
+   ],
+   "at": [
+    161.21,
+    422.58
+   ],
+   "control": "unmarked",
+   "id": "j146",
+   "through": [[0,1]]
   }
  ],
  "arms_in_ring": true,
+ "bus_lines": [
+    {"id":"B1","name":"Line 1","stops":[{"id":"B1-01","kerb":-1,"name":"Fourteenth Street","station":41.2,"street":"s151"},{"id":"B1-02","kerb":1,"name":"Fifteenth Road","station":36.2,"street":"s177"},{"id":"B1-03","kerb":1,"name":"Thirteenth Street","station":41.42,"street":"s236"},{"id":"B1-04","kerb":1,"name":"Fifteenth Road 2","station":41.19,"street":"s301"},{"id":"B1-05","kerb":-1,"name":"Third Drive","station":106.67,"street":"s303"},{"id":"B1-06","kerb":1,"name":"Rowan Parkway","station":61.41,"street":"bv0_out"},{"id":"B1-07","kerb":-1,"name":"Rowan Parkway 2","station":57.43,"street":"s248_0"},{"id":"B1-08","kerb":-1,"name":"Lowell Drive","station":57.62,"street":"s189"},{"id":"B1-09","kerb":1,"name":"Dogwood Street","station":36.47,"street":"s121"},{"id":"B1-10","kerb":-1,"name":"Emerson Drive","station":39.56,"street":"s92"},{"id":"B1-11","kerb":1,"name":"Rowan Parkway 3","station":41.24,"street":"s155"}]},
+    {"id":"B2","name":"Line 2","stops":[{"id":"B2-01","kerb":1,"name":"Fourteenth Street","station":73.69,"street":"s18"},{"id":"B2-02","kerb":1,"name":"Third Drive","station":36.96,"street":"s16"},{"id":"B2-03","kerb":1,"name":"Thirteenth Street","station":41.2,"street":"s143"},{"id":"B2-04","kerb":1,"name":"Fifteenth Road","station":36.21,"street":"s206"},{"id":"B2-05","kerb":1,"name":"Fifteenth Road 2","station":71.55,"street":"s263"},{"id":"B2-06","kerb":-1,"name":"Foundry Parkway","station":102.73,"street":"s302"},{"id":"B2-07","kerb":1,"name":"Thirteenth Street 2","station":36.73,"street":"s261"},{"id":"B2-08","kerb":-1,"name":"Fourteenth Street 2","station":52.13,"street":"s269"},{"id":"B2-09","kerb":1,"name":"Rowan Parkway","station":86.43,"street":"bv0_out"},{"id":"B2-10","kerb":-1,"name":"Rowan Parkway 2","station":57.43,"street":"s248_0"},{"id":"B2-11","kerb":-1,"name":"Rowan Parkway 3","station":58.33,"street":"s155"},{"id":"B2-12","kerb":1,"name":"Dogwood Street","station":36.47,"street":"s121"}]},
+    {"id":"B3","name":"Line 3","stops":[{"id":"B3-01","kerb":1,"name":"Fourteenth Street","station":73.69,"street":"s18"},{"id":"B3-02","kerb":1,"name":"Lowell Drive","station":37.2,"street":"s28"},{"id":"B3-03","kerb":1,"name":"Rowan Parkway","station":36.31,"street":"s91"},{"id":"B3-04","kerb":-1,"name":"Fourteenth Street 2","station":58.22,"street":"s151"},{"id":"B3-05","kerb":1,"name":"Fifteenth Road","station":36.63,"street":"s263"},{"id":"B3-06","kerb":-1,"name":"Third Drive","station":106.67,"street":"s303"},{"id":"B3-07","kerb":1,"name":"Rowan Parkway 2","station":61.41,"street":"bv0_out"},{"id":"B3-08","kerb":-1,"name":"Rowan Parkway 3","station":57.43,"street":"s248_0"},{"id":"B3-09","kerb":1,"name":"Fourteenth Street 3","station":66.36,"street":"s244"},{"id":"B3-10","kerb":-1,"name":"Third Drive 2","station":56.28,"street":"s210"},{"id":"B3-11","kerb":-1,"name":"Third Drive 3","station":53.22,"street":"s114"},{"id":"B3-12","kerb":-1,"name":"Rowan Parkway 4","station":58.08,"street":"s91"},{"id":"B3-13","kerb":1,"name":"Dogwood Street","station":41.37,"street":"s123"},{"id":"B3-14","kerb":1,"name":"Rowan Parkway 5","station":41.3,"street":"s58"},{"id":"B3-15","kerb":-1,"name":"Fourteenth Street 4","station":77.1,"street":"s19"}]}
+  ],
  "lane_rules": {"solid_before_stop_line":20.0},
  "streets": [
   {
@@ -37652,17 +37496,6 @@
   },
   {
    "from": 0.0,
-   "id": "s10",
-   "junctions": [
-    "j7",
-    "j8"
-   ],
-   "name": "Sherman Avenue",
-   "road": "s10",
-   "to": 122.35
-  },
-  {
-   "from": 0.0,
    "id": "s11",
    "junctions": [
     "j7",
@@ -37671,6 +37504,21 @@
    "name": "Wharf Street",
    "road": "s11",
    "to": 64.91
+  },
+  {
+   "carries_on": [
+    null,
+    "s287"
+   ],
+   "from": 0.0,
+   "id": "s12",
+   "junctions": [
+    "j7",
+    null
+   ],
+   "name": "Foundry Parkway",
+   "road": "s12",
+   "to": 30.71
   },
   {
    "from": 0.0,
@@ -39170,20 +39018,20 @@
   },
   {
    "from": 0.0,
-   "id": "s169",
+   "id": "s168",
    "junctions": [
-    "j91",
-    "j75"
+    "j146",
+    "j91"
    ],
-   "name": "Sherman Avenue",
-   "road": "s169",
-   "to": 56.59
+   "name": "Twentieth Road",
+   "road": "s168",
+   "to": 27.2
   },
   {
    "from": 0.0,
    "id": "s170",
    "junctions": [
-    "j91",
+    "j146",
     "j92"
    ],
    "name": "Sherman Avenue",
@@ -40307,13 +40155,13 @@
   },
   {
    "carries_on": [
-    null,
+    "s12",
     "s320"
    ],
    "from": 0.0,
    "id": "s287",
    "junctions": [
-    "j7",
+    null,
     null
    ],
    "name": "Foundry Parkway",

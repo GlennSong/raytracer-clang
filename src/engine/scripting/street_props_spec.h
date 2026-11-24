@@ -25,6 +25,7 @@ struct StreetPropKind {
     std::string name;
     Real every = 90, verge = 0.55, junction = 6;
     bool mainOnly = false;
+    bool atBusStops = false;            // stands at each bus stop the roads state (ADR-0485), not every so many metres
     std::shared_ptr<RenderMesh> mesh;   // at the origin, standing on y = 0
     StreetPropCollider collider;
     std::string sprayEffect;            // empty: none

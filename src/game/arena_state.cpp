@@ -39,6 +39,7 @@
 #include "../apps/citysim/city_near.h"
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/train_system.h"
+#include "../apps/citysim/city_bus_ride.h"
 #include "../apps/citysim/city_map_tool.h"
 #include "../apps/citysim/city_possess.h"
 #endif
@@ -233,6 +234,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // capsule pose it reads is already this tick's.
     addSystem<PlayerBodySystem>();
     addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard
+    addSystem<citysim::BusRideSystem>(citySys, physSys, camSys.flyController());   // the player on a bus (ADR-0486)
     // The map: tool slot 3 (city_map_tool) -- the city SVG through the game UI
     // layer; drag pans, the wheel zooms, C centres on you.
     addSystem<citysim::CityMapToolSystem>(citySys, camSys.flyController());

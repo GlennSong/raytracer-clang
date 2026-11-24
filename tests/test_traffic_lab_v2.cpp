@@ -183,7 +183,29 @@ constexpr double kLongestStand = 100.0;
 // 8.85 -> 9.67 m/s, standing at the end 78 -> 52, ramps used 6 -> 8, cars over kLongestStand 12 -> 10 (the longest
 // 142.9 -> 169.5 s: car 9 refused room beyond). The same two failures: queues 2.40 -> 3.03 s a car (over 8 gaps; turns
 // included 3.09 -> 3.08), and cars over kLongestStand.
-constexpr uint64_t kFiveMinuteStateHash = 0x9956a73de1425d39ull;
+// Retaken 2026-11-22 (ADR-0489): the pin had gone stale since the #306 sweep's bug fixes (94341134, the walk-only
+// phases; 511dc08e, followers along a split's stretch), which changed the lab's driving without retaking it; the same
+// value is given at 3db7e3d4 and with ADR-0489's lane change step present but off (routes planning no changes), so the
+// lane change step itself changes nothing here. 0x9956a73de1425d39 -> 0xd6190c9be20ab725. The same two failures.
+// Retaken 2026-11-23 (sitting 5, the two merge faults): (b) announce.cpp asks whether a car holds a stop short of a
+// stretch within kSamePoint instead of exactly (a stop placed AT a stretch's start sat a double's step past it, and the
+// car creeping to it was put first by cannot_stop); (a) following sees a moving car on a road merge's other path further
+// along the join's stretch (traffic_state.h followedAcross), as it did a split's. 0xd6190c9be20ab725 -> 0x4cb5074df110f915.
+// At 5 minutes: arrived 400 -> 401, standing 49 -> 48; at 20 minutes arrived 1892 -> 1891; overlaps, touches, no-reason
+// stands and box stops unchanged (0, 0, 0, 8.1 car-s all allowed). The same two failures.
+// Retaken 2026-11-23 (sitting 5): LANE CHANGES ON BY DEFAULT (RT_LANE_CHANGES=0 gives the old 0x4cb5074df110f915
+// exactly). 0x4cb5074df110f915 -> 0x1e642ca0e2346d7c. Not the same traffic: trips may go wherever a lane change reaches
+// (mean planned 1300 -> 1511 m). At 5 minutes arrived 401 -> 183, standing 48 -> 103, lost a km 41.8 -> 55.7 s; at 20
+// minutes 58.5 -> 98.4 s a km, deadlocks 0, touches 0. Slower, taken on purpose (Glenn, 2026-11-23: a robust system
+// first, timings later). The same two failures, and Jumps (#320).
+// And 0x1e642ca0e2346d7c -> 0x5cbc93953af33b13: a route from where a car stands whose first move across does not fit
+// in what is left of its lane keeps its lane instead (Driving::routeFromWhereItIs). Every count the same.
+// Retaken (sitting 6, JUNCTIONS BY JUDGEMENT: no ring order imposed on a group of cars, no room grants -- each driver
+// asks the questions of what it sees, ties go to the bolder by a seeded boldness, a car queued behind one waiting at its
+// line is not coming): 0x5cbc93953af33b13 -> 0x4f08df2944d83a94. At 5 minutes arrived 183 -> 185, standing 103 -> 102,
+// lost a km 55.7 -> 55.6 s; deadlocks 0, touches 0. The same failures (queues, Jumps #320); kLongestStand is no longer
+// checked (above).
+constexpr uint64_t kFiveMinuteStateHash = 0x4f08df2944d83a94ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -523,6 +545,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     for (int i = 1; i <= steps; ++i) {
         city.step(lc.world, kStep);
         const Real now = i * kStep;
+        if (std::getenv("RT_LAB_EARLY") && i == 4885)
+            if (const driving::Car* c54 = d->car(driving::CarId(54))) {
+                std::string why;
+                const bool holds = d->waitReasonHolds(*c54, &why);
+                std::printf("      [early] car 54 reason holds %d (%s); beside %d offset %.3f\n%s\n", holds ? 1 : 0, why.c_str(),
+                            c54->besidePath.valid() ? static_cast<int>(c54->besidePath.index) : -1, c54->offset,
+                            d->describeCar(c54->id).substr(0, 1800).c_str());
+            }
         for (const driving::Car& c : d->cars()) {
             if (!c.driven) continue;
             const engine::Path& p = roads.paths[c.path.index];
@@ -824,7 +854,14 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("    [lab-v2] another way: %llu drivers refused room for room_refused_another_way asked for one, %llu "
                     "took one\n",
                     static_cast<unsigned long long>(pc.askedAnotherWay), static_cast<unsigned long long>(pc.tookAnotherWay));
-        // WHO GOES FIRST (issue #263): the conflicts the one resolver settled over the run, by the question that decided.
+        // CONTACT AND CRASHES (sitting 7)
+        {
+            const driving::Driving::CrashCounts& k = d->crashCounts();
+            std::printf("    [lab-v2] contact: %llu new contacts between bodies, %llu rolled a crash, %llu wrecks, %llu cleared\n",
+                        static_cast<unsigned long long>(k.contacts), static_cast<unsigned long long>(k.crashes),
+                        static_cast<unsigned long long>(k.wrecks), static_cast<unsigned long long>(k.cleared));
+        }
+        // WHO GOES FIRST (issue #263; sitting 6: by each pair's questions): the conflicts over the run, by the question that decided.
         const driving::ConflictCounts& cc = d->conflictCounts();
         std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",
                     static_cast<unsigned long long>(cc.conflicts));
@@ -832,10 +869,8 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (cc.byQuestion[q] > 0)
                 std::printf(" %s %llu", driving::questionName(static_cast<driving::Question>(q)),
                             static_cast<unsigned long long>(cc.byQuestion[q]));
-        std::printf("; rings broken %llu (untied at a queue %llu; of bodies alone, left standing %llu); conflicts whose "
-                    "car going second could not stop short (#284) %llu\n",
-                    static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.physicalRings),
-                    static_cast<unsigned long long>(cc.bodyRings), static_cast<unsigned long long>(cc.secondCannotStop));
+        std::printf("; conflicts whose car going second could not stop short (#284) %llu\n",
+                    static_cast<unsigned long long>(cc.secondCannotStop));
         // ROOM BEYOND (issue #264): asks, grants and refusals over the run.
         const driving::RoomCounts& rc = d->roomCounts();
         std::printf("    [lab-v2] room beyond: %llu asks settled, %llu granted (%llu through junctions too close to stop "
@@ -848,11 +883,9 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 std::printf(" %llu %s;", static_cast<unsigned long long>(rc.refused[k]),
                             driving::roomRefusalWords(static_cast<driving::RoomRefusal>(k)));
         std::printf(" grants used on the lane %llu, given back %llu (%llu claims through close junctions checked again and "
-                    "no longer holding, #284); the most held at once %u; asks of one tick put in order by the resolver "
-                    "%llu; road-data places refused %zu\n",
+                    "no longer holding, #284); the most held at once %u; road-data places refused %zu\n",
                     static_cast<unsigned long long>(rc.usedOnLane), static_cast<unsigned long long>(rc.givenBack),
-                    static_cast<unsigned long long>(rc.chainsGivenBack), rc.mostHeld,
-                    static_cast<unsigned long long>(rc.orderedByResolver), rc.roadDataPlaces.size());
+                    static_cast<unsigned long long>(rc.chainsGivenBack), rc.mostHeld, rc.roadDataPlaces.size());
         for (const std::pair<uint32_t, uint32_t>& place : rc.roadDataPlaces)
             std::printf("      [road data] refused room at junction %u, lane %u beyond\n", place.first, place.second);
         // One driver's card giving way at a line, as `driver? <id>` shows it.
@@ -1000,6 +1033,25 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // BODY AGAINST BODY (issue #283): every pair of drawn bodies every tick, sorted by how their paths relate.
     const driving::TouchRow& touches = sim.drivingHost().measurements().rows().touches;
     printTouches(*d, touches);
+    {   // TRIPS AGAINST FREE FLOW (sitting 5: compares runs whose cars go on different trips)
+        const driving::Driving::TripTimes& tt = d->tripTimes();
+        if (tt.arrived > 0)
+            std::printf("    [lab-v2] trips arrived %llu: mean %.0f m planned, %.1f s taken against %.1f s at free flow "
+                        "(%.2f times; %.1f s lost a trip, %.1f s a km)\n",
+                        static_cast<unsigned long long>(tt.arrived), tt.metres / tt.arrived, tt.seconds / tt.arrived,
+                        tt.freeFlowSeconds / tt.arrived, tt.freeFlowSeconds > 0 ? tt.seconds / tt.freeFlowSeconds : 0.0,
+                        (tt.seconds - tt.freeFlowSeconds) / tt.arrived,
+                        tt.metres > 0 ? (tt.seconds - tt.freeFlowSeconds) / (tt.metres / 1000.0) : 0.0);
+    }
+    {   // LANE CHANGES (sitting 5)
+        const driving::Driving::LaneChangeCounts& n = d->laneChangeCounts();
+        std::printf("    [lab-v2] lane changes: wanted in %llu decisions; begun %llu, finished %llu, backed off %llu; turns missed %llu (no way on %llu); let in %llu; dropped back %llu\n",
+                    static_cast<unsigned long long>(n.wanted), static_cast<unsigned long long>(n.begun),
+                    static_cast<unsigned long long>(n.finished), static_cast<unsigned long long>(n.backedOff),
+                    static_cast<unsigned long long>(n.missed),
+                    static_cast<unsigned long long>(n.missedNoRoute), static_cast<unsigned long long>(n.letIn),
+                    static_cast<unsigned long long>(n.droppedBack));
+    }
     CHECK(touches.spells <= kMostTouchSpells);
     // FAILS SINCE ADR-0426 on one row, "How a queue empties" (2.76 s a car over 9 gaps from the fourth car on, target 1.7
     // to 2.1 s; it passed on the lane graph worked out from the built roads). Left failing, not loosened: the lane level
@@ -1024,15 +1076,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
-    // FAILS SINCE ADR-0426 (13 cars over kLongestStand, not loosened): car 92 stood 261 s on the frontage road s311's
-    // offside lane where the off-ramp d0_0_a_off merges into it (lane 1457 joins ramp lane 1607 near (-562, 80)), giving
-    // way to the ramp's cars every time -- two lanes meeting between junctions are settled by the rule set's
-    // between_junctions questions, and two lanes have no sign rank, no movement and no line to arrive at, so the
-    // fall-back (the lower path id gives way) decides it -- with cars 97 and 184 behind it; and cars stood up to 143 s at
-    // red lights, the lab's longest cycle now 115 s (junction 0, which the lane level holds as the one stated junction it
-    // is: a spread junction of seven arms, one signal plan of seven phases, where the old graph split it in two; 92.8 s
-    // before). Both are the driving's (merging, signal plans), out of step 8's scope. See ADR-0426.
-    CHECK(overLongest == 0);
+    // NO LONG-STAND LIMIT (two-drivers-meeting-design.md section 12, sitting 6: "the lab tests for unending rings of
+    // waits instead of long stands"; Glenn 2026-11-16: cars "need to wait as long as they have to"). A car standing long
+    // at a red, or behind a slow merge, is printed above (cars over kLongestStand), not failed; a deadlock -- a ring of
+    // waits nothing can end -- fails the measurements table's deadlock row and loopSamples above.
+    (void)overLongest;
     // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
     // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants
     // never outlive their use).

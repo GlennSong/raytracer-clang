@@ -149,19 +149,32 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
     const CityMapData& data, const std::vector<const RoadDeckField*>& decks,
     double tolerance, double mergeRadius) {
     std::vector<SidewalkCrossing> out;
-    // the street map's links (ADR-0425), each street piece once: only to LABEL a hit with its road, and its ends' degree
+    // the streets' centre lines (the road model's, CityMapData::streets), each piece between two of a line's points once,
+    // the points shared where lines meet (to the centimetre): only to LABEL a hit with its road, and its ends' degree
     struct Piece { int a, b; RoadClass klass; double width; };
     std::vector<Piece> pieces;
+    std::vector<Vec2> nodes;
     {
+        std::map<std::pair<long long, long long>, int> at;
+        auto nodeOf = [&](const Vec2& v) {
+            const std::pair<long long, long long> k{std::llround(v.x * 100.0), std::llround(v.y * 100.0)};
+            const std::map<std::pair<long long, long long>, int>::iterator it = at.find(k);
+            if (it != at.end()) return it->second;
+            nodes.push_back(v);
+            at.emplace(k, static_cast<int>(nodes.size()) - 1);
+            return static_cast<int>(nodes.size()) - 1;
+        };
         std::set<std::pair<int, int>> seen;
-        for (int li = 0; li < data.nav.streetLinkCount(); ++li) {
-            const NavLink& L = data.nav.links[static_cast<std::size_t>(li)];
-            if (L.footpath || !seen.insert({std::min(L.from, L.to), std::max(L.from, L.to)}).second) continue;
-            pieces.push_back({L.from, L.to, L.klass, L.width});
+        for (const CityMapData::Street& s : data.streets) {
+            if (s.footway || s.track) continue;
+            for (std::size_t i = 0; i + 1 < s.line.size(); ++i) {
+                const int a = nodeOf(s.line[i]), b = nodeOf(s.line[i + 1]);
+                if (a == b || !seen.insert({std::min(a, b), std::max(a, b)}).second) continue;
+                pieces.push_back({a, b, s.klass, s.width});
+            }
         }
     }
-    const std::vector<Vec2>& nodes = data.nav.nodes;
-    const int N = data.nav.streetNodeCount();
+    const int N = static_cast<int>(nodes.size());
     if (decks.empty() || data.curbLoops.empty()) return out;
     // A spatial hash of the pieces, only to LABEL a hit with its road.
     const double cell = 32.0;
@@ -283,7 +296,6 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         minX = std::min(minX, x); maxX = std::max(maxX, x);
         minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
     };
-    for (int n = 0; n < data.nav.streetNodeCount(); ++n) grow(data.nav.nodes[static_cast<std::size_t>(n)].x, data.nav.nodes[static_cast<std::size_t>(n)].y);
     for (const CityMapData::Street& s : data.streets) for (const Vec2& v : s.line) grow(v.x, v.y);
     for (const Poly2& p : data.blocks) for (const Vec2& v : p) grow(v.x, v.y);
     for (const CityMapData::Building& b : data.buildings) for (const Vec2& v : b.plan) grow(v.x, v.y);
@@ -458,16 +470,13 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         out << "</g>\n";
         ++drawn;
     }
-    // --- nav graph -------------------------------------------------------------------
+    // --- the streets' centre lines (the road model's; the "nav" layer drew the street map's links until #306) ---------
     if (layers.nav) {
         out << "<g id='layer-nav' stroke='#0aa2c7' stroke-width='0.6' fill='none' opacity='0.9'>\n";
-        for (int li = 0; li < data.nav.linkCount(); ++li) {
-            const NavLink& L = data.nav.links[li];
-            if (L.from < 0 || L.to < 0 || L.from >= data.nav.nodeCount() || L.to >= data.nav.nodeCount())
-                continue;
-            out << "<line x1='" << data.nav.nodes[L.from].x << "' y1='" << data.nav.nodes[L.from].y
-                << "' x2='" << data.nav.nodes[L.to].x << "' y2='" << data.nav.nodes[L.to].y << "'/>\n";
-        }
+        for (const CityMapData::Street& s : data.streets)
+            for (std::size_t i = 0; i + 1 < s.line.size(); ++i)
+                out << "<line x1='" << s.line[i].x << "' y1='" << s.line[i].y << "' x2='" << s.line[i + 1].x << "' y2='"
+                    << s.line[i + 1].y << "'/>\n";
         out << "</g>\n";
         ++drawn;
     }
@@ -651,7 +660,7 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
         entry(layers.buildings, "layer-buildings", sw("#8f8378", "#3f3731", 8),
               "buildings: plan polygons (" + std::to_string(data.buildings.size()) + ")");
         entry(layers.nav, "layer-nav", sw("none", "#0aa2c7", 8),
-              "nav graph: the city sim's links (" + std::to_string(data.nav.linkCount()) + ")");
+              "street centre lines (" + std::to_string(data.streets.size()) + " streets)");
         entry(layers.objects, "layer-objects", sw("#2e7d32", "#6a1b9a", 8),
               "planted objects: trees/scenery " + std::to_string(nTrees) + " (green), furniture " +
                   std::to_string(nFurn) + " (purple)");
@@ -670,7 +679,7 @@ bool writeCityMapSvg(const std::string& path, const CityMapData& data,
     }
     out << "</svg>\n";
     LOG_INFO << "[citymap] wrote " << path << " (" << drawn << " layers: " << layers.toList() << "; "
-             << data.nav.streetLinkCount() << " street links, " << data.curbLoops.size() << " curb loops, "
+             << data.streets.size() << " streets, " << data.curbLoops.size() << " curb loops, "
              << data.buildings.size() << " buildings, " << data.objects.size() << " objects)";
     return static_cast<bool>(out);
 }

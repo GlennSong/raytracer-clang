@@ -811,31 +811,6 @@ void RoomLedger::addGrant(const RoomGrant& g) {
     grants_.insert(at, g);
 }
 
-void RoomLedger::orderSameTick(const RoomWorld& world, std::size_t first, std::size_t end) {
-    // A topological order of the resolver's answers (Kahn's method), the lower car id first among those free to come
-    // next. Its answers hold no ring, so every car is placed; were one found, the lower id would go first.
-    const std::size_t n = end - first;
-    ordered_.clear();
-    placed_.assign(n, 0);
-    for (std::size_t pos = 0; pos < n; ++pos) {
-        std::size_t pick = n, lowest = n;
-        for (std::size_t i = 0; i < n && pick == n; ++i) {
-            if (placed_[i]) continue;
-            if (lowest == n) lowest = i;
-            bool free = true;
-            for (std::size_t j = 0; j < n && free; ++j)
-                if (j != i && !placed_[j] &&
-                    world.resolver.order(claims_[first + j].car, claims_[first + i].car) == Answer::First)
-                    free = false;
-            if (free) pick = i;
-        }
-        if (pick == n) pick = lowest;
-        if (pick != lowest) ++counts_.orderedByResolver;
-        placed_[pick] = 1;
-        ordered_.push_back(claims_[first + pick]);
-    }
-    std::copy(ordered_.begin(), ordered_.end(), claims_.begin() + static_cast<std::ptrdiff_t>(first));
-}
 
 CarId RoomLedger::aheadWithoutRoom(const RoomWorld& world, const std::vector<RoomSeat>& seats, const RoomSeat& seat,
                                    const JunctionPlan& plan) {
@@ -977,11 +952,14 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
     }
     ans.at = engine::JunctionId();
 
-    // 2. THE CARS ON THE WAY, each once: its rear-most point on it, and its front if that is on it.
+    // 2. THE CARS ON THE WAY, each once: its rear-most point on it, and its front if that is on it. A car moving across
+    // into or out of a lane of the way (listed Beside) is on it too, its front not: its body is there until it is across
+    // (sitting 5: counted as gone the moment it began to move out, the lane was granted to the car behind it, which then
+    // stood in the box behind it when it stopped half across).
     onWay_.clear();
     for (const Seg& g : segs_)
         for (const PathEntry& e : world.lists.on(g.path)) {
-            if (e.why == OnPath::Beside || e.car == c.id) continue;
+            if (e.car == c.id) continue;
             OnWay o;
             o.car = e.car.index;
             o.rear = g.from + e.rear;
@@ -1014,26 +992,15 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
     // came) is first in the queue by when it asked, not in transit: counted as in transit, two cars refused for one lane
     // at two lines each counted the other ahead of it and neither was granted (a two-car ring the five-minute lab showed
     // at junction 62 once drivers moved off sooner, issue #284).
-    const uint64_t myAsk = plans.plans[k].room.asked ? plans.plans[k].room.askedTick : world.tick;
     transit_.clear();
     for (std::size_t s = 0; s < stretches_.size(); ++s) {
         const engine::PathId lane = stretches_[s].firstLane;
         const engine::PathId mine = s > 0 ? stretches_[s - 1].intoNext : engine::PathId();
-        Waiting first;
-        first.lane = lane;
-        const std::vector<Waiting>::const_iterator waitingFrom =
-            std::lower_bound(waiting_.begin(), waiting_.end(), first,
-                             [](const Waiting& a, const Waiting& b) { return a.lane.index < b.lane.index; });
-        const auto waitsForIt = [&](CarId car) {
-            for (std::vector<Waiting>::const_iterator w = waitingFrom; w != waiting_.end() && w->lane == lane; ++w)
-                if (w->car == car.index) return true;
-            return false;
-        };
         const std::pair<const engine::PathId*, const engine::PathId*> in = world.layout.connectorsInto(lane);
         for (const engine::PathId* conn = in.first; conn != in.second; ++conn) {
             if (*conn == mine) continue;
             for (const PathEntry& e : world.lists.on(*conn))
-                if (e.why == OnPath::Front && e.car != c.id && !waitsForIt(e.car)) transit_.push_back(e.car.index);
+                if (e.why == OnPath::Front && e.car != c.id) transit_.push_back(e.car.index);
         }
         RoomGrant key;
         key.lane = lane;
@@ -1043,9 +1010,6 @@ RoomAnswer RoomLedger::measure(const RoomWorld& world, const RoomSeat& seat, std
                                   [](const RoomGrant& a, const RoomGrant& b) { return a.lane.index < b.lane.index; });
              g != grants.end() && g->lane == lane; ++g)
             if (g->car != c.id.index && g->odometer < g->laneAt) transit_.push_back(g->car);
-        for (std::vector<Waiting>::const_iterator w = waitingFrom; w != waiting_.end() && w->lane == lane; ++w)
-            if (w->car != c.id.index && std::make_pair(w->askedTick, w->car) < std::make_pair(myAsk, c.id.index))
-                transit_.push_back(w->car);
     }
     std::sort(transit_.begin(), transit_.end());
     transit_.erase(std::unique(transit_.begin(), transit_.end()), transit_.end());
@@ -1119,25 +1083,6 @@ void RoomLedger::settle(const RoomWorld& world, std::vector<RoomSeat>& seats) {
     std::sort(grants_.begin(), grants_.end(), [](const RoomGrant& a, const RoomGrant& b) {
         return std::make_tuple(a.lane.index, a.car) < std::make_tuple(b.lane.index, b.car);
     });
-    // ... and the cars first in the queue for room: refused it for want of it at their last ask, still at their line.
-    waiting_.clear();
-    for (const RoomSeat& s : seats)
-        for (std::size_t k = 0; k < s.plans->count && k < kMaxJunctionPlans; ++k) {
-            const JunctionPlan& p = s.plans->plans[k];
-            if (p.room.state != RoomState::Refused || p.room.refusal != RoomRefusal::NoRoom || !p.room.lane.valid() ||
-                p.startOdometer - s.car->odometer < -world.numbers.atLineWithin)
-                continue;
-            Waiting w;
-            w.lane = p.room.lane;
-            w.car = s.car->id.index;
-            w.askedTick = p.room.askedTick;
-            w.need = p.room.need;
-            waiting_.push_back(w);
-        }
-    const auto waitingOrder = [](const Waiting& a, const Waiting& b) {
-        return std::make_tuple(a.lane.index, a.askedTick, a.car) < std::make_tuple(b.lane.index, b.askedTick, b.car);
-    };
-    std::sort(waiting_.begin(), waiting_.end(), waitingOrder);
 
     // 2. This tick's asks, in order: who first asked earlier; then the resolver's order; then the lower id.
     claims_.clear();
@@ -1155,12 +1100,6 @@ void RoomLedger::settle(const RoomWorld& world, std::vector<RoomSeat>& seats) {
     std::sort(claims_.begin(), claims_.end(), [](const Claim& a, const Claim& b) {
         return std::make_tuple(a.askedTick, a.car, a.plan) < std::make_tuple(b.askedTick, b.car, b.plan);
     });
-    for (std::size_t i = 0; i < claims_.size();) {
-        std::size_t e = i + 1;
-        while (e < claims_.size() && claims_[e].askedTick == claims_[i].askedTick) ++e;
-        if (e - i > 1) orderSameTick(world, i, e);
-        i = e;
-    }
 
     // 3. Each ask granted or refused, every grant counted against the room before the next is looked at.
     for (const Claim& cl : claims_) {
@@ -1178,7 +1117,7 @@ void RoomLedger::settle(const RoomWorld& world, std::vector<RoomSeat>& seats) {
             a.by = ahead;
             a.need = r.need;
         } else {
-            a = measure(world, seat, cl.plan, grants_);
+            a = measure(world, seat, cl.plan, noGrants_);   // (what the driver sees: where cars are, nobody's grant)
             if (a.granted && r.toWaitInside && a.junctions > 1) {
                 a.granted = false;
                 a.refusal = RoomRefusal::NoStopToWait;
@@ -1208,15 +1147,6 @@ void RoomLedger::settle(const RoomWorld& world, std::vector<RoomSeat>& seats) {
             r.through = a.junctions;
             r.lane = a.junctions > 0 ? a.lanes[0] : engine::PathId();
             ++counts_.refused[static_cast<std::size_t>(a.refusal)];
-            // Refused for want of room: from now on it is in the queue for it, ahead of every car that asked later.
-            if (a.refusal == RoomRefusal::NoRoom && r.lane.valid()) {
-                Waiting w;
-                w.lane = r.lane;
-                w.car = seat.car->id.index;
-                w.askedTick = r.askedTick;
-                w.need = r.need;
-                waiting_.insert(std::lower_bound(waiting_.begin(), waiting_.end(), w, waitingOrder), w);
-            }
             if ((a.refusal == RoomRefusal::TooShort || a.refusal == RoomRefusal::MustStopAhead) && a.at.valid()) {
                 const std::pair<uint32_t, uint32_t> place(a.at.index, a.lanes[0].index);
                 const std::vector<std::pair<uint32_t, uint32_t>>::iterator at =

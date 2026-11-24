@@ -10,10 +10,13 @@
 // its junction plan (junction_plan.h RoomClaim); a CHAIN is one claim that passes through junctions too close together for
 // the car to stop between.
 //
-// WHY A CLAIM, NOT A LOOK. Two cars from different approaches can both see the same one car's worth of room beyond. So
-// room is ASKED FOR (in the plan step, by the driver) and GRANTED (in the settle step, one car at a time, each grant
-// reducing the room before the next is looked at). A car not granted room stops at the line, through the rule set (the
-// fact `no_room_beyond` and the place `room_line`, which waits for the car whose tail bounds the room: StopFor::NoRoom),
+// A LOOK, NOT A CLAIM (sitting 6, two-drivers-meeting-design.md section 10: "is there room beyond for me" is the
+// driver's own judgement). A driver asks (in the plan step) and is answered (in the settle step) from where the cars
+// ARE: the cars on the stretch and those whose fronts are on a connector into it. Nobody's grant counts against another
+// driver's room, and there is no queue of earlier askers: two drivers from different approaches can both see the same
+// one car's worth of room and both go -- the one that gives way at the crossing (conflict.h) is the one that waits, and a
+// car that then has to stop in the box is counted (the box-stops row), never prevented by an arbiter. A car not seeing
+// room stops at the line, through the rule set (the fact `no_room_beyond` and the place `room_line`: StopFor::NoRoom),
 // and announces that it is not going (announce.h), so cross traffic uses the time.
 //
 // HOW MUCH ROOM THERE IS, on the lane a connector joins (the brief's decisions):
@@ -26,10 +29,7 @@
 //   - the NEAR END is where the box ends: the lane's start, or past a crosswalk on it filed under the junction, by the
 //     rule set's room_clear_of_crosswalk (a car must not come to rest on the far crosswalk).
 //   - the room is far end - near end - the length and gap of every car IN TRANSIT to it: each car whose front is on a
-//     connector leading into the lane (granted or not: a car placed there by a level-of-detail change counts), and each
-//     car granted room on the lane whose front has not reached it. Derived from where cars are, each tick. And of every
-//     car FIRST IN THE QUEUE for it: refused it for want of room before this car first asked, still waiting at its line
-//     (through a red too) -- so "who asked first goes first" holds across ticks, not only among cars asking in one.
+//     connector leading into the lane. Derived from where cars are, each tick.
 // HOW MUCH A CAR NEEDS: its length (and trailer) and a standstill gap (the rule set's standstill_gap).
 //
 // WHEN A DRIVER ASKS (roomToAsk): at the decision where it decides to go at a junction it holds no grant for (its
@@ -40,13 +40,10 @@
 // refused; there is no timer. Its way ahead is made long enough to measure the claim (roomReach: a car at rest looks no
 // further than the junctions it planned, and a claim may pass through the next ones).
 //
-// GRANTING (RoomLedger::settle), once a tick in the settle step, in one fixed order: cars that first asked earlier
-// first; among those that first asked in the same tick, the conflict resolver's order (conflict.h order: who goes first
-// where the two meet, the same answer the judgement gives way by), then the lower car id. A car whose lane has a car
-// ahead of it short of the same line that holds no grant there is refused (that car is asked first: a car behind it
-// holding room it cannot reach would starve it). Each grant is counted against the room before the next is looked at.
-// REFUSED, a car waits at the line; one that had rolled no more than at_line_within over it as the refusal came stops
-// where it is.
+// ANSWERING (RoomLedger::settle), once a tick, each ask on its own, in a fixed order (who first asked, then car id) that
+// changes nothing, since no answer counts against another. A car whose lane has a car ahead of it short of the same
+// line that holds no grant there is refused (that car cannot be passed). REFUSED, a car waits at the line; one that
+// had rolled no more than at_line_within over it as the refusal came stops where it is.
 //
 // JUNCTIONS CLOSE TOGETHER. When the stretch beyond is shorter than the car needs, it cannot stop there: the claim goes
 // on through the next junction and is granted only if (a) there is room beyond THAT junction, (b) nothing rests on the
@@ -87,7 +84,7 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/announce.h"        // Mover: how a car moves, for when it reaches the next junction
-#include "apps/driving/conflict.h"        // the resolver's order among cars asking in one tick
+#include "apps/driving/conflict.h"        // who goes first where two cars meet (a chain's onward turn, seen clear)
 #include "apps/driving/junction_plan.h"   // JunctionPlans, RoomClaim
 #include "apps/driving/notice.h"          // FactRegistry, WayAhead
 #include "apps/driving/right_of_way.h"
@@ -311,7 +308,6 @@ struct RoomCounts {
     uint64_t givenBack = 0;             // grants given back before the car entered (gave way at the line, a red, ...)
     uint64_t chainsGivenBack = 0;       // ... of them, claims through close junctions checked again and found no longer
                                         // to hold (the lights or the onward turn's gaps), while the car could still stop
-    uint64_t orderedByResolver = 0;     // pairs of asks in one tick put in order by the conflict resolver
     uint32_t mostHeld = 0;              // the most grants outstanding at once
     std::vector<std::pair<uint32_t, uint32_t>> roadDataPlaces;   // (junction, lane) refused TooShort or MustStopAhead
 };
@@ -368,12 +364,6 @@ private:
         engine::PathId path;
         Real from = 0;
     };
-    struct Waiting {        // a car refused room on `lane` for want of it, waiting at its line: first in the queue for it
-        engine::PathId lane;
-        uint32_t car = 0;
-        uint64_t askedTick = 0;
-        Real need = 0;
-    };
 
     void keepOrLetGo(const RoomWorld& world, RoomSeat& seat);
     // WHEN THE CAR OF `seat` REACHES A POINT `distance` metres ahead along its way, seconds: its own estimate (announce.h
@@ -386,7 +376,6 @@ private:
     // holds.
     bool chainHolds(const RoomWorld& world, const RoomSeat& seat, std::size_t k, RoomRefusal& why,
                     engine::JunctionId& at);
-    void orderSameTick(const RoomWorld& world, std::size_t first, std::size_t end);
     // The car ahead of the claimant in its lane, short of the plan's line, that holds no grant there (none: nobody).
     CarId aheadWithoutRoom(const RoomWorld& world, const std::vector<RoomSeat>& seats, const RoomSeat& seat,
                            const JunctionPlan& plan);
@@ -394,10 +383,8 @@ private:
 
     RoomCounts counts_;
     std::vector<RoomGrant> grants_;
-    std::vector<Waiting> waiting_;   // sorted by (lane, asked tick, car)
+    const std::vector<RoomGrant> noGrants_;   // (a driver judges room from where cars are, never from others' grants)
     std::vector<Claim> claims_;
-    std::vector<Claim> ordered_;
-    std::vector<uint8_t> placed_;
     std::vector<Seg> segs_;
     std::vector<Stretch> stretches_;
     std::vector<OnWay> onWay_;

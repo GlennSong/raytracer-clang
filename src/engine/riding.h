@@ -30,6 +30,11 @@ class FlyCameraController;
 // nothing here assumes the carrier's up is the world's.
 
 
+// A RIDER's EYE over where it stands or sits: standing, over the floor; seated, over the seat's hip point (a bus's or
+// a train's upright seat). One pair for every owner (the train, the bus: ADR-0486).
+constexpr Real kRiderStandingEye = 1.62;
+constexpr Real kRiderSeatedEye = 0.74;
+
 // A rider at `local` in `carrier`: its eye, `eyeAbove` over that point along the carrier's own up, and its capsule's
 // centre (upright, kEyeAboveCentre under the eye: player/body_rules.h).
 Vec3 riderEye(const Mat4& carrier, const Vec3& local, Real eyeAbove);

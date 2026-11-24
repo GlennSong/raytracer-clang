@@ -70,15 +70,21 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
         if (m.name.empty()) return fail(L, base, err, "modes[" + std::to_string(i) + "] has no name");
         if (cat.find(m.name) >= 0) return fail(L, base, err, "`" + m.name + "` is listed twice");
         const std::string net = strField(L, mt, "network");
-        if (net != "roads" && net != "footpaths")
-            return fail(L, base, err, "`" + m.name + "`: network must be \"roads\" or \"footpaths\", not \"" + net + "\"");
+        if (net != "roads" && net != "footpaths" && net != "bus")
+            return fail(L, base, err, "`" + m.name + "`: network must be \"roads\", \"footpaths\" or \"bus\", not \"" + net + "\"");
         m.roads = net == "roads";
-        // a walk's speed is the table's; a drive's minutes are the router's time for its route (ADR-0416)
+        m.bus = net == "bus";
+        // a walk's speed is the table's; a drive's minutes are the router's time for its route (ADR-0416); a bus ride's
+        // the line's timetable (ADR-0484)
         const double kmh = numField(L, mt, "speed_kmh", 0.0);
-        if (m.roads) {
+        if (m.bus) {
+            if (kmh != 0.0)
+                return fail(L, base, err, "`" + m.name + "`: a bus way has no speed_kmh -- its minutes are the line's timetable");
+            m.speed = 0;
+        } else if (m.roads) {
             if (kmh != 0.0)
                 return fail(L, base, err, "`" + m.name + "`: a way on the roads has no speed_kmh -- its minutes are the "
-                                              "router's own time by road class (pathfind.h classSpeed)");
+                                              "lane router's own time at each lane's posted limit");
             m.speed = 0;
         } else {
             if (!(kmh > 0)) return fail(L, base, err, "`" + m.name + "`: speed_kmh must be positive");
@@ -114,7 +120,7 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
     // a way that needs a vehicle is reached on foot: by the row it fixes (`access`), or else by any row on the
     // footpaths, of which one at least must be open to everyone
     bool anyoneOnFoot = false;
-    for (const citysim::TravelMode& m : cat.modes) anyoneOnFoot = anyoneOnFoot || (!m.roads && !m.ownVehicle && m.needs.empty());
+    for (const citysim::TravelMode& m : cat.modes) anyoneOnFoot = anyoneOnFoot || (!m.roads && !m.bus && !m.ownVehicle && m.needs.empty());
     for (std::size_t i = 0; i < cat.modes.size(); ++i) {
         if (cat.modes[i].ownVehicle && access[i].empty() && !anyoneOnFoot)
             return fail(L, base, err, "`" + cat.modes[i].name + "` needs a vehicle, which is reached on foot, and no row "

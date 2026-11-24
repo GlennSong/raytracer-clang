@@ -65,6 +65,9 @@ public:
     // The table must already be compiled and its ways bound. The skills may be null for a machine whose people are all
     // far (no skill is ever asked).
     Machine(const BrainTable& table, World& world, Planner& planner, WalkSkill* walk, DriveSkill* drive);
+    // THE RIDE SKILL (ADR-0484): who carries people on buses. Null (the default): nobody near rides; a near person given a
+    // bus leg is told it cannot be done.
+    void setRide(RideSkill* ride) { ride_ = ride; }
 
     // A NEW PERSON at `home`, wanting to be there (intent `kind`) and there already: in that intent's arriving state
     // (indoors at a building, standing at a place with none), or the table's start state where that is not built.
@@ -137,6 +140,7 @@ private:
     Planner& planner_;
     WalkSkill* walk_;
     DriveSkill* drive_;
+    RideSkill* ride_ = nullptr;
     std::vector<AgentBrain> agents_;
     std::vector<BrainEvent> incoming_, draining_;
     uint32_t posted_ = 0;

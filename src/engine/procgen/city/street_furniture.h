@@ -1,29 +1,50 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_STREET_FURNITURE_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_STREET_FURNITURE_H
 
-#include "../../ai/nav_graph.h"
 #include "road_mesh.h"      // RoadDeckField: where the asphalt really is
+#include "road_network.h"   // RoadClass
+#include "polygon.h"
 #include "../../../rt_math.h"
+#include <cstdint>
 #include <functional>
 #include <vector>
 
 namespace engine {
 
+struct RoadModel;
+
 // Build-time street furniture (device: "place the stop lights when we build
 // the city instead of during the simulation ... The simulation should use it
 // but it shouldn't be responsible for where they are"). The city build plans
-// WHERE every signal pole and street lamp stands, keyed to the deterministic
-// NavGraph the sim will later derive from the same roads; the sim animates the
+// WHERE every signal pole and street lamp stands, from the level's road model
+// (its streets' centre lines and cross-sections, its junctions' arms and stated
+// controls; #306: the street map it was planned on went); the sim animates the
 // lenses and reacts to the phases but never invents a pole.
 
+// A model arm as one key: its city (an index into LevelRoadModel::cities), junction and arm.
+inline int64_t packFurnitureArm(int city, int junction, int arm) {
+    return (static_cast<int64_t>(city) << 40) | (static_cast<int64_t>(junction) << 16) | static_cast<int64_t>(arm);
+}
+
 // One signalled approach: the pole foot on the near-right junction corner and
-// the direction the three-lamp head faces (toward its approaching traffic).
-// `link` is the NavGraph link this signal governs.
+// the direction the three-lamp head faces (toward its approaching traffic), and
+// the road-model arm it governs.
 struct SignalSpot {
     Vec3 base;
     Vec3 face;
-    int link = -1;
-    int64_t arm = -1;   // the road-model arm it governs (StreetFurnitureParams::approachArm's key), -1: none
+    int64_t arm = -1;   // packFurnitureArm(city, junction, arm)
+    int city = -1, junction = -1, armIndex = -1;
+};
+
+// One city's road model, for the planner: the model and its index in LevelRoadModel::cities.
+struct FurnitureCity {
+    const RoadModel* model = nullptr;
+    int city = 0;
+};
+// A lamp's street: its city and the model street it lights (-1: none).
+struct LampStreet {
+    int city = -1;
+    int street = -1;
 };
 
 // WHAT A STREET IS LIKE, for its planting (Glenn: "some have trees, some don't, some have them spaced differently ...
@@ -132,16 +153,15 @@ struct StreetFurnitureParams {
         Real verge = 0.55;
         Real junction = 6.0;
         bool mainOnly = false;
+        bool atBusStops = false;   // one at each bus stop of the roads' lines (ADR-0485), on the stop's kerb, `verge` out
     };
     std::vector<KerbKind> kerbKinds;
-    // THE ROAD MODEL (ADR-0421; empty / null: the nav graph's own nodes and a street's bearing, as before).
-    // Which model junction arm a signalled approach link governs (a key, one per arm of the level; -1: none), and how
-    // far the link's node stands from that arm's mouth (out): one pole per arm.
-    std::function<int64_t(int link, Real* mouthDistance)> approachArm;
-    // Where junctions are: every model junction's centre and arm mouths (lamps, trees and kerb props keep clear).
-    std::vector<Vec2> junctionPoints;
-    // A key the same along one stated street run (the trees' "same street"), 0: none (the bearing key then).
-    std::function<uint64_t(int link)> streetRun;
+    // A key the same along one stated street run (the trees' "same street": LevelRoadModel::runKey), 0: none (the
+    // bearing key then).
+    std::function<uint64_t(int city, int street)> streetRun;
+    // Every junction's stated control is read (junctionLit: one pole per arm of a lit junction). False: the road file
+    // states no controls, and a junction of four arms or more is lit.
+    bool controlsStated = true;
 };
 
 // A street tree (its pit's centre, on the pavement), its size and which of the tree kit's varieties it is.
@@ -160,26 +180,24 @@ struct KerbProp {
 struct StreetFurniturePlan {
     std::vector<SignalSpot> signals;
     // Signalled approaches that got NO pole (both kerb corners buried in asphalt): the
-    // junction node each one enters. The sim still phases them; this names where the
+    // junction each one enters. The driving still phases them; this names where the
     // drawn city is missing a light (Glenn: "the stoplights aren't showing up in some
     // places").
     std::vector<Vec2> unpoledApproaches;
-    int unarmedApproaches = 0;     // signalled approaches no model arm takes (with approachArm): phased, no pole
+    int unarmedApproaches = 0;     // arms of a lit junction with no street or no mouth: phased, no pole
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
-    std::vector<int> lampLinks;    // the link each lamp lights, beside lampBases (its street: the link's, ADR-0425)
+    std::vector<LampStreet> lampStreets;   // the street each lamp lights, beside lampBases (ADR-0421)
     std::vector<StreetTree> trees; // kerb life (StreetFurnitureParams::kerbLife)
     std::vector<KerbProp> props;
-    int planted[8] = {0};          // street links by StreetPlanting::Scheme (with a character)
+    int planted[8] = {0};          // street pieces by StreetPlanting::Scheme (with a character)
 };
 
-// Plan every pole from the nav graph: a signal per junction-entering link
-// (same criterion SignalController uses, so sim phases and placed poles agree
-// one-to-one), lamps marching along each link's right sidewalk — two-way roads
-// get both sides for free, one direction per side. `ground` is the road
-// surface height (a RoadEntity's heightAt), so every base sits on the deck.
+// Plan every pole from the road model: a signal per arriving arm of every lit junction (junctionLit, its stated
+// control), standing at the arm's mouth on the kerb corner; lamps, street trees and kerb props marching along each
+// kerb of each street that has a sidewalk there. `ground` is the road surface height, so every base sits on it.
 StreetFurniturePlan planStreetFurniture(
-    const NavGraph& nav, const std::function<Real(Real, Real)>& ground,
+    const std::vector<FurnitureCity>& cities, const std::function<Real(Real, Real)>& ground,
     const StreetFurnitureParams& params = {});
 
 }  // namespace engine

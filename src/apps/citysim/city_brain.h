@@ -68,12 +68,14 @@
 // Same result every run: nothing reads the wall clock, and the machine answers events in a fixed order.
 
 #include "brain/brain.h"
+#include "brain/brain_planner.h"   // PlanRoadCounts
 #include "../../engine/world.h"   // engine::Entity: a household's car (ADR-0444)
 #include "../../engine/procgen/city/polygon.h"
 #include "../../engine/procgen/city/roads/road_model.h"
 #include "../../rt_math.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -91,8 +93,6 @@ using engine::Real;
 using engine::Vec2;
 
 // HOW THE GLUE BEHAVES (metres, seconds), named once.
-// How long a car is drawn sliding between its space and the kerb lane.
-constexpr Real kKerbEaseSeconds = 2.5;
 // The kerb lane counts as clear for pulling out when no car's body is on its path from this far behind where the
 // car's rear will be (a car arriving at a local street's 11 m/s and braking gently stops in about this), measured on
 // back along every path leading into the lane where the lane itself begins nearer (brain_driving.h LaneRoom) ...
@@ -102,11 +102,21 @@ constexpr Real kPullOutRoomAhead = 3.0;
 // A car's front is put no nearer than this to the end of a lane path, so a car standing beside a space has no part in
 // a junction (the hand-over's own margin for a place a trip may end, city_driving.h kPlaceMargin).
 constexpr Real kKerbLaneEndMargin = 2.0;
+// A car the driving has standing this near its space's offset beside the kerb lane (m) drove into the space: it stays
+// where it came to rest (the driving settles a pull-in to the offset exactly; a car that ended in the lane is metres off).
+constexpr Real kInSpaceWithin = 0.05;
 // How far on foot from a marker a kerb space may be to be offered for it, and how many are looked at.
 constexpr Real kSpaceReach = 400.0;
 // (64: a crowd's homes share the spaces of their streets, and the ones a car cannot drive from are passed over, ADR-0446;
 // it was 24)
 constexpr std::size_t kSpacesLookedAt = 64;
+// THE KERB SPACES OFFERED FOR A PLACE whose frontage is `f`: of the kSpacesLookedAt nearest it on foot within
+// kSpaceReach (RoadModel::kerbSpacesNear), nearest first, those `keep` keeps (the caller's word that a car can stand
+// there and be driven away). The one list both sides use: the brain offers a car its spaces from it (spacesFor; a
+// household's car at the start takes the first free one), and the crowd maker holds a household's cars' spaces in it
+// as it takes the home (city_render.cpp, makeCrowd's CrowdSpaces), so it never deals a household the brain must refuse.
+std::vector<engine::KerbSpace> kerbSpacesOffered(const engine::RoadModel& model, const engine::RoadFrontage& f,
+                                                 const std::function<bool(const engine::KerbSpace&)>& keep);
 // Where a person stands to get into a car or after getting out: this far out from the car's side, on the kerb side.
 constexpr Real kDoorStandOff = 0.6;
 // A walk has arrived when the person is within this of where it ends.
@@ -146,7 +156,13 @@ struct CityBrainCounts {
     uint32_t waitedForRoom = 0;    // ticks a car waited in its space for the kerb lane to be clear
     uint32_t tripsBegun = 0;
     uint32_t parkedReports = 0;    // the driving's "parked" events for the resident's car
-    uint32_t slidIn = 0;           // times the car left the driving for a space
+    uint32_t parkedInSpace = 0;    // times the car left the driving, standing in its space
+    uint32_t towed = 0;            // wrecks cleared and towed to a kerb space (sitting 7)
+    uint32_t refusedInSpace = 0;   // trips refused as the car was placed to pull out: it went back into its space
+    // The farthest (m) a car moved as it was handed between its kerb space and the driving: placed to pull out (where
+    // the driving puts it against where it stood: millimetres), or put in its space when it did not drive in.
+    Real worstKerbHandOver = 0;
+    uint32_t putInSpace = 0;       // ...of them, cars not driven into the space (ended in the lane): put there, a jump
     uint32_t alighted = 0;
     uint32_t walksBegun = 0, walksArrived = 0, walksBlocked = 0;
     uint32_t nextSpaces = 0;       // times a taken space was answered with another
@@ -158,6 +174,8 @@ struct CityBrainCounts {
     uint32_t leftAgain = 0;        // times an outsider left one somewhere
     uint32_t putOut = 0;           // drivers stood on the kerb side because their car was taken
     uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
+    uint32_t busWaits = 0;         // times someone near began waiting at a bus stop (ADR-0484)
+    uint32_t busRides = 0;         // ...and got off a bus at their stop
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
@@ -255,6 +273,8 @@ public:
     const std::vector<brain::Transition>& trace(int who = 0) const;
     const brain::Machine* machine() const;
     const CityBrainCounts& counts() const;
+    // What the plans put on the roads: legs by car priced and chosen, and those on the freeway (brain_planner.h).
+    brain::PlanRoadCounts planRoadCounts() const;
     const CityBrainCost& cost() const;
     brain::BrainTime now() const;
     std::vector<BrainPlanLeg> planLegs(int who = 0) const;

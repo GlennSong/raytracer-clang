@@ -1,5 +1,8 @@
 #include "trip_plan.h"
 
+#include "../../engine/procgen/city/roads/road_model.h"
+#include "../driving/driving.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -7,9 +10,6 @@
 namespace citysim {
 
 namespace {
-// How many of the nodes nearest each end are tried before a leg is called impossible -- the nearest node can sit on
-// a piece of the graph the other end cannot reach (sendAgentTo tries the same few).
-constexpr int kTryNodes = 8;
 // Two lengths of time in minutes this close are the same (a leg exactly as long as its way's longest is allowed).
 constexpr Real kSameMinutes = 1e-9;
 
@@ -39,61 +39,103 @@ int TravelCatalog::find(const std::string& name) const {
     return -1;
 }
 
-bool planLeg(const engine::NavGraph& nav, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out) {
-    if (mode < 0 || mode >= static_cast<int>(cat.modes.size()) || nav.nodeCount() == 0) return false;
+bool TripNetwork::valid() const { return model && model->built && walker && !walker->open.empty(); }
+
+bool planLeg(const TripNetwork& net, const TravelCatalog& cat, int mode, Vec2 from, Vec2 to, TripLeg& out,
+             uint32_t vehicleClass, const engine::PathPoint* fromLane) {
+    if (mode < 0 || mode >= static_cast<int>(cat.modes.size()) || !net.valid()) return false;
     const TravelMode& m = cat.modes[static_cast<std::size_t>(mode)];
-    const bool onFoot = !m.roads;
-    const std::vector<int> ends = nav.nearestNodes(to, kTryNodes);
-    for (int s : nav.nearestNodes(from, kTryNodes)) {
-        // one flood from this start says which end, if any, it reaches: one search, not one per end
-        const std::vector<char> reach = engine::reachableFrom(nav, s, onFoot);
-        for (int e : ends) {
-            engine::Route r;
-            if (e != s) {
-                if (!reach[static_cast<std::size_t>(e)]) continue;
-                r = engine::findRoute(nav, s, e, onFoot);
-                if (!r.valid()) continue;
-            }
-            TripLeg leg;
-            leg.mode = mode;
-            leg.from = from;
-            leg.to = to;
-            leg.fromNode = s;
-            leg.toNode = e;
-            leg.metres = (from - nav.nodes[static_cast<std::size_t>(s)]).length() + r.length(nav) +
-                         (nav.nodes[static_cast<std::size_t>(e)] - to).length();
-            leg.route = std::move(r);
-            if (m.roads) {
-                // THE ROUTER'S OWN TIME (ADR-0416): each road class at its speed and a few seconds a street junction,
-                // what findRoute chose this route by; the bits off the network at a local street's speed
-                const Real off = leg.metres - leg.route.length(nav);
-                leg.minutes = (engine::routeSeconds(nav, leg.route) + off / engine::classSpeed(engine::RoadClass::Local)) / 60.0;
-                // ...and the kinds of road it is on, with the bits off the network counted as the street they join
-                leg.kindMetres.assign(cat.roadKinds.size(), 0);
-                leg.kindStretches.assign(cat.roadKinds.size(), 0);
-                int was = -1;
-                for (int li : leg.route.links) {
-                    const int k = cat.roadKindOf(nav.links[static_cast<std::size_t>(li)].klass);
-                    if (k >= 0) {
-                        leg.kindMetres[static_cast<std::size_t>(k)] += nav.links[static_cast<std::size_t>(li)].length;
-                        if (k != was) ++leg.kindStretches[static_cast<std::size_t>(k)];
-                    }
-                    was = k;
-                }
-                const int ends = cat.roadKindOf(engine::RoadClass::Local);
-                if (ends >= 0) leg.kindMetres[static_cast<std::size_t>(ends)] += off;
-            } else {
-                leg.minutes = leg.metres / m.speed / 60.0;
-            }
-            leg.minutes += m.startMinutes + m.endMinutes;
-            out = std::move(leg);
-            return true;
+    const engine::RoadModel& model = *net.model;
+    TripLeg leg;
+    leg.mode = mode;
+    leg.from = from;
+    leg.to = to;
+    if (m.roads) {
+        // ON THE ROADS: from the kerb lane beside one end to the kerb lane beside the other, as the driving routes its
+        // cars (each lane and turn at the limit it is driven at). Getting from a space into its kerb lane and back into
+        // a space at the end is the way's start and end minutes (pulling out, parking), so the leg is the route alone.
+        if (!net.driving) return false;
+        const engine::KerbLanePlace a = fromLane ? engine::KerbLanePlace() : model.kerbLaneBeside(model.frontageAt(from));
+        const engine::KerbLanePlace b = model.kerbLaneBeside(model.frontageAt(to));
+        if ((!fromLane && !a.valid()) || !b.valid()) return false;
+        engine::PathPoint pa, pb;
+        if (fromLane) {
+            pa = *fromLane;
+        } else {
+            pa.path = a.path;
+            pa.along = a.along;
         }
+        pb.path = b.path;
+        pb.along = b.along;
+        const engine::roads::Route r = net.driving->routeBetween(vehicleClass, pa, pb);
+        if (!r.found) return false;
+        leg.metres = r.metres;
+        leg.minutes = r.seconds / 60.0;
+        leg.kindMetres.assign(cat.roadKinds.size(), 0);
+        leg.kindStretches.assign(cat.roadKinds.size(), 0);
+        int was = -1;
+        const auto count = [&](engine::PathId path, Real metres) {
+            const engine::ModelStreet* st = model.streetOf(path);
+            const int k = cat.roadKindOf(st ? st->section.klass : engine::RoadClass::Local);
+            if (k >= 0) {
+                leg.kindMetres[static_cast<std::size_t>(k)] += metres;
+                if (k != was) ++leg.kindStretches[static_cast<std::size_t>(k)];
+            }
+            was = k;
+        };
+        for (std::size_t i = 0; i < r.legs.size(); ++i) {
+            count(r.legs[i].lane, r.legs[i].metres);
+            if (i < r.turns.size() && r.turns[i].connector.valid()) count(r.turns[i].connector, r.turns[i].metres);
+        }
+    } else {
+        // ON FOOT: over the walks, from where each end joins them
+        const engine::WalkJoin a = model.walkJoinNear(from, net.walker->open);
+        const engine::WalkJoin b = model.walkJoinNear(to, net.walker->open);
+        if (!a.valid() || !b.valid()) return false;
+        engine::roads::WalkRoute r;
+        if (a.at != b.at) {
+            r = engine::roads::findWalkRoute(model, *net.walker, a.at, b.at);
+            if (!r.found) return false;
+        }
+        leg.metres = (from - a.point).length() + (r.found ? r.metres : 0) + (b.point - to).length();
+        leg.minutes = leg.metres / m.speed / 60.0;
+        leg.route = std::move(r);
     }
-    return false;
+    leg.minutes += m.startMinutes + m.endMinutes;
+    out = std::move(leg);
+    return true;
 }
 
-TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const TripRequest& req) {
+BusRide bestBusRide(const BusTimetable& tt, Vec2 from, Vec2 to, Real walkPace) {
+    BusRide best;
+    const Real pace = std::max(walkPace, Real(0.1));
+    for (std::size_t L = 0; L < tt.lines.size(); ++L) {
+        const std::vector<BusTimetable::Stop>& st = tt.lines[L];
+        const std::size_t n = st.size();
+        for (std::size_t a = 0; a < n; ++a) {
+            const Real wa = (st[a].wait - from).length();
+            if (wa > tt.walkReach) continue;
+            Real ride = 0;
+            for (std::size_t k = 1; k < n; ++k) {
+                const std::size_t b = (a + k) % n;
+                ride += st[(b + n - 1) % n].toNextSeconds;
+                const Real wb = (st[b].wait - to).length();
+                if (wb > tt.walkReach) continue;
+                const Real est = (wa + wb) / pace + ride;
+                if (!best.found() || est < best.estimate) {
+                    best.line = static_cast<int>(L);
+                    best.board = static_cast<int>(a);
+                    best.alight = static_cast<int>(b);
+                    best.rideSeconds = ride;
+                    best.estimate = est;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+TripPlan planTrip(const TripNetwork& nav, const TravelCatalog& cat, const TripRequest& req) {
     TripPlan plan;
     plan.from = req.from;
     plan.to = req.to;
@@ -116,9 +158,10 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
         const int mode = static_cast<int>(i);
         TripOption o;
         o.mode = mode;
-        auto leg = [&](int legMode, Vec2 a, Vec2 b, LegEnd end, const std::string& whyNot) {
+        auto leg = [&](int legMode, Vec2 a, Vec2 b, LegEnd end, const std::string& whyNot, uint32_t vehicleClass = 0,
+                       const engine::PathPoint* fromLane = nullptr) {
             TripLeg l;
-            if (!planLeg(nav, cat, legMode, a, b, l)) { o.why = whyNot; return false; }
+            if (!planLeg(nav, cat, legMode, a, b, l, vehicleClass, fromLane)) { o.why = whyNot; return false; }
             const TravelMode& lm = cat.modes[static_cast<std::size_t>(legMode)];
             if (tooLong(lm, l)) {
                 o.why = "too far for " + lm.name + " (" + minutesText(l.minutes) + " min, at most " +
@@ -137,7 +180,7 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
             Real bestWeighted = 0;
             for (std::size_t f = 0; f < cat.modes.size(); ++f) {
                 const TravelMode& fm = cat.modes[f];
-                if (fm.roads || fm.ownVehicle || !has(fm) || ruledOut(static_cast<int>(f))) continue;
+                if (fm.roads || fm.bus || fm.ownVehicle || !has(fm) || ruledOut(static_cast<int>(f))) continue;
                 TripLeg l;
                 if (!planLeg(nav, cat, static_cast<int>(f), a, b, l) || tooLong(fm, l)) continue;
                 const Real weighted = l.minutes * fm.weight;
@@ -156,11 +199,47 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
             o.why = "needs " + m.needs;
         } else if (ruledOut(mode)) {
             o.why = "ruled out (a leg of it could not be done)";
+        } else if (m.bus && (!nav.buses || nav.buses->lines.empty())) {
+            o.offered = false;   // (no bus anywhere, ADR-0484: not a way anyone weighs, so the plan's reason leaves it out)
+            o.why = "no bus line";
         } else if (inHand && inHand->mode != mode) {
             o.why = "at the wheel of the " + cat.modes[static_cast<std::size_t>(inHand->mode)].name;
         } else if (inHand) {
-            o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name) &&
+            o.possible = leg(mode, inHand->at, inHand->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name, inHand->vehicleClass,
+                             inHand->onLane ? &inHand->lane : nullptr) &&
                          footLeg(inHand->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
+        } else if (m.bus) {
+            // BY BUS (ADR-0484): on foot to a stop, the wait (the way's start minutes) and the ride round the line to a
+            // stop, on foot to the door. The stops are picked by an estimate (straight-line walks at the walk's pace, the
+            // timetable's ride); only the best pair's walks are routed.
+            const BusTimetable* tt = nav.buses;
+            const int walkRow = cat.find("walk");
+            const Real pace = walkRow >= 0 ? cat.modes[static_cast<std::size_t>(walkRow)].speed : Real(1.4);
+            const BusRide best = tt ? bestBusRide(*tt, req.from, req.to, pace) : BusRide();
+            const int bestLine = best.line, bestA = best.board, bestB = best.alight;
+            const Real bestRide = best.rideSeconds;
+            if (bestLine < 0) {
+                o.why = "no stop near both ends";
+            } else {
+                const std::vector<BusTimetable::Stop>& st = tt->lines[static_cast<std::size_t>(bestLine)];
+                const Vec2 board = st[static_cast<std::size_t>(bestA)].wait, alight = st[static_cast<std::size_t>(bestB)].wait;
+                o.possible = footLeg(req.from, board, LegEnd::Stop, "no route to the stop");
+                if (o.possible) {
+                    o.legs.back().busLine = bestLine;
+                    o.legs.back().busTo = bestA;
+                    TripLeg ride;
+                    ride.mode = mode;
+                    ride.end = LegEnd::Stop;
+                    ride.from = board;
+                    ride.to = alight;
+                    ride.minutes = m.startMinutes + bestRide / 60.0 + m.endMinutes;
+                    ride.busLine = bestLine;
+                    ride.busFrom = bestA;
+                    ride.busTo = bestB;
+                    o.legs.push_back(ride);
+                    o.possible = footLeg(alight, req.to, LegEnd::Door, "no route from the stop");
+                }
+            }
         } else if (!m.ownVehicle) {
             o.possible = leg(mode, req.from, req.to, LegEnd::Door,
                              "no route on the " + std::string(m.roads ? "roads" : "footpaths"));
@@ -174,7 +253,7 @@ TripPlan planTrip(const engine::NavGraph& nav, const TravelCatalog& cat, const T
                 o.why = "the " + m.name + " is in use";
             } else {
                 o.possible = footLeg(req.from, v->at, LegEnd::Vehicle, "no route to the " + m.name) &&
-                             leg(mode, v->at, v->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name) &&
+                             leg(mode, v->at, v->leaveAt, LegEnd::VehicleLeft, "no route by " + m.name, v->vehicleClass) &&
                              footLeg(v->leaveAt, req.to, LegEnd::Door, "no route from where the " + m.name + " is left");
             }
         }
@@ -226,6 +305,12 @@ bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, st
         d.way = static_cast<uint8_t>(l.mode);
         d.end = l.end;
         d.seconds = static_cast<uint16_t>(seconds);
+        if (l.end == LegEnd::Stop) {
+            if (l.busLine < 0 || l.busLine > 255 || l.busTo < 0 || l.busTo > 65535)
+                return refuse("leg " + std::to_string(f.count) + " ends at a stop it does not name");
+            d.busLine = static_cast<uint8_t>(l.busLine);
+            d.busStop = static_cast<uint16_t>(l.busTo);
+        }
     }
     out = f;
     return true;

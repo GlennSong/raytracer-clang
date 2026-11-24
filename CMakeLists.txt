@@ -225,8 +225,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/structure_set.cpp
     src/engine/procgen/city/block_grade.cpp
-    src/engine/ai/nav_graph.cpp
-    src/engine/ai/pathfind.cpp
     src/engine/asset_root.cpp
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
@@ -538,11 +536,13 @@ add_library(driving STATIC
     src/apps/driving/give_way.cpp        # judging the gaps a driver gives way by at junctions; patience (#262)
     src/apps/driving/junction_plan.cpp   # each driver's plan for the junctions ahead: connector, waiting points (#260)
     src/apps/driving/measure.cpp         # the plan's measurements table, counted while the tick runs (#257)
+    src/apps/driving/contact.cpp         # body against body on the plan: the one test (measurements, crashes)
     src/apps/driving/notice.cpp         # facts: what a driver can notice, registered by name (#251)
     src/apps/driving/right_of_way.cpp    # who gives way to whom at every junction, worked out at load (#260)
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)
     src/apps/driving/room.cpp            # room beyond a junction, asked for and granted one car at a time (#264)
     src/apps/driving/things.cpp          # what is in a driver's way, whatever it is, and going round it (ADR-0451)
+    src/apps/driving/lane_change.cpp     # lane changes: the lane the route needs, MOBIL's safe gap, the move (sitting 5)
     src/apps/driving/route.cpp           # a vehicle class bound to the road for the one router (roads/route.h, ADR-0467)
     src/apps/driving/signal_programme.cpp   # the traffic lights' clock: programmes, yellow, a pure function of time (#261)
     src/apps/driving/rule_set.cpp
@@ -643,7 +643,6 @@ add_library(citysim STATIC
     src/apps/citysim/city_goals.cpp
     src/apps/citysim/city_roles.cpp
     src/apps/citysim/activities.cpp
-    src/apps/citysim/city_bus.cpp   # bus loops planned over the street map (the island planner's local lines)
     src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
     src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
     src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
@@ -655,7 +654,10 @@ add_library(citysim STATIC
     src/apps/citysim/households.cpp      # ages, life stages, households in the dwellings (people.lua)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
+    src/apps/citysim/city_walk_points.cpp   # the sim's walk points: places on the road model's walks (the street map's nodes were)
     src/apps/citysim/city_driving.cpp   # the drivers handed to the new driving model (v2, #255)
+    src/apps/citysim/city_buses.cpp   # the people on the buses (ADR-0484)
+    src/apps/citysim/city_bus_cabin.cpp   # the bus's rules for a rider (ADR-0486)
     src/apps/citysim/city_car.cpp       # a household's car as one entity: its components (ADR-0444)
     src/apps/citysim/city_poses.cpp     # where the city's bodies are each fixed step: cars and walkers (ADR-0454)
     src/apps/citysim/city_render.cpp
@@ -751,10 +753,10 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/road_layout.cpp   # the road file's junctions and streets, with ids (ADR-0417)
             src/engine/procgen/city/roads/road_model.cpp   # the one road model, assembled from a build (ADR-0417)
             src/engine/procgen/city/roads/route.cpp   # the one route-finder over the lane level, cars and walkers (ADR-0467)
+            src/engine/procgen/city/roads/bus_planner.cpp   # a town's bus lines laid over the road model (ADR-0482)
             src/engine/procgen/city/roads/road_problem.cpp   # a problem the road build found, as a record (ADR-0438)
             src/engine/procgen/city/roads/vehicle_size.cpp   # the body a road is checked against per vehicle tag (ADR-0435)
             src/engine/procgen/city/roads/lane_turns.cpp   # which turns a junction offers, which lane takes each (ADR-0426)
-            src/engine/procgen/city/roads/street_map.cpp   # the street map agents route on, from the road model (ADR-0425)
             src/engine/procgen/city/roads/control_signs.cpp   # the signs that follow from its facts (ADR-0424)
             src/engine/procgen/city/roads/lanes_builder.cpp
         )
@@ -1028,6 +1030,8 @@ add_executable(run_tests
     tests/test_road_weld.cpp
     tests/test_road_spec.cpp
     tests/test_street_furniture.cpp
+    tests/test_bus_lines.cpp
+    tests/test_bus_ride.cpp
     tests/test_street_signs.cpp
     tests/test_editable_curve.cpp
     tests/test_curve.cpp
@@ -1038,8 +1042,6 @@ add_executable(run_tests
     tests/test_height_pyramid.cpp
     tests/test_residency.cpp
     tests/test_terrain_async.cpp
-    tests/test_nav_graph.cpp
-    tests/test_pathfind.cpp
     tests/test_perception.cpp
     tests/test_agent_memory.cpp
     tests/test_state_machine.cpp
@@ -1288,6 +1290,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
         src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
+        src/apps/citysim/city_bus_ride.cpp   # the player aboard a bus (ADR-0486)
         src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )
@@ -1312,6 +1315,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_prefab_motion_physics.cpp   # a crane's boom, swung, sweeps a box off a post (#191 step 8)
         tests/test_fleet_springs.cpp    # every fleet car put down on its own springs (spawnHeight)
         tests/test_near_tier.cpp        # a physics car carrying out the new driving, against a lane car (ADR-0447)
+        tests/test_bus_ride_level.cpp   # river_town: the player walks onto a bus, rides it, walks off (ADR-0486)
         tests/test_city_map.cpp
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp
@@ -1325,6 +1329,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/riding.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_near.cpp           # the near tier's test bed (ADR-0447)
+        src/apps/citysim/city_bus_ride.cpp       # the player aboard a bus (ADR-0486)
         src/engine/systems/vehicle_system.cpp    # ...which drives its cars through the real VehicleSystem
         src/apps/citysim/city_map_tool.cpp
         src/engine/systems/player_system.cpp

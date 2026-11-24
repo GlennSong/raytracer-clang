@@ -1,6 +1,6 @@
 #include "test_framework.h"
 
-#include "city_test_util.h"
+#include "model_scene.h"   // the towns: road files built as a level's roads are (#306 piece 6 W2)
 #include "../src/apps/citysim/city_goals.h"
 #include "../src/apps/citysim/city_sim.h"
 
@@ -126,10 +126,10 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     // The seam's parity pin: a sim running the built-in tables and one handed
     // the same tables through setGoalTables must be BIT-IDENTICAL — same rng
     // draws, same tick every transition fires, same poses and labels.
-    NavGraph nav = citytest::cross4(50.0);
+    const citytest::ModelScene& scene = citytest::crossScene(50.0);
     CitySim a, b;
-    a.build(nav, 24, 17);
-    b.build(nav, 24, 17);
+    scene.build(a, 24, 17);
+    scene.build(b, 24, 17);
     b.setGoalTables(builtinDayTable("worker"), builtinDayTable("worker"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
@@ -160,9 +160,9 @@ TEST_CASE(custom_goal_table_runs_errands_with_a_two_hour_dwell) {
     CHECK(errands.setEntry("Errand"));
     CHECK(!errands.addTransition("Errand", GoalEvent::Arrived, "NoSuchState"));
 
-    NavGraph nav = citytest::cross4(40.0);
+    const citytest::ModelScene& scene = citytest::crossScene(40.0);
     CitySim sim;
-    sim.build(nav, 2, 9);
+    scene.build(sim,2, 9);
     sim.setGoalTables(errands, errands);
 
     // Track each agent's rest bouts: every completed stay must last ~2 h of
@@ -209,14 +209,15 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
     CHECK(out.addTransition("Out", GoalEvent::NoRoute, "Pause"));
     CHECK(out.addTransition("Pause", GoalEvent::DwellDone, "Out"));
     CHECK(out.setEntry("Pause"));
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const citytest::ModelScene& scene = citytest::gridScene(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 12, 21);
+    scene.build(sim,12, 21);
     sim.setGoalTables(out, out);
     std::vector<CitySim::SeatSpot> seats;
-    for (int i = 0; i < nav.nodeCount(); i += 3) {
+    const WalkPointMap& pts = sim.walkPoints();
+    for (int i = 0; i < pts.nodeCount(); i += 3) {
         CitySim::SeatSpot s;
-        s.pos = nav.nodes[static_cast<std::size_t>(i)] + Vec2(7.0, 4.0);
+        s.pos = pts.nodes[static_cast<std::size_t>(i)] + Vec2(7.0, 4.0);
         s.face = Vec2(0, 1);
         s.hip = 0.47;
         seats.push_back(s);
@@ -259,9 +260,10 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
 // it has beds -- and runs their day on the student table: to class in the teaching hall, a break (the library, a
 // bench on the quad, lunch), back to class, and home to the hall in the evening.
 TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 5);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 420, 21);
+    scene.build(sim,420, 21);
     PlaceMap places;
     for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
     for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
@@ -280,11 +282,11 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
         seats.push_back(s);
     }
     sim.setSeats(seats);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     sim.seedFromSchedule(6.0);
 
     CHECK(sim.studentCount() == 60);   // the hall's beds (fewer than a quarter of the 400 walkers)
-    const int hallNode = nav.nearestNode(places[hall].entrance);
+    const int hallNode = sim.placePoint(hall);
     int homeless = 0, othersInHall = 0;
     for (const Agent& a : sim.agents()) {
         if (sim.isStudent(a)) homeless += a.home != hallNode || a.homePlace != hall;
@@ -295,7 +297,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
 
     int inClass = 0, onBench = 0, inLibrary = 0, backHome = 0, nightOut = 0, peakOut = 0;
     std::vector<uint8_t> sawClass(sim.agents().size(), 0), sawBreak(sim.agents().size(), 0);
-    const int teachNode = nav.nearestNode(places[teach].entrance), libNode = nav.nearestNode(places[lib].entrance);
+    const int teachNode = sim.placePoint(teach), libNode = sim.placePoint(lib);
     for (int i = 0; i < 30000 && sim.timeOfDay() < 22.5; ++i) {
         sim.step(0.5, 0.002);
         const auto& ag = sim.agents();
@@ -331,9 +333,10 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
 // THE DORM BLOCK (campus gap pass): with two residence halls the students fill both, in proportion to their beds, and
 // their courses are spread over every teaching hall.
 TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 5);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 420, 21);
+    scene.build(sim,420, 21);
     PlaceMap places;
     for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
     places.add(PlaceType::Office, Vec2(0, 330), nav, 9, 17);
@@ -342,7 +345,7 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     const PlaceId t1 = places.add(PlaceType::Civic, Vec2(60, 120), nav);
     const PlaceId t2 = places.add(PlaceType::Civic, Vec2(-60, 200), nav);
     kindOf(places, h1, "residence"); kindOf(places, h2, "residence"); kindOf(places, t1, "teaching"); kindOf(places, t2, "teaching");
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
     for (const Agent& a : sim.agents()) {
         if (!sim.isStudent(a)) continue;
@@ -364,9 +367,10 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
 TEST_CASE(households_fill_the_dwellings_one_to_each) {
     for (int perBlock : {6, 40})
         for (uint32_t seed = 1; seed <= 4; ++seed) {
-            NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+            const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, seed);
+        const engine::RoadModel* nav = scene.model.get();
             CitySim sim;
-            sim.build(nav, 480, seed);
+            scene.build(sim,480, seed);
             PlaceMap places;
             for (int i = 0; i < 24; ++i) {
                 const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + (i % 12) * 60.0, i < 12 ? -330 : 330), nav);
@@ -378,7 +382,7 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
             places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
             places.add(PlaceType::Park, Vec2(150, 150), nav);
             places.add(PlaceType::Cafe, Vec2(-150, 150), nav, 7, 19);
-            sim.assignPlaces(places, nav);
+            sim.assignPlaces(places);
             const HouseholdPlan& plan = sim.households();
             std::vector<int> taken(places.dwellings().size(), 0);
             for (const Household& h : plan.households)
@@ -414,13 +418,14 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
         }
     // the same city houses the same people the same way
     auto who = [](uint32_t seed) {
-        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, seed);
+        const engine::RoadModel* nav = scene.model.get();
         CitySim sim;
-        sim.build(nav, 260, seed);
+        scene.build(sim,260, seed);
         PlaceMap places;
         for (int i = 0; i < 12; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + i * 60.0, -330), nav), {0, 1, 2, 3, 2, 1});
         places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
-        sim.assignPlaces(places, nav);
+        sim.assignPlaces(places);
         std::vector<int> out;
         for (const Agent& a : sim.agents()) { out.push_back(a.household); out.push_back(a.age); out.push_back(a.stage); }
         return out;
@@ -434,9 +439,10 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
 // counts as staffed for those hours. Three seeds.
 TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
     for (uint32_t seed = 3; seed <= 5; ++seed) {
-        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, seed);
+        const engine::RoadModel* nav = scene.model.get();
         CitySim sim;
-        sim.build(nav, 420, seed);
+        scene.build(sim,420, seed);
         PlaceMap places;
         for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
@@ -445,7 +451,7 @@ TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
         const PlaceId hall = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 60);
         const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
         kindOf(places, hall, "residence"); kindOf(places, teach, "teaching");
-        sim.assignPlaces(places, nav);
+        sim.assignPlaces(places);
         sim.seedFromSchedule(15.0);
         int holders = 0;
         for (const Agent& a : sim.agents()) holders += a.sideVenue >= 0 ? 1 : 0;
@@ -481,9 +487,10 @@ TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
 // rider rolls faster than a walk. Three seeds.
 TEST_CASE(children_play_skate_and_scoot) {
     for (uint32_t seed = 2; seed <= 4; ++seed) {
-        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, seed);
+        const engine::RoadModel* nav = scene.model.get();
         CitySim sim;
-        sim.build(nav, 520, seed);
+        scene.build(sim,520, seed);
         PlaceMap places;
         std::vector<int> beds;
         for (int d = 0; d < 6; ++d) beds.push_back(2 + d % 3);   // family-sized flats
@@ -494,7 +501,7 @@ TEST_CASE(children_play_skate_and_scoot) {
         places.add(PlaceType::Restaurant, Vec2(-60, -200), nav, 11, 22);
         const PlaceId park = places.add(PlaceType::Park, Vec2(0, 0), nav);
         (void)park;
-        sim.assignPlaces(places, nav);
+        sim.assignPlaces(places);
         CitySim::ActivityArea lawn;
         lawn.kind = "lawn"; lawn.center = Vec2(0, 0); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
         CitySim::ActivityArea yard = lawn;
@@ -543,7 +550,8 @@ TEST_CASE(children_play_skate_and_scoot) {
 // pair a Household bond, a parent's child seeing them as its parent -- and nobody outside the dwelling.
 TEST_CASE(housemates_are_tied_as_their_household_says) {
     const PeopleCatalog cat = defaultPeopleCatalog();
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 3);
+    const engine::RoadModel* nav = scene.model.get();
     PlaceMap places;
     std::vector<int> beds;
     for (int d = 0; d < 12; ++d) beds.push_back(d % 6);
@@ -570,9 +578,9 @@ TEST_CASE(housemates_are_tied_as_their_household_says) {
     }
     // the sim: every Household bond is between agents of one household, and a parent / child pair reads both ways
     CitySim sim;
-    sim.build(nav, 300, 5);
+    scene.build(sim,300, 5);
     places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     const RelationshipTable& rel = sim.relationships();
     std::map<AgentId, int> hhOf;
     for (const Agent& a : sim.agents()) hhOf[a.uid] = a.household;
@@ -597,7 +605,8 @@ TEST_CASE(housemates_are_tied_as_their_household_says) {
 // -- one sort of the dwellings, one pass -- so 170,000 dwellings and 300,000 people must plan in well under a second.
 #include <chrono>
 TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 3);
+    const engine::RoadModel* nav = scene.model.get();
     PlaceMap places;
     std::vector<int> beds;
     for (int d = 0; d < 170; ++d) beds.push_back(d % 4);
@@ -611,93 +620,12 @@ TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
     CHECK(ms < 2000.0);
 }
 
-// THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
-// nav graph as walker-only links. A walker's route takes the diagonal across a block when it is shorter; a car's never
-// does; nearestNode never answers with a walk node; a walk's end joins the street at its pavement, not its middle; a
-// tee joins a walk to another's middle; a walk marked off-street (a quad door's) stays off the streets.
-#include "../src/engine/ai/pathfind.h"
-namespace {
-// THE WALKS AS A CALLER STATES THEM (ADR-0476: the street map is told where each walk meets what, never by distance; on
-// a level that is roads/street_map.h appendWalkways, from the road model's walkways): a diagonal across the block from
-// a to b, each end joined to the street link `nearestLink` answers there, from the pavement on the walk's side; and,
-// with `spur`, a walk off its middle to `spurEnd`, whose far end joins nothing (a door).
-NavGraph::FootpathPlan statedDiagonal(const NavGraph& nav, const Vec2& a, const Vec2& b, bool spur, const Vec2& spurEnd) {
-    NavGraph::FootpathPlan plan;
-    plan.nodes = {a, b};
-    if (spur) {
-        plan.nodes.push_back((a + b) * 0.5);
-        plan.nodes.push_back(spurEnd);
-        plan.walks = {{0, 2}, {2, 1}, {2, 3}};
-    } else {
-        plan.walks = {{0, 1}};
-    }
-    for (int end : {0, 1}) {
-        const Vec2 q = plan.nodes[static_cast<std::size_t>(end)];
-        const int link = nav.nearestLink(q);
-        const NavLink& S = nav.links[static_cast<std::size_t>(link)];
-        const Vec2 A = nav.nodes[static_cast<std::size_t>(S.from)], B = nav.nodes[static_cast<std::size_t>(S.to)];
-        const Vec2 dir = normalize(B - A);
-        Vec2 side(-dir.y, dir.x);
-        if (dot(q - A, side) < 0) side = side * -1.0;
-        plan.streetJoins.push_back({end, link, side});
-    }
-    return plan;
-}
-}  // namespace
-TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
-    // Twelve grids, each corner jittered its own way (ADR-0265): a square block's diagonal saves 29 %, a skewed one
-    // 13 %, and on every one the walk takes it. (Walkers were costed by the cars' class speed, so a collector round
-    // the block "beat" a shorter walk across it.)
-    for (uint32_t seed = 1; seed <= 12; ++seed) {
-        NavGraph nav = citytest::cityNav(600.0, 100.0, seed);
-        const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
-        CHECK(c00 >= 0 && c11 >= 0 && c00 != c11);
-        const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
-        const Route before = findRoute(nav, c00, c11, true);
-        Real walkBefore = 0;
-        for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
-        const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
-        const Vec2 d = normalize(p11 - p00);
-        // the diagonal, its ends short of the corners, and a spur off its middle toward a door (its far end joins nothing)
-        const Vec2 mid = (p00 + p11) * 0.5;
-        const NavGraph::FootpathReport rep =
-            nav.appendFootpaths(statedDiagonal(nav, p00 + d * 8.0, p11 - d * 8.0, true, mid + Vec2(19.4, -19.4)));
-        std::printf("    [footpaths] seed %u: %d nodes, %d links, %d street joins; street walk %.0f m\n", seed, rep.nodes, rep.links,
-                    rep.streetJoins, walkBefore);
-        CHECK(rep.nodes == 4);
-        CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
-        // three walks each way; two ends each joined to a street link's nodes (both, unless one is over 80 m off), each way
-        CHECK(rep.links >= 3 * 2 + 2 * 2 && rep.links <= 3 * 2 + 2 * 2 * 2);
-        // a walker cuts across; the walk is shorter than the streets round the block
-        const Route after = findRoute(nav, c00, c11, true);
-        Real walkAfter = 0;
-        bool usedPath = false;
-        for (int li : after.links) {
-            walkAfter += nav.links[static_cast<std::size_t>(li)].length;
-            usedPath = usedPath || nav.links[static_cast<std::size_t>(li)].footpath;
-        }
-        CHECK(usedPath);
-        CHECK(walkAfter < walkBefore * 0.9);   // the skewest block still saves 13 %
-        // a car never takes a walk
-        const Route car = findRoute(nav, c00, c11, false);
-        CHECK(car.valid());
-        for (int li : car.links) CHECK(!nav.links[static_cast<std::size_t>(li)].footpath);
-        // and cannot get to a walk node at all
-        CHECK(!findRoute(nav, c00, streetNodes, false).valid());
-        // nearestNode keeps to the streets, even standing on the walk
-        CHECK(nav.nearestNode((p00 + p11) * 0.5) < streetNodes);
-        // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
-        for (int li = streetLinks; li < nav.linkCount(); ++li) {
-            const NavLink& L = nav.links[static_cast<std::size_t>(li)];
-            CHECK(L.footpath && L.walkable && L.access == 0);   // (a walk: none of a street's access bits)
-            if (L.from < streetNodes) {
-                const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
-                CHECK(off > 1.0);
-                CHECK((nav.sidewalkPoint(li, 0.0) - L.footA).length() < 1e-9);
-            }
-        }
-    }
-}
+// (DELETED in #306 piece 6 W2: `footpaths_are_walked_across_a_block_and_never_driven`, which joined a diagonal to the
+// hand-made street map with its own footpath joining and routed it with the street map's router. It tested the street
+// map's own footpath links, which piece 10 deletes. What it showed is shown on the one road model: a walkway is walked
+// and never driven, joined where its ends are stated (road_model_43, road_model_45, lanes_tests), and a crowd walks one
+// to work in the sim (below).)
+#include "../src/engine/procgen/city/roads/walkway.h"
 
 // AN ACTIVITY GOAL TAKES ONLY WHAT IT ASKS FOR (behaviour plan, step 2): a goal asking for a SIT on the CAMPUS uses the
 // campus's benches and never the town's, never a spot of another kind, and never one already held.
@@ -710,9 +638,10 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     CHECK(out.addTransition("Find", GoalEvent::NoRoute, "Pause"));
     CHECK(out.addTransition("Pause", GoalEvent::DwellDone, "Find"));
     CHECK(out.setEntry("Pause"));
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const citytest::ModelScene& scene = citytest::gridScene(600.0, 100.0, 4);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 40, 21);
+    scene.build(sim,40, 21);
     sim.setGoalTables(out, out);
     PlaceMap places;
     for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
@@ -724,7 +653,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     for (int i = 0; i < 3; ++i) spot(Vec2(-12.0 + i * 8.0, -8.0), SpotKind::Watch);       // ...and somewhere to watch
     for (int i = 0; i < 12; ++i) spot(Vec2(-250.0 + i * 40.0, 210.0), SpotKind::Sit);     // the town's benches, far off
     sim.setSpots(spots);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     int campusSits = 0, wrong = 0, shared = 0;
     for (int i = 0; i < 40000; ++i) {
         sim.step(0.1, 0.25);
@@ -759,9 +688,9 @@ TEST_CASE(joggers_run_laps_of_the_track_and_come_off_it) {
     CHECK(out.addTransition("Run", GoalEvent::NoRoute, "Rest"));
     CHECK(out.addTransition("Rest", GoalEvent::DwellDone, "Run"));
     CHECK(out.setEntry("Rest"));
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const citytest::ModelScene& scene = citytest::gridScene(600.0, 100.0, 4);
     CitySim sim;
-    sim.build(nav, 30, 21);
+    scene.build(sim,30, 21);
     sim.setGoalTables(out, out);
     // a track: a 40 x 30 m oval between the streets
     std::vector<Vec2> loop;
@@ -829,18 +758,48 @@ TEST_CASE(joggers_run_laps_of_the_track_and_come_off_it) {
 // A CROWD ON A WALK (the island's stuck students: 32 of them held at the foot of a walk, speed 0): walkers whose
 // commute runs over a footpath -- many leaving the same door at once -- get to work.
 TEST_CASE(a_crowd_walks_a_footpath_to_work) {
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
-    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
-    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
-    const Vec2 d = normalize(p11 - p00);
-    nav.appendFootpaths(statedDiagonal(nav, p00 + d * 8.0, p11 - d * 8.0, false, Vec2()));
+    // THE WALK IS A WALKWAY OF THE ROAD MODEL (ADR-0475, ADR-0476; #306 piece 6 W2): stated on the town's model, its two
+    // ends on the streets either side of the block, at the station and kerb the model answers there (frontageAt), laid
+    // in the lane level as its walks (stateWalkways). (Was a diagonal the test joined to the hand-made map's links
+    // itself; its ends 8 m from the corners now lie past where the sidewalks start, so the walk runs across the block
+    // between the two streets' middles.)
+    const citytest::ModelScene& town = citytest::gridScene(600.0, 100.0, 4);
+    std::shared_ptr<RoadModel> model = std::make_shared<RoadModel>(*town.model);
+    // the block's corners: the model's junctions nearest (0, 0) and (100, 100)
+    const auto junctionNear = [&](Vec2 p) {
+        Vec2 best = town.model->junctions.front().at;
+        for (const ModelJunction& j : town.model->junctions)
+            if ((j.at - p).length() < (best - p).length()) best = j.at;
+        return best;
+    };
+    const Vec2 p00 = junctionNear(Vec2(0, 0)), p11 = junctionNear(Vec2(100, 100));
+    const Vec2 westMid = town.sidewalkBeside(Vec2(p00.x + 6.0, (p00.y + p11.y) * 0.5));   // the west street's sidewalk, block side
+    const Vec2 eastMid = town.sidewalkBeside(Vec2(p11.x - 6.0, (p00.y + p11.y) * 0.5));   // ...the east street's
+    ModelWalkway w;
+    w.id = "across";
+    w.kind = "footway";
+    w.width = 3.0;
+    w.line = {westMid, eastMid};
+    w.heights = {0.0, 0.0};
+    for (int e = 0; e < 2; ++e) {
+        const RoadFrontage f = model->frontageAt(w.line[static_cast<std::size_t>(e)]);
+        CHECK(f.valid() && f.street.valid());
+        if (!f.valid() || !f.street.valid()) return;
+        w.ends[static_cast<std::size_t>(e)].meets.street = model->streets[f.street.index].id;
+        w.ends[static_cast<std::size_t>(e)].meets.station = f.station;
+        w.ends[static_cast<std::size_t>(e)].meets.dir = f.dir;
+    }
+    const std::vector<WalkwayProblem> faults = stateWalkways(*model, {w});
+    for (const WalkwayProblem& p : faults) std::printf("    walkway fault: %s\n", p.why.c_str());
+    CHECK(faults.empty());
     CitySim sim;
-    sim.build(nav, 60, 21);
+    sim.setRoads(model, "test scene with a walkway");
+    sim.build(60, 21);
     PlaceMap places;
-    const PlaceId home = places.add(PlaceType::Home, p00 + Vec2(-6, -6), nav);
-    const PlaceId job = places.add(PlaceType::Office, p11 + Vec2(6, 6), nav, 8, 17);
+    const PlaceId home = places.add(PlaceType::Home, westMid + Vec2(-12, 0), model.get());
+    const PlaceId job = places.add(PlaceType::Office, eastMid + Vec2(12, 0), model.get(), 8, 17);
     (void)home; (void)job;
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     sim.seedFromSchedule(7.9);
     int onWalk = 0, arrived = 0, maxStuck = 0;
     std::vector<int> stuck(sim.agents().size(), 0);
@@ -849,16 +808,16 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
         sim.step(0.1, 0.0005);
         for (std::size_t k = 0; k < sim.agents().size(); ++k) {
             const Agent& a = sim.agents()[k];
-            if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (!nav.links[static_cast<std::size_t>(li)].footpath) { stuck[k] = 0; continue; }
+            if (!CitySim::onRoute(a)) continue;
+            const engine::WalkId w = a.route.steps[static_cast<std::size_t>(a.leg)].walk;   // on the walkway's walk (W3)
+            if (model->laneLevel.walks[w.index].modelWalkway == engine::kNoIndex) { stuck[k] = 0; continue; }
             ++onWalk;
             if (std::fabs(a.distOnLeg - lastD[k]) < 1e-6) ++stuck[k]; else stuck[k] = 0;
             lastD[k] = a.distOnLeg;
             maxStuck = std::max(maxStuck, stuck[k]);
         }
     }
-    for (const Agent& a : sim.agents()) arrived += !a.moving && a.restNode == nav.nearestNode(places[job].entrance);
+    for (const Agent& a : sim.agents()) arrived += !a.moving && a.restNode == sim.placePoint(job);
     std::printf("    [crowd] %d walker-steps on the walk, %d at work, longest stall %.1f s\n", onWalk, arrived, maxStuck * 0.1);
     CHECK(onWalk > 100);
     CHECK(maxStuck < 100);   // nobody held on a walk for 10 s
@@ -870,9 +829,10 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
 namespace {
 struct KickRun { int games = 0, started = 0, swapped = 0, givenUp = 0, outOfHalf = 0, offPitch = 0, maxOn = 0; };
 KickRun runKickabout(int walkers) {
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const citytest::ModelScene& scene = citytest::gridScene(600.0, 100.0, 4);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, walkers, 21);
+    scene.build(sim,walkers, 21);
     ActivityCatalog cat = defaultActivityCatalog();
     Menu kick;
     kick.name = "kick";
@@ -895,7 +855,7 @@ KickRun runKickabout(int walkers) {
     CitySim::ActivityArea pitch;
     pitch.kind = "pitch"; pitch.center = Vec2(50, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
     sim.setAreas({pitch});
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     KickRun r;
     std::vector<int> seenState(64, -1);
     std::vector<uint8_t> sawSwap(64, 0);
@@ -990,9 +950,10 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
         all.bands.push_back(b);
     }
     cat.menus.push_back(all);
-    NavGraph nav = citytest::cityNav(1200.0, 100.0, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(1200.0, 100.0, 5);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 300, 21);
+    scene.build(sim,300, 21);
     sim.setActivityCatalog(cat);
     GoalTable t;
     t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
@@ -1052,7 +1013,7 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     CitySim::ActivityArea play = lawnQ;    // a playground (an open lot's)
     play.kind = "playground"; play.center = Vec2(120, -120); play.halfL = 12; play.halfW = 8;
     sim.setAreas({pitch, lawnQ, lawnP, sand, shore, play});
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 
     // the longest any activity keeps someone at a spot or in a session, in hours, plus slack
@@ -1129,9 +1090,10 @@ struct LawnRun {
     double pairLo = 1e9, pairHi = 0;
 };
 LawnRun runLawn(const char* activity, int walkers, double startHour) {
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const citytest::ModelScene& scene = citytest::gridScene(600.0, 100.0, 4);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, walkers, 33);
+    scene.build(sim,walkers, 33);
     ActivityCatalog cat = defaultActivityCatalog();
     Menu m;
     m.name = "lawn";
@@ -1153,7 +1115,7 @@ LawnRun runLawn(const char* activity, int walkers, double startHour) {
     CitySim::ActivityArea lawn;
     lawn.kind = "lawn"; lawn.center = Vec2(50, 50); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
     sim.setAreas({lawn});
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     sim.seedFromSchedule(startHour);
     LawnRun r;
     std::vector<int> seen(128, 0);
@@ -1234,17 +1196,18 @@ TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
     // open exactly while it is posted open and someone is on shift, and some staffed hour open. (One town of 340 once
     // seemed to show the gate shutting a place; it was every shop's staff stuck on a walker's median commute --
     // scheduleSnapshot.)
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 5);
+    const engine::RoadModel* nav = scene.model.get();
     int gated = 0, disagree = 0, closedInHours = 0, openHours = 0;
     for (uint32_t seed = 21; seed <= 28; ++seed) {
         CitySim sim;
-        sim.build(nav, 340, seed);
+        scene.build(sim,340, seed);
         PlaceMap places;
         for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
         for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
         places.add(PlaceType::Cafe, Vec2(120, -40), nav, 6, 23);
         places.add(PlaceType::Bar, Vec2(-120, 40), nav, 16, 2);
-        sim.assignPlaces(places, nav);
+        sim.assignPlaces(places);
         const CitySim::VenueStaffing at10 = sim.venueStaffing(10.0);
         std::printf("    [staffed] seed %u: %d places gated, %d staffed at 10:00, %d at 03:00\n", seed, at10.gated, at10.staffedNow,
                     sim.venueStaffing(3.0).staffedNow);
@@ -1286,9 +1249,10 @@ TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
 // THE BUSY STREETS: homes and jobs are drawn by floor area -- a block of flats houses a block of flats' people, a
 // tower holds a tower's staff -- not one share per building.
 TEST_CASE(people_live_and_work_where_the_floor_space_is) {
-    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    const citytest::ModelScene& scene = citytest::gridScene(800.0, 80.0, 5);
+    const engine::RoadModel* nav = scene.model.get();
     CitySim sim;
-    sim.build(nav, 800, 31);
+    scene.build(sim,800, 31);
     PlaceMap places;
     std::vector<PlaceId> houses;
     for (int i = 0; i < 10; ++i) {
@@ -1306,7 +1270,7 @@ TEST_CASE(people_live_and_work_where_the_floor_space_is) {
     }
     const PlaceId tower = places.add(PlaceType::Office, Vec2(150, 170), nav);
     places.setFloorArea(tower, 30000);
-    sim.assignPlaces(places, nav);
+    sim.assignPlaces(places);
     int inFlats = 0, inHouses = 0, atTower = 0, atShops = 0;
     for (const Agent& a : sim.agents()) {
         if (a.homePlace == flats) ++inFlats;
