@@ -237,6 +237,11 @@ struct GiveWayInputs {
     // start of the tick. A driver on the other lane of a join holding back to let me in is not coming: I do not give
     // way to it there (#323, the zipper at a merge). Null: nobody lets anybody in.
     const std::map<CarId, CarId>* lettingIn = nullptr;
+    // THE CARS QUEUED BEHIND ANOTHER (sitting 6): (the car ahead, the car behind it), sorted -- in one lane, or along a
+    // split's stretch (traffic_state.h carAhead), as the cars stood at the start of the tick. A car queued behind me
+    // cannot pass me: I never give way to it (brain_crowd's car 102 waited inside junction 7 for car 136, which stood
+    // behind it). Null: none known.
+    const std::vector<std::pair<uint64_t, uint64_t>>* behind = nullptr;
 };
 
 // WHAT ONE DRIVER JUDGED.

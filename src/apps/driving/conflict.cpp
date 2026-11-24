@@ -52,8 +52,7 @@ const char* questionName(Question q) {
     case Question::Going: return "going";
     case Question::ArrivedFirst: return "arrived_first";
     case Question::Fallback: return "fallback";
-    case Question::LowerId: return "lower_id";
-    case Question::Ring: return "ring";
+    case Question::Hesitation: return "hesitation";
     }
     return "?";
 }
@@ -68,8 +67,7 @@ const char* questionWords(Question q) {
     case Question::Going: return "it can no longer stop at its line";
     case Question::ArrivedFirst: return "it reached its line first";
     case Question::Fallback: return "the table's fall-back puts it first";
-    case Question::LowerId: return "nothing else told us apart: the lower car id";
-    case Question::Ring: return "we stood in a ring of right of way, broken in a fixed order";
+    case Question::Hesitation: return "nothing else told us apart: one of us hesitated";
     }
     return "?";
 }
@@ -129,9 +127,28 @@ Answer askFallback(const Conflict& c) {
     return Answer::NoAnswer;
 }
 
-Answer askLowerId(const Conflict& c) {
+// THE TIE: neither has right of way and neither came first. People hesitate, and the bolder goes: each driver's own
+// seeded boldness (a hash of the car and when it reached its line -- not tossed afresh each tick, which would have them
+// swap places), compared. One number per driver, so the answers between any number of cars hold no loop: four cars at
+// an all-way stop in the same tick go one by one, where the kerb-side fall-back alone runs in a ring (each has another
+// on its kerb side). No central order is needed: each driver reads the other's boldness off how it moves. Not the lower
+// id: that put the same car first in every tie it met.
+uint64_t boldness(const Side& s) {
+    engine::bundle::Fnv h;
+    h.pod(s.who);
+    h.pod(s.arrivalFixed ? s.arrivalTick : uint64_t(0));
+    return h.h;
+}
+Answer askHesitation(const Conflict& c) {
     if (c.first.who == c.second.who) return Answer::NoAnswer;
-    return firstIf(c.first.who < c.second.who);
+    const uint64_t a = boldness(c.first), b = boldness(c.second);
+    return firstIf(a != b ? a > b : c.first.who < c.second.who);
+}
+// ...asked BEFORE the fall-back when both already stand at their lines, having reached them in the same tick: the
+// fall-back is the law for cars still driving up, and among cars at their lines it can run in a ring.
+Answer askTieAtLines(const Conflict& c) {
+    if (!c.first.arrivalFixed || !c.second.arrivalFixed) return Answer::NoAnswer;
+    return askHesitation(c);
 }
 
 const std::array<QuestionSpec, kAskedQuestions> kQuestions = {{
@@ -141,8 +158,9 @@ const std::array<QuestionSpec, kAskedQuestions> kQuestions = {{
     {Question::Table, askTable},
     {Question::Going, askGoing},
     {Question::ArrivedFirst, askArrivedFirst},
+    {Question::Hesitation, askTieAtLines},
     {Question::Fallback, askFallback},
-    {Question::LowerId, askLowerId},
+    {Question::Hesitation, askHesitation},
 }};
 
 Resolution resolve(const Conflict& c) {
@@ -155,28 +173,15 @@ Resolution resolve(const Conflict& c) {
         return r;
     }
     Resolution r;   // one car on both sides: not a conflict, but an answer all the same
-    r.by = Question::LowerId;
+    r.by = Question::Hesitation;
     return r;
 }
 
-bool ringOrder(const Side& a, const Side& b) {
-    // Smaller goes first, as the questions ask: cannot stop (0) before can (1); committed before not, earlier commit
-    // first; going before not; a fixed arrival before none, earlier first; then the lower id.
-    const uint64_t never = ~uint64_t(0);
-    return std::make_tuple(a.cannotStop ? 0 : 1, a.committed ? 0 : 1, a.committed ? a.committedTick : never,
-                           a.going ? 0 : 1, a.arrivalFixed ? a.arrivalTick : never, a.who) <
-           std::make_tuple(b.cannotStop ? 0 : 1, b.committed ? 0 : 1, b.committed ? b.committedTick : never,
-                           b.going ? 0 : 1, b.arrivalFixed ? b.arrivalTick : never, b.who);
-}
 
 void addCounts(ConflictCounts& a, const ConflictCounts& b) {
     a.conflicts += b.conflicts;
     for (std::size_t q = 0; q < kQuestionCount; ++q) a.byQuestion[q] += b.byQuestion[q];
-    a.rings += b.rings;
-    a.physicalRings += b.physicalRings;
-    a.bodyRings += b.bodyRings;
     a.secondCannotStop += b.secondCannotStop;
-    a.queuesCut += b.queuesCut;
 }
 
 // ---- The resolver -----------------------------------------------------------------------------------------------------
@@ -188,7 +193,7 @@ uint32_t ConflictResolver::groupOf(const engine::LaneGraph& roads, engine::Cross
 }
 
 void ConflictResolver::study(const engine::LaneGraph& roads, const RightOfWay& row, const AnnouncementBoard& board,
-                             const std::vector<std::pair<uint64_t, uint64_t>>& behind, double now) {
+                             double now) {
     met_.clear();
     settled_.clear();
     counts_ = ConflictCounts();
@@ -301,9 +306,8 @@ void ConflictResolver::study(const engine::LaneGraph& roads, const RightOfWay& r
         i = e;
     }
 
-    // 4. No rings: every arrow checked for loops, with the arrows nobody can turn round, and any loop's conflicts answered
-    // by one order.
-    breakRings(behind);
+    // (No ring breaking, no order imposed on a group of cars: each pair is answered by the questions both drivers ask of
+    // what they see, sitting 6. A ring of waits that follows is counted by the wait-for graph, a measurement.)
 
     counts_.conflicts = settled_.size();
     for (const SettledConflict& s : settled_) {
@@ -316,209 +320,10 @@ void ConflictResolver::study(const engine::LaneGraph& roads, const RightOfWay& r
     }
 }
 
-uint32_t ConflictResolver::nodeOf(uint64_t who) const {
-    return static_cast<uint32_t>(std::lower_bound(nodes_.begin(), nodes_.end(), who) - nodes_.begin());
-}
 
-void ConflictResolver::breakRings(const std::vector<std::pair<uint64_t, uint64_t>>& behind) {
-    // Each car behind another: (the car behind, the car ahead of it), sorted to be looked up. A car may be behind one car
-    // on the path its front is on and another on a path its tail is still on.
-    aheadOf_.clear();
-    for (const std::pair<uint64_t, uint64_t>& b : behind)
-        if (b.first != b.second) aheadOf_.push_back({b.second, b.first});
-    std::sort(aheadOf_.begin(), aheadOf_.end());
-    aheadOf_.erase(std::unique(aheadOf_.begin(), aheadOf_.end()), aheadOf_.end());
-    // Every group together: a car can be held at one junction's line by its conflict at the next (when its body would
-    // not fit between the two, give_way.h), so a loop can run through two junctions.
-    breakRingsIn(0, settled_.size());
-}
 
-void ConflictResolver::breakRingsIn(std::size_t first, std::size_t end) {
-    // The group's cars, sorted, each with its side gathered over all its conflicts here (for the order).
-    nodes_.clear();
-    for (std::size_t k = first; k < end; ++k) {
-        nodes_.push_back(settled_[k].conflict.first.who);
-        nodes_.push_back(settled_[k].conflict.second.who);
-    }
-    std::sort(nodes_.begin(), nodes_.end());
-    nodes_.erase(std::unique(nodes_.begin(), nodes_.end()), nodes_.end());
-    const uint32_t n = static_cast<uint32_t>(nodes_.size());
-    if (n < 2) return;
-    nodeSides_.assign(n, Side());
-    placed_.assign(n, 0);   // here: "its side has been set from a conflict"
-    // The arrows: from the one that goes second to the one it goes after.
-    arrows_.clear();
-    for (std::size_t k = first; k < end; ++k) {
-        const SettledConflict& s = settled_[k];
-        const uint32_t a = nodeOf(s.conflict.first.who), b = nodeOf(s.conflict.second.who);
-        for (const std::pair<uint32_t, const Side*>& node :
-             {std::make_pair(a, &s.conflict.first), std::make_pair(b, &s.conflict.second)}) {
-            if (!placed_[node.first]) nodeSides_[node.first] = *node.second;
-            else gather(nodeSides_[node.first], *node.second);
-            placed_[node.first] = 1;
-        }
-        Arrow arrow;
-        arrow.from = s.resolution.firstGoes ? b : a;
-        arrow.to = s.resolution.firstGoes ? a : b;
-        arrow.conflict = static_cast<uint32_t>(k);
-        arrow.fixed = fixedAnswer(s.resolution.by);
-        arrows_.push_back(arrow);
-    }
-    // ... and from a car in a queue to the nearest cars in a conflict ahead of it in that queue (the cars between, if any,
-    // are in none). A queue is looked along no further than kMaxQueueLooked cars from each: one cut short is counted.
-    for (uint32_t v = 0; v < n; ++v) {
-        queueWalk_.clear();
-        queueWalk_.push_back(nodes_[v]);
-        for (std::size_t look = 0; look < queueWalk_.size(); ++look) {
-            if (look == kMaxQueueLooked) {
-                ++counts_.queuesCut;
-                break;
-            }
-            const std::vector<std::pair<uint64_t, uint64_t>>::const_iterator from =
-                std::lower_bound(aheadOf_.begin(), aheadOf_.end(), std::make_pair(queueWalk_[look], uint64_t(0)));
-            for (std::vector<std::pair<uint64_t, uint64_t>>::const_iterator it = from;
-                 it != aheadOf_.end() && it->first == queueWalk_[look]; ++it) {
-                const uint64_t ahead = it->second;
-                const uint32_t w = nodeOf(ahead);
-                if (w < n && nodes_[w] == ahead) {
-                    if (w != v) {
-                        Arrow arrow;
-                        arrow.from = v;
-                        arrow.to = w;
-                        arrow.conflict = kFixedArrow;
-                        arrow.fixed = true;
-                        arrows_.push_back(arrow);
-                    }
-                } else if (std::find(queueWalk_.begin(), queueWalk_.end(), ahead) == queueWalk_.end()) {
-                    queueWalk_.push_back(ahead);
-                }
-            }
-        }
-    }
-    std::sort(arrows_.begin(), arrows_.end(), [](const Arrow& x, const Arrow& y) {
-        return std::make_tuple(x.from, x.to, x.conflict) < std::make_tuple(y.from, y.to, y.conflict);
-    });
-    firstArrow_.assign(n + 1, 0);
-    for (const Arrow& arrow : arrows_) ++firstArrow_[arrow.from + 1];
-    for (uint32_t i = 0; i < n; ++i) firstArrow_[i + 1] += firstArrow_[i];
 
-    strongParts();
-    for (uint32_t p = 0; p < partSize_.size(); ++p)
-        if (partSize_[p] >= 2) orderPart(p);
-}
 
-void ConflictResolver::strongParts() {
-    // Tarjan's method, walked without recursion: each car's visit number and the lowest visit number it reaches; a car
-    // whose two are equal heads a strongly connected part, made of the cars above it on the stack.
-    const uint32_t n = static_cast<uint32_t>(nodes_.size());
-    constexpr uint32_t kUnvisited = 0xFFFFFFFFu;
-    visitOrder_.assign(n, kUnvisited);
-    lowLink_.assign(n, 0);
-    part_.assign(n, 0);
-    onStack_.assign(n, 0);
-    partSize_.clear();
-    stack_.clear();
-    uint32_t visits = 0;
-    for (uint32_t root = 0; root < n; ++root) {
-        if (visitOrder_[root] != kUnvisited) continue;
-        walk_.clear();
-        walkArrow_.clear();
-        const auto enter = [&](uint32_t v) {
-            visitOrder_[v] = lowLink_[v] = visits++;
-            stack_.push_back(v);
-            onStack_[v] = 1;
-            walk_.push_back(v);
-            walkArrow_.push_back(firstArrow_[v]);
-        };
-        enter(root);
-        while (!walk_.empty()) {
-            const uint32_t v = walk_.back();
-            if (walkArrow_.back() < firstArrow_[v + 1]) {
-                const uint32_t w = arrows_[walkArrow_.back()++].to;
-                if (visitOrder_[w] == kUnvisited) enter(w);
-                else if (onStack_[w]) lowLink_[v] = std::min(lowLink_[v], visitOrder_[w]);
-                continue;
-            }
-            if (lowLink_[v] == visitOrder_[v]) {
-                const uint32_t p = static_cast<uint32_t>(partSize_.size());
-                partSize_.push_back(0);
-                uint32_t w = kUnvisited;
-                do {
-                    w = stack_.back();
-                    stack_.pop_back();
-                    onStack_[w] = 0;
-                    part_[w] = p;
-                    ++partSize_[p];
-                } while (w != v);
-            }
-            walk_.pop_back();
-            walkArrow_.pop_back();
-            if (!walk_.empty()) lowLink_[walk_.back()] = std::min(lowLink_[walk_.back()], lowLink_[v]);
-        }
-    }
-}
-
-void ConflictResolver::orderPart(uint32_t part) {
-    ++counts_.rings;
-    const uint32_t n = static_cast<uint32_t>(nodes_.size());
-    partNodes_.clear();
-    for (uint32_t v = 0; v < n; ++v)
-        if (part_[v] == part) partNodes_.push_back(v);
-    // How many fixed arrows each car of the part has to cars of the part not yet placed (it comes after all of them), and
-    // how many of those are a body's (on_it, or a car that cannot stop: cannot_stop).
-    waitingOn_.assign(n, 0);
-    waitingOnBody_.assign(n, 0);
-    rank_.assign(n, 0);
-    placed_.assign(n, 0);
-    for (const uint32_t v : partNodes_)
-        for (uint32_t a = firstArrow_[v]; a < firstArrow_[v + 1]; ++a)
-            if (arrows_[a].fixed && part_[arrows_[a].to] == part) {
-                ++waitingOn_[v];
-                if (arrows_[a].conflict != kFixedArrow) ++waitingOnBody_[v];
-            }
-    bool setAsideAQueue = false, bodiesLocked = false;
-    for (uint32_t pos = 0; pos < partNodes_.size(); ++pos) {
-        // Next: of the cars free to come next (nothing fixed still ahead of them), the first by ringOrder. When none is
-        // free (a loop of fixed arrows), the first of those waiting on no body (a queue arrow gives way first: it is no
-        // answer, so putting a car before the car ahead of it in its queue changes nothing it does). When bodies alone
-        // are locked round, any: the order then only answers the part's other conflicts, never one between bodies.
-        uint32_t best = n;
-        for (int pass = 0; pass < 3 && best == n; ++pass)
-            for (const uint32_t v : partNodes_)
-                if (!placed_[v] && (pass == 2 || (pass == 1 ? waitingOnBody_[v] == 0 : waitingOn_[v] == 0)) &&
-                    (best == n || ringOrder(nodeSides_[v], nodeSides_[best])))
-                    best = v;
-        if (waitingOnBody_[best] != 0) bodiesLocked = true;
-        else if (waitingOn_[best] != 0) setAsideAQueue = true;
-        placed_[best] = 1;
-        rank_[best] = pos;
-        // The cars with a fixed arrow to it wait on one fewer.
-        for (const uint32_t v : partNodes_)
-            for (uint32_t a = firstArrow_[v]; a < firstArrow_[v + 1]; ++a)
-                if (arrows_[a].fixed && arrows_[a].to == best && waitingOn_[v] > 0) {
-                    --waitingOn_[v];
-                    if (arrows_[a].conflict != kFixedArrow && waitingOnBody_[v] > 0) --waitingOnBody_[v];
-                }
-    }
-    if (setAsideAQueue) ++counts_.physicalRings;
-    // A LOOP OF BODIES ALONE (issue #284): left standing. Each of its cars waits for a body that is where it is; no answer
-    // can undo that, and overruling one would tell a car to drive through another. The wait-for graph shows it as gridlock.
-    if (bodiesLocked) ++counts_.bodyRings;
-    // Every other conflict inside the part answered by the order (its question kept where the order agrees with it). An
-    // answer by on_it or cannot_stop is never overruled.
-    for (const uint32_t v : partNodes_)
-        for (uint32_t a = firstArrow_[v]; a < firstArrow_[v + 1]; ++a) {
-            const Arrow& arrow = arrows_[a];
-            if (arrow.conflict == kFixedArrow || part_[arrow.to] != part) continue;
-            SettledConflict& s = settled_[arrow.conflict];
-            if (fixedAnswer(s.resolution.by)) continue;
-            const bool firstGoes = rank_[nodeOf(s.conflict.first.who)] < rank_[nodeOf(s.conflict.second.who)];
-            if (firstGoes == s.resolution.firstGoes) continue;
-            s.beforeRing = s.resolution;
-            s.resolution.firstGoes = firstGoes;
-            s.resolution.by = Question::Ring;
-        }
-}
 
 const SettledConflict* ConflictResolver::find(uint32_t group, uint64_t a, uint64_t b) const {
     const uint64_t lo = std::min(a, b), hi = std::max(a, b);
@@ -540,23 +345,6 @@ bool ConflictResolver::goesFirst(const engine::LaneGraph& roads, engine::Crossin
     return (s->conflict.first.who == me) == s->resolution.firstGoes;
 }
 
-Answer ConflictResolver::order(uint64_t a, uint64_t b, Question* by) const {
-    if (by) *by = Question::None;
-    if (a == b) return Answer::NoAnswer;
-    const uint64_t lo = std::min(a, b), hi = std::max(a, b);
-    // byPair_ lists settled_ by (first, second, group): the pair's record in the lowest group comes first.
-    const std::vector<uint32_t>::const_iterator it =
-        std::lower_bound(byPair_.begin(), byPair_.end(), std::make_pair(lo, hi),
-                         [this](uint32_t k, const std::pair<uint64_t, uint64_t>& key) {
-                             const SettledConflict& s = settled_[k];
-                             return std::make_pair(s.conflict.first.who, s.conflict.second.who) < key;
-                         });
-    if (it == byPair_.end()) return Answer::NoAnswer;
-    const SettledConflict& s = settled_[*it];
-    if (s.conflict.first.who != lo || s.conflict.second.who != hi) return Answer::NoAnswer;
-    if (by) *by = s.resolution.by;
-    return (a == lo) == s.resolution.firstGoes ? Answer::First : Answer::Second;
-}
 
 uint64_t ConflictResolver::hash() const {
     engine::bundle::Fnv h;

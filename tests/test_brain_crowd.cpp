@@ -433,6 +433,8 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // changes widen, so cars 209 -> 215 (with one 222 -> 233); trips 326 -> 337, parked 261 -> 272, arrivals 494 -> 473
     // (more drive, fewer walk), the most on the road 90 at minute 10 -> 98 at minute 8, busy minutes 14; rings 0; every
     // trip still ends in its space; hash 0xe8da33de4e20c514 -> 0x76038c965dbef7af. Longest stand 690.4 -> 457.3 s.
+    // RE-PINNED (sitting 6: junctions by judgement, no ring order, no room grants): parked 272 -> 271, the rest the same;
+    // rings 0; hash 0x76038c965dbef7af -> 0xf7e7889934759abd.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
@@ -443,15 +445,15 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(mostOnRoadAt == 8);
         CHECK(busyMinutes == 14);
         CHECK(b.counts().tripsBegun == 337u);
-        CHECK(b.counts().parkedReports == 272u);
+        CHECK(b.counts().parkedReports == 271u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
         CHECK(b.machine()->counts().arrivals == 473u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0x76038c965dbef7afull);
-        CHECK(d.kerbMoveCounts().pulledIn == 272u && d.kerbMoveCounts().stoppedInLane == 0u);
+        CHECK(hash == 0xf7e7889934759abdull);
+        CHECK(d.kerbMoveCounts().pulledIn == 271u && d.kerbMoveCounts().stoppedInLane == 0u);
         CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood

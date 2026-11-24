@@ -200,7 +200,12 @@ constexpr double kLongestStand = 100.0;
 // first, timings later). The same two failures, and Jumps (#320).
 // And 0x1e642ca0e2346d7c -> 0x5cbc93953af33b13: a route from where a car stands whose first move across does not fit
 // in what is left of its lane keeps its lane instead (Driving::routeFromWhereItIs). Every count the same.
-constexpr uint64_t kFiveMinuteStateHash = 0x5cbc93953af33b13ull;
+// Retaken (sitting 6, JUNCTIONS BY JUDGEMENT: no ring order imposed on a group of cars, no room grants -- each driver
+// asks the questions of what it sees, ties go to the bolder by a seeded boldness, a car queued behind one waiting at its
+// line is not coming): 0x5cbc93953af33b13 -> 0x4f08df2944d83a94. At 5 minutes arrived 183 -> 185, standing 103 -> 102,
+// lost a km 55.7 -> 55.6 s; deadlocks 0, touches 0. The same failures (queues, Jumps #320); kLongestStand is no longer
+// checked (above).
+constexpr uint64_t kFiveMinuteStateHash = 0x4f08df2944d83a94ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's
@@ -849,7 +854,7 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("    [lab-v2] another way: %llu drivers refused room for room_refused_another_way asked for one, %llu "
                     "took one\n",
                     static_cast<unsigned long long>(pc.askedAnotherWay), static_cast<unsigned long long>(pc.tookAnotherWay));
-        // WHO GOES FIRST (issue #263): the conflicts the one resolver settled over the run, by the question that decided.
+        // WHO GOES FIRST (issue #263; sitting 6: by each pair's questions): the conflicts over the run, by the question that decided.
         const driving::ConflictCounts& cc = d->conflictCounts();
         std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",
                     static_cast<unsigned long long>(cc.conflicts));
@@ -857,10 +862,8 @@ TEST_CASE(level_traffic_lab_v2_drives) {
             if (cc.byQuestion[q] > 0)
                 std::printf(" %s %llu", driving::questionName(static_cast<driving::Question>(q)),
                             static_cast<unsigned long long>(cc.byQuestion[q]));
-        std::printf("; rings broken %llu (untied at a queue %llu; of bodies alone, left standing %llu); conflicts whose "
-                    "car going second could not stop short (#284) %llu\n",
-                    static_cast<unsigned long long>(cc.rings), static_cast<unsigned long long>(cc.physicalRings),
-                    static_cast<unsigned long long>(cc.bodyRings), static_cast<unsigned long long>(cc.secondCannotStop));
+        std::printf("; conflicts whose car going second could not stop short (#284) %llu\n",
+                    static_cast<unsigned long long>(cc.secondCannotStop));
         // ROOM BEYOND (issue #264): asks, grants and refusals over the run.
         const driving::RoomCounts& rc = d->roomCounts();
         std::printf("    [lab-v2] room beyond: %llu asks settled, %llu granted (%llu through junctions too close to stop "
@@ -873,11 +876,9 @@ TEST_CASE(level_traffic_lab_v2_drives) {
                 std::printf(" %llu %s;", static_cast<unsigned long long>(rc.refused[k]),
                             driving::roomRefusalWords(static_cast<driving::RoomRefusal>(k)));
         std::printf(" grants used on the lane %llu, given back %llu (%llu claims through close junctions checked again and "
-                    "no longer holding, #284); the most held at once %u; asks of one tick put in order by the resolver "
-                    "%llu; road-data places refused %zu\n",
+                    "no longer holding, #284); the most held at once %u; road-data places refused %zu\n",
                     static_cast<unsigned long long>(rc.usedOnLane), static_cast<unsigned long long>(rc.givenBack),
-                    static_cast<unsigned long long>(rc.chainsGivenBack), rc.mostHeld,
-                    static_cast<unsigned long long>(rc.orderedByResolver), rc.roadDataPlaces.size());
+                    static_cast<unsigned long long>(rc.chainsGivenBack), rc.mostHeld, rc.roadDataPlaces.size());
         for (const std::pair<uint32_t, uint32_t>& place : rc.roadDataPlaces)
             std::printf("      [road data] refused room at junction %u, lane %u beyond\n", place.first, place.second);
         // One driver's card giving way at a line, as `driver? <id>` shows it.
@@ -1068,15 +1069,11 @@ TEST_CASE(level_traffic_lab_v2_drives) {
     // path, and a ring through that waiting is broken at an answer.
     CHECK(joinPairTicks <= kMostJoinPairTicks);
     CHECK(loopSamples <= kMostLoopSamples);
-    // FAILS SINCE ADR-0426 (13 cars over kLongestStand, not loosened): car 92 stood 261 s on the frontage road s311's
-    // offside lane where the off-ramp d0_0_a_off merges into it (lane 1457 joins ramp lane 1607 near (-562, 80)), giving
-    // way to the ramp's cars every time -- two lanes meeting between junctions are settled by the rule set's
-    // between_junctions questions, and two lanes have no sign rank, no movement and no line to arrive at, so the
-    // fall-back (the lower path id gives way) decides it -- with cars 97 and 184 behind it; and cars stood up to 143 s at
-    // red lights, the lab's longest cycle now 115 s (junction 0, which the lane level holds as the one stated junction it
-    // is: a spread junction of seven arms, one signal plan of seven phases, where the old graph split it in two; 92.8 s
-    // before). Both are the driving's (merging, signal plans), out of step 8's scope. See ADR-0426.
-    CHECK(overLongest == 0);
+    // NO LONG-STAND LIMIT (two-drivers-meeting-design.md section 12, sitting 6: "the lab tests for unending rings of
+    // waits instead of long stands"; Glenn 2026-11-16: cars "need to wait as long as they have to"). A car standing long
+    // at a red, or behind a slow merge, is printed above (cars over kLongestStand), not failed; a deadlock -- a ring of
+    // waits nothing can end -- fails the measurements table's deadlock row and loopSamples above.
+    (void)overLongest;
     // ROOM BEYOND (issue #264): nobody at rest in a box but by a recorded give-way; the deadlock row of the measurements
     // table passes; and every grant outstanding belongs to a driven car whose front has not yet reached its lane (grants
     // never outlive their use).

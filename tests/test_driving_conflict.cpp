@@ -1,20 +1,16 @@
-// THE ONE CONFLICT RESOLVER (issue #263, task D4; src/apps/driving/conflict.h): who goes first where two cars' paths
-// meet. Its four guarantees, each checked over many random boards on a hand-made junction whose every pair of paths
-// crosses, with a give-way table drawn at random (settled answers either way, and "asked while driving" with fall-backs
-// that run in rings, as kerb side does at a four-way):
+// WHO GOES FIRST WHERE TWO CARS' PATHS MEET (issue #263, task D4; sitting 6: junctions by judgement; conflict.h): the
+// questions a driver asks about another. Checked over many random boards on a hand-made junction whose every pair of
+// paths crosses, with a give-way table drawn at random:
 //
 //   1. the questions are asked in the written order: each one decides over every one after it;
 //   2. CONSISTENT: whoever asks, at the same instant, if A goes before B then B goes after A; and resolving the two sides
 //      the other way round gives the mirror answer;
-//   3. ALWAYS AN ANSWER: every pair of cars announced on a shared crossing point has one, decided by a named question;
-//   4. NO RINGS: in each group (a junction, or "no junction") the arrows "goes after" have no loop, and a ring the
-//      questions made is broken in the fixed order (the lower id among equals), with the queue arrows a host passes in;
-//      the one exception since #284: a loop of bodies (and cars that cannot stop) alone, which is left standing, never
-//      broken by telling a car to drive through another (conflict_5), and an answer by on_it or cannot_stop is never
-//      overruled;
-//   6. A CAR THAT CANNOT STOP short of a crossing point goes first, whatever the table says (#284; conflict_6);
-//   5. DETERMINISTIC: the same announcements written in any order, studied by a fresh or a reused resolver, give the
-//      same conflicts and answers.
+//   3. ALWAYS AN ANSWER: every pair of cars announced on a shared crossing point has one, decided by a named question
+//      (a tie by the seeded hesitation, the same for both);
+//   4. DETERMINISTIC: the same announcements written in any order, studied by a fresh or a reused resolver, give the
+//      same conflicts and answers;
+//   6. A CAR THAT CANNOT STOP short of a crossing point goes first, whatever the table says (#284; conflict_6).
+// Nothing breaks rings any more (sitting 6): a ring of waits the answers leave is counted by the wait-for graph.
 
 #include "test_framework.h"
 
@@ -141,94 +137,12 @@ std::vector<Announcement> drawBoard(const Ground& g, Draw& draw, uint32_t carsPe
     return out;
 }
 
-// THE QUEUE ARROWS of a drawn board, as a host passes them: on each path, its cars one behind another in the order they
-// arrive (their earliest arrival, then the lower id): (the car ahead, the car behind it).
-std::vector<std::pair<uint64_t, uint64_t>> queuesOf(const std::vector<Announcement>& list) {
-    std::map<uint32_t, std::map<uint64_t, Real>> earliest;   // path -> car -> its earliest arrival there
-    for (const Announcement& a : list) {
-        std::map<uint64_t, Real>& cars = earliest[a.onPath.index];
-        const std::map<uint64_t, Real>::iterator it = cars.find(a.who);
-        if (it == cars.end()) cars[a.who] = a.arriveIn;
-        else it->second = std::min(it->second, a.arriveIn);
-    }
-    std::vector<std::pair<uint64_t, uint64_t>> out;
-    for (const std::pair<const uint32_t, std::map<uint64_t, Real>>& path : earliest) {
-        std::vector<std::pair<Real, uint64_t>> order;
-        for (const std::pair<const uint64_t, Real>& car : path.second) order.push_back({car.second, car.first});
-        std::sort(order.begin(), order.end());
-        for (std::size_t k = 0; k + 1 < order.size(); ++k) out.push_back({order[k].second, order[k + 1].second});
-    }
-    return out;
-}
-
 void sealInto(const Ground& g, const std::vector<Announcement>& list, AnnouncementBoard& board) {
     board.begin(7, g.roads.crossings.size());
     for (const Announcement& a : list) board.add(a);
     board.seal();
 }
 
-// Every group together, for hasLoop.
-constexpr uint32_t kAllGroups = 0xFFFFFFFFu;
-
-// Does the "goes after" relation among the conflicts of `group` have a loop? (A depth-first walk with colours.)
-bool hasLoop(const std::vector<SettledConflict>& all, uint32_t group) {
-    std::map<uint64_t, std::vector<uint64_t>> after;   // car -> the cars it goes after
-    for (const SettledConflict& s : all) {
-        if (group != kAllGroups && s.group != group) continue;
-        const uint64_t first = s.resolution.firstGoes ? s.conflict.first.who : s.conflict.second.who;
-        const uint64_t second = s.resolution.firstGoes ? s.conflict.second.who : s.conflict.first.who;
-        after[second].push_back(first);
-        after[first];
-    }
-    std::map<uint64_t, int> colour;   // 0 unseen, 1 on the walk, 2 done
-    bool loop = false;
-    std::vector<std::pair<uint64_t, std::size_t>> stack;
-    for (const std::pair<const uint64_t, std::vector<uint64_t>>& start : after) {
-        if (colour[start.first] != 0) continue;
-        stack.push_back({start.first, 0});
-        colour[start.first] = 1;
-        while (!stack.empty() && !loop) {
-            std::pair<uint64_t, std::size_t>& top = stack.back();
-            const std::vector<uint64_t>& next = after[top.first];
-            if (top.second == next.size()) {
-                colour[top.first] = 2;
-                stack.pop_back();
-                continue;
-            }
-            const uint64_t n = next[top.second++];
-            if (colour[n] == 1) loop = true;
-            else if (colour[n] == 0) {
-                colour[n] = 1;
-                stack.push_back({n, 0});
-            }
-        }
-        if (loop) break;
-    }
-    return loop;
-}
-
-// THE NO-RINGS GUARANTEE as it stands since #284: an answer by on_it or cannot_stop is never overruled; so a loop of
-// those alone (bodies locked round, which random boards do draw: three cars each with its body on the next one's
-// crossing point) is left standing and counted (bodyRings), and then the loop is one of those answers alone; otherwise no
-// group, nor all of them together, holds a loop.
-std::vector<SettledConflict> fixedOnly(const std::vector<SettledConflict>& all) {
-    std::vector<SettledConflict> out;
-    for (const SettledConflict& s : all)
-        if (fixedAnswer(s.resolution.by)) out.push_back(s);
-    return out;
-}
-uint64_t gBoardsWithBodyRings = 0;
-void checkNoRingsButBodies(const ConflictResolver& r, uint32_t groups = 0) {
-    for (const SettledConflict& s : r.conflicts())
-        if (s.resolution.by == Question::Ring) CHECK(!fixedAnswer(s.beforeRing.by));
-    if (r.counts().bodyRings > 0) {
-        ++gBoardsWithBodyRings;
-        CHECK(hasLoop(fixedOnly(r.conflicts()), kAllGroups));
-        return;
-    }
-    for (uint32_t group = 0; group <= groups; ++group) CHECK(!hasLoop(r.conflicts(), group));
-    CHECK(!hasLoop(r.conflicts(), kAllGroups));   // nor through two groups
-}
 
 Conflict mirror(const Conflict& c) {
     const auto flip = [](TableSays t) {
@@ -271,7 +185,7 @@ TEST_CASE(conflict_1_the_questions_are_asked_in_the_written_order) {
     CHECK(kQuestions.size() == kAskedQuestions);
     // Undo the questions one at a time, from the top: each time the next question down decides.
     const Question order[] = {Question::OnIt,  Question::CannotStop,   Question::CommittedFirst, Question::Table,
-                              Question::Going, Question::ArrivedFirst, Question::Fallback,       Question::LowerId};
+                              Question::Going, Question::ArrivedFirst, Question::Hesitation, Question::Fallback, Question::Hesitation};
     for (std::size_t q = 0; q < kAskedQuestions; ++q) CHECK(kQuestions[q].question == order[q]);
     Conflict c = base;
     c.second.onIt = false;
@@ -285,9 +199,13 @@ TEST_CASE(conflict_1_the_questions_are_asked_in_the_written_order) {
     c.second.going = false;
     CHECK(resolve(c).by == Question::ArrivedFirst && !resolve(c).firstGoes);
     c.first.arrivalTick = c.second.arrivalTick;
+    // both at their lines since the same tick: the bolder goes, before the fall-back (which can run in a ring there)
+    CHECK(resolve(c).by == Question::Hesitation && resolve(mirror(c)).firstGoes != resolve(c).firstGoes);
+    c.first.arrivalFixed = c.second.arrivalFixed = false;   // still driving up: the fall-back
     CHECK(resolve(c).by == Question::Fallback && !resolve(c).firstGoes);
     c.fallback = TableSays::Nothing;
-    CHECK(resolve(c).by == Question::LowerId && !resolve(c).firstGoes);
+    CHECK(resolve(c).by == Question::Hesitation && resolve(mirror(c)).by == Question::Hesitation &&
+          resolve(mirror(c)).firstGoes != resolve(c).firstGoes);   // (the same hesitation, whichever side asks)
     // And each one decides over everything after it: the first car on it beats all the rest pointing the other way.
     c = base;
     c.second.onIt = false;
@@ -306,9 +224,9 @@ TEST_CASE(conflict_1_the_questions_are_asked_in_the_written_order) {
     // Only the three that say "a car to follow" forbid going ahead; only a body or a car that cannot stop is an answer
     // nobody may turn round.
     CHECK(followOnly(Question::OnIt) && followOnly(Question::CannotStop) && followOnly(Question::CommittedFirst));
-    CHECK(!followOnly(Question::Table) && !followOnly(Question::ArrivedFirst) && !followOnly(Question::Ring));
+    CHECK(!followOnly(Question::Table) && !followOnly(Question::ArrivedFirst) && !followOnly(Question::Hesitation));
     CHECK(fixedAnswer(Question::OnIt) && fixedAnswer(Question::CannotStop) && !fixedAnswer(Question::CommittedFirst) &&
-          !fixedAnswer(Question::Ring));
+          !fixedAnswer(Question::Hesitation));
 }
 
 // ---- 2 and 3. Consistent, and always an answer --------------------------------------------------------------------------
@@ -353,159 +271,10 @@ TEST_CASE(conflict_2_consistent_and_always_an_answer) {
     for (uint8_t q = 0; q < kQuestionCount; ++q)
         std::printf(" %s %llu", questionName(static_cast<Question>(q)), static_cast<unsigned long long>(byQuestion[q]));
     std::printf("\n");
-    // The draw reaches every question but the last, and rings. (The lower id decides only when the table's answers at
-    // two shared crossing points disagree and nothing else differs: conflict_1 stages it.)
+    // The draw reaches every question but the last. (The hesitation decides only when the table's answers at two shared
+    // crossing points disagree and nothing else differs: conflict_1 stages it.)
     for (uint8_t q = static_cast<uint8_t>(Question::OnIt); q < kQuestionCount; ++q)
-        if (static_cast<Question>(q) != Question::LowerId) CHECK(byQuestion[q] > 0);
-}
-
-// ---- 4. No rings ---------------------------------------------------------------------------------------------------------
-
-TEST_CASE(conflict_3_no_rings) {
-    // The order rings are broken by is strict and total over cars with different ids (one of any two goes first, and
-    // never both), and transitive.
-    {
-        Draw draw(99);
-        std::vector<Side> sides;
-        for (uint64_t who = 0; who < 40; ++who) {
-            Side s;
-            s.who = who;
-            s.committed = draw.coin();
-            s.committedTick = draw.below(3);
-            s.going = draw.coin();
-            s.arrivalFixed = draw.coin();
-            s.arrivalTick = draw.below(3);
-            sides.push_back(s);
-        }
-        for (const Side& a : sides)
-            for (const Side& b : sides) {
-                if (a.who == b.who) {
-                    CHECK(!ringOrder(a, b));
-                    continue;
-                }
-                CHECK(ringOrder(a, b) != ringOrder(b, a));
-                for (const Side& c : sides)
-                    if (ringOrder(a, b) && ringOrder(b, c)) CHECK(ringOrder(a, c));
-            }
-    }
-    uint64_t groupsWithRings = 0, queueRings = 0;
-    gBoardsWithBodyRings = 0;
-    for (uint64_t seed = 1; seed <= 400; ++seed) {
-        Draw draw(seed * 7);
-        const Ground g = makeGround(5 + draw.below(4), draw, seed % 3 == 0);
-        AnnouncementBoard board;
-        const std::vector<Announcement> list = drawBoard(g, draw, 4);
-        sealInto(g, list, board);
-        ConflictResolver r;
-        // With the queue arrows a host passes (issue #284: the fuzz passed none before): the cars on each path held one
-        // behind another, in the order they arrive.
-        r.study(g.roads, g.row, board, queuesOf(list));
-        groupsWithRings += r.counts().rings;
-        queueRings += r.counts().physicalRings;
-        checkNoRingsButBodies(r, static_cast<uint32_t>(g.roads.junctions.size()));
-        // Every conflict a ring overruled says what the questions had answered.
-        for (const SettledConflict& s : r.conflicts())
-            if (s.resolution.by == Question::Ring) CHECK(s.beforeRing.by != Question::None && s.beforeRing.by != Question::Ring);
-    }
-    std::printf("    %llu rings the questions made were broken (%llu through a queue); none is left but %llu boards' rings of "
-                "bodies alone, left standing\n",
-                static_cast<unsigned long long>(groupsWithRings), static_cast<unsigned long long>(queueRings),
-                static_cast<unsigned long long>(gBoardsWithBodyRings));
-    CHECK(groupsWithRings > 0);   // the draw does make rings, so the breaking was tested
-    CHECK(queueRings > 0);        // ... and rings through a queue, untied at the queue arrow
-
-    // THE CLASSIC RING: four cars reaching a four-way in one tick, each with another on its kerb side (fall-backs in a
-    // circle). The lower id goes first among them, as D3 did; the rest follow in the total order.
-    Ground g;
-    g.roads.paths.resize(4);
-    g.roads.junctions.resize(1);
-    for (uint32_t a = 0; a < 4; ++a) {
-        engine::CrossingPoint c;
-        c.a = engine::PathId(a);
-        c.other = (a + 1) % 4;
-        c.junction = engine::JunctionId(0);
-        g.roads.crossings.push_back(c);
-        MeetingAnswer m;
-        m.who = GivesWay::Ask;
-        m.fallback = GivesWay::A;   // path a gives way to path a + 1: round and round
-        g.row.answersOf.push_back(engine::Range{a, 1});
-        g.row.answers.push_back(m);
-    }
-    std::vector<Announcement> list;
-    for (uint32_t c = 0; c < 4; ++c)
-        for (const uint32_t p : {g.roads.crossings[c].a.index, g.roads.crossings[c].other}) {
-            Announcement a;
-            a.crossing = engine::CrossingId(c);
-            a.onPath = engine::PathId(p);
-            a.who = 10 + p;   // car 10 + p on path p
-            a.arriveIn = 3;
-            a.clearIn = 5;
-            a.arrivalFixed = true;
-            a.arrivalTick = 100;
-            list.push_back(a);
-        }
-    AnnouncementBoard board;
-    sealInto(g, list, board);
-    ConflictResolver r;
-    r.study(g.roads, g.row, board);
-    CHECK(r.conflicts().size() == 4u);
-    CHECK(r.counts().rings == 1u);
-    CHECK(!hasLoop(r.conflicts(), 0));
-    uint32_t overruled = 0;
-    for (const SettledConflict& s : r.conflicts()) {
-        CHECK(s.resolution.firstGoes);   // the lower id of each pair: car 10, then 11, 12, 13
-        if (s.resolution.by == Question::Ring) {
-            ++overruled;
-            CHECK(s.beforeRing.by == Question::Fallback);
-        } else {
-            CHECK(s.resolution.by == Question::Fallback);   // car 13 gave way to car 10 already
-        }
-    }
-    CHECK(overruled == 3u);
-
-    // A RING THROUGH A QUEUE: car 20 waits for car 21's body on their crossing point (on_it), car 21 is held behind
-    // car 22 in its lane, and car 22 would go after car 20 by the table. The ring cannot be broken through the body or
-    // the queue: car 22 goes before car 20, and car 20 still waits for car 21.
-    Ground q;
-    q.roads.paths.resize(3);
-    q.roads.junctions.resize(1);
-    for (const std::pair<uint32_t, uint32_t>& pq : {std::make_pair(0u, 1u), std::make_pair(0u, 2u)}) {
-        engine::CrossingPoint c;
-        c.a = engine::PathId(pq.first);
-        c.other = pq.second;
-        c.junction = engine::JunctionId(0);
-        q.roads.crossings.push_back(c);
-        MeetingAnswer m;
-        m.who = GivesWay::Other;   // path 0 has the right of way by the table at both
-        q.row.answersOf.push_back(engine::Range{static_cast<uint32_t>(q.row.answers.size()), 1});
-        q.row.answers.push_back(m);
-    }
-    std::vector<Announcement> ql;
-    const auto put = [&](uint32_t c, uint32_t p, uint64_t who, Real arriveIn) {
-        Announcement a;
-        a.crossing = engine::CrossingId(c);
-        a.onPath = engine::PathId(p);
-        a.who = who;
-        a.arriveIn = arriveIn;
-        a.clearIn = arriveIn + 3;
-        ql.push_back(a);
-    };
-    put(0, 0, 20, 2);   // car 20 on path 0, short of both crossing points
-    put(1, 0, 20, 4);
-    put(0, 1, 21, 0);   // car 21's body on crossing point 0
-    put(1, 2, 22, 3);   // car 22 coming to crossing point 1
-    sealInto(q, ql, board);
-    const std::vector<std::pair<uint64_t, uint64_t>> held = {{22, 21}};   // car 21 is held behind car 22
-    r.study(q.roads, q.row, board, held);
-    const SettledConflict* body = r.find(0, 20, 21);
-    const SettledConflict* table = r.find(0, 20, 22);
-    CHECK(body && table);
-    if (body && table) {
-        CHECK(!body->resolution.firstGoes && body->resolution.by == Question::OnIt);   // 20 still waits for 21's body
-        CHECK(!table->resolution.firstGoes && table->resolution.by == Question::Ring);   // 22 now goes before 20
-        CHECK(table->beforeRing.by == Question::Table && table->beforeRing.firstGoes);
-    }
-    CHECK(r.counts().rings == 1u && r.counts().bodyRings == 0u && r.counts().physicalRings == 0u);
+        if (static_cast<Question>(q) != Question::Hesitation) CHECK(byQuestion[q] > 0);
 }
 
 // ---- 4a. A car that cannot stop goes first (issue #284 item A) ---------------------------------------------------------
@@ -553,88 +322,15 @@ TEST_CASE(conflict_6_a_car_that_cannot_stop_short_goes_first_whatever_the_table_
     ConflictResolver r;
     r.study(g.roads, g.row, b);
     Question by = Question::None;
-    CHECK(r.order(41, 40, &by) == Answer::First);
+    CHECK(!r.goesFirst(g.roads, engine::CrossingId(0), 40, 41, &by));
     CHECK(by == Question::CannotStop);
     CHECK(r.counts().secondCannotStop == 0u);
     CHECK(followOnly(by));   // the car may only come behind the bus, never dash ahead of it
     // Both cannot stop: no answer there; the table decides, and the car told second is counted (it cannot comply).
     sealInto(g, board(true), b);
     r.study(g.roads, g.row, b);
-    CHECK(r.order(41, 40, &by) == Answer::Second && by == Question::Table);
+    CHECK(r.goesFirst(g.roads, engine::CrossingId(0), 40, 41, &by) && by == Question::Table);
     CHECK(r.counts().secondCannotStop == 1u);
-}
-
-// ---- 4b. A ring of bodies alone is left standing (issue #284 item C) --------------------------------------------------
-
-TEST_CASE(conflict_5_a_ring_of_bodies_is_left_standing_never_answered_by_an_order_to_go) {
-    // Three paths through one junction, each pair crossing once: car 30 on path 0 has its body on the crossing point it
-    // shares with path 1, car 31 on path 1 on the one it shares with path 2, car 32 on path 2 on the one it shares with path
-    // 0. Each waits for the next one's body (on_it): a ring no answer can undo. Before #284 the ring was "broken" by placing
-    // one car anyway and telling it to go through a body (counted as ringThroughABody). Now every on_it answer stands, the
-    // ring is counted (bodyRings), and each car is still told to wait for the body it waits for.
-    Ground g;
-    g.roads.paths.resize(3);
-    g.roads.junctions.resize(1);
-    for (uint32_t a = 0; a < 3; ++a) {
-        engine::CrossingPoint c;
-        c.a = engine::PathId(a);
-        c.other = (a + 1) % 3;
-        c.junction = engine::JunctionId(0);
-        g.roads.crossings.push_back(c);
-        MeetingAnswer m;
-        m.who = GivesWay::A;   // by the table path a gives way: the bodies say otherwise
-        g.row.answersOf.push_back(engine::Range{a, 1});
-        g.row.answers.push_back(m);
-    }
-    // Crossing point c is shared by paths c and c + 1; the car on path c + 1 has its body there.
-    std::vector<Announcement> list;
-    for (uint32_t c = 0; c < 3; ++c) {
-        const uint32_t onIt = (c + 1) % 3, coming = c;
-        Announcement body;
-        body.crossing = engine::CrossingId(c);
-        body.onPath = engine::PathId(onIt);
-        body.who = 30 + onIt;
-        body.arriveIn = 0;
-        body.clearIn = kNever;   // it stands there
-        list.push_back(body);
-        Announcement wait;
-        wait.crossing = engine::CrossingId(c);
-        wait.onPath = engine::PathId(coming);
-        wait.who = 30 + coming;
-        wait.arriveIn = 1;
-        wait.clearIn = 3;
-        list.push_back(wait);
-    }
-    AnnouncementBoard board;
-    sealInto(g, list, board);
-    ConflictResolver r;
-    r.study(g.roads, g.row, board);
-    CHECK(r.conflicts().size() == 3u);
-    CHECK(r.counts().bodyRings == 1u);
-    for (const SettledConflict& s : r.conflicts()) {
-        CHECK(s.resolution.by == Question::OnIt);   // never Ring: nobody is told to drive through a body
-        CHECK(s.beforeRing.by == Question::None);
-    }
-    // Each car waits for the next one's body: 30 for 31, 31 for 32, 32 for 30.
-    for (uint64_t car = 30; car < 33; ++car) {
-        const uint64_t body = 30 + (car - 30 + 1) % 3;
-        CHECK(r.order(car, body) == Answer::Second);
-    }
-    // THE WAIT-FOR GRAPH shows it as gridlock (a matter of space), not a deadlock: three cars at rest, each giving way to
-    // the body of the next (StopFor::ForABody, as the judgement's stop is when the resolver answered by on_it).
-    std::vector<WaitingCar> waiting;
-    for (uint32_t car = 30; car < 33; ++car) {
-        Car c;
-        c.id = CarId(car);
-        c.driven = true;
-        c.held.decided = true;
-        c.binding.by = Limit::Stop;
-        c.binding.stopFor = StopFor::ForABody;
-        c.binding.car = CarId(30 + (car - 30 + 1) % 3);
-        waiting.push_back({c.id, waitReasonOf(c)});
-    }
-    const WaitReport report = analyseWaiting(waiting);
-    CHECK(report.loops.size() == 1u && report.gridlocks == 1u && report.deadlocks == 0u);
 }
 
 // ---- 5. Deterministic ----------------------------------------------------------------------------------------------------

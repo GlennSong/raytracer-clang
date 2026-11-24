@@ -462,7 +462,12 @@ void Driving::announce() {
         if (wa.has && wa.fromLane == w.fromLane && ahead.gap < w.toLine) {
             // Queued for the same line.
             w.in = std::max(w.in, wa.in + interval);
-            w.notGoing = w.notGoing || wa.notGoing;
+            // ... and queued behind a car standing at the line giving way there: I am not coming until it moves, which
+            // nobody can time (sitting 6: a driver sees the oncoming queue stand behind a car that waits for it; without
+            // the resolver's ring order, two far turns waiting inside, each for the other's oncoming queue, stood for good)
+            const bool aheadWaitsAtLine = a->speed < kStandingBelow && a->held.hasStop && givesWay(a->held.stopFor) &&
+                                          wa.toLine <= n.atLineWithin;
+            w.notGoing = w.notGoing || wa.notGoing || aheadWaitsAtLine;
             w.neverClear = w.neverClear || wa.neverClear || wa.stopsShort;
         } else if (ahead.gap >= w.toLine) {
             if (a->speed < kStandingBelow) {
@@ -553,10 +558,10 @@ void Driving::announce() {
             }
     }
     board_.seal();
-    // Who goes first wherever two announced cars meet: settled once, from the sealed board, for every driver (#263). A
-    // car behind another on one path (the next in its list: a front, or a tail still on it) can never go before it: an
-    // arrow no answer can turn round, so a ring through it is broken at an answer, never through the queue. Read from
-    // where the cars are, not from what binds them, so the arrow does not come and go as the car ahead moves off.
+    // Who goes first wherever two announced cars meet: the questions both drivers ask (conflict.h), worked out once from
+    // the sealed board. A car behind another on one path (the next in its list: a front, or a tail still on it) can never
+    // go before it, and the car ahead never gives way to it (GiveWayInputs::behind). Read from where the cars are, not
+    // from what binds them, so it does not come and go as the car ahead moves off.
     behind_.clear();
     for (uint32_t p = 0; p < roads_->paths.size(); ++p) {
         const PathList list = pathLists_.on(engine::PathId(p));
@@ -580,7 +585,9 @@ void Driving::announce() {
             if (!std::binary_search(onOnePath.begin(), onOnePath.end(), arrow)) behind_.push_back(arrow);
         }
     }
-    resolver_.study(*roads_, rightOfWay_, board_, behind_, clockSeconds_);
+    std::sort(behind_.begin(), behind_.end());
+    behind_.erase(std::unique(behind_.begin(), behind_.end()), behind_.end());
+    resolver_.study(*roads_, rightOfWay_, board_, clockSeconds_);
     addCounts(conflictTotals_, resolver_.counts());
 }
 
@@ -668,6 +675,7 @@ void Driving::plan() {
                              cls.length, cls.brake,  static_cast<Real>(every) * step_, t->person,
                              clockSeconds_, p.junctions, {}, lightsRun_ ? &lightTiming_ : nullptr, cls.hardestBrake};
             in.way = &p.way;   // the lanes on it judge their crossing points too (issue #284)
+            in.behind = &behind_;
             if (changingLanes()) in.lettingIn = &lettingIn_;   // (a driver holding back to let me in is not coming)
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;

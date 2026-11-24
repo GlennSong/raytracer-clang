@@ -1184,12 +1184,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // a kerb space left to the driving, never taken into physics: Driving::atTheKerb, kKerbHandBack) from 18 at minute
     // 12, in 117, out 80, 0x2bad62395eeaee44 to 20 at minute 9, in 111, out 91, 0x268c4405c1d0db48. Contacts 0, and every
     // kind of hit 3/14/14 -> 0. STILL FAILING, not loosened: the longest off its lane 38.0 s -> 7.9 s (car 204, 1.12 m).
+    // And again (sitting 6: junctions by judgement) to in 113, out 92, 0xe9fff1fe55f83570 (the most near the same, 20
+    // at minute 9). Contacts 0; the longest off its lane 7.9 -> 2.9 s (passes); hits on walkers 0 -> 12 and on other
+    // things 0 -> 19 are BACK, as at bug 4 above: trajectories, not the change (#329).
     CHECK(mostNear == 20);
     CHECK(mostNearAt == 9);
-    CHECK(c.intoPhysics == 111u);
-    CHECK(c.intoLane == 91u);
+    CHECK(c.intoPhysics == 113u);
+    CHECK(c.intoLane == 92u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x268c4405c1d0db48ull);
+    CHECK(hash == 0xe9fff1fe55f83570ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

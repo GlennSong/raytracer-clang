@@ -325,15 +325,15 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 397u);
         CHECK(withCar == 427);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 200);
+        CHECK(mostOnRoad == 201);
         CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 430u);
-        CHECK(b.counts().parkedReports == 275u);
+        CHECK(b.counts().tripsBegun == 419u);
+        CHECK(b.counts().parkedReports == 250u);
         CHECK(b.counts().walksBlocked == 2u);   // (lane changes on: was 0; #327)
         CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 590u);
+        CHECK(b.machine()->counts().arrivals == 570u);
         CHECK(b.machine()->counts().noPlans == 1u);   // (lane changes on: was 0; #327)
-        // STILL FAILING with lane changes on (2 spells): #327
+        // STILL FAILING with lane changes on (2 spells; 1 since sitting 6): #327
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -373,19 +373,22 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // reach, so cars 391 -> 397; more drive: trips 320 -> 430, the most on the road 125 -> 200 (minute 10), parked
         // 247 -> 275, arrivals 676 -> 590, the buses' calls 167 -> 152, riders 45 -> 20 boardings. WORSE, and two checks
         // fail: 2 touching spells and bus 7 stood 1150 s (#326: a car left parked in a lane past junction 11; #327)
-        CHECK(hash == 0xf4b923be54a7b75bull);
+        // 0xf4b923be54a7b75b -> 0x67a1b7581e4e1dac (sitting 6: junctions by judgement): most on the road 200 -> 201,
+        // trips 430 -> 419, parked 275 -> 250, arrivals 590 -> 570, bus calls 152 -> 144, boardings 20 -> 18; rings 0;
+        // touching spells 2 -> 1. The same two failures (#326, #327).
+        CHECK(hash == 0x67a1b7581e4e1dacull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 152u);
+        CHECK(sim.drivingHost().counts().busCalls == 144u);
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         CHECK(busStandTicks * kStep < 180.0);   // STILL FAILING with lane changes on (1150 s): #326, #327
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 23u && rc.boardings == 20u && rc.alightings == 10u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 20u && b.counts().busRides == 10u);
+            CHECK(rc.waits == 24u && rc.boardings == 18u && rc.alightings == 10u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 21u && b.counts().busRides == 10u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
     }
