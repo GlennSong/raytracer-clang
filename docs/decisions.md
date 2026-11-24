@@ -24522,3 +24522,24 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - **Bus riders 11 → 0.** Nobody's trip in this half hour is long enough for the bus to win. river_town was the only rider test, so its rider check now fails, marked with #335.
 - #333 (the sim's own walkers standing in junction 62's turn) catches bus 4 now (1257 s); its check stays failing.
 - The hash moved from `0x0c184c57be58cc6a` to `0x4d453ad8fdb637d9`.
+
+## ADR-0492 — The crowd generator and the brain_crowd level are deleted (one-brain plan, step 3; 2026-11-24)
+
+**Why:** the crowd generator (ADR-0446) made invented places spaced along the streets, households for them, and a day of stops with no clock. It was a second model of the city and of a day. Since ADR-0490 and ADR-0491 the brain runs the city's own households on their role's day, so nothing needs the crowd any more, and a second model left in place would mislead later work (Glenn, 2026-11-24: the harnesses "will probably confuse you later on").
+
+**Deleted:**
+- `src/apps/citysim/city_crowd.*`, `scripting/crowd_lua.*`, `assets/scripts/crowd.lua` and `crowd_river_town.lua`;
+- the level key `citysim.crowd` (`CitySimConfig::crowd`, its loader line, the render's crowd path);
+- `assets/levels/brain_crowd.json` and its test `tests/test_brain_crowd.cpp`;
+- the probe scenarios that only worked on brain_crowd (`tools/brain_lab_probe.py`: crowd, things, nearcrowd).
+
+`tools/crosswalk_probe.py` now defaults to river_town. traffic_lab has no buildings, so `planHouseholds` has nowhere to put people; that is why its level went rather than moving to the city's households.
+
+**Where its tests went** (`tests/test_near_tier.cpp`):
+- *The kerb lane keeps clear of parked cars* and *the near tier holds its cap* now run on traffic_lab. Those are brain_crowd's roads; the cap test switches river_town's near rules on in place of the level's. Both pass.
+- *The near tier in the crowd follows the player* now runs on river_town, the only crowd left, from its busiest 100 m cell, (-50, 750).
+  - Re-pinned: the most near 23 → 12, in 114 → 22, out 90 → 9; the hash moved from `0x4e80967d762cb46f` to `0xcf97ef5254ff6375`.
+  - It fails more than it did, for what river_town's terrain shows and traffic_lab's flat roads never did: cars refused as "not upright", chassis hits on things that are not cars, and one contact (#336).
+- *A near car with no way past finds another way* fails as before this change (the same on an older binary); it is #328 and is now marked so.
+
+**river_town** never used the crowd since ADR-0490, so its pins hold.

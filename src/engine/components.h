@@ -1161,10 +1161,6 @@ struct CitySimConfig {
     std::vector<CityMarker> markers;
     std::vector<CityResident> residents;
     std::vector<CityHousehold> households;
-    // A CROWD MADE FROM THE ROADS (ADR-0446; apps/citysim/city_crowd.h): `"crowd": "crowd.lua"` names a file under
-    // assets/scripts whose `crowd` table says how many residents, their households, cars, places and days; they are
-    // made when the city is built and added to the markers, residents and households above. Empty: none.
-    std::string crowd;
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490; apps/citysim/brain_people.h): `"brainPeople": 630` has the
     // agent brain run whole households of the people the city's dwellings were filled with, up to that many people,
     // added to what the level states. 0: none.

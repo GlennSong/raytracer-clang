@@ -243,7 +243,7 @@ Tests:
 - **Lane level / driving v2**: the model's own `laneLevel`, filled by `assembleRoadModel` (ADR-0426, ADR-0429). The
   host makes nothing: it hands the driving the lane level of the built model the loader published in `LevelRoadModel`
   (ADR-0435), and warns when a vehicle class carries a tag the roads were not checked for. Only the levels naming
-  `citysim.drivingRules` drive (traffic_lab, brain_lab, brain_crowd, river_town).
+  `citysim.drivingRules` drive (traffic_lab, brain_lab, river_town).
 - **The city sim holds the model on every lanes level** (ADR-0480), whether or not it drives: `CitySim::setRoads`, given
   `LevelRoadModel::builtCity()` (the first city's built model), and `CitySim::roads()`. Its people walk the lane level's
   walks (#306 piece 6, W3): every tier's walker holds a `WalkRoute` from `findWalkRoute` (`Agent::route`, `leg`,

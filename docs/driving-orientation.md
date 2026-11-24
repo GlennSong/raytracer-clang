@@ -1,7 +1,7 @@
 # Driving: orientation for a helper
 
 Start here before touching `src/apps/driving/` or the city sim's driving side (`src/apps/citysim/city_driving.*`,
-`city_near.*`, `city_car.*`, `city_crowd.*`, `city_brain.*`). This page says where things are, who reads what and the
+`city_near.*`, `city_car.*`, `brain_people.*`, `city_brain.*`). This page says where things are, who reads what and the
 rules that apply. The *why* is in `docs/driving-model-design.md`, `docs/two-drivers-meeting-design.md` and the ADRs it
 names (ADR-0398 to ADR-0416 for the driving library, ADR-0440 to ADR-0452 for the brain, the near tier, things in the
 way and crosswalks, ADR-0453 for one kind of car, ADR-0455 for the brain's car facts on the car and one way to take a
@@ -15,11 +15,12 @@ after it. Anything marked
 checked in the code.
 
 **Which levels the driving drives (ADR-0457, ADR-0461).** Every level that names a rule set (`citysim.drivingRules`):
-traffic_lab, brain_lab, brain_crowd and river_town. There is one driving since ADR-0461: the `citysim.driving` key that
+traffic_lab, brain_lab and river_town (brain_crowd went with the crowd generator, ADR-0492). There is one driving since ADR-0461: the `citysim.driving` key that
 chose between the old and the new is gone (ignored if a level still sets it), and a level with no rule set has no
-driving and no traffic at all (the old levels, until they get the new driving's data). river_town's cars are all a
-crowd's households' (`citysim.crowd = "crowd_river_town.lua"`, the same format as crowd.lua; `cars: 0`); the old sim
-still walks its other people on foot. A sim-only citysim field (cars, a crowd, the rule set, the near tier) never
+driving and no traffic at all (the old levels, until they get the new driving's data). river_town's cars are all its brain
+people's households' (`citysim.brainPeople`: the city's own households, ADR-0490, on their role's day, ADR-0491;
+`cars: 0`); the old sim still walks its other people on foot. A sim-only citysim field (cars, the brain's people, the
+rule set, the near tier) never
 re-bakes a level: the lots key hashes only the fields the lot pass reads (`src/engine/lot_citysim.h`).
 
 **One signal clock (ADR-0456).** The traffic lights are the new driving's alone: `signal_programme.h`, pure functions of
@@ -136,7 +137,7 @@ wishes with.
 | `citysim/city_driving.h/.cpp` | `DrivingHost`: runs the driving's tick; puts its own cars (those that drive round for ever) down and sends them on trip after trip; copies every car entity's pose from the driving; answers `driving?`. |
 | `citysim/city_car.h/.cpp` | Every car the new driving moves is one ECS entity (ADR-0444, ADR-0453): pose, body, household, driver, `away`; a lane component while the driving has it; `CityCarRoams` on a car with nobody in it that drives round for ever (the traffic lab's); `CityCarKept`, the brain's facts, on a household's car (ADR-0455); `carsNear`; the one take and give-back (`CitySim::playerTakesCar`, `playerLeftCar`). |
 | `citysim/city_near.h/.cpp` | The near tier (ADR-0447..0450): the cars nearest the player as Jolt cars carrying out their drivers' intent, switched on one entity; physics sweeps answer "what is in my way" for them (ADR-0451). |
-| `citysim/city_crowd.h/.cpp` | A crowd of residents made from the road model and `crowd.lua` (ADR-0446): places beside streets, households, cars, days. |
+| `citysim/brain_people.h/.cpp` | The brain's people from the city's own households (ADR-0490): homes, members, cars in kerb spaces near home; a place's marker (`placeMarkerSpec`). |
 | `citysim/city_brain.h/.cpp` | The residents with the agent brain: what they want, their trips, carried out with the sim's walking and the new driving. |
 | `citysim/city_sim.h/.cpp` (parts) | The sim, which walks every person on foot over the road model's walks by the one router (`findWalkRoute`; ADR-0480 W3): `thingsForDriving` writes them into the driving's things each tick; `nextCrossing` (the crossings their routes hold), `crossingGate`, `gapToCross`, `jaywalks` make them wait at a crosswalk's kerb end and cross (ADR-0452). |
 | `citysim/city_render.h/.cpp` (parts) | The signal heads (ADR-0456): one `SignalHead` per post the loader placed (`StreetFurniture::Signal`, which carries the model arm the head is attached to), tied to the new driving's lane junction there (`tieSignalHeads`, by `RoadModel::laneJunctionOf`), lit each bake from `headAt` (the face as the post instance's number, `headFaceNumber`; the arrow as a lens beside it). |
@@ -152,21 +153,19 @@ wishes with.
   their way for them, near cars get physics' answer (`seeAhead`).
 - **Tests**: `driving_tests` (hand-made roads in `tests/driving_test_roads.h`, stated on a small model:
   `stateStreet`, `stateControl`, `stateTurn`, `stateCrosswalk` via `TestRoadSpec::crosswalks`), `level_tests`
-  (`level_traffic_lab_v2_*`, `level_brain_lab_*`, `level_brain_crowd_*`), `physics_tests` (`near_tier_*`).
+  (`level_traffic_lab_v2_*`, `level_brain_lab_*`, `level_river_town_crowd_*`), `physics_tests` (`near_tier_*`).
 
 ## 5. Checking a change
 
 Build with `cmake --build build-viewer --target driving_tests level_tests physics_tests viewer`. Filters are substrings:
 - `./build-viewer/driving_tests` (about 200 cases, a minute or two); `RT_TEST_FILTER=walks_`, `arrows_`, `crosswalks_`.
 - `RT_TEST_FILTER=signal_heads ./build-viewer/level_tests`: every drawn head on traffic_lab against `lampShownAt`.
-- `RT_TEST_FILTER=brain_crowd ./build-viewer/level_tests`: 30 simulated minutes of 350 residents; per-minute lines
-  include the crosswalk counts. Pins its hash.
-- `RT_TEST_FILTER=river_town_crowd ./build-viewer/level_tests`: river_town's 630 residents (`crowd_river_town.lua`), 30
-  minutes; per-minute lines, why the cars standing at the end stand, what is in the longest-standing car's way, tick
-  cost and memory. Pins its hash. (The two crowd tests share `tests/crowd_test_rig.h`.)
+- `RT_TEST_FILTER=river_town_crowd ./build-viewer/level_tests`: river_town's 630 brain people (its own households on
+  their role's day), 30 minutes; per-minute lines (the day's counts, why the cars standing at the end stand, what is in
+  the longest-standing car's way, tick cost and memory). Pins its hash. (`tests/crowd_test_rig.h` is its rig.)
 - `RT_TEST_FILTER=near_tier ./build-viewer/physics_tests`: contacts and hits on walkers.
 - `RT_TEST_FILTER=v2_drives ./build-viewer/level_tests`: traffic_lab, 300 cars, 5 minutes; two known failures.
-- Viewer: `tools/rtctl.py` launches `build-viewer/viewer assets/levels/brain_crowd.json`; `tools/brain_lab_probe.py`
+- Viewer: `tools/rtctl.py` launches `build-viewer/viewer assets/levels/river_town.json`; `tools/brain_lab_probe.py`
   drives it (`brain labels off`, `near marks on`, `brain follow rN`, `sim speed 16`, `near?`, `things?`). Stop only the
   viewers you started, by PID.
 
@@ -177,7 +176,7 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 - A walker's place standing at a crosswalk's kerb end (`refreshPose`'s ModelCrosswalk::kerbWait step, ADR-0452) is
   never reached: `refreshPose` returns for every walker before it (an explicit `return` since ADR-0463, commented).
   Found in ADR-0461, not fixed (it moves the walkers and every pinned hash); likely part of brain_crowd's
-  kerb-end-share failure, so task 4's.
+  kerb-end-share failure (that level is gone, ADR-0492), so task 4's.
 - A walker at a junction the model's crosswalks do not rule (no crosswalk with pavements there, or a junction of a city
   the new driving does not drive) waits for nothing: no light, and since ADR-0463 no gap either (it judged the gap in the
   old driving's cars, which were gone already).
@@ -193,7 +192,7 @@ Build with `cmake --build build-viewer --target driving_tests level_tests physic
 - A household car given back mid-street on brain_lab where it was taken 30 s into a drive: the household plans with it
   and the driving refuses every trip from where it was put in the kerb lane, retried every minute (ADR-0455, not
   looked into).
-- traffic_lab has no near tier: switched on (brain_crowd's `citysim.near`), no two Jolt cars touch, but a few near cars
+- traffic_lab has no near tier: switched on (river_town's `citysim.near`, as brain_crowd's was), no two Jolt cars touch, but a few near cars
   leave their carriageway on some streets and stand off their lane for minutes. How it was measured is in ADR-0453.
 - river_town (ADR-0457, measured, not filed yet):
   - a queue of about 40 residents waiting at crosswalk 123's kerb end (lane junction 29, near -142 482) reaches back

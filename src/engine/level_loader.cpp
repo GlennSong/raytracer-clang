@@ -259,7 +259,6 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
             cfg.households.push_back(out);
         }
     // A CROWD MADE FROM THE ROADS (ADR-0446): the file under assets/scripts that says what to make
-    if (cs.contains("crowd") && cs["crowd"].is_string()) cfg.crowd = cs["crowd"].get<std::string>();
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490): how many of their people
     cfg.brainPeople = std::max(0, cs.value("brainPeople", 0));
     cfg.drivableSpacesOnly = cs.value("drivableSpacesOnly", false);

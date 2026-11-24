@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CROSSWALKS IN THE VIEWER (ADR-0452): brain_crowd at its busy minutes, four pictures, each found by asking the viewer's
+"""CROSSWALKS IN THE VIEWER (ADR-0452): river_town (was brain_crowd, deleted at ADR-0492), four pictures, each found by asking the viewer's
 `crosswalks?` (people at the road model's crosswalks, drivers giving way at one, cars on a green arrow):
 
   1 people waiting at a kerb end on DON'T WALK;
@@ -67,7 +67,7 @@ def find(sock, want, timeout):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--viewer", default="build-viewer/viewer")
-    ap.add_argument("--level", default="assets/levels/brain_crowd.json")
+    ap.add_argument("--level", default="assets/levels/river_town.json")
     ap.add_argument("--shots", default=os.path.expanduser("~/Pictures/Raytracer/brain"))
     ap.add_argument("--log", default="out/zz_4b/crosswalk_probe_viewer.log")
     ap.add_argument("--suffix", default="_4b")

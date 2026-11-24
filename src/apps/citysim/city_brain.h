@@ -120,8 +120,8 @@ constexpr std::size_t kSpacesLookedAt = 64;
 // THE KERB SPACES OFFERED FOR A PLACE whose frontage is `f`: of the kSpacesLookedAt nearest it on foot within
 // kSpaceReach (RoadModel::kerbSpacesNear), nearest first, those `keep` keeps (the caller's word that a car can stand
 // there and be driven away). The one list both sides use: the brain offers a car its spaces from it (spacesFor; a
-// household's car at the start takes the first free one), and the crowd maker holds a household's cars' spaces in it
-// as it takes the home (city_render.cpp, makeCrowd's CrowdSpaces), so it never deals a household the brain must refuse.
+// household's car at the start takes the first free one), and brainPeopleFromHouseholds holds a household's cars'
+// spaces in it as it takes the home, so it never deals a household the brain must refuse.
 std::vector<engine::KerbSpace> kerbSpacesOffered(const engine::RoadModel& model, const engine::RoadFrontage& f,
                                                  const std::function<bool(const engine::KerbSpace&)>& keep);
 // Where a person stands to get into a car or after getting out: this far out from the car's side, on the kerb side.

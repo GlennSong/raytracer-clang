@@ -12,7 +12,6 @@
 #include "city_car.h"                                 // ...which are entities
 #include "city_driving.h"                             // busDoorsOpenness: how far a bus's doors are open (ADR-0487)
 #include "city_near.h"                                // CityNearCar: a near car the driving sees by itself (ADR-0451)
-#include "city_crowd.h"                               // a crowd made from the roads (ADR-0446)
 #include "brain_people.h"                             // the brain's people from the city's households (ADR-0490)
 #include "../../engine/procgen/city/polyline.h"       // distToSegment
 
@@ -47,7 +46,6 @@
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
 #include "scripting/place_kinds_lua.h"   // the place kinds and dwellings (places.lua)
 #include "scripting/people_lua.h"        // ages, life stages, households (people.lua)
-#include "scripting/crowd_lua.h"         // a crowd made from the roads (crowd.lua, ADR-0446)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -237,7 +235,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.markers = c.markers;
         params_.residents = c.residents;
         params_.households = c.households;
-        params_.crowd = c.crowd;
         params_.brainPeople = c.brainPeople;
         params_.drivableSpacesOnly = c.drivableSpacesOnly;
         params_.ambientBus = c.ambientBus;
@@ -1642,13 +1639,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // THE MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441; city_brain.h), on a level that states any and that
     // the new driving drives. Last, once the city is seeded: seeding puts every walker where its day has it, and the
     // resident is put at their home marker after that.
-    // A CROWD MADE FROM THE ROADS (ADR-0446; city_crowd.h), or THE CITY'S OWN HOUSEHOLDS (ADR-0490; brain_people.h),
-    // added to what the level states
+    // THE CITY'S OWN HOUSEHOLDS (ADR-0490; brain_people.h), added to what the level states
     std::vector<engine::CityMarker> markers = params_.markers;
     std::vector<engine::CityResident> residents = params_.residents;
     std::vector<engine::CityHousehold> households = params_.households;
     std::vector<int> residentAgents;   // (empty: the level's own residents only, each the next walker)
-    if ((!params_.crowd.empty() || params_.brainPeople > 0) && sim_.drivingV2() && sim_.drivingV2()->model()) {
+    if (params_.brainPeople > 0 && sim_.drivingV2() && sim_.drivingV2()->model()) {
         // WHERE PEOPLE CAN WALK TO AND FROM: a place whose stand joins the walks (CitySim::walkJoin, the very join a
         // walk from or to it starts and ends by: the brain sends its people to their places' stands) in the largest
         // part of them a walker can get round. (A place on a walk cut off from the rest, a sidewalk ending short of its
@@ -1658,8 +1654,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // kerbSpacesOffered), kept to those beside lanes in the largest part of the road every vehicle class drives
         // (driving/trip_places.h; the brain, with the level's drivableSpacesOnly, keeps those of the car's own class,
         // so these are among them), at least kHomeSpaces of them for the comings and goings; and as many of them free
-        // as its household has cars, which the home then holds (makeCrowd's CrowdSpaces, brainPeopleFromHouseholds:
-        // neither deals a household whose car the brain finds no free space for)
+        // as its household has cars, which the home then holds (brainPeopleFromHouseholds deals no household whose car
+        // the brain finds no free space for)
         // (12 at ADR-0446's 200 residents; at 350 a household's car found none of 12 free)
         constexpr int kHomeSpaces = 24;
         const driving::Driving& d2 = *sim_.drivingV2();
@@ -1691,7 +1687,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             if (!sim_.walkJoin(p, joined, &cutOff) || cutOff) return false;
             return !cars || static_cast<int>(carSpaces(f).size()) >= kHomeSpaces;
         };
-        if (params_.brainPeople > 0) {
+        {
             BrainPeople made;
             std::string err;
             if (!brainPeopleFromHouseholds(sim_, places_, model, params_.brainPeople, onFoot, carSpaces, params_.seed, made, &err)) {
@@ -1713,29 +1709,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 residentAgents.insert(residentAgents.end(), made.agents.begin(), made.agents.end());
             }
         }
-#ifdef RT_ENABLE_SCRIPTING
-        if (!params_.crowd.empty()) {
-            const std::string code = engine::loadScriptCode(params_.crowd, "");
-            engine::ScriptVM vm;
-            std::string err;
-            CrowdSpec spec;
-            CrowdMade made;
-            if (code.empty() || !vm.doString(code, &err) || !engine::loadCrowdSpec(vm, params_.crowd, spec, &err) ||
-                !makeCrowd(spec, model, onFoot, carSpaces, params_.seed, made, &err)) {
-                LOG_WARN << "[citysim] crowd " << params_.crowd << ": " << (code.empty() ? std::string("not found under assets/scripts") : err);
-            } else if (!residentAgents.empty()) {
-                LOG_WARN << "[citysim] crowd " << params_.crowd << ": not made, the level runs the city's own households (brainPeople)";
-            } else {
-                std::string kinds;
-                for (const std::pair<std::string, int>& k : made.placesOfKind) kinds += " " + std::to_string(k.second) + " " + k.first;
-                LOG_INFO << "[citysim] crowd " << params_.crowd << ": " << made.residents.size() << " residents in "
-                         << made.households.size() << " households, " << made.cars << " cars; places:" << kinds;
-                markers.insert(markers.end(), made.markers.begin(), made.markers.end());
-                residents.insert(residents.end(), made.residents.begin(), made.residents.end());
-                households.insert(households.end(), made.households.begin(), made.households.end());
-            }
-        }
-#endif
     }
     if ((!markers.empty() || !residents.empty()) && sim_.drivingV2() && sim_.drivingHost().active()) {
         std::string brainReport;

@@ -524,7 +524,7 @@ TEST_CASE(lot_citysim_the_lot_pass_reads_only_what_its_key_hashes) {
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     const uint64_t key = lots->identity(in).key;
     int movedBySim = 0, stillForLots = 0;
-    for (const char* simOnly : {"cars", "pedestrians", "buses", "busRoutes", "taxiFraction", "driving", "drivingRules", "crowd",
+    for (const char* simOnly : {"cars", "pedestrians", "buses", "busRoutes", "taxiFraction", "driving", "drivingRules",
                                 "near", "tiered", "dormancy", "hoursPerSecond", "vehicles", "fleet"}) {
         LevelInputs v = in;
         v.level["citysim"][simOnly] = 12345;

@@ -762,7 +762,7 @@ TEST_CASE(near_tier_a_near_car_with_no_way_past_finds_another_way) {
     CHECK(!run.swerved);
     CHECK(run.anotherWay);
     CHECK(run.chassisHits == 0u);
-    CHECK(run.arrived);
+    CHECK(run.arrived);   // FAILING: the other way needs two lane changes in a 32 m stretch (#328)
 }
 
 // A LANE CAR AND A PERSON CROSSING (the middle tier): a person steps into the road ahead of a lane car and walks across
@@ -862,6 +862,13 @@ constexpr Real kOffLaneKnownWorst = 5;      // s: kSteerBack, the time a car pus
 
 // THE STAND-IN PLAYER'S ROUTE: lane centre lines end to end from the lane nearest `from`, each the first lane on from
 // the last (a busy part of the lab: its signalled junction at -270, 0 that the crowd's cars cross at the busy minute)
+// Where the player's route starts on river_town (the crowd test's level since brain_crowd went, ADR-0492): the lane
+// nearest where its cars are most, over its first twelve minutes (100 m cells, a sample every 10 s: x -100..0, z
+// 700..800 had 527 car-samples, the next 281), north of the river by junction 62
+const Vec2 kRiverTownBusy(-50, 750);
+// ...and on traffic_lab (its 300 cars that drive round for ever): beside the signalled junction at -270, 0
+const Vec2 kTrafficLabJunction(-270, 0);
+
 std::vector<Vec2> playerRoute(Rig& rig, Vec2 from) {
     const LaneGraph& roads = *rig.d().roads();
     uint32_t best = 0;
@@ -919,7 +926,8 @@ Entity standInPlayer(Rig& rig, Vec2 at) {
 
 }  // namespace
 
-// THE KERB LANE KEEPS CLEAR OF PARKED CARS (ADR-0450, #302): on brain_crowd, along every lane path beside a kerb
+// THE KERB LANE KEEPS CLEAR OF PARKED CARS (ADR-0450, #302): on traffic_lab's roads (as brain_crowd, which drove them,
+// until ADR-0492), along every lane path beside a kerb
 // parking band, sampled every kClearanceStep, the side gap from a car on the path to a car in the nearest kerb space
 // beside it, and from the car to its street's centre line (oncoming traffic beyond), each for the WIDEST car of the
 // fleet on both sides. Before #302 the line ran through the band's inner part and the gap to a parked van was below 0.
@@ -927,7 +935,7 @@ constexpr Real kClearanceStep = 2.0;     // m along a path between samples
 constexpr Real kBesideSpace = 4.0;       // m: a space whose middle is within this of the sample, along the road, is beside it
 constexpr Real kLeastSideGap = 0.3;      // m: a car passing a parked car leaves at least this
 TEST_CASE(near_tier_the_kerb_lane_keeps_clear_of_parked_cars) {
-    Rig rig("brain_crowd", false);
+    Rig rig("traffic_lab", false);
     CHECK(rig.ok);
     if (!rig.ok) return;
     const RoadModel& model = *rig.d().model();
@@ -977,7 +985,7 @@ TEST_CASE(near_tier_the_kerb_lane_keeps_clear_of_parked_cars) {
 }
 
 TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
-    Rig rig("brain_crowd", false);
+    Rig rig("river_town", false);
     CHECK(rig.ok);
     if (!rig.ok) return;
     rig.withBridge = std::getenv("RT_NEAR_NO_BRIDGE") == nullptr;   // (the viewer's kinematic boxes: ADR-0449)
@@ -987,13 +995,13 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     if (!std::getenv("RT_NEAR_STEPS_PER_FRAME")) rig.stepsPerFrame = kProbeStepsPerFrame;
     CitySimConfig::NearTier rules;
     rig.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { rules = c.near; });
-    CHECK(rules.cap == 100);   // (the level's data: brain_crowd.json citysim.near)
+    CHECK(rules.cap == 100);   // (the level's data: river_town.json citysim.near)
     // A NEAR CAR STANDING OFF ITS LANE: each one's seconds at rest with its front more than kOffLane from its lane's
     // centre, and the worst
     std::map<uint32_t, Real> offFor;
     Real worstOffFor = 0, worstOff = 0;
     uint32_t worstOffCar = 0;
-    const std::vector<Vec2> route = playerRoute(rig, Vec2(-270, 0));
+    const std::vector<Vec2> route = playerRoute(rig, kRiverTownBusy);
     CHECK(route.size() >= 2);
     const Entity player = standInPlayer(rig, route.front());
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
@@ -1119,6 +1127,8 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
                 mostNear, mostNearAt, c.intoPhysics, c.intoLane, c.refusedCars, c.refused, c.mostThisStep, c.mostOverCap, c.contacts,
                 c.taken, c.givenBack, c.slotsMeasured, c.measureMs, rig.physicsWorstMs, static_cast<unsigned long long>(hash));
     CHECK(ringsSeen == 0);                       // no ring of waits, ever
+    // (FAILING since the case moved to river_town's terrain, ADR-0492: the contacts and every kind of hit below, and the
+    // longest off its lane: #336)
     CHECK(c.contacts == 0);                      // two of the city's Jolt cars never touch
     CHECK(c.parkedHits == 0);                    // no near car touches a parked car (ADR-0450; 3c: most of 59)
     CHECK(c.pedestrianHits == 0);                // ...nor a person on foot (ADR-0451; 3d: 11)
@@ -1193,14 +1203,17 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // at that record index) to in 114, out 90, 0x03fb7f921747f374 (the most near the same). STILL FAILING, not
     // loosened: contacts 0 -> 5, the longest off its lane back over -- a lane car's box shoves physics car 204 standing
     // inside the box at 12:21, into car 14 waiting at its line (#332).
-    CHECK(mostNear == 23);
+    // MOVED TO RIVER_TOWN (ADR-0492: brain_crowd, its level until now, was deleted with the crowd generator), the route
+    // from the busiest cell (kRiverTownBusy): the most near 23 at minute 12 -> 12 at minute 12, in 114 -> 22, out 90 ->
+    // 9, hash 0x4e80967d762cb46f -> 0xcf97ef5254ff6375. River_town is a real town -- slopes, bridges, built lots, street
+    // furniture -- and the near tier was only ever run on traffic_lab's flat roads: 19 cars refused as not upright, hits
+    // on things that are no car, one contact (#336).
+    CHECK(mostNear == 12);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 114u);
-    CHECK(c.intoLane == 90u);
+    CHECK(c.intoPhysics == 22u);
+    CHECK(c.intoLane == 9u);
     CHECK(c.mostOverCap == 0);
-    // ...and (#328: a trip ends in any lane of its destination's stretch unless it must end in its own; a driver letting
-    // me in at a merge is not given way to) 0x03fb7f921747f374 -> 0x4e80967d762cb46f, every count the same.
-    CHECK(hash == 0x4e80967d762cb46full);
+    CHECK(hash == 0xcf97ef5254ff6375ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at
@@ -1269,15 +1282,21 @@ TEST_CASE(near_tier_boxes_follow_their_cars_every_fixed_step) {
     CHECK(off == 0u);
 }
 
-// THE CAP HELD (ADR-0448): the same walk and drive with the cap at 4 (the level's data changed before the first step),
+// THE CAP HELD (ADR-0448): a walk and drive on traffic_lab (brain_crowd's roads; it went at ADR-0492) with the cap at 4 (the level's data changed before the first step),
 // so it fills: never more near cars than the cap, but for any that could not go back (counted over the cap).
 TEST_CASE(near_tier_holds_its_cap) {
     constexpr int kSmallCap = 4;
-    Rig rig("brain_crowd", false);
+    Rig rig("traffic_lab", false);
     CHECK(rig.ok);
     if (!rig.ok) return;
-    rig.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) { c.near.cap = kSmallCap; });
-    const std::vector<Vec2> route = playerRoute(rig, Vec2(-270, 0));
+    // (traffic_lab has no near tier of its own: river_town's rules, with the small cap)
+    rig.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
+        c.near.cap = kSmallCap;
+        c.near.enter = 150;
+        c.near.leave = 180;
+        c.near.perStep = 3;
+    });
+    const std::vector<Vec2> route = playerRoute(rig, kTrafficLabJunction);
     const Entity player = standInPlayer(rig, route.front());
     Real travelled = 0;
     int mostNear = 0;
@@ -1398,3 +1417,4 @@ TEST_CASE(near_tier_the_player_takes_a_near_car_and_gives_it_back) {
                 brain->planReason(0).c_str(), usedAgain ? 1 : 0);
     CHECK(usedAgain);
 }
+

@@ -842,7 +842,7 @@ public:
     // WHERE A POINT JOINS THE WALKS for a walker (RoadModel::walkJoinNear over the walker's open walks): false when the
     // sim holds no road model, or the point joins none. `cutOff`, when asked: the walk joined is outside the largest
     // part of the walks a walker can get round (reachableWalks), so a walk from there reaches only its own part. The
-    // crowd maker puts places only where this joins the largest part (city_render.cpp, makeCrowd's CrowdUsable).
+    // brain's people live only where this joins the largest part (city_render.cpp, brainPeopleFromHouseholds' usable).
     bool walkJoin(engine::Vec2 p, engine::WalkPoint& out, bool* cutOff = nullptr) const;
 
 
