@@ -1394,3 +1394,58 @@ TEST_CASE(level_brain_lab_who_has_a_car_has_one_answer) {
     CHECK(r.holdFaults == 0);
     CHECK(r.riderApart == 0);
 }
+
+// A CRASH, AND WHAT FOLLOWS FOR THE PERSON (sitting 7; two-drivers-meeting-design.md section 8; #330). Ana drives to
+// work; while her car is under way a stranger's car is set down overlapping it, again and again, until a contact rolls a
+// crash (the lab's crash_chance, a seeded roll per contact). Her car is a wreck where it stands, her trip is over, and
+// she is "in a crash"; after the rule set's wreck_seconds the wreck is cleared: she gets up and goes on without the
+// car (got_up -> replan without it), and the car is towed to the nearest free kerb space.
+TEST_CASE(level_brain_lab_a_crash_leaves_a_wreck_its_driver_goes_on_and_the_car_is_towed) {
+    Run r;
+    if (!r.b) return;
+    citysim::CityBrain& b = *r.b;
+    driving::Driving* d = r.lc.city.simMutable().drivingV2Mutable();
+    CHECK(d && d->crashStep());
+    if (!d || !d->crashStep()) return;
+    std::string why;
+    CHECK(b.goTo("work", &why));
+    const driving::CarId mine(static_cast<uint32_t>(b.residentCar(0)));
+    const bool underWay = r.until([&] {
+        const driving::Car* c = d->car(mine);
+        return b.stateName() == "driving" && c && c->driven && c->speed > 3;
+    });
+    CHECK(underWay);
+    if (!underWay) return;
+    // (a stranger's car set down 1 m ahead of her front, on her path, then taken away: each placing a new contact)
+    const driving::CarId stranger(90000);
+    for (int i = 0; i < 4000 && d->crashCounts().crashes == 0; ++i) {
+        const driving::Car* c = d->car(mine);
+        if (!c || !c->driven) break;
+        driving::PathPoint at;
+        at.path = c->path;
+        at.along = std::min(c->along + Real(1), d->roads()->paths[c->path.index].length);
+        if (d->placeCar(stranger, c->vehicleClass, at)) {
+            r.step();
+            if (d->car(stranger) && !d->isWreck(stranger)) d->removeCar(stranger);
+        }
+        r.step();
+    }
+    const driving::Driving::CrashCounts& k = d->crashCounts();
+    std::printf("    [brain-lab] crash: contacts %llu, crashes %llu, wrecks %llu; ana is %s\n",
+                static_cast<unsigned long long>(k.contacts), static_cast<unsigned long long>(k.crashes),
+                static_cast<unsigned long long>(k.wrecks), b.stateName().c_str());
+    CHECK(k.crashes >= 1u);
+    CHECK(d->isWreck(mine) && d->car(mine) && !d->car(mine)->driven);
+    r.run(0.5);
+    CHECK(b.stateName() == "crashed");
+    if (d->car(stranger) && !d->isWreck(stranger)) d->removeCar(stranger);
+    // ...cleared after wreck_seconds: off the road, towed to a kerb space; Ana goes on without it
+    const bool cleared = r.until([&] { return !d->car(mine); });
+    CHECK(cleared);
+    r.run(1.0);
+    std::printf("    [brain-lab] cleared: %llu; towed %u; ana is %s; the car stands in %s\n",
+                static_cast<unsigned long long>(k.cleared), b.counts().towed, b.stateName().c_str(), b.carSpaceName().c_str());
+    CHECK(k.cleared >= 1u && b.counts().towed == 1u);
+    CHECK(b.stateName() != "crashed");
+    CHECK(!b.carSpaceName().empty());
+}
