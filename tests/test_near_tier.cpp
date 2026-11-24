@@ -1189,12 +1189,16 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // things 0 -> 19 are BACK, as at bug 4 above: trajectories, not the change (#329).
     // And again (sitting 7: contact and crashes; a car nobody drives standing on a lane is a thing in drivers' way) to 23
     // at minute 12, in 113, out 89, 0xa1a0f672f35848e0. Contacts 0; hits on walkers 12 -> 8, on other things 19 -> 10 (#329).
+    // And again (the alpha review, P1-1: the lane-change safety check reads the real follower behind a gap, not a car
+    // at that record index) to in 114, out 90, 0x03fb7f921747f374 (the most near the same). STILL FAILING, not
+    // loosened: contacts 0 -> 5, the longest off its lane back over -- a lane car's box shoves physics car 204 standing
+    // inside the box at 12:21, into car 14 waiting at its line (#332).
     CHECK(mostNear == 23);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 113u);
-    CHECK(c.intoLane == 89u);
+    CHECK(c.intoPhysics == 114u);
+    CHECK(c.intoLane == 90u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xa1a0f672f35848e0ull);
+    CHECK(hash == 0x03fb7f921747f374ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

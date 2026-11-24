@@ -363,13 +363,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 397u);
         CHECK(withCar == 427);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 203);
+        CHECK(mostOnRoad == 206);
         CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 444u);
-        CHECK(b.counts().parkedReports == 303u);
+        CHECK(b.counts().tripsBegun == 433u);
+        CHECK(b.counts().parkedReports == 277u);
         CHECK(b.counts().walksBlocked == 2u);   // (lane changes on: was 0; #327)
         CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 612u);
+        CHECK(b.machine()->counts().arrivals == 597u);
         CHECK(b.machine()->counts().noPlans == 1u);   // (lane changes on: was 0; #327)
         // STILL FAILING with lane changes on (2 spells): #327
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
@@ -422,11 +422,15 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 250 -> 303, arrivals 570 -> 612, bus calls 144 -> 166, bus rides 10 -> 19; the longest a bus stood in the road
         // 1150 s -> 99 s (passes). Car 365 still stands at the end of a 20 m lane piece waiting to change lanes with no
         // room to (#328).
-        CHECK(hash == 0xeb213119d367acfdull);
+        // 0xeb213119d367acfd -> 0x537a4261659664d2 (the alpha review, P1-1): the lane-change safety check read the
+        // follower behind a gap by id as if it were a record index (the crowd's ids are sparse) -- now the real one, so
+        // more changes wait for a safe gap: most on the road 203 -> 206, trips 444 -> 433, parked 303 -> 277, arrivals
+        // 612 -> 597, bus calls 166 -> 165; the longest a bus stood in the road 99 s -> 117 s (passes)
+        CHECK(hash == 0x537a4261659664d2ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 166u);
+        CHECK(sim.drivingHost().counts().busCalls == 165u);
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         CHECK(busStandTicks * kStep < 180.0);

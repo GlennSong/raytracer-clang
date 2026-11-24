@@ -15,12 +15,11 @@
 // scripting/travel_lua.h), so it is unit-tested headless.
 //
 // THE NETWORK (#306, the street map's deletion): every leg is routed over the road model's walks by the one router
-// (findWalkRoute) -- the sidewalks run along every street a person drives too. A leg on the roads is timed by the
-// class of the street each walk runs along (classSpeed), a leg on foot at the way's speed. (So a drive is priced on
-// the streets that have sidewalks: no freeway. The simplest port; the driving's own lane router is the one to price
-// a drive by, later.)
+// (findWalkRoute). A leg on the roads is the driving's own lane route (Driving::routeBetween), timed at each lane's
+// posted limit (the rule set's, capped by the class's top speed) -- the same time the car's route was chosen by; a leg
+// on foot is at the way's speed.
 
-#include "../../engine/procgen/city/road_network.h"   // RoadClass, classSpeed
+#include "../../engine/procgen/city/road_network.h"   // RoadClass
 #include "../../engine/procgen/city/roads/route.h"     // findWalkRoute, WalkRoute, RouteWalker
 
 #include <cstdint>

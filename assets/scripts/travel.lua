@@ -10,9 +10,9 @@
 --   network        "footpaths" (where walkers go), "roads" (where cars go) or "bus" (the road file's bus lines: on foot
 --                  to a stop, the wait, the ride round the line, on foot from a stop; ADR-0484)
 --   speed_kmh      FOOTPATHS ONLY: average door-to-door speed, crossings included. A way on the roads has none:
---                  its minutes are the router's own time for the route it takes -- each road class at its speed
---                  (engine::classSpeed: freeway 100 km/h, arterial 58, collector 43, local 29, ramp 36) and a few
---                  seconds at each street junction -- the time the route was chosen by (ADR-0416)
+--                  its minutes are the driving's lane router's own time for the route it takes -- each lane at its
+--                  posted limit (rules/control_policy.lua, capped by the vehicle's top speed) -- the time the route
+--                  was chosen by (ADR-0416)
 --   start_minutes  fixed minutes at the start of a leg of it (unlocking, pulling out)
 --   end_minutes    fixed minutes at its end (finding a space, parking, locking up)
 --   set_off_wait_minutes  OPTIONAL: the longest a leg of it waits to set off. A car ready to leave its kerb space

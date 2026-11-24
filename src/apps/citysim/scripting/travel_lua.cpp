@@ -84,7 +84,7 @@ bool loadTravelCatalog(ScriptVM& vm, citysim::TravelCatalog& out, std::string* e
         } else if (m.roads) {
             if (kmh != 0.0)
                 return fail(L, base, err, "`" + m.name + "`: a way on the roads has no speed_kmh -- its minutes are the "
-                                              "router's own time by road class (road_network.h classSpeed)");
+                                              "lane router's own time at each lane's posted limit");
             m.speed = 0;
         } else {
             if (!(kmh > 0)) return fail(L, base, err, "`" + m.name + "`: speed_kmh must be positive");

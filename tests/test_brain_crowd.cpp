@@ -447,16 +447,19 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         CHECK(mostOnRoad == 98);
         CHECK(mostOnRoadAt == 8);
         CHECK(busyMinutes == 14);
-        CHECK(b.counts().tripsBegun == 337u);
-        CHECK(b.counts().parkedReports == 271u);
+        CHECK(b.counts().tripsBegun == 334u);
+        CHECK(b.counts().parkedReports == 269u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 473u);
+        CHECK(b.machine()->counts().arrivals == 470u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xf7e7889934759abdull);
-        CHECK(d.kerbMoveCounts().pulledIn == 271u && d.kerbMoveCounts().stoppedInLane == 0u);
+        // 0xf7e7889934759abd -> 0x5dba6ae139896c49 (the alpha review, P1-1): the lane-change safety check looked a car up
+        // by its id as if it were its record, so with the crowd's sparse ids it read a stranger (or no one) as the
+        // follower behind a gap -- now the real follower: trips 337 -> 334, parked 271 -> 269, arrivals 473 -> 470
+        CHECK(hash == 0x5dba6ae139896c49ull);
+        CHECK(d.kerbMoveCounts().pulledIn == 269u && d.kerbMoveCounts().stoppedInLane == 0u);
         CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood

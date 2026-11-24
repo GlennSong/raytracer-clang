@@ -762,9 +762,12 @@ public:
     // Hand an agent's PLAN to a director (ADR-0091). Idempotent; -1 or an
     // out-of-range index is a no-op. Turning it off returns the agent to its
     // schedule from wherever it is standing.
+    // (a brain resident stays directed: the brain is their director, and the goal table must never wake on them when
+    // a possession lets go)
     void setAgentDirected(int agentIndex, bool on) {
-        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
-            agents_[static_cast<std::size_t>(agentIndex)].directed = on;
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        a.directed = on || a.brainOwned;
     }
     bool agentDirected(int agentIndex) const {
         return agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()) &&

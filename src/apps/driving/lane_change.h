@@ -258,11 +258,7 @@ LaneGap findLaneGap(const engine::LaneGraph& roads, const std::vector<Car>& cars
                 for (const engine::PathId p : before[b.path.index]) todo.push_back({p, b.behind + len});
         }
     }
-    const auto carOf = [&](CarId id) -> const Car* {
-        if (!id.valid() || id.index >= lists.recordOfCar.size()) return nullptr;
-        const uint32_t r = lists.recordOfCar[id.index];
-        return r < cars.size() ? &cars[r] : nullptr;
-    };
+    const auto carOf = [&](CarId id) -> const Car* { return id.valid() ? findCar(cars, lists, id) : nullptr; };
     if (const Car* a = carOf(g.ahead)) speedAhead = a->speed;
     // MOBIL's safety criterion, eq. 2: the new follower's acceleration behind me is no harsher than -b_safe; and mine
     // behind the new leader (the following model's own answer, not a gap table)

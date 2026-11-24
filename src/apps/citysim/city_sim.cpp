@@ -4900,7 +4900,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
         if (a.tier != Agent::Tier::K) continue;
         // Player-adjacent agents never demote: host-driven, released to the
         // player, or tethered to a physical body another bridge owns -- nor one being followed.
-        if (a.playerControlled || a.released || a.tethered || a.pinned) continue;
+        if (a.playerControlled || a.released || a.tethered || a.pinned || a.brainOwned) continue;
         const Real dr = pedDemoteRadius * ns;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
         if (dx * dx + dy * dy <= dr * dr) {
@@ -4926,7 +4926,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
             const std::size_t i = static_cast<std::size_t>(vi);
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
-            if (a.playerControlled || a.released || a.tethered) continue;
+            if (a.playerControlled || a.released || a.tethered || a.brainOwned) continue;
             // REMEMBERED (near you lately) or followed: stays far, on its exact trip, rather than rebuilt later
             if (a.pinned || a.rememberUntil > simSeconds_) continue;
             // NEVER ANYONE MID-JOURNEY BY TRAIN: a rider rebuilt from their schedule on waking would lose the ride.

@@ -106,7 +106,7 @@ void Driving::wreck(Car& c) {
     lettingIn_.erase(c.id);
     droppingBack_.erase(c.id);
     Wreck w;
-    w.clearAtTick = tickCount_ + static_cast<uint64_t>(std::ceil(wreckSeconds_ / std::max(step_, Real(1e-6))));
+    w.clearAtTick = tickCount_ + (step_ > 0 ? static_cast<uint64_t>(std::ceil(wreckSeconds_ / step_)) : 0);
     w.person = person;
     wrecks_[c.id] = w;
     ++crashCounts_.wrecks;
@@ -1551,11 +1551,8 @@ Real Driving::followAcceleration(const Car& who, Real gap, Real speedAhead) cons
     if (who.vehicleClass >= vehicleClasses_.size()) return 0;
     const VehicleClass& cls = vehicleClasses_.at(who.vehicleClass);
     PersonId person = 0;
-    if (who.id.index < pathLists_.recordOfCar.size()) {
-        const uint32_t r = pathLists_.recordOfCar[who.id.index];
-        if (r < tripOfRecord_.size())
-            if (const Trip* t = trips_.get(tripOfRecord_[r])) person = t->person;
-    }
+    if (const std::map<CarId, TripId>::const_iterator ti = tripOfCar_.find(who.id); ti != tripOfCar_.end())
+        if (const Trip* t = trips_.get(ti->second)) person = t->person;
     Follower f;
     f.speedUp = cls.speedUp;
     f.brake = cls.brake;
@@ -1997,6 +1994,13 @@ bool Driving::removeCar(CarId id, std::string* why) {
     carried_.erase(id);
     laneMoves_.erase(id);
     inSpace_.erase(id);
+    // Everything else the driving keeps per car goes with it: a later car may be given the same id (the alpha review)
+    watch_.erase(id);
+    seen_.erase(id);
+    crosswalkOf_.erase(id);
+    wrecks_.erase(id);
+    for (std::set<std::pair<uint32_t, uint32_t>>::iterator t = touching_.begin(); t != touching_.end();)
+        t = t->first == id.index || t->second == id.index ? touching_.erase(t) : std::next(t);
     indicating_.erase(id);
     lettingIn_.erase(id);
     droppingBack_.erase(id);
