@@ -499,6 +499,7 @@ add_library(driving STATIC
     src/apps/driving/give_way.cpp        # judging the gaps a driver gives way by at junctions; patience (#262)
     src/apps/driving/junction_plan.cpp   # each driver's plan for the junctions ahead: connector, waiting points (#260)
     src/apps/driving/measure.cpp         # the plan's measurements table, counted while the tick runs (#257)
+    src/apps/driving/contact.cpp         # body against body on the plan: the one test (measurements, crashes)
     src/apps/driving/notice.cpp         # facts: what a driver can notice, registered by name (#251)
     src/apps/driving/right_of_way.cpp    # who gives way to whom at every junction, worked out at load (#260)
     src/apps/driving/road_rules.cpp      # the graph's regulation kinds bound to the rule set's devices (#251)

@@ -214,6 +214,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     if (!busOf.empty())
         std::printf("    [river] the longest a bus stood in the road (not at a stop): bus %u, %.1f s; its card then:\n%s\n", busStandCar,
                     busStandTicks * kStep, busStandWhy.c_str());
+    std::printf("    [river] contact: %llu new contacts, %llu crashes, %llu wrecks, %llu cleared\n",
+                static_cast<unsigned long long>(d.crashCounts().contacts), static_cast<unsigned long long>(d.crashCounts().crashes),
+                static_cast<unsigned long long>(d.crashCounts().wrecks), static_cast<unsigned long long>(d.crashCounts().cleared));
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
     // RT_RIVER_CARDS=365,12: those cars' driver cards at the end (following a chain of waits by hand)
     if (const char* cards = std::getenv("RT_RIVER_CARDS")) {
@@ -376,7 +379,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0xf4b923be54a7b75b -> 0x67a1b7581e4e1dac (sitting 6: junctions by judgement): most on the road 200 -> 201,
         // trips 430 -> 419, parked 275 -> 250, arrivals 590 -> 570, bus calls 152 -> 144, boardings 20 -> 18; rings 0;
         // touching spells 2 -> 1. The same two failures (#326, #327).
-        CHECK(hash == 0x67a1b7581e4e1dacull);
+        // 0x67a1b7581e4e1dac -> 0x86dd6401bb40c85c (sitting 7: contact and crashes; a car nobody drives standing on a
+        // lane is a thing in drivers' way): every count above the same; 1 new contact, no crash rolled.
+        CHECK(hash == 0x86dd6401bb40c85cull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);

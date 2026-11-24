@@ -854,6 +854,13 @@ TEST_CASE(level_traffic_lab_v2_drives) {
         std::printf("    [lab-v2] another way: %llu drivers refused room for room_refused_another_way asked for one, %llu "
                     "took one\n",
                     static_cast<unsigned long long>(pc.askedAnotherWay), static_cast<unsigned long long>(pc.tookAnotherWay));
+        // CONTACT AND CRASHES (sitting 7)
+        {
+            const driving::Driving::CrashCounts& k = d->crashCounts();
+            std::printf("    [lab-v2] contact: %llu new contacts between bodies, %llu rolled a crash, %llu wrecks, %llu cleared\n",
+                        static_cast<unsigned long long>(k.contacts), static_cast<unsigned long long>(k.crashes),
+                        static_cast<unsigned long long>(k.wrecks), static_cast<unsigned long long>(k.cleared));
+        }
         // WHO GOES FIRST (issue #263; sitting 6: by each pair's questions): the conflicts over the run, by the question that decided.
         const driving::ConflictCounts& cc = d->conflictCounts();
         std::printf("    [lab-v2] who goes first: %llu conflicts settled (summed over the ticks); by question:",

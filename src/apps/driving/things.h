@@ -39,6 +39,9 @@ using engine::Real;
 // ONE THING STANDING OR MOVING ON THE ROAD, as the host writes it each tick: its middle on the plan, how far it reaches
 // across (a person's shoulders, half a crate) and how it moves. `id`: the host's number for it (the same thing keeps its
 // number from tick to tick, so a driver can tell it has stood still).
+// A car nobody here drives, standing on a lane, is a thing too (the driving adds it: Driving::plan), numbered with this bit
+// set over its car id so it never shares a host thing's number.
+constexpr uint32_t kCarThingBit = 0x80000000u;
 struct RoadThing {
     uint32_t id = 0;
     engine::Vec2 at;

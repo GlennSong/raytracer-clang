@@ -282,6 +282,13 @@ rule_set = {
     -- (design section 6: a joining car slows or speeds up along a ramp instead of stopping at its end).
     drop_back_within = { 150, unit = "m",
       source = "[~] a judgement: about a ramp's acceleration lane (UK motorway slip roads run ~200 m, from memory); to tune against the lab" },
+    -- CONTACT AND CRASHES (sitting 7; src/apps/driving/contact.h, driving.h CrashCounts). A contact between two cars'
+    -- bodies is a crash with this chance (a seeded roll); otherwise they go on. A crash leaves the cars as wrecks where
+    -- they stand, for this long, then they are cleared.
+    crash_chance = { 0.02, unit = "ratio",
+      source = "Glenn, 2026-11-16 (two-drivers-meeting-design.md section 12, sitting 7): a 1-in-50 roll" },
+    wreck_seconds = { 600, unit = "s",
+      source = "Glenn, 2026-11-16 (sitting 7): wrecks stand 10 game minutes, then are cleared (a tow truck later)" },
   },
 
   -- THE LIMIT ON A ROAD WITH NONE POSTED, by the road's class (the lane graph's road classes). The control plan posts

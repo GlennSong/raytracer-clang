@@ -71,6 +71,7 @@
 //
 // Units: metres, seconds.
 
+#include "apps/driving/contact.h"   // body against body: the one test
 #include "apps/driving/driving.h"
 #include "apps/driving/notice.h"
 #include "apps/driving/traffic_state.h"
@@ -415,26 +416,7 @@ private:
 // wide as the drawn vehicle -- is tested for overlap. Only afterwards is each overlap SORTED by how the two cars' paths
 // relate, so the count says where to look.
 
-// A CAR'S BODY ON THE PLAN, as the host draws it.
-struct PlanBody {
-    CarId car;
-    double x = 0, z = 0;            // its middle
-    double ux = 1, uz = 0;          // unit, from its rear to its front
-    double halfLength = 0, halfWidth = 0;
-    double height = 0;              // the road's height under its middle
-};
-// The drawn body of a car at `pose`, `length` long and `width` wide (the host's drawing centres the vehicle between the
-// bumpers and points it from the rear bumper to the front: citysim DrivingHost::mirror). The lane graph's own body rule
-// (engine::bodyOnPlan), the one the road builder sweeps along each path for its crossing points (ADR-0412).
-PlanBody planBody(CarId car, const CarPose& pose, double length, double width);
-// HOW DEEP TWO BODIES OVERLAP on the plan: the shortest push that would part them (metres; separating axes over the
-// two rectangles), or zero when they do not overlap.
-double bodyOverlapDepth(const PlanBody& a, const PlanBody& b);
-// Two bodies whose roads differ in height by more than this are on different decks (a street under a bridge), not
-// touching: the road builder's same-level figure (Rules::sameLevelDz), which the crossing points use too.
-constexpr double kTouchSameLevelMetres = 1.0;
-// Overlaps shallower than this (metres) are rounding, not touching: a millimetre.
-constexpr double kTouchToleranceMetres = 1e-3;
+// (The bodies and the test for two touching are contact.h's: PlanBody, planBody, bodyOverlapDepth, findContacts.)
 
 // HOW THE PATHS OF TWO TOUCHING CARS RELATE, the first that fits, in this order.
 enum class TouchKind : uint8_t {
@@ -688,6 +670,7 @@ private:
     std::vector<std::size_t> bodyRecord_;   // per body: its record in d.cars()
     std::vector<std::size_t> sweep_;        // bodies in order of their lowest x
     std::vector<TouchSpell> touchesFound_;
+    std::vector<BodyContact> contacts_;
 };
 
 // ONE TICK, TIMED: ticks `d` and hands what it cost on the wall clock to the measurements attached to it (none: only

@@ -3542,3 +3542,43 @@ TEST_CASE(merge_b_a_car_creeping_to_its_give_way_stop_is_not_put_first) {
 }
 
 #endif  // RT_ENABLE_SCRIPTING
+
+// ---- CONTACT AND CRASHES (sitting 7; two-drivers-meeting-design.md section 8) -------------------------------------------
+
+// Two cars placed with their bodies overlapping on one lane, a crash certain (crash_chance 1) and wrecks standing 5 s: the
+// contact is counted and rolled a crash; both driven cars are left as wrecks where they stand, their trips over; a third
+// car coming up behind stops short of them (it sees an undriven car in its way, things.h) and never touches them; after
+// wreck_seconds both are cleared off the road, and the third drives on.
+TEST_CASE(crash_1_a_contact_rolled_a_crash_leaves_wrecks_others_stop_behind_until_cleared) {
+    Sim s(driving_test::gridRoads(3, 3),
+          labRules("rule_set.numbers.crash_chance = { 1.0, unit = 'ratio', source = 'test' }\n"
+                   "rule_set.numbers.wreck_seconds = { 5, unit = 's', source = 'test' }\n"),
+          "signal");
+    CHECK(s.ok);
+    if (!s.ok) return;
+    CHECK(s.d.crashStep());
+    approach(s, 0, 1, 1, kEast, 40, kEast);
+    approach(s, 1, 1, 1, kEast, 42, kEast);   // 2 m behind car 0's front: the two bodies overlap
+    approach(s, 2, 1, 1, kEast, 75, kEast);   // coming up behind
+    s.run(0.5);
+    const Driving::CrashCounts& k = s.d.crashCounts();
+    std::printf("    [crash] after 0.5 s: contacts %llu, crashes %llu, wrecks %llu\n", static_cast<unsigned long long>(k.contacts),
+                static_cast<unsigned long long>(k.crashes), static_cast<unsigned long long>(k.wrecks));
+    CHECK(k.contacts >= 1u && k.crashes >= 1u && k.wrecks == 2u);
+    CHECK(s.d.isWreck(CarId(0)) && s.d.isWreck(CarId(1)));
+    CHECK(s.d.car(CarId(0)) && !s.d.car(CarId(0))->driven && s.d.car(CarId(0))->speed == 0);
+    CHECK(!s.d.tripOf(CarId(0)).valid() && !s.d.tripOf(CarId(1)).valid());
+    const uint64_t crashesThen = k.crashes;
+    s.run(4.0);
+    const Car* behind = s.d.car(CarId(2));
+    CHECK(behind && behind->driven);
+    std::printf("    [crash] after 4.5 s: car 2 at %.1f m, %.2f m/s; contacts %llu\n", behind ? behind->along : -1.0,
+                behind ? behind->speed : -1.0, static_cast<unsigned long long>(k.contacts));
+    CHECK(k.crashes == crashesThen);   // car 2 did not run into them
+    s.run(1.5);
+    CHECK(k.cleared == 2u && !s.d.car(CarId(0)) && !s.d.car(CarId(1)));
+    const double alongThen = s.d.car(CarId(2)) ? s.d.car(CarId(2))->along : 0.0;
+    s.run(6.0);
+    const Car* after = s.d.car(CarId(2));
+    CHECK(!after || after->along > alongThen + 5 || after->path != behind->path);   // it drove on (or arrived)
+}

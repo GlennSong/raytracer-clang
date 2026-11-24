@@ -9,6 +9,7 @@ namespace {
 // The driving's kinds of event, in its own order (driving::EventKind), as brain.lua names them.
 const char* const kDrivingEventNames[driving::kEventKindCount] = {
     "parked", "no_route", "cannot_park", "missed_turn", "crashed", "ended_early",
+    "got_up",   // (a wreck cleared: its driver gets up and goes on without the car)
 };
 constexpr uint32_t kIndexMask = (1u << RoadPlaces::kIndexBits) - 1;
 }  // namespace

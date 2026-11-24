@@ -39,7 +39,8 @@
 
 #include "engine/procgen/city/roads/lane_graph.h"
 #include "apps/driving/announce.h"        // the board: who will be on which crossing point, and when
-#include "apps/driving/conflict.h"        // who goes first where two cars' paths meet: the one resolver
+#include "apps/driving/conflict.h"        // who goes first where two cars' paths meet: the questions
+#include "apps/driving/contact.h"         // body against body: contacts and crashes (sitting 7)
 #include "apps/driving/decide.h"
 #include "apps/driving/give_way.h"        // judging the gaps a driver gives way by
 #include "apps/driving/junction_plan.h"   // each driver's plan for the junctions ahead
@@ -222,10 +223,11 @@ enum class EventKind : uint8_t {
     NoRoute,       // there is no way from where the car is to the destination
     CannotPark,    // the car reached its destination and found nowhere to leave it
     MissedTurn,    // the car missed a turn and was routed again (for the driver card; the host need not act)
-    Crashed,       // the car hit something
+    Crashed,       // the car hit something: its trip is over, and it stands where it is as a wreck
     EndedEarly,    // the host ended the trip before it arrived (endTrip)
+    WreckCleared,  // a wreck's time is up: the driving has taken it off the road (the host puts the car back somewhere)
 };
-constexpr uint8_t kEventKindCount = 6;
+constexpr uint8_t kEventKindCount = 7;
 
 struct Event {
     EventKind kind = EventKind::Parked;
@@ -446,6 +448,22 @@ public:
         uint64_t stoppedInLane = 0;   // trips meant to end in a space that began too near it to pull in: ended in the lane
     };
     const KerbMoveCounts& kerbMoveCounts() const { return kerbMoveCounts_; }
+    // CONTACT AND CRASHES (two-drivers-meeting-design.md section 8, sitting 7), in the middle tier: every tick the bodies
+    // of the cars on the road are tested against each other (contact.h). A new contact -- two bodies that were apart last
+    // tick, one of them driven -- is counted, then a seeded roll (the pair and the tick) against the rule set's
+    // crash_chance says whether it is a crash. A crash ends each driven car's trip (a Crashed event for its person) and
+    // leaves it standing where it is as a WRECK: an undriven car in the road, which drivers behind see as a thing in
+    // their way (things.h) and follow to a stop, go round, or find another way past. After the rule set's wreck_seconds
+    // it is cleared: taken off the road, a WreckCleared event for the host. Off when the rule set lacks the numbers.
+    struct CrashCounts {
+        uint64_t contacts = 0;   // new contacts between two bodies (one of them driven)
+        uint64_t crashes = 0;    // ...of which rolled a crash
+        uint64_t wrecks = 0;     // cars left as wrecks
+        uint64_t cleared = 0;    // wrecks cleared
+    };
+    const CrashCounts& crashCounts() const { return crashCounts_; }
+    bool isWreck(CarId car) const { return wrecks_.count(car) != 0; }
+    bool crashStep() const { return crashesOn_; }
     // TRIPS ARRIVED, and the time they took against their routes' free-flow time when begun (a measure that compares two
     // runs sending cars on different trips: arrivals alone do not).
     struct TripTimes {
@@ -756,6 +774,22 @@ private:
     Indicating mergeWait(const Car& c) const;
     LaneChangeCounts laneChangeCounts_;
     KerbMoveCounts kerbMoveCounts_;
+    // CONTACT AND CRASHES (sitting 7)
+    struct Wreck {
+        uint64_t clearAtTick = 0;
+        PersonId person = 0;
+    };
+    void crash();                                    // the step, after the move
+    void wreck(Car& c);                              // a driven car in a crash: its trip over, a wreck where it stands
+    bool crashesOn_ = false;
+    Real crashChance_ = 0, wreckSeconds_ = 0;
+    CrashCounts crashCounts_;
+    std::map<CarId, Wreck> wrecks_;
+    std::set<std::pair<uint32_t, uint32_t>> touching_;   // the pairs of bodies touching last tick
+    std::vector<PlanBody> crashBodies_;
+    std::vector<std::size_t> crashBodyRecord_, crashSweep_;
+    std::vector<BodyContact> crashContacts_;
+    std::vector<RoadThing> seenThings_;              // the host's things and the undriven cars standing on the roads
     // the cars moving across into the lane beside, or out of or into a kerb space, and each one's move
     std::map<CarId, LaneMove> laneMoves_;
     std::set<CarId> inSpace_;   // the undriven cars whose last trip ended in a kerb space (they drive out of it first)

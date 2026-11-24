@@ -322,6 +322,9 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
                     static_cast<unsigned long long>(k.pulledOut), static_cast<unsigned long long>(k.pulledIn),
                     static_cast<unsigned long long>(k.stoppedInLane), static_cast<double>(b.counts().worstKerbHandOver), b.counts().putInSpace);
     }
+    std::printf("    [crowd] contact: %llu new contacts, %llu crashes, %llu wrecks, %llu cleared\n",
+                static_cast<unsigned long long>(d.crashCounts().contacts), static_cast<unsigned long long>(d.crashCounts().crashes),
+                static_cast<unsigned long long>(d.crashCounts().wrecks), static_cast<unsigned long long>(d.crashCounts().cleared));
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
 
     // NO RING OF WAITS AT ANY MINUTE: a ring is cars each waiting on the next, which nothing can end (the wait-for graph,

@@ -1187,12 +1187,14 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // And again (sitting 6: junctions by judgement) to in 113, out 92, 0xe9fff1fe55f83570 (the most near the same, 20
     // at minute 9). Contacts 0; the longest off its lane 7.9 -> 2.9 s (passes); hits on walkers 0 -> 12 and on other
     // things 0 -> 19 are BACK, as at bug 4 above: trajectories, not the change (#329).
-    CHECK(mostNear == 20);
-    CHECK(mostNearAt == 9);
+    // And again (sitting 7: contact and crashes; a car nobody drives standing on a lane is a thing in drivers' way) to 23
+    // at minute 12, in 113, out 89, 0xa1a0f672f35848e0. Contacts 0; hits on walkers 12 -> 8, on other things 19 -> 10 (#329).
+    CHECK(mostNear == 23);
+    CHECK(mostNearAt == 12);
     CHECK(c.intoPhysics == 113u);
-    CHECK(c.intoLane == 92u);
+    CHECK(c.intoLane == 89u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xe9fff1fe55f83570ull);
+    CHECK(hash == 0xa1a0f672f35848e0ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

@@ -489,6 +489,7 @@ struct CityBrain::Impl {
     void tickDay(AgentId who);
     void tickChoice(AgentId who);
     void parkInSpace(Car c, PlaceRef space);
+    void towAway(Car c);
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
     void outsiderTook(Car c, bool lost);
@@ -1024,6 +1025,37 @@ void CityBrain::Impl::parkInSpace(Car c, PlaceRef space) {
     ++counts.parkedInSpace;
 }
 
+// A WRECK CLEARED (sitting 7; two-drivers-meeting-design.md section 8): the driving has taken it off the road; it is
+// towed to the nearest free kerb space to where it stood (a tow truck later), and its household is told. Nobody holds
+// it: its driver got out at the crash and went on without it. No free space near: it stands where it was, stranded.
+void CityBrain::Impl::towAway(Car c) {
+    syncLane(c);
+    CityCarKept& k = keptOf(c);
+    k.phase = CarPhase::Standing;
+    k.tripWanted = false;
+    k.spaceFront = driving::PathPoint();
+    const uint32_t number = numberOf(c);
+    CarRef ref;
+    ref.id = number;
+    for (const PlaceRef space : spaces->spacesNear(carPos(c), kSpaceReach, kSpacesLookedAt)) {
+        if (!spaceFree(space, ref, brain::kNoAgent)) continue;
+        engine::KerbSpacePose pose;
+        Vec2 kerbward;
+        if (!spacePose(space, pose, kerbward)) continue;
+        leaveEverySpace(c);
+        occupant[space.id] = number;
+        writeCarPose(c, pose.at, pose.facing);
+        k.standing = space;
+        k.stranded = false;
+        ++counts.towed;
+        tellHousehold(c, brain::kNoAgent);
+        return;
+    }
+    k.standing = pointPlace(carPos(c));
+    k.stranded = true;
+    tellHousehold(c, brain::kNoAgent);
+}
+
 void CityBrain::Impl::tickCars() {
     for (const Car c : cars) {
         CityCarKept& k = keptOf(c);
@@ -1502,8 +1534,14 @@ void CityBrain::tick(Real dt) {
     im.followCars();   // (the driving has moved the cars on the road: their people with them, before anyone plans)
     // the driving's reports for the households' cars, taken from the hand-over (which drains the driving's events)
     const std::vector<driving::Event> events = im.sim.drivingHost_.takeGuestEvents();
-    for (const driving::Event& e : events)
+    for (const driving::Event& e : events) {
         if (e.kind == driving::EventKind::Parked) ++im.counts.parkedReports;
+        if (e.kind == driving::EventKind::WreckCleared) {   // (sitting 7: the wreck is towed to a kerb space near)
+            CarRef ref;
+            ref.id = e.car.index;
+            if (const Impl::Car c = im.car(ref); c.valid()) im.towAway(c);
+        }
+    }
     im.skill->report(*im.machine, events);
     im.tickRides();
     im.tickWalks(dt);

@@ -424,6 +424,12 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
             ++counts_.arrivals;
             arrived.push_back(e.car);
         }
+        if (e.kind == driving::EventKind::WreckCleared) {
+            // (sitting 7: the driving took the wreck off the road; it is put down again below, where it can drive from)
+            const engine::Entity w = entityOf(e.car);
+            if (carWorld_ && w.valid()) carWorld_->remove<CityCarOnLane>(w);
+            --counts_.placed;
+        }
     }
     for (const driving::CarId car : arrived) {
         const engine::Entity e = entityOf(car);
@@ -465,8 +471,8 @@ void DrivingHost::tick(driving::Driving& d, Real dt) {
             --counts_.placed;
             ++counts_.replaced;
             if (putDown(d, e, kMovingRoom)) sendOn(d, e);
-        } else if (!d.tripOf(car).valid()) {
-            // Arrived earlier but no destination was found then: try again.
+        } else if (!d.tripOf(car).valid() && !d.isWreck(car)) {
+            // Arrived earlier but no destination was found then: try again. (A wreck stands until it is cleared.)
             sendOn(d, e);
         }
     }

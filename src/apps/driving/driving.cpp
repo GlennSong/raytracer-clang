@@ -31,10 +31,85 @@ void Driving::tick(Real dt) {
         listsStale_ = false;
         settleClaims();
         move(dt);
+        if (crashesOn_) crash();
     }
     ++tickCount_;
     clockSeconds_ += dt;
     if (measurements_) measurements_->observe(*this);   // it only watches
+}
+
+// ---- CONTACT AND CRASHES (sitting 7) -----------------------------------------------------------------------------------
+
+void Driving::crash() {
+    // 1. Wrecks whose time is up are cleared: off the road, and the host told.
+    for (std::map<CarId, Wreck>::iterator w = wrecks_.begin(); w != wrecks_.end();) {
+        if (tickCount_ < w->second.clearAtTick) {
+            ++w;
+            continue;
+        }
+        const CarId id = w->first;
+        const PersonId person = w->second.person;
+        w = wrecks_.erase(w);
+        if (car(id) && tripOfCar_.count(id) == 0) removeCar(id);
+        queueEvent(EventKind::WreckCleared, id, TripId{}, person);
+        ++crashCounts_.cleared;
+    }
+    // 2. Every body against every other (contact.h), at the class's size.
+    crashBodies_.clear();
+    crashBodyRecord_.clear();
+    for (std::size_t r = 0; r < cars_.size(); ++r) {
+        const Car& c = cars_[r];
+        if (!c.path.valid() || c.path.index >= roads_->paths.size() || c.vehicleClass >= vehicleClasses_.size()) continue;
+        const VehicleClass& cls = vehicleClasses_.at(c.vehicleClass);
+        crashBodies_.push_back(planBody(c.id, carPose(*roads_, vehicleClasses_, ruleSet_, c), cls.length, cls.width));
+        crashBodyRecord_.push_back(r);
+    }
+    findContacts(crashBodies_, crashSweep_, crashContacts_);
+    // 3. A new contact is counted and rolled for: a crash leaves its driven cars as wrecks.
+    std::set<std::pair<uint32_t, uint32_t>> now;
+    std::vector<CarId> crashed;
+    for (const BodyContact& k : crashContacts_) {
+        const Car& a = cars_[crashBodyRecord_[k.a]];
+        const Car& b = cars_[crashBodyRecord_[k.b]];
+        const std::pair<uint32_t, uint32_t> key(a.id.index, b.id.index);
+        now.insert(key);
+        if (touching_.count(key) != 0) continue;   // (the same contact, going on)
+        if (!a.driven && !b.driven) continue;      // (two cars nobody drives: placed so by the host)
+        ++crashCounts_.contacts;
+        engine::bundle::Fnv h;
+        h.pod(key.first);
+        h.pod(key.second);
+        h.pod(tickCount_);
+        const double roll = static_cast<double>(h.h >> 11) * (1.0 / 9007199254740992.0);   // [0, 1)
+        if (!(roll < static_cast<double>(crashChance_))) continue;
+        ++crashCounts_.crashes;
+        if (a.driven) crashed.push_back(a.id);
+        if (b.driven) crashed.push_back(b.id);
+    }
+    touching_.swap(now);
+    for (const CarId id : crashed)
+        if (Car* c = findPlaced(id); c && c->driven) wreck(*c);
+}
+
+void Driving::wreck(Car& c) {
+    const std::map<CarId, TripId>::iterator ti = tripOfCar_.find(c.id);
+    PersonId person = 0;
+    if (ti != tripOfCar_.end()) {
+        if (const Trip* t = trips_.get(ti->second)) person = t->person;
+        queueEvent(EventKind::Crashed, c.id, ti->second, person);
+        trips_.erase(ti->second);
+        tripOfCar_.erase(ti);
+    }
+    leaveParked(c);   // (where it stands, at rest: a crash stops it)
+    laneMoves_.erase(c.id);
+    indicating_.erase(c.id);
+    lettingIn_.erase(c.id);
+    droppingBack_.erase(c.id);
+    Wreck w;
+    w.clearAtTick = tickCount_ + static_cast<uint64_t>(std::ceil(wreckSeconds_ / std::max(step_, Real(1e-6))));
+    w.person = person;
+    wrecks_[c.id] = w;
+    ++crashCounts_.wrecks;
 }
 
 void Driving::attachMeasurements(Measurements* m) {
@@ -181,6 +256,15 @@ bool Driving::useRules(RuleSet ruleSet, FactRegistry facts, AnswerVocabulary voc
         hornAction_ = vocabulary.findAction(kActionHorn);
         passKind_ = vocabulary.findIntention(kIntentionPass);
         wayKind_ = vocabulary.findIntention(kIntentionWay);
+    }
+    // CONTACT AND CRASHES (sitting 7): on where the rule set gives the chance of a contact being a crash and how long a
+    // wreck stands.
+    {
+        const Number* chance = ruleSet.findNumber(kNumberCrashChance);
+        const Number* seconds = ruleSet.findNumber(kNumberWreckSeconds);
+        crashesOn_ = chance && seconds && chance->value > 0 && seconds->value > 0;
+        crashChance_ = chance ? static_cast<Real>(chance->value) : Real(0);
+        wreckSeconds_ = seconds ? static_cast<Real>(seconds->value) : Real(0);
     }
     // LANE CHANGES (lane_change.h; sitting 5), when the registry has the step: its numbers and its answer. It moves cars
     // across only where their routes plan changes (DrivingSettings::laneChanges).
@@ -600,6 +684,25 @@ void Driving::plan() {
     const uint32_t every = settings_.decideEveryTicks(step_);   // the decide interval in ticks of this tick's length
     planned_.clear();
     if (thingsOn_) crosswalkPeople_.fill(things_, model_ ? model_->crosswalks.size() : 0);   // (ADR-0452)
+    // WHAT DRIVERS SEE IN THEIR WAY (things.h): the host's things, and every car nobody here drives standing on a lane --
+    // a wreck, a car left in the road -- as things.h always named them (sitting 7). A driver follows one to a stop as a
+    // car ahead, and as a thing honks, goes round it where there is room, or after waiting finds another way past (a car
+    // left parked just past a junction stood the queue behind it for good: #326). Numbered apart from the host's things.
+    seenThings_.clear();
+    if (thingsOn_) {
+        seenThings_ = things_;
+        for (const Car& c : cars_) {
+            if (c.driven || carried_.count(c.id) || !c.path.valid() || c.path.index >= roads_->paths.size() ||
+                c.vehicleClass >= vehicleClasses_.size() || roads_->paths[c.path.index].kind != engine::PathKind::Lane)
+                continue;
+            const CarPose pose = carPose(*roads_, vehicleClasses_, ruleSet_, c);
+            RoadThing th;
+            th.id = kCarThingBit | c.id.index;
+            th.at = engine::Vec2((pose.front.x + pose.rear.x) * Real(0.5), (pose.front.z + pose.rear.z) * Real(0.5));
+            th.halfAcross = vehicleClasses_.at(c.vehicleClass).width * Real(0.5);
+            seenThings_.push_back(th);
+        }
+    }
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         const Car& c = cars_[i];
         const Trip* t = trips_.get(tripOfRecord_[i]);
@@ -710,7 +813,7 @@ void Driving::plan() {
                 const std::vector<engine::PathId> after(p.way.paths.size() > 1 ? p.way.paths.begin() + 1 : p.way.paths.end(),
                                                         p.way.paths.end());
                 things.thing = findThingAhead(*roads_, c.path, c.along, after, lookAhead, cls.width * Real(0.5), c.offset,
-                                              passClearance_, things_, c.speed);
+                                              passClearance_, seenThings_, c.speed);
             }
             ThingWatch& w = watch_[c.id];
             if (!things.thing.found || things.thing.id != w.id) {
@@ -2175,6 +2278,14 @@ uint64_t Driving::stateHash() const {
         if (r.second.kerb) h.pod(r.second.to);   // (pulling out of or into a kerb space: a run with none hashes as before)
     }
     for (const CarId id : inSpace_) h.pod(id.index);   // (standing in a kerb space)
+    for (const std::pair<const CarId, Wreck>& w : wrecks_) {   // (wrecks, sitting 7: a run with none hashes as before)
+        h.pod(w.first.index);
+        h.pod(w.second.clearAtTick);
+    }
+    for (const std::pair<uint32_t, uint32_t>& k : touching_) {
+        h.pod(k.first);
+        h.pod(k.second);
+    }
     if (changingLanes()) {   // (letting in, sitting 5)
         for (const std::pair<const CarId, Indicating>& r : indicating_) {
             h.pod(r.first.index);
