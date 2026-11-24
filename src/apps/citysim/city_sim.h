@@ -914,7 +914,8 @@ public:
     // households' cars are entities of `world` (ADR-0444; city_car.h). brain(): null when there is none.
     bool startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                     const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-                    const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly = false);
+                    const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
+                    bool drivableSpacesOnly = false);
     CityBrain* brain() const { return brain_.get(); }
     // A DIRECTOR TAKES ONE OF THE BRAIN'S PEOPLE OVER, OR LETS THEM GO (ADR-0443; the possession channel,
     // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until

@@ -132,6 +132,8 @@ constexpr Real kMarkerPostOffset = 2.0;
 // pair of shoulders), to one side and the other in turn: the first resident on the marker's own spot, the second
 // kStandApart one way along the street, the third as far the other way, and so on.
 constexpr Real kStandApart = 0.9;
+// ...and a marker has this many spots, one person each: no more people than this use one marker.
+constexpr std::size_t kMarkerSpots = 256;
 // A CAR SOMEBODY ELSE LEFT IS "IN" A KERB SPACE when its middle is within this of where a car in that space stands
 // (half a space's width: its body is then mostly inside the painted bay).
 constexpr Real kLeftInSpaceWithin = 1.25;
@@ -211,9 +213,12 @@ public:
     // with the reason in `report`: nothing is left behind. On success `report` says what was set up.
     // `drivableSpacesOnly` (ADR-0446; citysim.drivableSpacesOnly): offer only kerb spaces a car can drive away from
     // and back to (the kerb lane beside them in the largest part of the road its class drives).
+    // `agentOf` (ADR-0490): resident r is the sim's agent agentOf[r] (the city's own households, brain_people.h);
+    // empty, each is the next of the sim's walkers in order (a level's hand-written residents, test data).
     bool start(engine::World& world, const std::vector<engine::CityMarker>& markers,
                const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-               const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly = false);
+               const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
+               bool drivableSpacesOnly = false);
     // One tick, after the driving's: reports in, skills stepped, the machine ticked, the day tables.
     void tick(Real dt);
 

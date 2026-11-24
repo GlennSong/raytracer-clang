@@ -47,6 +47,7 @@ constexpr uint32_t kMarkerIndexMask = 0x0000FFFFu;
 constexpr uint32_t kMarkerSpotShift = 16;
 constexpr uint32_t kMarkerSpotMask = 0xFFu;
 constexpr std::size_t kMostResidents = kMarkerSpotMask + 1;   // the spots one marker has (one person each)
+static_assert(kMostResidents == kMarkerSpots, "city_brain.h kMarkerSpots is the spots a marker has");
 // The first this many residents stand on the spot of their own number at every marker (Impl::takeSpot).
 constexpr uint32_t kSpotsByNumber = 8;
 // The car a test puts in a space (occupyForTest): no car of the households.
@@ -156,6 +157,7 @@ struct CityBrain::Impl {
         int agent = -1;
         std::string name;
         int household = -1;
+        bool drives = true;   // false: their household's cars are not theirs to take (CityResident::drives)
         WalkPhase walk = WalkPhase::None;
         brain::WayId way = brain::kNoId;
         Vec2 target;
@@ -576,6 +578,7 @@ struct CityBrain::Impl::LabWorld : brain::World {
     // one they had in mind (so the plan can say "in use"), or the household's first.
     CarRef carOffered(AgentId who, CarRef has, Vec2 from) const override {
         if (who >= im.people.size() || im.people[who].household < 0) return has;
+        if (!im.people[who].drives) return CarRef{};   // (a child, a student: no car is theirs)
         const Household& h = im.households[static_cast<std::size_t>(im.people[who].household)];
         CarRef best;
         Real bestD2 = 0;
@@ -1259,7 +1262,8 @@ CityBrain::~CityBrain() = default;
 
 bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker>& markerSpecs,
                       const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& householdSpecs,
-                      const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly) {
+                      const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
+                      bool drivableSpacesOnly) {
     Impl& im = *impl_;
     CitySim& sim = im.sim;
     im.drivableSpacesOnly = drivableSpacesOnly;
@@ -1362,11 +1366,26 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             return refuse("marker \"" + im.markers[m].name + "\" is used by more residents than its " +
                           std::to_string(kMostResidents) + " spots");
 
-    // THE RESIDENTS, checked before anything is made: each a walker the level made, in the order it made them
+    // THE RESIDENTS, checked before anything is made: each the sim's agent who is them (the city's own households,
+    // ADR-0490), or a walker the level made, in the order it made them (hand-written residents)
     std::vector<int> agents;
-    for (std::size_t i = 0; i < sim.agents_.size() && agents.size() < residents.size(); ++i) {
-        const Agent& a = sim.agents_[i];
-        if (!a.released && !a.playerControlled) agents.push_back(static_cast<int>(i));
+    if (!agentOf.empty()) {
+        if (agentOf.size() != residents.size())
+            return refuse(std::to_string(residents.size()) + " residents and " + std::to_string(agentOf.size()) + " agents for them");
+        std::vector<bool> taken(sim.agents_.size(), false);
+        for (const int i : agentOf) {
+            if (i < 0 || i >= static_cast<int>(sim.agents_.size()) || taken[static_cast<std::size_t>(i)])
+                return refuse("resident's agent " + std::to_string(i) + " is not one of the sim's, or is two residents");
+            const Agent& a = sim.agents_[static_cast<std::size_t>(i)];
+            if (a.released || a.playerControlled) return refuse("resident's agent " + std::to_string(i) + " is somebody else's");
+            taken[static_cast<std::size_t>(i)] = true;
+            agents.push_back(i);
+        }
+    } else {
+        for (std::size_t i = 0; i < sim.agents_.size() && agents.size() < residents.size(); ++i) {
+            const Agent& a = sim.agents_[i];
+            if (!a.released && !a.playerControlled) agents.push_back(static_cast<int>(i));
+        }
     }
     if (agents.size() < residents.size())
         return refuse("the level states " + std::to_string(residents.size()) + " residents and made " + std::to_string(agents.size()) +
@@ -1397,6 +1416,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         Impl::Person person;
         person.agent = agents[r];
         person.name = resident.name;
+        person.drives = resident.drives;
         person.intentKind = m.intent;
         im.people.push_back(person);
     }
@@ -1496,7 +1516,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         const BrainMarker& homeMarker = im.markers[static_cast<std::size_t>(made[r].home)];
         const PlaceRef homePlace = im.markerPlace(made[r].home, id);
         CarRef carRef;
-        if (person.household >= 0 && !im.households[static_cast<std::size_t>(person.household)].cars.empty())
+        if (person.drives && person.household >= 0 && !im.households[static_cast<std::size_t>(person.household)].cars.empty())
             carRef.id = im.households[static_cast<std::size_t>(person.household)].cars.front();
         {
             Agent& a = sim.agents_[static_cast<std::size_t>(person.agent)];
@@ -2036,9 +2056,10 @@ bool CityBrain::directorHolds(int agent, bool on) {
 
 bool CitySim::startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                          const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
-                         const std::vector<int>& classOfSlot, std::string* report, bool drivableSpacesOnly) {
+                         const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
+                         bool drivableSpacesOnly) {
     std::shared_ptr<CityBrain> made = std::make_shared<CityBrain>(*this);
-    if (!made->start(world, markers, residents, households, classOfSlot, report, drivableSpacesOnly)) return false;
+    if (!made->start(world, markers, residents, households, agentOf, classOfSlot, report, drivableSpacesOnly)) return false;
     brain_ = std::move(made);
     return true;
 }

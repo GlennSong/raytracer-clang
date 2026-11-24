@@ -128,3 +128,20 @@ people.crossing = {
   bolder_per_second = 0.1, bolder_floor = 0.5,
   jaywalk_gap = 1.5, jaywalk_share = 0.03,
 }
+
+-- WHAT THE AGENT BRAIN'S PEOPLE OWN AND DO (ADR-0490: the brain runs people of the city's own households -- the
+-- households above, in the city's real dwellings -- on a level that names `citysim.brainPeople`).
+--   cars    { cars, share }: how many cars a household owns, never more than its members who may drive (a stage
+--           without `walks`). The design of 2026-11-11 asks for car ownership of 60% or more [~ estimate]
+--   traits  { <travel.lua trait> = share }: the share of people who have each (a board, a scooter) [~ estimate]
+--   intent  what they want at each place: a row of brain.lua's `intents`
+--   day     FOR NOW, until the brain plans from the roles' day tables (who works where and when, opening hours):
+--           someone with a job goes to it, stays `work_minutes` (a seeded number in the band) and comes home; they
+--           first wait at home `home_minutes`, so people leave home over that band. Everyone else stays home. Short
+--           minutes, so a test sees the whole round in half an hour of the clock (they were crowd.lua's days).
+people.brain = {
+  cars = { { cars = 0, share = 0.33 }, { cars = 1, share = 0.60 }, { cars = 2, share = 0.07 } },
+  traits = { has_board = 0.08, has_scooter = 0.05 },
+  intent = "be_outside_at",
+  day = { work_minutes = { 1, 4 }, home_minutes = { 0, 8 } },
+}

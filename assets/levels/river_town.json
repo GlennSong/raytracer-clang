@@ -8,7 +8,7 @@
   "busStops": 14,
   "buses": 0,
   "cars": 0,
-  "crowd": "crowd_river_town.lua",
+  "brainPeople": 630,
   "drivableSpacesOnly": true,
   "drivingRules": "rules/lab.lua",
   "near": {

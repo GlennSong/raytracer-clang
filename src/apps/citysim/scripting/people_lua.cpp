@@ -1,5 +1,7 @@
 #include "people_lua.h"
 
+#include <algorithm>
+
 #include "../../../engine/scripting/lua_helpers.h"
 #include "../../../engine/scripting/script_vm.h"
 
@@ -235,6 +237,52 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         k.bolderFloor = numField(L, d, "bolder_floor", k.bolderFloor);
         k.jaywalkGap = numField(L, d, "jaywalk_gap", k.jaywalkGap);
         k.jaywalkShare = numField(L, d, "jaywalk_share", k.jaywalkShare);
+    }
+    lua_pop(L, 1);
+    // people.brain (optional): what the agent brain's people own and do (ADR-0490)
+    lua_getfield(L, pt, "brain");
+    if (lua_istable(L, -1)) {
+        const int b = lua_gettop(L);
+        citysim::BrainPeopleRules& k = c.brain;
+        k.given = true;
+        k.intent = strField(L, b, "intent");
+        lua_getfield(L, b, "cars");
+        if (lua_istable(L, -1)) {
+            const int ct = lua_gettop(L);
+            for (lua_Integer i = 1;; ++i) {
+                lua_rawgeti(L, ct, i);
+                if (!lua_istable(L, -1)) { lua_pop(L, 1); break; }
+                const int row = lua_gettop(L);
+                k.cars.push_back({static_cast<int>(numField(L, row, "cars", 0)), numField(L, row, "share", 0)});
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, b, "traits");
+        if (lua_istable(L, -1)) {
+            const int tt = lua_gettop(L);
+            lua_pushnil(L);
+            while (lua_next(L, tt)) {
+                if (lua_type(L, -2) == LUA_TSTRING && lua_isnumber(L, -1))
+                    k.traits.push_back({lua_tostring(L, -2), lua_tonumber(L, -1)});
+                lua_pop(L, 1);
+            }
+            // (lua_next's order is not one: by name)
+            std::sort(k.traits.begin(), k.traits.end());
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, b, "day");
+        if (lua_istable(L, -1)) {
+            const int dt = lua_gettop(L);
+            int lo = 0, hi = 0;
+            if (range(L, dt, "work_minutes", lo, hi)) { k.workLo = lo; k.workHi = hi; }
+            if (range(L, dt, "home_minutes", lo, hi)) { k.homeLo = lo; k.homeHi = hi; }
+        }
+        lua_pop(L, 1);
+        for (const std::pair<int, double>& row : k.cars)
+            if (row.first < 0 || row.second < 0) return bail("brain.cars: a row with fewer than 0 cars or a share under 0");
+        if (k.intent.empty()) return bail("brain: no `intent`");
+        if (k.workHi < k.workLo || k.homeHi < k.homeLo) return bail("brain.day: a band whose top is under its bottom");
     }
     lua_pop(L, 1);
     lua_settop(L, base);

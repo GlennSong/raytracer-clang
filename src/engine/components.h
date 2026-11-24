@@ -1058,6 +1058,8 @@ struct CityResident {
     std::string home;
     std::string intent;
     std::vector<std::string> traits;
+    // false: they never drive (a child, a student; ADR-0490): their household's cars are not theirs to take ("drives")
+    bool drives = true;
     struct Stop {
         std::string at;
         double minutes = 0;
@@ -1160,6 +1162,10 @@ struct CitySimConfig {
     // assets/scripts whose `crowd` table says how many residents, their households, cars, places and days; they are
     // made when the city is built and added to the markers, residents and households above. Empty: none.
     std::string crowd;
+    // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490; apps/citysim/brain_people.h): `"brainPeople": 630` has the
+    // agent brain run whole households of the people the city's dwellings were filled with, up to that many people,
+    // added to what the level states. 0: none.
+    int brainPeople = 0;
     // `"drivableSpacesOnly": true` (ADR-0446): the brain offers its households only kerb spaces a car can drive away
     // from and back to (apps/citysim/city_brain.h). brain_lab, built before it, does not ask.
     bool drivableSpacesOnly = false;

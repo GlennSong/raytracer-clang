@@ -629,6 +629,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_brain.cpp      # the resident with the agent brain: the world, walking and driving for real (ADR-0441)
     src/apps/citysim/city_brain_system.cpp   # ...seen and told: brain?, goto, the markers and the plan drawn
     src/apps/citysim/city_crowd.cpp      # a crowd of residents, their places and days, made from the roads (ADR-0446)
+    src/apps/citysim/brain_people.cpp    # the brain's people from the city's own households (ADR-0490)
     src/apps/citysim/city_traffic_audio.cpp   # ambient traffic engine note (voice pool)
     src/apps/citysim/city_meshes.cpp
 )

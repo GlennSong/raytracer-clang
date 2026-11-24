@@ -1,9 +1,9 @@
 // RIVER TOWN ON THE NEW DRIVING (ADR-0457; #306, deleting the old driving, piece B).
 //
 // Loads assets/levels/river_town.json through the real LevelLoader and CityRenderSystem (a NullRenderer underneath): the
-// town's roads and lots, and a crowd made when the level loads from assets/scripts/crowd_river_town.lua and the road model
-// (city_crowd.h, the same reader and maker as brain_crowd's crowd.lua): residents in households, the households' cars in
-// kerb spaces near home, each person a day round places spread along the streets. The new driving drives their cars;
+// town's roads and lots, and 630 of the people its dwellings were filled with, whole households of them, run by the agent
+// brain (ADR-0490, brain_people.h; the level's `citysim.brainPeople`): each at home in their real building, the households'
+// cars in kerb spaces near home, a worker's day to their own job and home again. The new driving drives their cars;
 // the old driving drives nothing (no v1 cars, buses or cabs). The city is stepped as the viewer steps it, 60 times a
 // second, for kRiverMinutes of the day (RT_CROWD_MINUTES for another stretch; the pins then do not apply).
 //
@@ -86,6 +86,30 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                 "(%.0f before)\n",
                 b.residentCount(), households, b.cars().size(), withCar, b.markers().size(), sim.agents().size(), walkers,
                 d.carCount(), mbLoaded, mb0);
+    // THE PEOPLE ARE THE CITY'S OWN (ADR-0490): every brain person is the sim agent of a household the city's dwellings
+    // were filled with -- the brain's household of the same number -- and that household's home is a home: a dwelling of
+    // its building, or a hall's bed
+    {
+        int notTheirs = 0, notAHome = 0;
+        const citysim::HouseholdPlan& plan = sim.households();
+        const citysim::PlaceMap& places = lc.city.places();
+        for (int who = 0; who < b.residentCount(); ++who) {
+            const int agent = b.residentAgent(who);
+            const int h = agent >= 0 ? sim.agents()[static_cast<std::size_t>(agent)].household : -1;
+            if (h < 0 || b.householdName(who) != "h" + std::to_string(h)) {
+                ++notTheirs;
+                continue;
+            }
+            const citysim::Household& hh = plan.households[static_cast<std::size_t>(h)];
+            const bool home = hh.place != citysim::kNoPlace && places[hh.place].type == citysim::PlaceType::Home &&
+                              (hh.dwelling != citysim::Household::kNoDwelling || hh.type == citysim::Household::kHall);
+            notAHome += home ? 0 : 1;
+        }
+        std::printf("    [river] the brain's people: %d not a household's own agent, %d whose household's home is no dwelling\n",
+                    notTheirs, notAHome);
+        CHECK(notTheirs == 0);
+        CHECK(notAHome == 0);
+    }
     // THE ROADS THE NEW DRIVING HAS: the model's junctions and streets, and its lane level's paths
     std::printf("    [river] the road model: %zu junctions, %zu streets, %zu lane-level paths; the sim's walk points %d\n",
                 d.model()->junctions.size(), d.model()->streets.size(), d.roads()->paths.size(), sim.walkPoints().nodeCount());
@@ -357,21 +381,32 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // RE-PINNED when the buses drive their lines (ADR-0483): 6 buses on the 3 lines of its road file, each driving to
     // its next stop, standing there 20 s, and on. The most on the road 111 -> 120 (still minute 11: the buses among
     // them); arrivals 663 -> 665; trips and parked the same (316, 229). Nobody rides them yet (step 4).
+    // RE-PINNED when the brain took its people from the city's own households (ADR-0490; the one-brain plan's step 1):
+    // the crowd generator's 630 invented residents at invented places became 630 people of 343 of the households its
+    // dwellings were filled with (drawn in a seeded order; 84 more were passed over, their home with too few kerb spaces
+    // for their cars or walked to from nowhere), at home in their real buildings, a worker going to their own job (329 of
+    // them) and home, everyone else staying home. Households 582 -> 343, cars 397 -> 180 (a child or a hall student
+    // drives none), residents with one 427 -> 263, markers 799 -> 284 (one per real home or job used). The crowd's days
+    // sent 94% of people to work at least 900 m away; real jobs are mostly near, so most walk: trips by car 433 -> 92,
+    // parked 277 -> 69, the most on the road 206 at minute 10 -> 37 at minute 21, arrivals 597 -> 1282; walks blocked
+    // 2 -> 0, another place 1 -> 0, no plan 1 -> 0. Touching spells 2 -> 0 (#327's check passes on this run).
+    // A NEW FAILURE, the bus's: a motorcycle (car 118) stands at junction 62's far turn from minute 6 with bus 6 behind
+    // it, for the sim's own walkers standing at rest in the carriageway across the turn (#333).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
-        CHECK(households == 582);
-        CHECK(b.cars().size() == 397u);
-        CHECK(withCar == 427);
-        CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 206);
-        CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 433u);
-        CHECK(b.counts().parkedReports == 277u);
-        CHECK(b.counts().walksBlocked == 2u);   // (lane changes on: was 0; #327)
-        CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 597u);
-        CHECK(b.machine()->counts().noPlans == 1u);   // (lane changes on: was 0; #327)
-        // STILL FAILING with lane changes on (2 spells): #327
+        CHECK(households == 343);
+        CHECK(b.cars().size() == 180u);
+        CHECK(withCar == 263);
+        CHECK(b.markers().size() == 284u);
+        CHECK(mostOnRoad == 37);
+        CHECK(mostOnRoadAt == 21);
+        CHECK(b.counts().tripsBegun == 92u);
+        CHECK(b.counts().parkedReports == 69u);
+        CHECK(b.counts().walksBlocked == 0u);
+        CHECK(b.counts().otherPlaces == 0u);
+        CHECK(b.machine()->counts().arrivals == 1282u);
+        CHECK(b.machine()->counts().noPlans == 0u);
+        // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -428,19 +463,24 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 612 -> 597, bus calls 166 -> 165; the longest a bus stood in the road 99 s -> 117 s (passes)
         // 0x537a4261659664d2 -> 0x982f4b5f055d37a8 (#328: as brain_crowd's; buses end at their stops in the kerb lane):
         // every count the same
-        CHECK(hash == 0x982f4b5f055d37a8ull);
+        // 0x982f4b5f055d37a8 -> 0x0c184c57be58cc6a (ADR-0490: the brain's people are the city's own households): the
+        // counts above, and the buses' below
+        CHECK(hash == 0x0c184c57be58cc6aull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 165u);
+        CHECK(sim.drivingHost().counts().busCalls == 147u);   // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333)
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
+        // FAILING since ADR-0490: bus 6, 1308 s, behind car 118 at junction 62 (#333)
         CHECK(busStandTicks * kStep < 180.0);
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 25u && rc.boardings == 20u && rc.alightings == 19u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 21u && b.counts().busRides == 19u);
+            // (ADR-0490: fewer far trips, so fewer by bus: waits 25 -> 11, boardings 20 -> 3, got off 19 -> 2; the
+            // residents' waits 21 -> 3, rides 19 -> 2)
+            CHECK(rc.waits == 11u && rc.boardings == 3u && rc.alightings == 2u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 3u && b.counts().busRides == 2u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
     }

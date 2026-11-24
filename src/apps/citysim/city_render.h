@@ -99,6 +99,7 @@ struct CityRenderParams {
     std::vector<engine::CityResident> residents;     // the people with the agent brain (CitySimConfig::residents; city_brain.h)
     std::vector<engine::CityHousehold> households;   // ...and the households whose cars they share (ADR-0443)
     std::string crowd;   // a crowd made from the roads: crowd.lua's file (CitySimConfig::crowd; city_crowd.h, ADR-0446)
+    int brainPeople = 0;   // the city's own households' people the brain runs (CitySimConfig::brainPeople; ADR-0490)
     bool drivableSpacesOnly = false;   // kerb spaces a car can drive from and back to only (CitySimConfig, ADR-0446)
     bool ambientBus = false;               // ambient rotation includes the bus body (wheel_lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script

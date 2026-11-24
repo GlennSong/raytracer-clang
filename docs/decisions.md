@@ -24446,3 +24446,38 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 **Not done, and why lane changes are off by default:** on traffic_lab with them on the flow is far worse than without. At 300 s, 166 cars have arrived and 152 stand, against 400 arrived and 49 standing without them. Also still failing: 15,202 short spells standing with no reason and 311 small jumps (the worst 2.2 cm). On river_town and brain_crowd more people drive (car trips 321 → 434), and river_town's arrivals fall (672 → 594). So `city_sim` plans lane changes only with `RT_LANE_CHANGES=1`, and everything lane changes alter waits on that (`Driving::changingLanes`). Without it every level drives exactly as before: its pins hold. The flow is the next work; after it, merging by zipper and pulling out and in.
 
 **Indicators** are not drawn yet (the measurements' "indicator on before the move" row stays "not measured").
+
+## ADR-0490 — The agent brain runs the city's own households: real homes, real jobs, each person their own sim agent (one-brain plan, step 1; 2026-11-24)
+
+**Why:** the brain took the first N agents the old sim made and gave them the crowd generator's identity: an invented home, household, car and day at invented places. Each person's real home, job and role were ignored, so one person could be a shop worker to the old sim and somebody else to the brain. The alpha review (P1-5) and Glenn agreed on one brain, fed by the real households. The crowd generator goes in step 3.
+
+**Words:**
+- The *households* are what `planHouseholds` fills the city's real dwellings with (`households.h`): singles, couples, families, roommates, seniors, and students in hall beds. Each person has an age, a life stage and, for a worker, a job at a real place.
+- A *place's marker* is the brain's point beside a street for one of the city's places, named `place_<id>`. It sits where the place's door fronts the road, as the lot pass recorded it, or otherwise at the frontage nearest its entrance.
+
+**What happens** (`src/apps/citysim/brain_people.h`, `.cpp`):
+- **Who:** a level that names `citysim.brainPeople` (river_town: 630) has the brain run whole households, drawn in a seeded order, until that many people. The order is not the plan's own, because the plan fills the halls first and its head is all students.
+  - Each member is the sim agent `assignPlaces` matched to them. `CityBrain::start` takes the agent for each resident (`agentOf`), so no resident is "the next walker" any more.
+  - A level's hand-written residents (brain_lab) are still each the next walker: they are test data.
+- **Their home and cars:** the home is the household's own building, with one marker per building, which its households share. The household's cars, drawn from `people.lua` `people.brain.cars` and never more than its members who may drive, each hold a free kerb space near home, the brain's own list, as the crowd maker's homes did.
+- **Who may drive:** a person whose life stage `walks` (a child, a hall student) never drives (`CityResident::drives`, the JSON `"drives"`). The brain offers them no household car.
+- **Their day, for now:** someone with a job goes to their own workplace's door, stays `work_minutes` and comes home, after first waiting at home `home_minutes`. Everyone else stays home. The numbers are `people.brain.day`, crowd.lua's short minutes. Step 2 replaces this with the roles' day tables on the sim clock.
+- **Left out, and counted** (logged as "the brain's people from the households: ..."):
+  - a household whose home can't be walked to and from, or that has cars and fewer than 24 kerb spaces a car can drive from near home;
+  - a home or job marker with no spots left (`kMarkerSpots`, now in `city_brain.h`);
+  - a job that can't be walked to (that worker stays home);
+  - a car with no free space (the household has fewer cars).
+
+**Checked:**
+- river_town's test now also checks that every brain person is the sim agent of the household of the same name, and that the household's home is a dwelling or a hall bed (0 and 0).
+- 630 people in 343 households (84 passed over, all for their home), 180 cars, 329 workers, 284 markers. 0 errors, 0 refused, 0 rings of waits, 0 touching spells, nobody without a plan.
+
+**Regressions, re-pinned** (`tests/test_river_town_crowd.cpp`, old → new with the reason there):
+- Most real jobs are near home, so most people walk where the crowd's days sent 94% to work 900 m or more away:
+  - car trips 433 → 92
+  - the most on the road at once 206 → 37
+  - arrivals 597 → 1282
+  - bus riders 20 → 3 boardings
+- **One new failure:** a motorcycle at junction 62's far turn stands from minute 6 with a bus behind it (1308 s). The sim's own walkers stand at rest in the carriageway across the turn (#333).
+- The hash moved from `0x982f4b5f055d37a8` to `0x0c184c57be58cc6a`.
+- brain_crowd still uses the crowd generator until step 3.
