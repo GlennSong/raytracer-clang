@@ -141,7 +141,10 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
             const int st = agents[static_cast<std::size_t>(a)].stage;
             drivers += st >= 0 && !people.stages[static_cast<std::size_t>(st)].walks ? 1 : 0;
         }
-        const int cars = std::clamp(pickValue(rng, rules.cars, 0), 0, drivers);
+        // (no space finder: no driving on the level, so no household has a car; the draw is made all the same, so the
+        // seeded stream is the one it would be)
+        const int carsDrawn = std::clamp(pickValue(rng, rules.cars, 0), 0, drivers);
+        const int cars = spaces ? carsDrawn : 0;
         PlaceMarker& home = markerOf(hh.place);
         if (!home.resolved) {   // (no street beside its door: the brain has nowhere to put them)
             ++out.homesUnusable;

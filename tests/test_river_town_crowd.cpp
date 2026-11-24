@@ -587,11 +587,55 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // 2724; the player stands in the town's busiest, densest part: 1453 to 1836 within the 300 m ring, 736 to 809
     // between the rings, 39 to 135 near for a car); 3062 times lowered, 558 raised, 2906 far visits; 2823 set out, 2296
     // arrived, 1528 at work; nowhere 4, no way 30; the brain 0.98 ms a tick (worst 6.7).
+    // RE-PINNED when far walkers are drawn by the GPU crowd along their route (ADR-0495): one lowered part-way along a
+    // walk goes on from where they were (not the straight line between the leg's ends), and one raised is put where the
+    // crowd had them. The most far 2724 -> 2718; lowered 3062 -> 3070, raised 558 -> 568, far visits 2906 -> 2889; set
+    // out 2823 -> 2820, arrived 2296 -> 2293, at work 1528 -> 1521; 0x17ca8289b402619b -> 0xd898a2ec3bb6bbe9.
     if (kFarMinutes == 15) {
-        CHECK(mostFar == 2724);
-        CHECK(c.lowered == 3062u && c.raised == 558u && c.farVisits == 2906u);
-        CHECK(c.daySetOut == 2823u && c.dayArrivals == 2296u && c.dayToWork == 1528u);
-        CHECK(hash == 0x17ca8289b402619bull);
+        CHECK(mostFar == 2718);
+        CHECK(c.lowered == 3070u && c.raised == 568u && c.farVisits == 2889u);
+        CHECK(c.daySetOut == 2820u && c.dayArrivals == 2293u && c.dayToWork == 1521u);
+        CHECK(hash == 0xd898a2ec3bb6bbe9ull);
     }
 }
 
+
+// WITH NO DRIVING (ADR-0494): the same town with its rule set taken away, as the island and every level the new driving
+// does not drive yet are. The brain runs every household all the same: they walk (and would ride), nobody has a car,
+// and their role's day goes on -- out, to work inside their shift, home.
+TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
+    crowdtest::LoadedCrowd lc("river_town.json", [](engine::CitySimConfig& c) { c.drivingRules.clear(); });
+    CHECK(lc.ok);
+    if (!lc.ok) return;
+    citysim::CitySim& sim = lc.city.simMutable();
+    CHECK(!sim.drivingHost().active());
+    citysim::CityBrain* bp = sim.brain();
+    CHECK(bp != nullptr && bp->hasResident());
+    if (!bp || !bp->hasResident()) return;
+    citysim::CityBrain& b = *bp;
+    const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
+    constexpr int kMinutes = 10;
+    for (int minute = 1; minute <= kMinutes; ++minute) {
+        for (int t = 0; t < ticksPerMinute; ++t) lc.city.step(lc.world, kStep);
+        const citysim::CityBrainCounts& c = b.counts();
+        std::printf("    [no-driving] %2d min: the day: set out %u, arrived %u, nowhere %u, no way %u, at a shut place %u, at "
+                    "work %u (%u outside the shift) | brain %.3f ms a tick (worst %.3f)\n",
+                    minute, c.daySetOut, c.dayArrivals, c.dayNowhere, c.dayNoWay, c.dayArrivedShut, c.dayToWork,
+                    c.dayToWorkOffShift, b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs);
+    }
+    const citysim::CityBrainCounts& c = b.counts();
+    std::printf("    [no-driving] %d people, %zu cars; arrivals %llu, errors %llu, refused %llu\n", b.residentCount(), b.cars().size(),
+                static_cast<unsigned long long>(b.machine()->counts().arrivals),
+                static_cast<unsigned long long>(b.machine()->counts().errors),
+                static_cast<unsigned long long>(b.machine()->counts().refused));
+    CHECK(b.residentCount() > 5000);
+    CHECK(b.cars().empty());
+    CHECK(c.tripsBegun == 0u);
+    CHECK(c.dayArrivals > 1000u && c.dayToWork > 500u);
+    CHECK(c.dayArrivedShut == 0u && c.dayToWorkOffShift == 0u);
+    CHECK(b.machine()->counts().errors == 0u && b.machine()->counts().refused == 0u);
+    // PINNED from the run of 2026-11-24 (ADR-0494): 2568 set out, 2087 arrived, 1419 at work in ten minutes; 2104
+    // arrivals in all; the brain 0.84 ms a tick (worst 3.2)
+    CHECK(c.daySetOut == 2568u && c.dayArrivals == 2087u && c.dayToWork == 1419u);
+    CHECK(b.machine()->counts().arrivals == 2104u);
+}

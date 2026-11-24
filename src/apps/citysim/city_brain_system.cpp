@@ -389,7 +389,9 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
     }
     // each resident's name above their head (on foot) or their car (at its wheel)
     for (int who = 0; labels_ && who < b->residentCount(); ++who) {
-        const Vec2 at = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))].pos;   // (at the wheel: the car's)
+        const Agent& body = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))];
+        if (body.indoors && body.inCar < 0) continue;   // (out of sight: indoors, or far on a leg, ADR-0493)
+        const Vec2 at = body.pos;   // (at the wheel: the car's)
         const Vec3 head(at.x, city_.surfaceY(at) + kNameHeight, at.y);
         if ((head - cam.position).length() > kNameRange) continue;
         Vec2 px;

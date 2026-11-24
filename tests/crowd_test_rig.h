@@ -1,5 +1,5 @@
-// A LEVEL WITH A CROWD OF RESIDENTS, LOADED AND BUILT (ADR-0446), and one number over a crowd run's end state: what the
-// crowd tests share (test_brain_crowd.cpp on the traffic lab's roads, test_river_town_crowd.cpp on river_town's).
+// A LEVEL WITH A CROWD OF RESIDENTS, LOADED AND BUILT (ADR-0446), and one number over a crowd run's end state: what
+// test_river_town_crowd.cpp's cases share (test_brain_crowd.cpp's too, until brain_crowd went, ADR-0492).
 #ifndef RAYTRACER_TESTS_CROWD_TEST_RIG_H
 #define RAYTRACER_TESTS_CROWD_TEST_RIG_H
 
@@ -15,6 +15,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -30,12 +31,15 @@ struct LoadedCrowd {
     engine::RenderView view;
     citysim::CityRenderSystem city;
     bool ok = false;
-    explicit LoadedCrowd(const std::string& level) {
+    // `edit` (optional) changes the level's city sim settings after the load, before the city is built (a test of the
+    // same town another way: no driving).
+    explicit LoadedCrowd(const std::string& level, const std::function<void(engine::CitySimConfig&)>& edit = nullptr) {
         uploader = std::make_unique<engine::RendererMeshUploader>(*renderer);
         assets = std::make_unique<engine::AssetManager>(*uploader);
         if (!engine::LevelLoader::load(std::string(RT_SOURCE_DIR) + "/assets/levels/" + level, world, *renderer, view,
                                        *assets, false))
             return;
+        if (edit) world.each<engine::CitySimConfig>([&](engine::Entity, engine::CitySimConfig& c) { edit(c); });
         ok = city.build(world, assets.get(), nullptr);
     }
 };

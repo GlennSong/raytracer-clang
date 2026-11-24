@@ -195,6 +195,7 @@ struct CityBrain::Impl {
         brain::Detail level = brain::Detail::Near;
         BrainTime due = brain::kNever;
         bool unseen = false;   // in a state they are out of sight in (showBody)
+        BrainTime farWalkSince = brain::kNever;   // the walk whose route the crowd draws them along (farWalkDrawn)
         // the places (marker indices) they have found no way to, with every way they had to try ruled out (tickChoice)
         std::vector<uint32_t> noWayTo;
         brain::IntentKind intentKind = 0;
@@ -538,7 +539,10 @@ struct CityBrain::Impl {
     void tickMachine();
     brain::Detail detailWanted(AgentId who) const;
     bool carLegAhead(AgentId who) const;
-    void placeFarBody(AgentId who);
+    void placeFarBody(AgentId who, bool justLowered = false);
+    void farWalkDrawn(AgentId who);
+    void raiseBody(AgentId who);
+    Vec2 farWalkPoint(const Agent& a) const;
     void showBody(AgentId who);
     uint32_t detailTurn = 0;
     int daySetOutsThisTick = 0;
@@ -1221,7 +1225,11 @@ brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
     const Person& p = people[who];
     if (p.heldByDirector || sim.agents_[static_cast<std::size_t>(p.agent)].inCar >= 0) return brain::Detail::Near;
     if (carLegAhead(who)) return brain::Detail::Near;
-    const Vec2 at = p.level == brain::Detail::Far ? machine->whereIs(who, now()) : sim.agents_[static_cast<std::size_t>(p.agent)].pos;
+    // (a far walker the crowd draws is where the crowd has them, on their route: judged by the straight line between
+    // the leg's ends instead, a walk whose line passes inside the ring and whose route does not raised and lowered its
+    // walker over and over)
+    const Agent& body = sim.agents_[static_cast<std::size_t>(p.agent)];
+    const Vec2 at = p.level != brain::Detail::Far ? body.pos : body.farWalk ? farWalkPoint(body) : machine->whereIs(who, now());
     const Real away = (at - sim.tierCenter()).length();
     if (away < sim.pedPromoteRadius) return brain::Detail::Near;
     if (away > sim.pedDemoteRadius) return brain::Detail::Far;
@@ -1243,18 +1251,106 @@ bool CityBrain::Impl::carLegAhead(AgentId who) const {
 
 // A FAR PERSON'S BODY: where the brain says they are. On a leg they are not drawn (the sim's `indoors`: a far traveller
 // is out of sight); at a place they stand at it, as a near person would.
-void CityBrain::Impl::placeFarBody(AgentId who) {
+// A FAR PERSON'S WALK, DRAWN (ADR-0495): when a far person's walking leg begins (or they are lowered on one), their
+// agent is given the walk route from where they are to the leg's end, at the speed that arrives when the brain's clock
+// says, from now: the GPU crowd moves and draws them along it (Agent::farWalk). Off it again when the leg ends or they
+// are raised. Their body stays hidden; the sim does not move them.
+void CityBrain::Impl::farWalkDrawn(AgentId who) {
     Person& p = people[who];
     Agent& a = agentOf(who);
-    const Vec2 at = machine->whereIs(who, now());
-    if ((at - a.pos).length() > engine::kSamePoint) {
+    const brain::AgentBrain& b = machine->agent(who);
+    const bool walking = b.travelling() && table.states[b.state].skill == "walk";
+    if (!walking) {
+        if (a.farWalk) {
+            a.farWalk = false;
+            a.route = engine::roads::WalkRoute{};
+            sim.crowdChanged(p.agent);
+        }
+        return;
+    }
+    if (a.farWalk && p.farWalkSince == b.stateEntered) return;   // (this walk's route is given already)
+    p.farWalkSince = b.stateEntered;
+    Vec2 end;
+    engine::WalkPoint from, to;
+    engine::roads::WalkRoute r;
+    if (machine->legEnd(b, end) && sim.walkJoin(a.pos, from) && sim.walkJoin(end, to))
+        r = engine::roads::findWalkRoute(*sim.roads(), sim.walker_, from, to);
+    const Real left = b.stateDue == brain::kNever || b.stateDue <= now() ? Real(0) : static_cast<Real>(b.stateDue - now()) / kMillis;
+    if (!r.found || r.steps.empty() || !(r.metres > 0) || !(left > 0)) {
+        if (a.farWalk) sim.crowdChanged(p.agent);
+        a.farWalk = false;
+        a.route = engine::roads::WalkRoute{};
+        return;
+    }
+    a.route = std::move(r);
+    a.leg = 0;
+    a.distOnLeg = 0;
+    a.speed = a.route.metres / left;
+    a.vLastTick = sim.seconds();
+    a.farWalk = true;
+    sim.crowdChanged(p.agent);
+}
+
+// RAISED: the body where the brain has them -- along the route the crowd was drawing them on, else where the clock puts
+// them -- and seen, and off the crowd.
+void CityBrain::Impl::raiseBody(AgentId who) {
+    Agent& a = agentOf(who);
+    if (a.farWalk) {
+        const Vec2 at = farWalkPoint(a);
+        a.farWalk = false;
+        a.route = engine::roads::WalkRoute{};
+        a.speed = 0;
+        sim.crowdChanged(people[who].agent);
         a.pos = at;
         a.tickFromPos = at;
-        sim.grid_.place(p.agent, a.pos);
+        sim.grid_.place(people[who].agent, a.pos);
+        a.moving = false;
+    } else {
+        placeFarBody(who);
+        if (a.farWalk) {   // (they are near from now: their skill takes up the walk, not the crowd)
+            a.farWalk = false;
+            a.route = engine::roads::WalkRoute{};
+            a.speed = 0;
+            sim.crowdChanged(people[who].agent);
+        }
     }
-    a.moving = false;
-    a.speed = 0;
-    a.indoors = machine->agent(who).travelling() || !table.states[machine->agent(who).state].seen;
+    a.indoors = false;
+}
+
+// Where a far walker drawn by the crowd is now: along their route at their speed since it began (farWalkDrawn).
+Vec2 CityBrain::Impl::farWalkPoint(const Agent& a) const {
+    Real go = std::max(Real(0), static_cast<Real>(sim.seconds() - a.vLastTick)) * a.speed;
+    const engine::LaneGraph& G = sim.roads()->laneLevel;
+    Vec2 last = a.pos;
+    for (const engine::roads::WalkStep& s : a.route.steps) {
+        const Real along = std::fabs(s.to - s.from);
+        if (go <= along) return G.pointAt(s.walk, s.from + (s.forward ? go : -go));
+        go -= along;
+        last = G.pointAt(s.walk, s.to);
+    }
+    return last;
+}
+
+void CityBrain::Impl::placeFarBody(AgentId who, bool justLowered) {
+    Person& p = people[who];
+    Agent& a = agentOf(who);
+    const brain::AgentBrain& b = machine->agent(who);
+    // (on a walk the crowd is drawing already, the body is left where the walk began: the crowd moves them; just
+    // lowered part-way along a walk, they are where their near walk had got to, and the crowd goes on from there)
+    const bool sameWalk = a.farWalk && p.farWalkSince == b.stateEntered && b.travelling();
+    const bool walkingOn = justLowered && b.travelling() && table.states[b.state].skill == "walk";
+    if (!sameWalk && !walkingOn) {
+        const Vec2 at = machine->whereIs(who, now());
+        if ((at - a.pos).length() > engine::kSamePoint) {
+            a.pos = at;
+            a.tickFromPos = at;
+            sim.grid_.place(p.agent, a.pos);
+        }
+        a.moving = false;
+        a.speed = 0;
+    }
+    a.indoors = b.travelling() || !table.states[b.state].seen;
+    farWalkDrawn(who);
 }
 
 // A STATE THE PERSON IS OUT OF SIGHT IN (brain.lua `seen = false`: indoors): their body is not drawn while in it, and is
@@ -1291,8 +1387,7 @@ void CityBrain::Impl::tickMachine() {
         if (who % kDetailTurns == turn) level = detailWanted(who);
         if (level != p.level) {
             if (level == brain::Detail::Near) {
-                placeFarBody(who);   // (raised: their body where the clock has them, then the skill takes up the leg)
-                agentOf(who).indoors = false;
+                raiseBody(who);   // (raised: their body where the clock has them, then the skill takes up the leg)
                 ++counts.raised;
             } else {
                 ++counts.lowered;
@@ -1300,7 +1395,7 @@ void CityBrain::Impl::tickMachine() {
             machine->step(who, level);
             p.level = level;
             if (level == brain::Detail::Far) {
-                placeFarBody(who);
+                placeFarBody(who, true);
                 p.due = machine->nextAttention(who);
             }
             showBody(who);
@@ -1314,8 +1409,7 @@ void CityBrain::Impl::tickMachine() {
             ++counts.farVisits;
             if (carLegAhead(who)) {
                 // a plan by car: raised at once (the far car tier is not built; the car must be driven)
-                placeFarBody(who);
-                agentOf(who).indoors = false;
+                raiseBody(who);
                 machine->step(who, brain::Detail::Near);
                 p.level = brain::Detail::Near;
                 ++counts.raised;
@@ -1607,11 +1701,13 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         im.cars.clear();
         return false;
     };
-    if (!sim.drivingV2_ || !sim.drivingV2_->roads() || !sim.drivingV2_->hasRules() || !sim.drivingHost_.active())
-        return refuse("the driving does not run on this level (it runs where the level names citysim.drivingRules)");
+    // WITH NO DRIVING (ADR-0494: a level that names no citysim.drivingRules -- the island, the metros), the brain's
+    // people walk and ride, and no household has a car: there is nothing to drive one on. The old sim's people had none
+    // there either (ADR-0461).
+    const bool driven = sim.drivingV2_ && sim.drivingV2_->roads() && sim.drivingV2_->hasRules() && sim.drivingHost_.active();
     if (!sim.roads() || !sim.roads()->built || sim.walker_.open.empty()) return refuse("the city's road model has no walks");
-    im.d = &*sim.drivingV2_;
-    im.model = im.d->model();
+    im.d = driven ? &*sim.drivingV2_ : nullptr;
+    im.model = driven ? im.d->model() : sim.roads();
     im.ecs = &world;
     {
         // the cars of a brain made before (the city built again on the same world) go: their numbers and their people
@@ -1737,9 +1833,10 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d, &sim.buses_.timetable()},
                                                        im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
-    im.room = std::make_unique<brain::LaneRoom>(*im.d);
+    if (im.d) im.room = std::make_unique<brain::LaneRoom>(*im.d);
 
     // THE HOUSEHOLDS AND THEIR CARS, each car standing in the free kerb space nearest (on foot) the marker it states
+    std::size_t carsNotMade = 0;   // (no driving: none is)
     for (const engine::CityHousehold& hs : householdSpecs) {
         Impl::Household h;
         h.name = hs.name;
@@ -1753,7 +1850,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             im.people[static_cast<std::size_t>(who)].household = index;
             h.members.push_back(static_cast<AgentId>(who));
         }
-        for (const engine::CityHousehold::Car& cs : hs.cars) {
+        if (!im.d && !hs.cars.empty()) carsNotMade += hs.cars.size();
+        for (const engine::CityHousehold::Car& cs : im.d ? hs.cars : std::vector<engine::CityHousehold::Car>{}) {
             const std::string at = "household \"" + hs.name + "\": a car near \"" + cs.near + "\"";
             const int marker = markerNamed(cs.near);
             if (marker < 0) return refuse(at + ": that is not one of the level's markers");
@@ -1809,12 +1907,13 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         }
         im.households.push_back(h);
     }
-    im.skill = std::make_unique<brain::DrivingSkill>(*im.d, *im.fronts, im.cars.empty() ? 0u : im.bodyOf(im.cars.front()).vehicleClass);
+    if (carsNotMade > 0) line += "; no driving on this level: " + std::to_string(carsNotMade) + " household cars not made";
+    if (im.d) im.skill = std::make_unique<brain::DrivingSkill>(*im.d, *im.fronts, im.cars.empty() ? 0u : im.bodyOf(im.cars.front()).vehicleClass);
     // (the hand-over copies the driving's pose into each car entity while the driving has it: it has the world since
     // the driving began, startDrivingV2)
-    if (!im.skill->bindEvents(im.table, &err)) return refuse(err);
+    if (im.skill && !im.skill->bindEvents(im.table, &err)) return refuse(err);
     im.walk = std::make_unique<Impl::LabWalk>(im);
-    im.drive = std::make_unique<Impl::LabDrive>(im);
+    if (im.d) im.drive = std::make_unique<Impl::LabDrive>(im);
     im.machine = std::make_unique<brain::Machine>(im.table, *im.world, *im.planner, im.walk.get(), im.drive.get());
     im.ride = std::make_unique<Impl::LabRide>(im);
     im.machine->setRide(im.ride.get());
@@ -1892,7 +1991,7 @@ void CityBrain::tick(Real dt) {
     const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
     im.followCars();   // (the driving has moved the cars on the road: their people with them, before anyone plans)
     // the driving's reports for the households' cars, taken from the hand-over (which drains the driving's events)
-    const std::vector<driving::Event> events = im.sim.drivingHost_.takeGuestEvents();
+    const std::vector<driving::Event> events = im.d ? im.sim.drivingHost_.takeGuestEvents() : std::vector<driving::Event>{};
     for (const driving::Event& e : events) {
         if (e.kind == driving::EventKind::Parked) ++im.counts.parkedReports;
         if (e.kind == driving::EventKind::WreckCleared) {   // (sitting 7: the wreck is towed to a kerb space near)
@@ -1901,7 +2000,7 @@ void CityBrain::tick(Real dt) {
             if (const Impl::Car c = im.car(ref); c.valid()) im.towAway(c);
         }
     }
-    im.skill->report(*im.machine, events);
+    if (im.skill) im.skill->report(*im.machine, events);
     im.tickRides();
     im.tickWalks(dt);
     im.tickMachine();

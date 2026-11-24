@@ -1214,12 +1214,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // player's near ring theirs; a day that gives up a trip wants to be where it is): 14 at minute 7, in 27, out 15,
     // 0xc67ebf2c5dd82500; contacts 0 -> 68, all car 3 grinding on car 194 at -192, 874 (the first contact's place) from
     // minute 4 to 12, and a 130 ms physics step (#336).
-    CHECK(mostNear == 14);
-    CHECK(mostNearAt == 7);
+    // And again when far walkers are drawn along their routes (ADR-0495: raised where the crowd had them, so the
+    // walkers near the route stand elsewhere): 14 at minute 7 -> 13 at minute 12, in 27, out 15 the same,
+    // 0xc67ebf2c5dd82500 -> 0xe1ebb1c928285069; contacts 68 -> 232, still all car 3 on car 194 at -192, 874 (#336).
+    CHECK(mostNear == 13);
+    CHECK(mostNearAt == 12);
     CHECK(c.intoPhysics == 27u);
     CHECK(c.intoLane == 15u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xc67ebf2c5dd82500ull);
+    CHECK(hash == 0xe1ebb1c928285069ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

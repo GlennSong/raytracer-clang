@@ -1645,7 +1645,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     std::vector<engine::CityResident> residents = params_.residents;
     std::vector<engine::CityHousehold> households = params_.households;
     std::vector<int> residentAgents;   // (empty: the level's own residents only, each the next walker)
-    if (params_.brainPeople != 0 && sim_.drivingV2() && sim_.drivingV2()->model()) {
+    // (ADR-0494: on a level with no driving too, where they walk and ride and nobody has a car)
+    const bool driven = sim_.drivingV2() && sim_.drivingV2()->model() && sim_.drivingHost().active();
+    if (params_.brainPeople != 0 && sim_.roads() && sim_.roads()->built) {
         // WHERE PEOPLE CAN WALK TO AND FROM: a place whose stand joins the walks (CitySim::walkJoin, the very join a
         // walk from or to it starts and ends by: the brain sends its people to their places' stands) in the largest
         // part of them a walker can get round. (A place on a walk cut off from the rest, a sidewalk ending short of its
@@ -1657,10 +1659,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // so these are among them); as many of them free as its household has cars, which the home then holds, each car
         // naming its space (ADR-0493: there is no least number of spaces a home must have; a household has the cars it
         // can park)
-        const driving::Driving& d2 = *sim_.drivingV2();
         std::vector<driving::TripPlaces> classParts;
         std::vector<uint32_t> classMain;
-        for (uint32_t cls = 0; cls < d2.vehicleClasses().size(); ++cls) {
+        for (uint32_t cls = 0; driven && cls < sim_.drivingV2()->vehicleClasses().size(); ++cls) {
+            const driving::Driving& d2 = *sim_.drivingV2();
             classParts.push_back(driving::findTripPlaces(*d2.roads(), d2.routeClass(cls), kKerbLaneEndMargin, kSmallestTripPart));
             uint32_t main = driving::kNoTripPart;
             Real most = 0;
@@ -1671,7 +1673,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 }
             classMain.push_back(main);
         }
-        const engine::RoadModel& model = *d2.model();
+        const engine::RoadModel& model = driven ? *sim_.drivingV2()->model() : *sim_.roads();
         const auto everyClass = [&](const engine::KerbSpace& space) {
             const engine::KerbLanePlace lane = model.kerbLaneBeside(space);
             bool every = lane.valid();
@@ -1679,7 +1681,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 every = classParts[cls].partOf(lane.path) == classMain[cls];
             return every;
         };
-        const auto carSpaces = [&](const engine::RoadFrontage& f) { return kerbSpacesOffered(model, f, everyClass); };
+        // (no driving: no space finder, so no household has a car)
+        BrainCarSpaces carSpaces;
+        if (driven) carSpaces = [&](const engine::RoadFrontage& f) { return kerbSpacesOffered(model, f, everyClass); };
         const auto onFoot = [&](Vec2 p, const engine::RoadFrontage&) {
             engine::WalkPoint joined;
             bool cutOff = true;
@@ -1709,7 +1713,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             }
         }
     }
-    if ((!markers.empty() || !residents.empty()) && sim_.drivingV2() && sim_.drivingHost().active()) {
+    if ((!markers.empty() || !residents.empty()) && ((sim_.drivingV2() && sim_.drivingHost().active()) || params_.brainPeople != 0)) {
         std::string brainReport;
         if (sim_.startBrain(world, markers, residents, households, residentAgents, drivingClassOfSlot, &brainReport,
                             params_.drivableSpacesOnly, &places_))
@@ -3053,8 +3057,9 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
     auto refresh = [&](int i) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
         const engine::RoadModel* model = sim_.roads();
-        const bool live = model && a.tier != Agent::Tier::K && a.moving && !a.released && !a.playerControlled &&
-                          CitySim::onRoute(a);
+        const bool live = model && !a.released && !a.playerControlled &&
+                          ((a.tier != Agent::Tier::K && CitySim::onRoute(a)) ||
+                           (a.farWalk && a.route.found && a.leg >= 0 && a.leg < static_cast<int>(a.route.steps.size())));
         int& slot = crowdSlot_[static_cast<std::size_t>(i)];
         if (!live) {
             if (slot >= 0) {

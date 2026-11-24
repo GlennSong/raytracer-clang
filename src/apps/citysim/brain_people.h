@@ -67,6 +67,7 @@ using BrainPlaceUsable = std::function<bool(engine::Vec2 stand, const engine::Ro
 // THE KERB SPACES A HOUSEHOLD'S CARS CAN START IN at a home whose frontage is `f`, nearest first on foot (the brain's
 // own list, city_brain.h kerbSpacesOffered). A household's cars hold as many of them as they are, unheld by an earlier
 // household, so the brain, putting each car in the first free space of its list in the same order, always finds one.
+// Empty (no function): the level has no driving, and no household has a car.
 using BrainCarSpaces = std::function<std::vector<engine::KerbSpace>(const engine::RoadFrontage& f)>;
 
 // A PLACE'S MARKER, as a level would state it: named placeMarkerName(id); by street, station and kerb when the place's

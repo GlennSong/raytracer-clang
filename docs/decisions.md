@@ -24592,3 +24592,42 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - the brain on a level the new driving does not drive: the island, the metros and piedmont have no `drivingRules`, and the brain needs the driving;
 - trains for brain people (the island's towns are joined by rail);
 - then deleting the old K/V/D tiers, `goalThink` and the control flags.
+
+## ADR-0494 — The brain runs where there is no driving: people walk and ride, nobody has a car (one-brain plan, step 4; 2026-11-24)
+
+**Why:** the brain refused to start on a level whose road file names no driving rule set (`citysim.drivingRules`). Of the levels with a city sim (those whose road file has a lane level: river_town, traffic_lab, brain_lab on its roads, agent_lab and island_8_nature), the island has no driving. For the brain to replace the old sim there, it must run without the driving, as the old sim's people did: since ADR-0461 nobody has a car on such a level.
+
+**What happens:**
+- `CityBrain::start` takes the driving only when it runs (a rule set, its host active). Without it:
+  - the road model is the sim's own;
+  - there is no drive skill, no lane room and no driving glue;
+  - no household car is made (the report says how many were not), and the tick takes no driving events.
+- `city_render` makes the brain's people on any level with a built road model and `brainPeople`, and starts the brain there.
+  - With no driving it hands `brainPeopleFromHouseholds` no space finder (`BrainCarSpaces` empty), which means no household has a car. The draws are made all the same, so the seeded stream is the one it would be.
+- Trip planning already priced no car leg without the driving (`TripNetwork::driving` null).
+
+**Checked:**
+- New case: river_town with its rule set taken away before the city is built (`crowdtest::LoadedCrowd` takes an edit of the config).
+- 5,115 people, 0 cars, 0 car trips. In 10 minutes 2,568 set out, 2,087 arrived, 1,419 reached work, all inside their shift; nobody at a shut place.
+- 0 errors, 0 refused; the brain costs 0.84 ms a tick (worst 3.2).
+
+**Not done:** the island itself. Its lots were last baked before the mesh-tools merge's tag bump (2026-11-22.1). Loading it now rebakes them, which needs about 35 GB of memory and a long bake, so it was not run unattended. Trains are not built for the brain's people, and the island's towns are joined by rail.
+
+## ADR-0495 — Far walkers are drawn by the GPU crowd along their route (one-brain plan, step 4; 2026-11-24)
+
+**Why:** since ADR-0493 a far person on a leg is not drawn, and since river_town's brain runs every household, the old sim draws nobody there either. Past the near ring, the streets were empty of people on foot. The old sim's far travellers were drawn by the GPU crowd (`crowd.comp`): a record of a walk route, a start time and a speed, and the shader moves them. The design meant the brain's far people to feed it the same way (docs/agent-brain-design.md section 8, "where the GPU stands").
+
+**What happens** (`city_brain.cpp` `farWalkDrawn`, `farWalkPoint`, `raiseBody`; `city_render.cpp` `feedGpuCrowd`):
+- **Setting it up.** When a far person's walking leg begins, or they are lowered part-way along one, their agent is given the walk route from where they are to the leg's end (`findWalkRoute`). Its speed is the one that arrives when the brain's clock says, from now, and it is marked `Agent::farWalk`.
+- **Drawing.** The GPU crowd takes such an agent as it takes the old sim's far travellers. The sim does not move them (not `moving`), and their own body stays hidden.
+- **Taking it down.** The mark comes off when the leg ends, or the person is raised. A raised walker is put where the crowd had them on the route; before, they jumped to the straight line between the leg's ends.
+- **Where one is lowered.** A walker lowered part-way stays where their near walk had got to, and the crowd goes on from there.
+- **Judging distance.** A far walker's distance from the player is judged at their point on the route. Judged on the straight line, a walk whose line passed inside the ring and whose route did not raised and lowered its walker over and over (raised 558 → 1,832 in one run, back to 568).
+- A resident's name label is not drawn while they are out of sight (indoors, or far on a leg).
+
+**Checked:**
+- In the viewer, with the player moved to (-420, 150), people walking at a crossing about 750 m away are drawn.
+- The far case is re-pinned (old → new in the test): the day the same within a few trips; 0 errors.
+- Headless runs (river_town's 30 minutes, the no-driving case) are untouched: no far person, no crowd record.
+
+**Not done:** a far person riding a bus is still not drawn (the crowd's records are walks). Nor is a far driver, who is near until the far car tier is built.

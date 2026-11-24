@@ -136,6 +136,10 @@ struct Agent {
     // next tick advances by the difference — no wall clock), and the remaining
     // modelled junction dwell it is currently "waiting out" mid-route.
     Real vLastTick = 0;
+    // A FAR BRAIN WALKER DRAWN BY THE GPU CROWD (ADR-0495): `route` from where they were when their walk began far, at
+    // `speed` from `vLastTick` (sim seconds), moved by the crowd shader alone -- the sim does not move them (not
+    // `moving`), and their own body is not drawn (`indoors`).
+    bool farWalk = false;
     Real vHold = 0;
     // SCHEDULED WAKE. An agent resting at home or at work has nothing to decide
     // until its own day says otherwise, so instead of re-reading the clock every
