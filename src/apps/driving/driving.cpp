@@ -1751,11 +1751,11 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     }
     if (!route.found) {
         // (no way on from its lane to where it goes: it waits in it for a gap, stopped where a move across still fits --
-        // the one place a driver stops in a through lane to change lanes -- and the host is told, as when a trip is begun
-        // with no route, so a resident's brain may plan otherwise)
+        // the one place a driver stops in a through lane to change lanes. The host is NOT told "no route": the trip goes
+        // on, and a resident's brain told so planned without the car and got out, leaving it standing in the lane for good
+        // -- river_town's car 365, 1.5 m past junction 11, and the queue behind it: #326)
         ++laneChangeCounts_.missedNoRoute;
         t.waitToChange = true;
-        queueEvent(EventKind::NoRoute, c.id, tripOf(c.id), t.person);
         return;
     }
     route.vehicle = routeClass(c.vehicleClass);

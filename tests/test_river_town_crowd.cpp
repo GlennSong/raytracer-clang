@@ -218,6 +218,41 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
                 static_cast<unsigned long long>(d.crashCounts().contacts), static_cast<unsigned long long>(d.crashCounts().crashes),
                 static_cast<unsigned long long>(d.crashCounts().wrecks), static_cast<unsigned long long>(d.crashCounts().cleared));
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
+    // RT_RIVER_WHO=365: every resident whose brain's description names that car, described (who left it where)
+    if (const char* who = std::getenv("RT_RIVER_WHO")) {
+        const std::string want = std::string("car ") + who;
+        for (int r = 0; r < b.residentCount(); ++r) {
+            const std::string text = b.describe(static_cast<citysim::brain::AgentId>(r));
+            if (text.find(want + ",") != std::string::npos || text.find(want + " ") != std::string::npos ||
+                text.find(want + ")") != std::string::npos)
+                std::printf("    [river] resident %d:\n%s\n%s\n", r, text.substr(0, 3000).c_str(), b.traceText(r).c_str());
+        }
+    }
+    // RT_RIVER_ROUTE=365: where that car's lane leads, and whether a route is found from it and from what it leads into
+    if (const char* which = std::getenv("RT_RIVER_ROUTE")) {
+        const driving::CarId id(static_cast<uint32_t>(std::atoi(which)));
+        const driving::Car* c = d.car(id);
+        const driving::Trip* t = c ? d.trip(d.tripOf(id)) : nullptr;
+        if (c && t) {
+            const engine::LaneGraph& g = *d.roads();
+            const engine::Path& P = g.paths[c->path.index];
+            std::printf("    [river] car %u on path %u (kind %d, %.1f m long, section %u) at %.1f; leads into:", id.index, c->path.index,
+                        static_cast<int>(P.kind), P.length, P.section.index, c->along);
+            for (uint32_t n = P.next.first; n < P.next.end(); ++n) {
+                const engine::PathId q = g.nextPaths[n];
+                driving::PathPoint from;
+                from.path = q;
+                from.along = 0;
+                const engine::roads::Route r = d.routeBetween(c->vehicleClass, from, t->destination);
+                std::printf(" %u (kind %d, %.1f m; route from it %s)", q.index, static_cast<int>(g.paths[q.index].kind),
+                            g.paths[q.index].length, r.found ? "found" : "NOT found");
+            }
+            driving::PathPoint here;
+            here.path = c->path;
+            here.along = c->along;
+            std::printf("; a route from where it is: %s\n", d.routeBetween(c->vehicleClass, here, t->destination).found ? "found" : "NOT found");
+        }
+    }
     // RT_RIVER_CARDS=365,12: those cars' driver cards at the end (following a chain of waits by hand)
     if (const char* cards = std::getenv("RT_RIVER_CARDS")) {
         std::string list(cards);
@@ -328,15 +363,15 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 397u);
         CHECK(withCar == 427);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 201);
+        CHECK(mostOnRoad == 203);
         CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 419u);
-        CHECK(b.counts().parkedReports == 250u);
+        CHECK(b.counts().tripsBegun == 444u);
+        CHECK(b.counts().parkedReports == 303u);
         CHECK(b.counts().walksBlocked == 2u);   // (lane changes on: was 0; #327)
         CHECK(b.counts().otherPlaces == 1u);
-        CHECK(b.machine()->counts().arrivals == 570u);
+        CHECK(b.machine()->counts().arrivals == 612u);
         CHECK(b.machine()->counts().noPlans == 1u);   // (lane changes on: was 0; #327)
-        // STILL FAILING with lane changes on (2 spells; 1 since sitting 6): #327
+        // STILL FAILING with lane changes on (2 spells): #327
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -381,19 +416,25 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // touching spells 2 -> 1. The same two failures (#326, #327).
         // 0x67a1b7581e4e1dac -> 0x86dd6401bb40c85c (sitting 7: contact and crashes; a car nobody drives standing on a
         // lane is a thing in drivers' way): every count above the same; 1 new contact, no crash rolled.
-        CHECK(hash == 0x86dd6401bb40c85cull);
+        // 0x86dd6401bb40c85c -> 0xeb213119d367acfd (#326: a car missing its turn with no way on from its lane is no longer
+        // reported "no route" to the host -- its resident got out and left it standing in the lane past junction 11, and
+        // the queue behind it, a bus among them, stood for good): most on the road 201 -> 203, trips 419 -> 444, parked
+        // 250 -> 303, arrivals 570 -> 612, bus calls 144 -> 166, bus rides 10 -> 19; the longest a bus stood in the road
+        // 1150 s -> 99 s (passes). Car 365 still stands at the end of a 20 m lane piece waiting to change lanes with no
+        // room to (#328).
+        CHECK(hash == 0xeb213119d367acfdull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 144u);
+        CHECK(sim.drivingHost().counts().busCalls == 166u);
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
-        CHECK(busStandTicks * kStep < 180.0);   // STILL FAILING with lane changes on (1150 s): #326, #327
+        CHECK(busStandTicks * kStep < 180.0);
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 24u && rc.boardings == 18u && rc.alightings == 10u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 21u && b.counts().busRides == 10u);
+            CHECK(rc.waits == 25u && rc.boardings == 20u && rc.alightings == 19u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 21u && b.counts().busRides == 19u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
     }

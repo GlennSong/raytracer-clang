@@ -158,6 +158,7 @@ struct CityBrainCounts {
     uint32_t parkedReports = 0;    // the driving's "parked" events for the resident's car
     uint32_t parkedInSpace = 0;    // times the car left the driving, standing in its space
     uint32_t towed = 0;            // wrecks cleared and towed to a kerb space (sitting 7)
+    uint32_t refusedInSpace = 0;   // trips refused as the car was placed to pull out: it went back into its space
     // The farthest (m) a car moved as it was handed between its kerb space and the driving: placed to pull out (where
     // the driving puts it against where it stood: millimetres), or put in its space when it did not drive in.
     Real worstKerbHandOver = 0;

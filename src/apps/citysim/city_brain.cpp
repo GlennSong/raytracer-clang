@@ -1074,6 +1074,7 @@ void CityBrain::Impl::tickCars() {
                 // placed standing in its space beside the kerb lane: its trip begins at once, and it drives out on
                 // the driving's curve across
                 counts.worstKerbHandOver = std::max(counts.worstKerbHandOver, awayFromDriving(c, carPos(c)));
+                const driving::PathPoint keptFront = k.spaceFront;
                 k.spaceFront = driving::PathPoint();
                 syncLane(c);
                 occupant.erase(k.standing.id);
@@ -1083,7 +1084,19 @@ void CityBrain::Impl::tickCars() {
                     k.tripWanted = false;
                     fronts->of(c);
                     // (no route: the driving queues its own "no route" for the person, which the skill passes on)
-                    if (skill->beginTrip(ref, k.tripPerson, k.tripFrom, k.tripTo, 0)) ++counts.tripsBegun;
+                    if (skill->beginTrip(ref, k.tripPerson, k.tripFrom, k.tripTo, 0)) {
+                        ++counts.tripsBegun;
+                    } else {
+                        // REFUSED BEFORE IT MOVED: back into its space, off the road -- left placed, it stood half in its
+                        // space and listed in the kerb lane for good, and the cars behind waited for room behind it
+                        // (river_town, #326: a car whose space began 1.5 m past junction 11)
+                        d->removeCar(id);
+                        syncLane(c);
+                        occupant[k.standing.id] = numberOf(c);
+                        k.spaceFront = keptFront;
+                        k.phase = CarPhase::Standing;
+                        ++counts.refusedInSpace;
+                    }
                 }
             }
         }

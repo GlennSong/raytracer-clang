@@ -453,7 +453,7 @@ TEST_CASE(trip_places_6b_a_car_changes_lanes_for_its_route) {
                     static_cast<unsigned long long>(n.missedNoRoute), noRoutes, restedAt, end,
                     d.atRoadEnd(CarId(1)) ? 1 : 0, arrived ? 1 : 0);
         CHECK(n.missed == 1u && n.missedNoRoute == 1u);
-        CHECK(noRoutes == 1);
+        CHECK(noRoutes == 0);   // (the trip goes on: the host is not told "no route", #326 -- told, a resident got out)
         CHECK(restedAt > 0 && restedAt < end - 5.0);   // (stopped with room left to move across)
         CHECK(!d.atRoadEnd(CarId(1)));
         if (theyLeave) {
