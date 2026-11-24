@@ -1208,12 +1208,18 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // 9, hash 0x4e80967d762cb46f -> 0xcf97ef5254ff6375. River_town is a real town -- slopes, bridges, built lots, street
     // furniture -- and the near tier was only ever run on traffic_lab's flat roads: 19 cars refused as not upright, hits
     // on things that are no car, one contact (#336).
-    CHECK(mostNear == 12);
-    CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 22u);
-    CHECK(c.intoLane == 9u);
+    // And again at the mesh-tools merge (its prefab parks and street things on river_town's lots: other bodies along
+    // the way): 12 at minute 12, in 22, out 9, 0xcf97ef5254ff6375 -> 10 at minute 12, in 17, out 7, 0x6f2308fc5a28ca03;
+    // contacts 1 -> 0. And again when the brain runs every household of river_town (ADR-0493; 630 -> 5115 people, the
+    // player's near ring theirs; a day that gives up a trip wants to be where it is): 14 at minute 7, in 27, out 15,
+    // 0xc67ebf2c5dd82500; contacts 0 -> 68, all car 3 grinding on car 194 at -192, 874 (the first contact's place) from
+    // minute 4 to 12, and a 130 ms physics step (#336).
+    CHECK(mostNear == 14);
+    CHECK(mostNearAt == 7);
+    CHECK(c.intoPhysics == 27u);
+    CHECK(c.intoLane == 15u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xcf97ef5254ff6375ull);
+    CHECK(hash == 0xc67ebf2c5dd82500ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

@@ -415,30 +415,40 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // homes now: a job's or a venue's marker is made when a day first goes there). Trips by car 92 -> 72, parked 69 ->
     // 65, the most on the road 37 at minute 21 -> 63 at minute 5 (the morning's late start, all at once); arrivals 1282
     // -> 392 (the stand-in sent workers back and forth every few minutes; a real day stays at work).
+    // RE-PINNED when the brain runs EVERY household (ADR-0493; the one-brain plan, step 4; river_town's brainPeople
+    // 630 -> -1): 5115 people of 2686 households, of the sim's 5149 (16 households left out, their home with no street
+    // beside its door). No home needs 24 kerb spaces any more (a household has the cars it can park: 899 cars found no
+    // free space), a car names its space, and people at home or work are indoors (people.lua intent be_at), sharing a
+    // tower's door. Residents 630 -> 5115, households 337 -> 2686, cars 204 -> 824 (with one 296 -> 1212), home markers
+    // 115 -> 278; trips by car 72 -> 164, parked 65 -> 151, the most on the road 63 at minute 5 -> 117 at minute 6;
+    // arrivals 392 -> 3281. The day: set out 436 -> 3611, arrived 392 -> 3247, at work 218 -> 1767, still nobody at a
+    // shut place or outside their shift; nowhere 2 -> 8 and no way 0 -> 62 (places no walk reaches: a day gives up on
+    // one and wants to be where it is), plans with no way 0 -> 317 (nine people stay in no_way, their own last place cut
+    // off on foot from where they stand).
     if (minutes == kRiverMinutes) {
-        CHECK(b.residentCount() == 630);
-        CHECK(households == 337);
-        CHECK(b.cars().size() == 204u);
-        CHECK(withCar == 296);
-        CHECK(homeMarkers == 115u);
-        CHECK(mostOnRoad == 63);
-        CHECK(mostOnRoadAt == 5);
-        CHECK(b.counts().tripsBegun == 72u);
-        CHECK(b.counts().parkedReports == 65u);
+        CHECK(b.residentCount() == 5115);
+        CHECK(households == 2686);
+        CHECK(b.cars().size() == 824u);
+        CHECK(withCar == 1212);
+        CHECK(homeMarkers == 278u);
+        CHECK(mostOnRoad == 117);
+        CHECK(mostOnRoadAt == 6);
+        CHECK(b.counts().tripsBegun == 164u);
+        CHECK(b.counts().parkedReports == 151u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 392u);
+        CHECK(b.machine()->counts().arrivals == 3281u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 436u);
-        CHECK(b.counts().dayArrivals == 392u);
-        CHECK(b.counts().dayToWork == 218u);
-        CHECK(b.counts().dayNowhere == 2u);
-        CHECK(b.counts().dayNoWay == 0u);
-        CHECK(b.machine()->counts().noPlans == 0u);
+        CHECK(b.counts().daySetOut == 3611u);
+        CHECK(b.counts().dayArrivals == 3247u);
+        CHECK(b.counts().dayToWork == 1767u);
+        CHECK(b.counts().dayNowhere == 8u);
+        CHECK(b.counts().dayNoWay == 62u);
+        CHECK(b.machine()->counts().noPlans == 317u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -500,17 +510,19 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // counts above, and the buses' below
         // 0x0c184c57be58cc6a -> 0x4d453ad8fdb637d9 (ADR-0491: the brain's people keep their role's day): the counts above
         // and the buses' below
-        CHECK(hash == 0x4d453ad8fdb637d9ull);
+        // 0x4d453ad8fdb637d9 -> 0x7ed5a8a9fec97fa4 (ADR-0493: the brain runs every household): the counts above, and
+        // the buses' below
+        CHECK(hash == 0x7ed5a8a9fec97fa4ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
         // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333; 147 -> 160, ADR-0491: bus 4 stood there instead)
-        CHECK(sim.drivingHost().counts().busCalls == 160u);
+        // (160 -> 182, ADR-0493: nobody stands in junction 62's turn now that the old sim walks nobody, #333)
+        CHECK(sim.drivingHost().counts().busCalls == 182u);
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
-        // FAILING since ADR-0490: bus 6, 1308 s, behind car 118 at junction 62 (#333); at ADR-0491 bus 4, 1257 s, the
-        // same turn (a run of that change before the brain's trips were spread over ticks had a household car there
-        // instead, and this passed: which vehicle is caught is chance)
+        // (FAILING from ADR-0490 to ADR-0491, the sim's own walkers standing in junction 62's turn, #333; passes since
+        // ADR-0493, the old sim walking nobody: bus 9, 87.2 s)
         CHECK(busStandTicks * kStep < 180.0);
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
@@ -527,3 +539,59 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         }
     }
 }
+
+// FAR PEOPLE KEEP THEIR DAY (ADR-0493; the one-brain plan, step 4). With the player standing north of the river by
+// junction 62 (the busiest place, test_near_tier's kRiverTownBusy), the brain's people within the level's
+// pedPromoteRadius are near and the rest far: no skill moves a far person, the brain's clock ends their legs, and they
+// are visited only then. The same day goes on: they set out, arrive, and get to work inside their shift, nobody at a
+// shut place; people come near and go far as the attention allows; nothing errs; and the brain costs less a tick.
+TEST_CASE(level_river_town_far_people_keep_their_day) {
+    crowdtest::LoadedCrowd lc(std::getenv("RT_FAR_LEVEL") ? std::getenv("RT_FAR_LEVEL") : "river_town.json");
+    CHECK(lc.ok);
+    if (!lc.ok) return;
+    citysim::CitySim& sim = lc.city.simMutable();
+    citysim::CityBrain* bp = sim.brain();
+    CHECK(bp != nullptr && bp->hasResident());
+    if (!bp || !bp->hasResident()) return;
+    citysim::CityBrain& b = *bp;
+    const engine::Vec2 player(-50, 750);
+    const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
+    const int kFarMinutes = std::getenv("RT_FAR_MINUTES") ? std::atoi(std::getenv("RT_FAR_MINUTES")) : 15;
+    int mostFar = 0;
+    for (int minute = 1; minute <= kFarMinutes; ++minute) {
+        for (int t = 0; t < ticksPerMinute; ++t) {
+            sim.setTierCenter(player);
+            lc.city.step(lc.world, kStep);
+        }
+        mostFar = std::max(mostFar, b.farCount());
+        std::printf("    [far] %2d min: %s\n", minute, b.attentionText().c_str());
+        const citysim::CityBrainCounts& c = b.counts();
+        std::printf("    [far] %2d min: far %d of %d | lowered %u, raised %u, far visits %llu | the day: set out %u, arrived %u, "
+                    "nowhere %u, no way %u, at a shut place %u, at work %u (%u outside the shift) | brain %.3f ms a tick "
+                    "(worst %.3f)\n",
+                    minute, b.farCount(), b.residentCount(), c.lowered, c.raised, static_cast<unsigned long long>(c.farVisits),
+                    c.daySetOut, c.dayArrivals, c.dayNowhere, c.dayNoWay, c.dayArrivedShut, c.dayToWork, c.dayToWorkOffShift,
+                    b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs);
+    }
+    const citysim::CityBrainCounts& c = b.counts();
+    const uint64_t hash = crowdtest::crowdHash(b, sim, lc.world);
+    std::printf("    [far] at the end: arrivals %llu, errors %llu, refused %llu; final state hash %016llx\n",
+                static_cast<unsigned long long>(b.machine()->counts().arrivals),
+                static_cast<unsigned long long>(b.machine()->counts().errors),
+                static_cast<unsigned long long>(b.machine()->counts().refused), static_cast<unsigned long long>(hash));
+    CHECK(c.dayArrivedShut == 0u);
+    CHECK(c.dayToWorkOffShift == 0u);
+    CHECK(b.machine()->counts().errors == 0u);
+    CHECK(b.machine()->counts().refused == 0u);
+    // PINNED from the run of 2026-11-24 (ADR-0493; the whole town, 5115 people): about half far at any minute (the most
+    // 2724; the player stands in the town's busiest, densest part: 1453 to 1836 within the 300 m ring, 736 to 809
+    // between the rings, 39 to 135 near for a car); 3062 times lowered, 558 raised, 2906 far visits; 2823 set out, 2296
+    // arrived, 1528 at work; nowhere 4, no way 30; the brain 0.98 ms a tick (worst 6.7).
+    if (kFarMinutes == 15) {
+        CHECK(mostFar == 2724);
+        CHECK(c.lowered == 3062u && c.raised == 558u && c.farVisits == 2906u);
+        CHECK(c.daySetOut == 2823u && c.dayArrivals == 2296u && c.dayToWork == 1528u);
+        CHECK(hash == 0x17ca8289b402619bull);
+    }
+}
+

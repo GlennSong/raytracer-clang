@@ -56,6 +56,7 @@ struct StateSpec {
     // set out from), "leg_start", "along_leg", "leg_end".
     std::string where = "place";
     bool holds = false;           // entering it interrupts what the person was doing, to be carried on or dropped later
+    bool seen = true;             // false: the person is out of sight while in it (inside a building), not drawn
     // HOW LONG IT LASTS, in seconds, for a state whose time is its own and not a leg's (ADR-0443: how long a person
     // with no way there waits before trying again). 0: not stated. Only for a state the clock ends whose behaviour
     // has no `lasts` function of its own.
@@ -159,6 +160,7 @@ struct StateRow {
     EventId clock = kNoId;
     Where where = Where::Place;
     bool holds = false;
+    bool seen = true;
     BrainTime fixedMillis = 0;    // the data's `seconds` (0: none): how long the state lasts when its behaviour does not say
     StateFns fns;
     EventId raises[kMaxRaises] = {kNoId, kNoId, kNoId, kNoId};

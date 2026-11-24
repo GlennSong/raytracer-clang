@@ -18,9 +18,10 @@
 // members who may drive) and the travel traits. Their day is their role's (CityResident::roleDay): the brain runs the
 // sim's role table for each of them on the sim's clock (city_brain.h, ADR-0491).
 //
-// LEFT OUT, and counted: a household whose home's door people cannot walk to and from (or, with cars, has too few kerb
-// spaces near), or whose home marker is full (city_brain.h kMarkerSpots); a car with no free kerb space near home (the
-// household has fewer).
+// EVERY HOUSEHOLD WHOSE HOME HAS A STREET BESIDE ITS DOOR (ADR-0493: the brain runs everyone): one whose door joins no
+// walk to the rest of the town is taken all the same, and counted (its people's trips find no way, as they would for
+// the old sim's). A household's cars hold free kerb spaces near home, each car naming its space; a car with none is
+// not made (the household has fewer), and counted. Left out, and counted: a home with no street and sidewalk beside it.
 //
 // Same result for the same city and seed: one ProcRng stream, drawn in a fixed order.
 
@@ -53,16 +54,16 @@ struct BrainPeople {
     int cars = 0;
     int workers = 0;           // residents with a job away from home
     // left out
-    int homesUnusable = 0;     // households whose home cannot be walked to (or, with cars, has too few kerb spaces)
-    int homesFull = 0;         // households whose home marker has no spots left
+    int homesCutOff = 0;       // households taken whose home's door joins no walk to the rest of the town (no trip goes)
+    // left out
+    int homesUnusable = 0;     // households whose home has no street and sidewalk beside its door
     int carsNoSpace = 0;       // cars with no free kerb space near home
     std::string describe() const;
 };
 
-// WHERE A PERSON CAN BE (the caller's answer, as crowd.h CrowdUsable): whether people can walk to and from a point
-// beside a street (`stand`, the middle of its sidewalk; `f` its frontage), and when `cars`, whether a household's cars
-// can be parked near it and driven away.
-using BrainPlaceUsable = std::function<bool(engine::Vec2 stand, const engine::RoadFrontage& f, bool cars)>;
+// WHERE A PERSON CAN WALK FROM (the caller's answer): whether people can walk to and from a point beside a street
+// (`stand`, the middle of its sidewalk; `f` its frontage) and the rest of the town.
+using BrainPlaceUsable = std::function<bool(engine::Vec2 stand, const engine::RoadFrontage& f)>;
 // THE KERB SPACES A HOUSEHOLD'S CARS CAN START IN at a home whose frontage is `f`, nearest first on foot (the brain's
 // own list, city_brain.h kerbSpacesOffered). A household's cars hold as many of them as they are, unheld by an earlier
 // household, so the brain, putting each car in the first free space of its list in the same order, always finds one.

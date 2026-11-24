@@ -18,6 +18,7 @@
 #include "../../engine/vehicle_lamps.h"               // the lamp decision core (ADR-0065)
 #include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
+#include <limits>
 #include <cctype>
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
@@ -1644,7 +1645,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     std::vector<engine::CityResident> residents = params_.residents;
     std::vector<engine::CityHousehold> households = params_.households;
     std::vector<int> residentAgents;   // (empty: the level's own residents only, each the next walker)
-    if (params_.brainPeople > 0 && sim_.drivingV2() && sim_.drivingV2()->model()) {
+    if (params_.brainPeople != 0 && sim_.drivingV2() && sim_.drivingV2()->model()) {
         // WHERE PEOPLE CAN WALK TO AND FROM: a place whose stand joins the walks (CitySim::walkJoin, the very join a
         // walk from or to it starts and ends by: the brain sends its people to their places' stands) in the largest
         // part of them a walker can get round. (A place on a walk cut off from the rest, a sidewalk ending short of its
@@ -1653,11 +1654,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // ...and, for a home, where the households' cars can be parked: the kerb spaces the brain offers (the one list,
         // kerbSpacesOffered), kept to those beside lanes in the largest part of the road every vehicle class drives
         // (driving/trip_places.h; the brain, with the level's drivableSpacesOnly, keeps those of the car's own class,
-        // so these are among them), at least kHomeSpaces of them for the comings and goings; and as many of them free
-        // as its household has cars, which the home then holds (brainPeopleFromHouseholds deals no household whose car
-        // the brain finds no free space for)
-        // (12 at ADR-0446's 200 residents; at 350 a household's car found none of 12 free)
-        constexpr int kHomeSpaces = 24;
+        // so these are among them); as many of them free as its household has cars, which the home then holds, each car
+        // naming its space (ADR-0493: there is no least number of spaces a home must have; a household has the cars it
+        // can park)
         const driving::Driving& d2 = *sim_.drivingV2();
         std::vector<driving::TripPlaces> classParts;
         std::vector<uint32_t> classMain;
@@ -1681,16 +1680,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             return every;
         };
         const auto carSpaces = [&](const engine::RoadFrontage& f) { return kerbSpacesOffered(model, f, everyClass); };
-        const auto onFoot = [&](Vec2 p, const engine::RoadFrontage& f, bool cars) {
+        const auto onFoot = [&](Vec2 p, const engine::RoadFrontage&) {
             engine::WalkPoint joined;
             bool cutOff = true;
-            if (!sim_.walkJoin(p, joined, &cutOff) || cutOff) return false;
-            return !cars || static_cast<int>(carSpaces(f).size()) >= kHomeSpaces;
+            return sim_.walkJoin(p, joined, &cutOff) && !cutOff;
         };
         {
             BrainPeople made;
             std::string err;
-            if (!brainPeopleFromHouseholds(sim_, places_, model, params_.brainPeople, onFoot, carSpaces, params_.seed, made, &err)) {
+            if (!brainPeopleFromHouseholds(sim_, places_, model,
+                                           params_.brainPeople < 0 ? std::numeric_limits<int>::max() : params_.brainPeople, onFoot, carSpaces, params_.seed, made, &err)) {
                 LOG_WARN << "[citysim] the brain's people from the households: " << err;
             } else {
                 LOG_INFO << "[citysim] the brain's people from the households: " << made.describe();

@@ -92,12 +92,18 @@ public:
 
     // Answer the posted events, then step everybody, at the world's time.
     void tick();
+    // A HOST WITH ITS OWN ATTENTION (a clock queue): answer the posted events only; the host then steps whom it will.
+    // Returns everyone an event was answered for, lowest first, each once (their next attention may have moved).
+    const std::vector<AgentId>& answerEvents();
     // Visit one person at `level`. A change of level is carried out first: raised to near, the state is taken up
     // part-way with the fraction of its planned time already gone; lowered, its skill is stopped.
     void step(AgentId who, Detail level);
     // When `who` next needs a visit if no event comes first: the time a clock-ended state is due. kNever: not until an
     // event. (A near person in a state a skill ends is waiting for that skill's event.)
     BrainTime nextAttention(AgentId who) const;
+    // WHERE `who` IS at `at`, as far as the brain can say (a far person part-way along a leg: on the straight line
+    // between its ends, by the share of its planned time gone; otherwise their place, or a leg's end).
+    Vec2 whereIs(AgentId who, BrainTime at) const;
 
     // ONE LINE about a person: intent, plan, the leg under way, state, since when, waiting for what.
     std::string describe(AgentId who) const;
@@ -129,7 +135,6 @@ private:
     void takePlan(AgentId who, const PlanLegs& legs);
     void resume(AgentId who, BrainTime at, int depth);
     void runClock(AgentId who, bool nearNow);
-    Vec2 whereIs(AgentId who, BrainTime at) const;
     BrainTime lastsOf(const StepContext& ctx, const AgentBrain& a) const;
     Real fractionDone(const StepContext& ctx, const AgentBrain& a) const;
     void fail(AgentId who, const char* what, const char* name);
@@ -143,6 +148,7 @@ private:
     RideSkill* ride_ = nullptr;
     std::vector<AgentBrain> agents_;
     std::vector<BrainEvent> incoming_, draining_;
+    std::vector<AgentId> answered_;
     uint32_t posted_ = 0;
     BrainCounts counts_;
     char lastError_[160] = {0};

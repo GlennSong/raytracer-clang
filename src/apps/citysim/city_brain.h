@@ -193,6 +193,9 @@ struct CityBrainCounts {
     uint32_t dayArrivedShut = 0;   // arrivals at a venue not open at that hour
     uint32_t dayToWork = 0;        // arrivals at their job's place
     uint32_t dayToWorkOffShift = 0;   // ...outside their work window (late, or after it)
+    // ADR-0493: the attention they get
+    uint32_t lowered = 0, raised = 0;   // times a person went far, and came near again
+    uint64_t farVisits = 0;             // far people visited because their clock was due
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
@@ -298,6 +301,10 @@ public:
     // What the plans put on the roads: legs by car priced and chosen, and those on the freeway (brain_planner.h).
     brain::PlanRoadCounts planRoadCounts() const;
     const CityBrainCost& cost() const;
+    // How many people are far now (ADR-0493).
+    int farCount() const;
+    // Who is far, and why each near person is near (`brain? attention`).
+    std::string attentionText() const;
     brain::BrainTime now() const;
     std::vector<BrainPlanLeg> planLegs(int who = 0) const;
 

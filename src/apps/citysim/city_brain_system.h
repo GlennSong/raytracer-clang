@@ -18,6 +18,7 @@
 //   brain follow                       the camera on the NEXT resident, in the level's order, round and round
 //   brain follow <who>                 the camera on that resident
 //   brain follow off                   the camera let go, so `camera <x> <y> <z> <pitch> <yaw>` can place it
+//   brain attention                    how many are far, and why each near person is near (ADR-0493)
 //   markers?                           every marker: its name, street, station, kerb and where a person stands at it
 //
 // Drawn: each marker as a ring round the spot where a person at it stands, a post beside the ring and its name (the

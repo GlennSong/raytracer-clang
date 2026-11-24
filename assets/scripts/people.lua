@@ -139,5 +139,5 @@ people.crossing = {
 people.brain = {
   cars = { { cars = 0, share = 0.33 }, { cars = 1, share = 0.60 }, { cars = 2, share = 0.07 } },
   traits = { has_board = 0.08, has_scooter = 0.05 },
-  intent = "be_outside_at",
+  intent = "be_at",
 }

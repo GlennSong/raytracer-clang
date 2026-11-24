@@ -104,6 +104,7 @@ bool compileBrainTable(const BrainSpec& spec, const BehaviourSet& behaviours, Br
         row.group = s.group;
         row.skill = s.skill;
         row.holds = s.holds;
+        row.seen = s.seen;
         const Behaviour* found = nullptr;
         for (const Behaviour& b : behaviours.rows)
             if (b.state == s.name) { found = &b; break; }

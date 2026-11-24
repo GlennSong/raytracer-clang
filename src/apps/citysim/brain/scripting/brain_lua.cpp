@@ -47,7 +47,7 @@ public:
             spec.events.push_back(row);
         });
         eachRow(bt, "states", [&](int t, const std::string& at) {
-            checkKeys(t, at, {"name", "label", "group", "skill", "ends", "clock", "where", "holds", "seconds", "on"});
+            checkKeys(t, at, {"name", "label", "group", "skill", "ends", "clock", "where", "holds", "seen", "seconds", "on"});
             StateSpec row;
             row.name = text(t, at, "name", "");
             const std::string key = row.name.empty() ? at : "states." + row.name;
@@ -64,6 +64,9 @@ public:
             const int holds = pushField(t, "holds");
             if (lua_isboolean(L, holds)) row.holds = lua_toboolean(L, holds) != 0;
             else if (!lua_isnil(L, holds)) fail(key + ".holds", "is " + describe(holds) + ", expected true or false");
+            const int seen = pushField(t, "seen");
+            if (lua_isboolean(L, seen)) row.seen = lua_toboolean(L, seen) != 0;
+            else if (!lua_isnil(L, seen)) fail(key + ".seen", "is " + describe(seen) + ", expected true or false");
             lua_pop(L, 1);
             const int on = pushField(t, "on");
             if (lua_istable(L, on)) {

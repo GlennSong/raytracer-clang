@@ -264,7 +264,7 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
         }
     // A CROWD MADE FROM THE ROADS (ADR-0446): the file under assets/scripts that says what to make
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490): how many of their people
-    cfg.brainPeople = std::max(0, cs.value("brainPeople", 0));
+    cfg.brainPeople = std::max(-1, cs.value("brainPeople", 0));
     cfg.drivableSpacesOnly = cs.value("drivableSpacesOnly", false);
     if (cs.contains("near") && cs["near"].is_object()) {   // the near tier (ADR-0448)
         const json& n = cs["near"];

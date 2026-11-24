@@ -1257,7 +1257,7 @@ struct CitySimConfig {
     std::vector<CityHousehold> households;
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490; apps/citysim/brain_people.h): `"brainPeople": 630` has the
     // agent brain run whole households of the people the city's dwellings were filled with, up to that many people,
-    // added to what the level states. 0: none.
+    // added to what the level states. -1: every household (ADR-0493: the brain runs everyone). 0: none.
     int brainPeople = 0;
     // `"drivableSpacesOnly": true` (ADR-0446): the brain offers its households only kerb spaces a car can drive away
     // from and back to (apps/citysim/city_brain.h). brain_lab, built before it, does not ask.

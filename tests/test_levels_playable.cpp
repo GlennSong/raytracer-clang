@@ -3665,6 +3665,7 @@ TEST_CASE(level_river_town_streets_are_drivable_grades) {
     for (std::size_t i = 0; i < steep.size() && i < 8; ++i)
         std::printf("      %5.1f %% at %.0f %.0f (class %d)\n", steep[i].grade * 100.0, steep[i].at.x, steep[i].at.y, steep[i].klass);
     CHECK(samples > 1000);
+    // (FAILING since the mesh-tools merge rebaked the lots: 73.0 % at 431 300, #337)
     CHECK(steep.empty() || steep.front().grade < 0.70);   // (the ratchet; owed: < 0.15)
 }
 

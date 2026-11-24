@@ -24543,3 +24543,52 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - *A near car with no way past finds another way* fails as before this change (the same on an older binary); it is #328 and is now marked so.
 
 **river_town** never used the crowd since ADR-0490, so its pins hold.
+
+## ADR-0493 — The brain owns how much attention a person gets, and runs every household of river_town (one-brain plan, step 4, first part; 2026-11-24)
+
+**Why:** for the brain to replace the old sim it must run everyone, and the island has 100k+ people, so it cannot step every person every tick. The brain library was built for this (docs/agent-brain-design.md section 8): a far person has no skill, their state ends by the brain's clock, and `nextAttention` says when they next need a visit. The city side had never used it; everyone was added near.
+
+**Words:**
+- *Near*: skills move the person's body every tick.
+- *Far*: no skill runs; the leg or the stay ends when the clock says, and the person is visited only then, or when an event comes.
+- To *raise* someone is to make them near; to *lower* them is to make them far.
+
+**What happens** (`src/apps/citysim/city_brain.cpp` `tickMachine`, `detailWanted`, `placeFarBody`, `showBody`):
+- **Who is near.** With a player (the sim's tier centre), a person is raised inside the level's `pedPromoteRadius` and lowered beyond its `pedDemoteRadius`. Each person's distance is looked at once every 30 ticks, a share of people each tick.
+  - Anyone in a car, or with a car leg still ahead in their plan, stays near, and a far person who plans a car trip is raised at once. The far car tier is not built, and a car must be in the driving to move.
+  - Headless (no player), everyone is near, as before.
+- **Visiting far people.** `Machine::answerEvents` answers the posted events. The host then steps near people every tick and far people when their clock is due or an event came. For now this is a scan in person order, not a priority queue; a queue waits until it is measured at island scale.
+- **A far person's body** is where `Machine::whereIs` (now public) puts them. On a leg they are not drawn. When raised they are put there first, then their skill takes up the leg.
+- **Out of sight.** A brain.lua state can say `seen = false` (`indoors` does), and its person is not drawn while in it.
+  - People.lua's brain people now want `be_at`, so at home or work they are indoors, as the old sim's people are. Before, they stood on the sidewalk outside.
+  - A marker's 256 spots are shared past the 256th person, in turn (`spotsShared`), since a tower's residents all use its door.
+- **The brain runs every household** of a level whose `brainPeople` is -1 (river_town now):
+  - every household whose home has a street beside its door, including one cut off on foot (counted; their trips find no way);
+  - no home needs 24 kerb spaces any more: a household has the cars it can park;
+  - each car names the space it holds, so the brain stands it in exactly that one. Two independent choices of space collided past 630 people, and the brain refused to start.
+- **A day that gives up** on a trip (NoRoute) also tells the brain the person wants to be where they are. Before, the brain went on wanting the unreachable place and planned again every minute.
+- `brain attention` (viewer) says how many are far and why each near person is near.
+
+**Checked** (river_town):
+- **Every household, headless, 30 minutes:**
+  - 5,115 people in 2,686 households, of the sim's 5,149; 824 cars (899 found no kerb space).
+  - 3,611 trips set out, 3,247 arrived, 1,767 reached work inside their shift; nobody at a shut place.
+  - 0 errors, 0 rings, 0 touching spells. The brain costs 0.87 ms a tick.
+  - The bus check (#333) passes again, since the old sim walks nobody: #333 closed.
+- **With a player at (-50, 750), 15 minutes:**
+  - about half the town is far (the most 2,724); 3,062 lowered, 558 raised;
+  - 2,296 arrived, 1,528 reached work inside their shift; 0 errors; the brain costs 0.98 ms a tick.
+- brain_tests pass (24 of 24).
+
+**Regressions, re-pinned** (old → new with the reason, in the tests):
+- river_town's counts and hash: all of them, for 630 → 5,115 people.
+- The near-tier crowd case: 68 contacts, all one car grinding on another at (-192, 874), the place #336 named, now with five times the traffic.
+- Nine people stay in no_way. The last place they were at is cut off on foot from where they now stand: 317 plans with no way in 30 minutes.
+
+**Not done (the rest of step 4, and 2b):**
+- the far car tier;
+- the GPU crowd drawing far travellers (they are hidden on a leg);
+- a priority queue for far visits;
+- the brain on a level the new driving does not drive: the island, the metros and piedmont have no `drivingRules`, and the brain needs the driving;
+- trains for brain people (the island's towns are joined by rail);
+- then deleting the old K/V/D tiers, `goalThink` and the control flags.

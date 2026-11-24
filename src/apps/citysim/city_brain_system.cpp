@@ -106,7 +106,7 @@ void CityBrainSystem::onStart(engine::FrameContext& ctx) {
                       "A resident with the agent brain (the followed one, or the one named) wants to be at that marker from "
                       "now: they plan the trip and make it. Stops their day table (brain day on resumes it). Poll brain?.",
                       [this](const engine::ControlCommand& c) { return gotoVerb(c); }, kOwner);
-    ctx.commands->add("brain", "brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off",
+    ctx.commands->add("brain", "brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off | attention",
                       "Give or take one of a resident's traits (travel.lua: has_board, has_scooter), used from their next "
                       "plan; switch a day table; put the camera on the next resident or the one named, or let it go (then "
                       "`camera` places it); show or hide the places' and residents' names. With no name: the followed "
@@ -164,7 +164,7 @@ std::string CityBrainSystem::gotoVerb(const engine::ControlCommand& cmd) {
 
 std::string CityBrainSystem::brainVerb(const engine::ControlCommand& cmd) {
     const std::string usage =
-        "err usage: brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off";
+        "err usage: brain trait [who] <name> on|off | day [who|all] on|off | follow [who|off] | labels on|off | attention";
     CityBrain* b = city_.built() ? city_.simMutable().brain() : nullptr;
     if (!b || !b->hasResident()) return kNoBrain;
     if (cmd.args.empty()) return usage;
@@ -177,6 +177,8 @@ std::string CityBrainSystem::brainVerb(const engine::ControlCommand& cmd) {
     const std::string noSuch = "err no resident \"" + (cmd.args.size() > 1 ? cmd.args[1] : std::string()) + "\" (residents?)";
     bool on = false;
     // the places' names and the residents' names over the view (#299: a probe's pictures turn them off)
+    // who is far, and why each near person is near (ADR-0493)
+    if (what == "attention" && cmd.args.size() == 1) return "ok " + b->attentionText();
     if (what == "labels" && cmd.args.size() == 2 && onOff(cmd.args[1], on)) {
         labels_ = on;
         return std::string("ok labels ") + (on ? "on" : "off");

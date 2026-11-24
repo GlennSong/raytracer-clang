@@ -76,6 +76,9 @@
     "perceptionReliability": 1.0,
     "dormancy": false,
     "drivingRules": "rules/lab.lua",
+    "_attention": "ADR-0493: everyone is near (skills every tick) wherever the player is: a lab of exact scripted trips, not a test of attention",
+    "pedPromoteRadius": 100000,
+    "pedDemoteRadius": 100000,
     "markers": "markers/traffic_lab.json",
     "residents": [
       { "name": "ana", "home": "home", "intent": "be_outside_at", "traits": [],

@@ -35,7 +35,7 @@ int pickValue(engine::ProcRng& rng, const std::vector<std::pair<int, double>>& r
 // One place's marker, made once: where its door fronts the road, the point a person stands at, and how many people
 // use it so far.
 struct PlaceMarker {
-    bool tried = false, usable = false, usableWithCars = false;
+    bool tried = false, resolved = false, walkable = false;
     engine::RoadFrontage frontage;
     engine::CityMarker marker;
     std::size_t users = 0;
@@ -46,9 +46,9 @@ struct PlaceMarker {
 std::string BrainPeople::describe() const {
     return std::to_string(residents.size()) + " people in " + std::to_string(households.size()) + " households, " +
            std::to_string(cars) + " cars, " + std::to_string(workers) + " with a job to go to, " +
-           std::to_string(markers.size()) + " homes; left out: " + std::to_string(homesUnusable) +
-           " households whose home cannot be reached, " + std::to_string(homesFull) + " whose home is full, " +
-           std::to_string(carsNoSpace) + " cars with no kerb space";
+           std::to_string(markers.size()) + " homes (" + std::to_string(homesCutOff) +
+           " households in a home cut off on foot); left out: " + std::to_string(homesUnusable) +
+           " households whose home has no street beside it, " + std::to_string(carsNoSpace) + " cars with no kerb space";
 }
 
 engine::CityMarker placeMarkerSpec(const Place& p, PlaceId id, const engine::RoadModel& model) {
@@ -113,8 +113,8 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
         }
         engine::Vec2 stand;
         if (!pm.frontage.valid() || !pm.frontage.street.valid() || !model.sidewalkBeside(pm.frontage, stand)) return pm;
-        pm.usable = !usable || usable(stand, pm.frontage, false);
-        pm.usableWithCars = pm.usable && (!usable || usable(stand, pm.frontage, true));
+        pm.resolved = true;
+        pm.walkable = !usable || usable(stand, pm.frontage);
         return pm;
     };
     const auto use = [&](PlaceMarker& pm, std::size_t people) {
@@ -129,6 +129,7 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
     for (std::size_t i = order.size(); i > 1; --i) std::swap(order[i - 1], order[static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
     using SpaceKey = std::tuple<uint32_t, int, uint32_t>;
     std::set<SpaceKey> heldSpaces;
+    std::vector<engine::KerbSpace> holdingSpaces;
     for (const std::size_t h : order) {
         const Household& hh = plan.households[h];
         const std::vector<int>& who = members[h];
@@ -142,21 +143,20 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
         }
         const int cars = std::clamp(pickValue(rng, rules.cars, 0), 0, drivers);
         PlaceMarker& home = markerOf(hh.place);
-        if (!home.usable || (cars > 0 && !home.usableWithCars)) {
+        if (!home.resolved) {   // (no street beside its door: the brain has nowhere to put them)
             ++out.homesUnusable;
             continue;
         }
-        if (home.users + who.size() > kMarkerSpots) {
-            ++out.homesFull;
-            continue;
-        }
+        if (!home.walkable) ++out.homesCutOff;   // (they live there all the same; their trips find no way)
         // ITS CARS, each holding a free kerb space near home (fewer when there are not enough)
         std::vector<SpaceKey> holding;
+        holdingSpaces.clear();
         if (cars > 0 && spaces)
             for (const engine::KerbSpace& s : spaces(home.frontage)) {
                 const SpaceKey key{s.street.index, s.dir, s.index};
                 if (heldSpaces.count(key) > 0) continue;
                 holding.push_back(key);
+                holdingSpaces.push_back(s);
                 if (static_cast<int>(holding.size()) >= cars) break;
             }
         out.carsNoSpace += cars - static_cast<int>(holding.size());
@@ -164,7 +164,9 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
         use(home, who.size());
         engine::CityHousehold made;
         made.name = "h" + std::to_string(h);
-        for (std::size_t c = 0; c < holding.size(); ++c) made.cars.push_back(engine::CityHousehold::Car{home.marker.name, std::string()});
+        // (each car names the space it holds, so the brain stands it in exactly that one)
+        for (const engine::KerbSpace& sp : holdingSpaces)
+            made.cars.push_back(engine::CityHousehold::Car{home.marker.name, model.kerbSpaceName(sp)});
         out.cars += static_cast<int>(holding.size());
         // ITS PEOPLE, each the agent who is them
         for (const int a : who) {

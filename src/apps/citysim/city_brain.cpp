@@ -66,6 +66,12 @@ constexpr double kDayRetryHours = 0.25;
 // for hundreds at once (river_town's start, 288 people: a 129 ms tick), the rest set out over the next ticks, as the
 // sim's own day spends its departures (CitySim::kDeparturesPerStep).
 constexpr int kDaySetOutsPerTick = 8;
+// HOW MUCH ATTENTION A PERSON GETS (ADR-0493; one-brain plan, step 4): near the player (the sim's tier centre) they are
+// NEAR -- skills move their body every tick; farther they are FAR -- no skill, their state ends by the brain's clock
+// and they are visited only when it is due or an event comes. Raised inside the level's pedPromoteRadius, lowered
+// beyond its pedDemoteRadius (the gap between is hysteresis). Each person's distance is looked at once every this
+// many ticks, a share of them each tick.
+constexpr uint32_t kDetailTurns = 30;
 constexpr Real kSecondsPerMinute = 60.0;
 // A car an outsider left at a point is put into the kerb lane beside it when the lane is empty from this far behind
 // its rear to this far ahead of its front (a body's own room; nobody is waited for: it either fits or it does not).
@@ -181,9 +187,14 @@ struct CityBrain::Impl {
         // (-1: not set out), and the venue it is for (-1: none)
         bool roleDay = false;
         int homeMarker = -1;
+        int atMarker = -1;    // the marker their day last brought them to (home at the start)
         int dayMarker = -1;
         int dayVenue = -1;
         double dayRetryAt = 0;   // (the sim's total hours) after a NoRoute, nothing fires before this
+        // THE ATTENTION THEY GET (ADR-0493): the level they are stepped at, and when a far person is next due
+        brain::Detail level = brain::Detail::Near;
+        BrainTime due = brain::kNever;
+        bool unseen = false;   // in a state they are out of sight in (showBody)
         // the places (marker indices) they have found no way to, with every way they had to try ruled out (tickChoice)
         std::vector<uint32_t> noWayTo;
         brain::IntentKind intentKind = 0;
@@ -315,6 +326,7 @@ struct CityBrain::Impl {
     // the street from their marker.)
     std::map<std::pair<int, AgentId>, uint32_t> spotOf;
     std::vector<std::vector<uint8_t>> spotsTaken;   // per marker, per spot number
+    std::vector<uint32_t> spotsShared;              // per marker, the people given a spot someone else has
     // THE MARKERS BY NAME, and the city's places (a role's day makes a place's marker the first time it goes there)
     std::unordered_map<std::string, int> markerByName;
     const PlaceMap* places = nullptr;
@@ -323,24 +335,30 @@ struct CityBrain::Impl {
     int addMarker(const engine::CityMarker& spec);
     int markerForPlace(PlaceId id);
     int markerForNode(int node);
-    // Their spot there: the one given, or (none given yet) the one they would be given now.
+    // Their spot there: the one given, or (none given yet) the one they would be given now. MORE PEOPLE THAN SPOTS (a
+    // tower's residents at its door, ADR-0493): everyone past the last free spot shares one, in turn (spotsShared counts
+    // them). They are indoors there, out of sight; only when two are outside at once do they stand on one spot.
     uint32_t spotFor(int index, AgentId who) const {
         const std::map<std::pair<int, AgentId>, uint32_t>::const_iterator it = spotOf.find({index, who});
         if (it != spotOf.end()) return it->second;
+        const bool known = index >= 0 && static_cast<std::size_t>(index) < spotsTaken.size();
         static const std::vector<uint8_t> kNone;
-        const std::vector<uint8_t>& taken =
-            index >= 0 && static_cast<std::size_t>(index) < spotsTaken.size() ? spotsTaken[static_cast<std::size_t>(index)] : kNone;
+        const std::vector<uint8_t>& taken = known ? spotsTaken[static_cast<std::size_t>(index)] : kNone;
         const auto isFree = [&](uint32_t s) { return s >= taken.size() || !taken[s]; };
         uint32_t spot = who < kSpotsByNumber && isFree(who) ? static_cast<uint32_t>(who) : 0;
-        while (!isFree(spot)) ++spot;
-        return spot;
+        while (spot < kMostResidents && !isFree(spot)) ++spot;
+        if (spot < kMostResidents) return spot;
+        const uint32_t shared = known && static_cast<std::size_t>(index) < spotsShared.size() ? spotsShared[static_cast<std::size_t>(index)] : 0;
+        return shared % static_cast<uint32_t>(kMostResidents);
     }
     void takeSpot(int index, AgentId who) {
         if (index < 0 || index >= static_cast<int>(markers.size()) || spotOf.count({index, who}) > 0) return;
         const uint32_t spot = spotFor(index, who);
         if (spotsTaken.size() < markers.size()) spotsTaken.resize(markers.size());
+        if (spotsShared.size() < markers.size()) spotsShared.resize(markers.size(), 0);
         std::vector<uint8_t>& taken = spotsTaken[static_cast<std::size_t>(index)];
         if (spot >= taken.size()) taken.resize(spot + 1, 0);
+        if (taken[spot]) ++spotsShared[static_cast<std::size_t>(index)];
         taken[spot] = 1;
         spotOf[{index, who}] = spot;
     }
@@ -516,6 +534,13 @@ struct CityBrain::Impl {
     void tickCars();
     void tickDay(AgentId who);
     void tickRoleDay(AgentId who, Real dtHours);
+    // THE MACHINE, stepped by attention (ADR-0493): events answered; then near people every tick, far people when due
+    void tickMachine();
+    brain::Detail detailWanted(AgentId who) const;
+    bool carLegAhead(AgentId who) const;
+    void placeFarBody(AgentId who);
+    void showBody(AgentId who);
+    uint32_t detailTurn = 0;
     int daySetOutsThisTick = 0;
     void setOut(AgentId who, const GoalState& s);
     bool fireDay(AgentId who, GoalEvent e);
@@ -1189,6 +1214,120 @@ int CityBrain::Impl::markerForNode(int node) {
     return addMarker(m);
 }
 
+// THE LEVEL A PERSON SHOULD RUN AT (ADR-0493). Near: within the promote radius of the player, or someone the brain cannot
+// yet run far -- anyone in a car or with a car leg in their plan (the far car tier is not built: a car must be in the
+// driving to move), or held by a director. Far: beyond the demote radius. Between: as they are.
+brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
+    const Person& p = people[who];
+    if (p.heldByDirector || sim.agents_[static_cast<std::size_t>(p.agent)].inCar >= 0) return brain::Detail::Near;
+    if (carLegAhead(who)) return brain::Detail::Near;
+    const Vec2 at = p.level == brain::Detail::Far ? machine->whereIs(who, now()) : sim.agents_[static_cast<std::size_t>(p.agent)].pos;
+    const Real away = (at - sim.tierCenter()).length();
+    if (away < sim.pedPromoteRadius) return brain::Detail::Near;
+    if (away > sim.pedDemoteRadius) return brain::Detail::Far;
+    return p.level;
+}
+
+// A LEG BY CAR still ahead in their plan (the leg under way or a later one): its way begins in a state the drive skill
+// carries out (brain.lua: pulling_out).
+bool CityBrain::Impl::carLegAhead(AgentId who) const {
+    const brain::AgentBrain& b = machine->agent(who);
+    for (int leg = b.legNow; leg < b.legCount; ++leg) {
+        const brain::WayId w = b.legWay(leg);
+        if (w < table.ways.size() && table.ways[w].begins < table.states.size() &&
+            table.states[table.ways[w].begins].skill == "drive")
+            return true;
+    }
+    return false;
+}
+
+// A FAR PERSON'S BODY: where the brain says they are. On a leg they are not drawn (the sim's `indoors`: a far traveller
+// is out of sight); at a place they stand at it, as a near person would.
+void CityBrain::Impl::placeFarBody(AgentId who) {
+    Person& p = people[who];
+    Agent& a = agentOf(who);
+    const Vec2 at = machine->whereIs(who, now());
+    if ((at - a.pos).length() > engine::kSamePoint) {
+        a.pos = at;
+        a.tickFromPos = at;
+        sim.grid_.place(p.agent, a.pos);
+    }
+    a.moving = false;
+    a.speed = 0;
+    a.indoors = machine->agent(who).travelling() || !table.states[machine->agent(who).state].seen;
+}
+
+// A STATE THE PERSON IS OUT OF SIGHT IN (brain.lua `seen = false`: indoors): their body is not drawn while in it, and is
+// again once they leave it (a walk, a far traveller's own rule, sets it as it goes on).
+void CityBrain::Impl::showBody(AgentId who) {
+    Person& p = people[who];
+    const bool seen = table.states[machine->agent(who).state].seen;
+    if (!seen) {
+        agentOf(who).indoors = true;
+        p.unseen = true;
+    } else if (p.unseen) {
+        p.unseen = false;
+        if (!(p.level == brain::Detail::Far && machine->agent(who).travelling())) agentOf(who).indoors = false;
+    }
+}
+
+void CityBrain::Impl::tickMachine() {
+    const std::vector<AgentId>& answered = machine->answerEvents();
+    // HEADLESS (no player, no tier centre): everybody near, every tick, as before attention
+    if (!sim.hasTierCenter()) {
+        for (AgentId who = 0; who < people.size(); ++who) {
+            machine->step(who, brain::Detail::Near);
+            showBody(who);
+        }
+        return;
+    }
+    const BrainTime t = now();
+    for (const AgentId who : answered)
+        if (who < people.size() && people[who].level == brain::Detail::Far) people[who].due = t;   // (visit them now)
+    const uint32_t turn = detailTurn++ % kDetailTurns;
+    for (AgentId who = 0; who < people.size(); ++who) {
+        Person& p = people[who];
+        brain::Detail level = p.level;
+        if (who % kDetailTurns == turn) level = detailWanted(who);
+        if (level != p.level) {
+            if (level == brain::Detail::Near) {
+                placeFarBody(who);   // (raised: their body where the clock has them, then the skill takes up the leg)
+                agentOf(who).indoors = false;
+                ++counts.raised;
+            } else {
+                ++counts.lowered;
+            }
+            machine->step(who, level);
+            p.level = level;
+            if (level == brain::Detail::Far) {
+                placeFarBody(who);
+                p.due = machine->nextAttention(who);
+            }
+            showBody(who);
+            continue;
+        }
+        if (level == brain::Detail::Near) {
+            machine->step(who, level);
+            showBody(who);
+        } else if (p.due != brain::kNever && p.due <= t) {
+            machine->step(who, level);
+            ++counts.farVisits;
+            if (carLegAhead(who)) {
+                // a plan by car: raised at once (the far car tier is not built; the car must be driven)
+                placeFarBody(who);
+                agentOf(who).indoors = false;
+                machine->step(who, brain::Detail::Near);
+                p.level = brain::Detail::Near;
+                ++counts.raised;
+                continue;
+            }
+            placeFarBody(who);
+            p.due = machine->nextAttention(who);
+            showBody(who);
+        }
+    }
+}
+
 // THEIR ROLE'S DAY (ADR-0491): the sim's own table for their role (roles.lua, buildDayTable), run here on the sim's
 // clock with the sim's own reading of it (CitySim::restEvents: the work window, the evening, the stop's length) and the
 // sim's own choosers (choosePickedNode: lunch, an outing, a campus break, an activity, the errand). A GoTo state is a
@@ -1228,12 +1367,19 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
             a.atActivity = a.tripActivity;
             a.tripActivity = -1;
             a.outingTo = -1;
+            p.atMarker = p.dayMarker;
             fireDay(who, GoalEvent::Arrived);
         } else if (b.state == table.noPlan) {
             ++counts.dayNoWay;
             a.outingTo = -1;
             a.tripVenue = -1;
             fireDay(who, GoalEvent::NoRoute);
+            // THE DAY HAS GIVEN UP ON IT: they want to be where they are again (else the brain goes on wanting a place
+            // there is no way to, planning again every minute: 25 of river_town's 5115 did, 782 plans in 30 minutes)
+            if (p.atMarker >= 0) {
+                const PlaceRef here = markerPlace(p.atMarker, who);
+                if (here.valid()) machine->setIntent(who, p.intentKind, here);
+            }
         }
         return;
     }
@@ -1528,10 +1674,6 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         im.takeSpot(markerNamed(residents[r].home), static_cast<AgentId>(r));
         for (const engine::CityResident::Stop& stop : residents[r].day) im.takeSpot(markerNamed(stop.at), static_cast<AgentId>(r));
     }
-    for (std::size_t m = 0; m < im.spotsTaken.size(); ++m)
-        if (im.spotsTaken[m].size() > kMostResidents)
-            return refuse("marker \"" + im.markers[m].name + "\" is used by more residents than its " +
-                          std::to_string(kMostResidents) + " spots");
 
     // THE RESIDENTS, checked before anything is made: each the sim's agent who is them (the city's own households,
     // ADR-0490), or a walker the level made, in the order it made them (hand-written residents)
@@ -1586,6 +1728,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         person.drives = resident.drives;
         person.roleDay = resident.roleDay;
         person.homeMarker = m.home;
+        person.atMarker = m.home;
         person.intentKind = m.intent;
         im.people.push_back(person);
     }
@@ -1761,7 +1904,7 @@ void CityBrain::tick(Real dt) {
     im.skill->report(*im.machine, events);
     im.tickRides();
     im.tickWalks(dt);
-    im.machine->tick();
+    im.tickMachine();
     im.tickCars();
     im.followCars();   // (...and the cars sliding between a space and the lane)
     const Real dtHours = dt * im.sim.hoursPerSecond();
@@ -1779,6 +1922,31 @@ void CityBrain::tick(Real dt) {
 }
 
 const std::vector<BrainMarker>& CityBrain::markers() const { return impl_->markers; }
+
+std::string CityBrain::attentionText() const {
+    const Impl& im = *impl_;
+    if (!im.machine) return "no brain";
+    int far = 0, held = 0, car = 0, inRing = 0, between = 0;
+    const Vec2 c = im.sim.tierCenter();
+    for (AgentId who = 0; who < im.people.size(); ++who) {
+        const Impl::Person& p = im.people[who];
+        if (p.level == brain::Detail::Far) { ++far; continue; }
+        const Agent& a = im.sim.agents_[static_cast<std::size_t>(p.agent)];
+        if (p.heldByDirector) ++held;
+        else if (a.inCar >= 0 || im.carLegAhead(who)) ++car;
+        else if ((a.pos - c).length() < im.sim.pedPromoteRadius) ++inRing;
+        else ++between;
+    }
+    return std::to_string(far) + " far; near: " + std::to_string(inRing) + " within " + fmt("%.0f m", im.sim.pedPromoteRadius) +
+           ", " + std::to_string(between) + " not yet lowered, " + std::to_string(car) + " in a car or with a car leg ahead, " +
+           std::to_string(held) + " held by a director";
+}
+
+int CityBrain::farCount() const {
+    int n = 0;
+    for (const Impl::Person& p : impl_->people) n += p.level == brain::Detail::Far ? 1 : 0;
+    return n;
+}
 
 int CityBrain::markerNamed(const std::string& name) const {
     const std::unordered_map<std::string, int>::const_iterator it = impl_->markerByName.find(name);

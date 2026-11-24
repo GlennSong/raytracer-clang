@@ -31,6 +31,7 @@
 --           "along_leg" (between the leg's ends, by how much of the planned time has gone), "leg_end"
 --   holds   true: entering it interrupts what the person was doing. The interrupted state and how much of its time was
 --           left are kept, for `resume`.
+--   seen    false: the person is out of sight while in it (inside a building), and not drawn. Left out: seen
 --   seconds how long it lasts, for a state the clock ends whose time is its own and not a leg's (`no_way`)
 --   on      event = what it leads to: a state's name, or a verb
 --
@@ -148,7 +149,7 @@ brain = {
     { name = "hailing", label = "hailing a cab", group = "transit" },   -- NOT BUILT
 
     -- AT A PLACE
-    { name = "indoors", label = "indoors", group = "at_place", on = { new_intent = "replan" } },
+    { name = "indoors", label = "indoors", group = "at_place", seen = false, on = { new_intent = "replan" } },
     { name = "standing", label = "standing outside", group = "at_place", on = { new_intent = "replan" } },
     -- WANTS TO BE SOMEWHERE AND HAS NO WAY THERE (ADR-0443; before, they stood for ever). They stand where they are
     -- and try again every `seconds` (an ESTIMATE: a minute, long enough for a car to come back or a lane to clear),

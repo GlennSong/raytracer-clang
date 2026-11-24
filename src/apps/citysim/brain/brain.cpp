@@ -553,15 +553,24 @@ void Machine::step(AgentId who, Detail level) {
     runClock(who, nearNow);
 }
 
-void Machine::tick() {
+const std::vector<AgentId>& Machine::answerEvents() {
     const BrainTime now = world_.now();
     draining_.swap(incoming_);
     std::sort(draining_.begin(), draining_.end(), [](const BrainEvent& x, const BrainEvent& y) {
         return x.agent != y.agent ? x.agent < y.agent : x.order < y.order;
     });
-    for (const BrainEvent& e : draining_)
-        if (e.agent < agents_.size()) answer(e.agent, e.kind, e.payload, now, 0);
+    answered_.clear();
+    for (const BrainEvent& e : draining_) {
+        if (e.agent >= agents_.size()) continue;
+        answer(e.agent, e.kind, e.payload, now, 0);
+        if (answered_.empty() || answered_.back() != e.agent) answered_.push_back(e.agent);
+    }
     draining_.clear();
+    return answered_;
+}
+
+void Machine::tick() {
+    answerEvents();
     for (std::size_t i = 0; i < agents_.size(); ++i)
         step(static_cast<AgentId>(i), static_cast<Detail>(agents_[i].detail));
 }
