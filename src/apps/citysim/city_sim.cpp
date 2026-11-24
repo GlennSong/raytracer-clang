@@ -383,11 +383,12 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
         if (report) *report = why;
         return false;
     }
-    // LANE CHANGES (sitting 5): routes plan them where the rule set has the lane change step to carry them out -- for
-    // now only with RT_LANE_CHANGES=1 (ADR-0489: the traffic lab's flow with them is not yet what it is without them);
-    // otherwise every route keeps to lanes the car's own lane leads into, as before.
+    // LANE CHANGES (sitting 5): routes plan them where the rule set has the lane change step to carry them out. On by
+    // default since letting in, dropping back, the zipper at merges and parking on the same curve (ADR-0489 had them
+    // opt-in); RT_LANE_CHANGES=0 turns them off: every route then keeps to lanes the car's own lane leads into.
     driving::DrivingSettings settings = drivingV2_->settings();
-    settings.laneChanges = drivingV2_->laneChangeStep() && std::getenv("RT_LANE_CHANGES") != nullptr;
+    const char* laneChanges = std::getenv("RT_LANE_CHANGES");
+    settings.laneChanges = drivingV2_->laneChangeStep() && !(laneChanges && std::string(laneChanges) == "0");
     drivingV2_->setSettings(settings);
 
     // THE CARS THAT DRIVE ROUND FOR EVER (city_car.h CityCarRoams): each one entity, with nobody in it; where it is

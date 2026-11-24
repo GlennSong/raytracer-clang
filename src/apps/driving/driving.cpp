@@ -1321,11 +1321,26 @@ void Driving::setVehicleClasses(VehicleClasses classes) {
     }
 }
 
-Route Driving::routeFor(const Car& c, const PathPoint& to) const {
+Route Driving::routeFor(const Car& c, const PathPoint& to) const { return routeFromWhereItIs(c, routeClass(c.vehicleClass), to); }
+
+// A ROUTE FROM WHERE A PLACED CAR'S FRONT IS: as `cls` finds it, unless its first move across does not fit in what is
+// left of the lane it stands on (a car at rest at a junction's line, its new way beginning in the lane beside: it could
+// never move over, and stood at the end of its way for good -- the near tier's road block, lane changes on). Then a way
+// keeping its lane to the end of this stretch, when there is one; otherwise the first, as it was.
+Route Driving::routeFromWhereItIs(const Car& c, RouteClass cls, const PathPoint& to) const {
+    if (!model_) return Route();
     PathPoint front;
     front.path = c.path;
     front.along = c.along;
-    return routeBetween(c.vehicleClass, front, to);
+    Route route = findRoute(*model_, routeBounds_, cls, front, to);
+    if (!route.found || !changingLanes() || cls.keepLaneAtStart || c.path.index >= roads_->paths.size()) return route;
+    const LanesToCross need = lanesToCross(route, c.path, 0);
+    const engine::Path& lane = roads_->paths[c.path.index];
+    const Real shortest = laneMoveShortest(lane.width, vehicleClasses_.at(c.vehicleClass).tightestTurnRadius);
+    if (need.inLeg == 0 || lane.length - c.along >= static_cast<Real>(need.inLeg) * shortest) return route;
+    cls.keepLaneAtStart = true;
+    Route inLane = findRoute(*model_, routeBounds_, cls, front, to);
+    return inLane.found ? inLane : route;
 }
 
 Route Driving::routeBetween(uint32_t vehicleClass, const PathPoint& from, const PathPoint& to) const {
@@ -1651,6 +1666,7 @@ void Driving::askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing) {
     if (roads_->paths[thing.path.index].kind == engine::PathKind::Connector) {
         close(thing.path);
     } else {
+        close(thing.path);   // (and the lane itself: with lane changes a route could move across into it beyond the turns)
         for (uint32_t k = 0; k < roads_->paths.size(); ++k) {
             const engine::Path& P = roads_->paths[k];
             if (P.kind != engine::PathKind::Connector) continue;
@@ -1658,10 +1674,7 @@ void Driving::askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing) {
                 if (roads_->nextPaths[n] == thing.path) close(engine::PathId(k));
         }
     }
-    PathPoint front;
-    front.path = c.path;
-    front.along = c.along;
-    Route route = findRoute(*model_, routeBounds_, cls, front, t.destination);
+    Route route = routeFromWhereItIs(c, cls, t.destination);
     if (!route.found) return;
     route.vehicle = routeClass(c.vehicleClass);
     ++thingCounts_.anotherWays;
@@ -1827,6 +1840,24 @@ bool Driving::placeCarInSpace(CarId id, uint32_t vehicleClass, const PathPoint& 
     return true;
 }
 
+bool Driving::atTheKerb(CarId id, Real within) const {
+    const Car* c = car(id);
+    if (!c) return false;
+    if (const std::map<CarId, LaneMove>::const_iterator m = laneMoves_.find(id); m != laneMoves_.end() && m->second.kerb)
+        return true;
+    if (inSpace_.count(id) != 0) return true;
+    const std::map<CarId, TripId>::const_iterator ti = tripOfCar_.find(id);
+    const Trip* t = ti == tripOfCar_.end() ? nullptr : trips_.get(ti->second);
+    if (!t || t->pullInOffset == 0 || t->pullInMissed) return false;
+    // (how far on its way its destination is; not on the way yet: farther than any reach worth asking about)
+    Real before = -c->along;
+    for (std::size_t k = t->wayAt; k < t->way.paths.size(); ++k) {
+        if (t->way.paths[k] == t->destination.path) return before + t->destination.along <= within;
+        before += roads_->paths[t->way.paths[k].index].length;
+    }
+    return false;
+}
+
 Real Driving::offsetBeside(const PathPoint& at, engine::Vec2 point) const {
     if (!roads_ || !onRoad(at)) return 0;
     const engine::Vec2 side = engine::perp(roads_->directionAt(at.path, at.along));
@@ -1949,10 +1980,7 @@ void Driving::askAnotherWay(Car& c, Trip& t) {
     RouteClass cls = routeClass(c.vehicleClass);
     const std::vector<engine::PathId>::iterator at = std::lower_bound(cls.closed.begin(), cls.closed.end(), refused->connector);
     if (at == cls.closed.end() || *at != refused->connector) cls.closed.insert(at, refused->connector);
-    PathPoint front;
-    front.path = c.path;
-    front.along = c.along;
-    Route route = findRoute(*model_, routeBounds_, cls, front, t.destination);
+    Route route = routeFromWhereItIs(c, cls, t.destination);
     if (!route.found) return;   // no other way: it keeps its own and waits on (the measurements report a wait that cannot end)
     // ... that it can take now: the first turn of the new way, where lights run there, shows green (a driver gives up its
     // turn for one it sees it may take, not for another red; otherwise it waits on and asks again later).

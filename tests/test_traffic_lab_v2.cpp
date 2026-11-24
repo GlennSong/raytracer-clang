@@ -193,7 +193,14 @@ constexpr double kLongestStand = 100.0;
 // along the join's stretch (traffic_state.h followedAcross), as it did a split's. 0xd6190c9be20ab725 -> 0x4cb5074df110f915.
 // At 5 minutes: arrived 400 -> 401, standing 49 -> 48; at 20 minutes arrived 1892 -> 1891; overlaps, touches, no-reason
 // stands and box stops unchanged (0, 0, 0, 8.1 car-s all allowed). The same two failures.
-constexpr uint64_t kFiveMinuteStateHash = 0x4cb5074df110f915ull;
+// Retaken 2026-11-23 (sitting 5): LANE CHANGES ON BY DEFAULT (RT_LANE_CHANGES=0 gives the old 0x4cb5074df110f915
+// exactly). 0x4cb5074df110f915 -> 0x1e642ca0e2346d7c. Not the same traffic: trips may go wherever a lane change reaches
+// (mean planned 1300 -> 1511 m). At 5 minutes arrived 401 -> 183, standing 48 -> 103, lost a km 41.8 -> 55.7 s; at 20
+// minutes 58.5 -> 98.4 s a km, deadlocks 0, touches 0. Slower, taken on purpose (Glenn, 2026-11-23: a robust system
+// first, timings later). The same two failures, and Jumps (#320).
+// And 0x1e642ca0e2346d7c -> 0x5cbc93953af33b13: a route from where a car stands whose first move across does not fit
+// in what is left of its lane keeps its lane instead (Driving::routeFromWhereItIs). Every count the same.
+constexpr uint64_t kFiveMinuteStateHash = 0x5cbc93953af33b13ull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

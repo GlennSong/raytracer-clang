@@ -353,6 +353,10 @@ public:
     // HOW FAR `point` IS TO THE SIDE OF THE LANE'S LINE at `at` (m), as a car's offset reads (Car::offset: + toward the
     // kerb side of the way the lane runs): for a host to say where a kerb space lies beside its lane.
     Real offsetBeside(const PathPoint& at, engine::Vec2 point) const;
+    // AT THE KERB: the car is pulling out of a kerb space, stands beside its lane, or its trip ends by pulling into a
+    // space no more than `within` metres on along its way. A host carrying cars itself (the near tier's physics) leaves
+    // these to the driving: the move across is the driving's curve, which a car following its lane's line cannot drive.
+    bool atTheKerb(CarId car, Real within) const;
     // REMOVE A CAR from the road. Refused (false, with the reason) when it is not placed or is on a trip (end the trip
     // first).
     bool removeCar(CarId car, std::string* why = nullptr);
@@ -583,6 +587,7 @@ private:
     Car* findPlaced(CarId id);
     // The route for a placed car from its front to `to`, for its class.
     Route routeFor(const Car& c, const PathPoint& to) const;
+    Route routeFromWhereItIs(const Car& c, RouteClass cls, const PathPoint& to) const;
     void queueEvent(EventKind kind, CarId car, TripId trip, PersonId person);
     // Each record's trip (a null handle for a car not on one), by its place in cars_: walks cars_ and tripOfCar_
     // side by side, both in car-id order.

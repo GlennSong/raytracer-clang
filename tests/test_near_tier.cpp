@@ -700,6 +700,19 @@ ThingRun runThing(ThingKind kind) {
                         static_cast<unsigned long long>(rig.d().thingCounts().anotherWays),
                         static_cast<unsigned long long>(rig.d().thingCounts().anotherWaysWanted), rig.d().passOffset(id));
     }
+    if (std::getenv("RT_THING_LOG") && rig.d().car(driving::CarId(1000)))
+    {
+        std::printf("%s\n", rig.d().describeCar(driving::CarId(1000)).substr(0, 2500).c_str());
+        if (const engine::roads::Route* rt = rig.d().route(rig.d().tripOf(driving::CarId(1000)))) {
+            for (const engine::roads::RouteLeg& l : rt->legs) {
+                std::printf("    [thing] leg lane %u, %.1f m, %.2f..%.2f, lanes:", l.lane.index, l.metres, l.enterFraction, l.leaveFraction);
+                for (uint32_t k = l.firstLane; k < l.firstLane + l.laneCount; ++k)
+                    std::printf(" %u(%u/%u, %.1f m, next %u)", rt->lanes[k].lane.index, rt->lanes[k].changes, rt->lanes[k].changesIfStaying,
+                                rt->lanes[k].length, rig.d().roads()->paths[rt->lanes[k].lane.index].next.count);
+                std::printf("\n");
+            }
+        }
+    }
     out.honked = rig.d().thingCounts().horns > 0;
     out.swerved = rig.d().thingCounts().swerves > 0;
     out.anotherWay = rig.d().thingCounts().anotherWays > 0;
@@ -1167,12 +1180,16 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // near the same, 18 at minute 12). The collisions are BACK: contacts 0 -> 3, hits on walkers 0 -> 14, on other things
     // 0 -> 14, the longest off its lane 5.6 s -> 38.0 s (car 10, 0.53 m). Nothing in the near cars' driving changed:
     // the clean runs after bugs 1 and 3 were trajectories that happened to miss, not a fix. Bug 2 stays open.
-    CHECK(mostNear == 18);
-    CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 117u);
-    CHECK(c.intoLane == 80u);
+    // And again (sitting 5: parking on the driving's curve, lane changes on by default, and a car pulling out of or into
+    // a kerb space left to the driving, never taken into physics: Driving::atTheKerb, kKerbHandBack) from 18 at minute
+    // 12, in 117, out 80, 0x2bad62395eeaee44 to 20 at minute 9, in 111, out 91, 0x268c4405c1d0db48. Contacts 0, and every
+    // kind of hit 3/14/14 -> 0. STILL FAILING, not loosened: the longest off its lane 38.0 s -> 7.9 s (car 204, 1.12 m).
+    CHECK(mostNear == 20);
+    CHECK(mostNearAt == 9);
+    CHECK(c.intoPhysics == 111u);
+    CHECK(c.intoLane == 91u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x2bad62395eeaee44ull);
+    CHECK(hash == 0x268c4405c1d0db48ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

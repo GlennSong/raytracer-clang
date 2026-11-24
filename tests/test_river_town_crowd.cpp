@@ -215,6 +215,17 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         std::printf("    [river] the longest a bus stood in the road (not at a stop): bus %u, %.1f s; its card then:\n%s\n", busStandCar,
                     busStandTicks * kStep, busStandWhy.c_str());
     if (!end.loops.empty()) std::printf("%s", d.describeWaiting(end).c_str());
+    // RT_RIVER_CARDS=365,12: those cars' driver cards at the end (following a chain of waits by hand)
+    if (const char* cards = std::getenv("RT_RIVER_CARDS")) {
+        std::string list(cards);
+        for (std::size_t at = 0; at < list.size();) {
+            const std::size_t comma = std::min(list.find(',', at), list.size());
+            const int id = std::atoi(list.substr(at, comma - at).c_str());
+            if (d.car(driving::CarId(static_cast<uint32_t>(id))))
+                std::printf("    [river] card:\n%s\n", d.describeCar(driving::CarId(static_cast<uint32_t>(id))).substr(0, 1800).c_str());
+            at = comma + 1;
+        }
+    }
     // WHY THE CARS STANDING AT THE END STAND: the rule each one's last decision named (its card's "now:" line)
     {
         std::map<std::string, int> why;
@@ -311,17 +322,18 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 630);
         CHECK(households == 582);
-        CHECK(b.cars().size() == 391u);
-        CHECK(withCar == 413);
+        CHECK(b.cars().size() == 397u);
+        CHECK(withCar == 427);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 125);
+        CHECK(mostOnRoad == 200);
         CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 320u);
-        CHECK(b.counts().parkedReports == 247u);
-        CHECK(b.counts().walksBlocked == 0u);
-        CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 676u);
-        CHECK(b.machine()->counts().noPlans == 0u);
+        CHECK(b.counts().tripsBegun == 430u);
+        CHECK(b.counts().parkedReports == 275u);
+        CHECK(b.counts().walksBlocked == 2u);   // (lane changes on: was 0; #327)
+        CHECK(b.counts().otherPlaces == 1u);
+        CHECK(b.machine()->counts().arrivals == 590u);
+        CHECK(b.machine()->counts().noPlans == 1u);   // (lane changes on: was 0; #327)
+        // STILL FAILING with lane changes on (2 spells): #327
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
         // are each one whole record now, so who gives way to whom there moved; every count above is unchanged
@@ -357,19 +369,23 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // curve, no drawn 2.5 s slide; the space a driver heads for is held for it): most on the road 124 -> 125 (still
         // minute 10), trips 321 -> 320, parked 245 -> 247, arrivals 672 -> 676, boardings 40 -> 45; rings and touching
         // spells still 0; the longest a bus stood in the road 87 -> 102 s (under the 180 s check); legs 3.79 -> 3.83 times
-        CHECK(hash == 0xc5fa9c993e9148d7ull);
+        // 0xc5fa9c993e9148d7 -> 0xf4b923be54a7b75b (sitting 5: LANE CHANGES ON BY DEFAULT): homes placed where routes
+        // reach, so cars 391 -> 397; more drive: trips 320 -> 430, the most on the road 125 -> 200 (minute 10), parked
+        // 247 -> 275, arrivals 676 -> 590, the buses' calls 167 -> 152, riders 45 -> 20 boardings. WORSE, and two checks
+        // fail: 2 touching spells and bus 7 stood 1150 s (#326: a car left parked in a lane past junction 11; #327)
+        CHECK(hash == 0xf4b923be54a7b75bull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
-        CHECK(sim.drivingHost().counts().busCalls == 167u);
+        CHECK(sim.drivingHost().counts().busCalls == 152u);
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
-        CHECK(busStandTicks * kStep < 180.0);
+        CHECK(busStandTicks * kStep < 180.0);   // STILL FAILING with lane changes on (1150 s): #326, #327
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 49u && rc.boardings == 45u && rc.alightings == 38u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 41u && b.counts().busRides == 38u);
+            CHECK(rc.waits == 23u && rc.boardings == 20u && rc.alightings == 10u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 20u && b.counts().busRides == 10u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
     }

@@ -429,25 +429,29 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
     // rings still 0; away from a kerb end 2.16% -> 2.30%; hash 0xa7a50cd8f2bb2c29 -> 0xe8da33de4e20c514. Pinned now too:
     // every trip ended in its space (none in the lane) and no car moved more than a centimetre between its space and the
     // driving (4 mm). Not pinned, looked at: the longest stand 685.6 s -> 690.4 s (the same car 68, junction 7).
+    // RE-PINNED (sitting 5: lane changes on by default): homes are placed where a class's routes reach, which lane
+    // changes widen, so cars 209 -> 215 (with one 222 -> 233); trips 326 -> 337, parked 261 -> 272, arrivals 494 -> 473
+    // (more drive, fewer walk), the most on the road 90 at minute 10 -> 98 at minute 8, busy minutes 14; rings 0; every
+    // trip still ends in its space; hash 0xe8da33de4e20c514 -> 0x76038c965dbef7af. Longest stand 690.4 -> 457.3 s.
     if (minutes == kCrowdMinutes) {
         CHECK(b.residentCount() == 350);
         CHECK(households == 323);
-        CHECK(b.cars().size() == 209u);
-        CHECK(withCar == 222);
+        CHECK(b.cars().size() == 215u);
+        CHECK(withCar == 233);
         CHECK(b.markers().size() == 451u);
-        CHECK(mostOnRoad == 90);
-        CHECK(mostOnRoadAt == 10);
+        CHECK(mostOnRoad == 98);
+        CHECK(mostOnRoadAt == 8);
         CHECK(busyMinutes == 14);
-        CHECK(b.counts().tripsBegun == 326u);
-        CHECK(b.counts().parkedReports == 261u);
+        CHECK(b.counts().tripsBegun == 337u);
+        CHECK(b.counts().parkedReports == 272u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 494u);
+        CHECK(b.machine()->counts().arrivals == 473u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(b.machine()->counts().errors == 0u);
         CHECK(b.machine()->counts().refused == 0u);
-        CHECK(hash == 0xe8da33de4e20c514ull);
-        CHECK(d.kerbMoveCounts().pulledIn == 261u && d.kerbMoveCounts().stoppedInLane == 0u);
+        CHECK(hash == 0x76038c965dbef7afull);
+        CHECK(d.kerbMoveCounts().pulledIn == 272u && d.kerbMoveCounts().stoppedInLane == 0u);
         CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }
     // RT_CROWD_LOG=1: why the first twenty planned as they did, everybody with no way, and the car that has stood
