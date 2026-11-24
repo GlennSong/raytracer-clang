@@ -13,6 +13,8 @@
 #include "../scripting/model_recipes.h"   // readScriptList
 #endif
 
+#include <sstream>
+#include <cctype>
 #include <nlohmann/json.hpp>
 
 #include <cmath>
@@ -71,12 +73,18 @@ void PrefabUseSystem::onStart(FrameContext& ctx) {
         s.shut = j.value("shut", std::string());
         s.moving = j.value("moving", std::string());
         s.running = j.value("running", std::string());
+        if (j.contains("playing")) {
+            if (j["playing"].is_string()) s.playing.push_back(j["playing"].get<std::string>());
+            else if (j["playing"].is_array()) for (const nlohmann::json& n : j["playing"]) if (n.is_string()) s.playing.push_back(n.get<std::string>());
+        }
         s.volume = j.value("volume", 1.0f);
         s.pitch = j.value("pitch", 1.0f);
         s.range = j.value("range", 12.0);
         sounds_[it.key()] = s;
     }
     soundsRead_ = true;
+    tunes_ = nlohmann::json();
+    if (!readScriptList("tunes.lua", std::string(), tunes_, &why)) LOG_WARN << "[prefab uses] tunes.lua: " << why << " (nothing plays music)";
 #endif
 }
 
@@ -98,6 +106,51 @@ AudioClipHandle PrefabUseSystem::clip(FrameContext& ctx, const std::string& name
     else if (name == "winch") pcm = sfx::reelWinch(rate, 4);
     else if (name == "roll") pcm = sfx::boardRoll(rate, 6);
     else if (name == "freewheel") pcm = sfx::freewheel(rate, 2);
+    else if (name.rfind("tune:", 0) == 0) {
+        // A TUNE (tunes.lua): each part a line of notes played from the start together. A note is `C4:1` (a pitch and
+        // how many beats), `C4+E4+G4:2` (a chord), `-:1` (a rest); `|` is only for the eye.
+        const std::string which = name.substr(5);
+        if (tunes_.is_object() && tunes_.contains(which) && tunes_[which].is_object()) {
+            const nlohmann::json& t = tunes_[which];
+            std::vector<sfx::TuneNote> notes;
+            int part = 0;
+            for (const nlohmann::json& line : t.value("parts", nlohmann::json::array())) {
+                if (!line.is_string()) continue;
+                std::istringstream words(line.get<std::string>());
+                std::string w;
+                double at = 0;
+                while (words >> w) {
+                    const std::size_t colon = w.find(':');
+                    if (w == "|" || colon == std::string::npos) continue;
+                    const double beats = std::atof(w.substr(colon + 1).c_str());
+                    std::istringstream chord(w.substr(0, colon));
+                    std::string one;
+                    while (std::getline(chord, one, '+')) {
+                        if (one.empty() || one == "-") continue;
+                        static const int kStep[7] = {9, 11, 0, 2, 4, 5, 7};   // A B C D E F G
+                        const char letter = static_cast<char>(std::toupper(static_cast<unsigned char>(one[0])));
+                        if (letter < 'A' || letter > 'G') continue;
+                        int semi = kStep[letter - 'A'];
+                        std::size_t k = 1;
+                        if (k < one.size() && one[k] == '#') { ++semi; ++k; }
+                        else if (k < one.size() && one[k] == 'b') { --semi; ++k; }
+                        const int octave = k < one.size() ? std::atoi(one.c_str() + k) : 4;
+                        sfx::TuneNote n;
+                        n.pitch = 12 * (octave + 1) + semi;
+                        n.start = at;
+                        n.length = beats;
+                        n.velocity = part == 0 ? 0.85f : 0.5f;   // the tune over its accompaniment
+                        notes.push_back(n);
+                    }
+                    at += beats;
+                }
+                ++part;
+            }
+            pcm = sfx::tune(notes, t.value("voice", std::string("piano")) == "record" ? sfx::TuneVoice::Record : sfx::TuneVoice::Piano,
+                            t.value("bpm", 100.0), rate, 7);
+        }
+        if (pcm.empty()) LOG_WARN << "[prefab uses] no tune named '" << which << "' in tunes.lua";
+    }
     else LOG_WARN << "[prefab uses] prefab_sounds.lua names the clip '" << name << "', which is not one of the engine's";
     const AudioClipHandle made = pcm.empty() ? AudioClipHandle() : ctx.audio.createClip(pcm.data(), pcm.size(), 1, rate);
     clips_[name] = made;
@@ -120,7 +173,8 @@ void PrefabUseSystem::sounds(FrameContext& ctx) {
             if (kind == sounds_.end()) continue;
             const Sound& s = kind->second;
             const bool runs = !u.use.run.empty() && (u.on || u.coasting > 0);
-            const bool loop = (u.moving && !s.moving.empty()) || (runs && !s.running.empty());
+            const bool plays = u.on && !s.playing.empty();   // (music: for as long as the use is on)
+            const bool loop = (u.moving && !s.moving.empty()) || (runs && !s.running.empty()) || plays;
             if (cues == 0 && !loop) continue;
             Vec3 at;
             Quat turn;
@@ -139,10 +193,12 @@ void PrefabUseSystem::sounds(FrameContext& ctx) {
             if (cues & PrefabUses::Use::Arrived) once(u.on ? s.arrived : (s.shut.empty() ? s.arrived : s.shut));
             if (!loop) continue;
             const std::pair<uint64_t, std::size_t> key{(uint64_t(e.index) << 32) | e.generation, i};
+            if (plays && (cues & PrefabUses::Use::Done)) ++played_[key];   // (the next tune each time it is started)
             wanted[key] = true;
             std::map<std::pair<uint64_t, std::size_t>, AudioVoiceHandle>::iterator voice = loops_.find(key);
             if (voice == loops_.end() || !ctx.audio.isPlaying(voice->second)) {
-                const AudioClipHandle c = clip(ctx, u.moving && !s.moving.empty() ? s.moving : s.running);
+                const AudioClipHandle c = clip(ctx, u.moving && !s.moving.empty() ? s.moving
+                                                    : plays ? s.playing[(played_[key] + s.playing.size() - 1) % s.playing.size()] : s.running);
                 if (!c.valid()) continue;
                 AudioPlayParams p;
                 p.volume = s.volume;
@@ -212,6 +268,32 @@ void PrefabUseSystem::update(FrameContext& ctx) {
     });
     if (!player.valid() || ctx.world.has<InVehicle>(player) || ctx.world.has<Passenger>(player)) return;
     const Vec3 feet = pos - Vec3(0, feetDrop, 0);
+
+    // WHAT DOES ITSELF AS SOMEONE COMES NEAR (a use's `near`): an automatic door opens, a revolving door turns. Done
+    // while the player is within reach of the use's marker and on its level; kept done while they stay.
+    {
+        std::vector<Entity> with;
+        ctx.world.each<PrefabUses>([&](Entity e, PrefabUses& u) {
+            for (const PrefabUses::Use& one : u.uses) if (one.use.near > 0) { with.push_back(e); break; }
+        });
+        for (Entity e : with) {
+            PrefabUses* uses = ctx.world.get<PrefabUses>(e);
+            for (std::size_t i = 0; uses != nullptr && i < uses->uses.size(); ++i) {
+                PrefabUses::Use& u = uses->uses[i];
+                if (u.use.near <= 0) continue;
+                Vec3 at;
+                Quat turn;
+                if (!modelMarkerWorld(ctx.world, e, u.use.at, at, turn)) continue;
+                const bool here = std::hypot(pos.x - at.x, pos.z - at.z) < u.use.near && feet.y < at.y + Real(0.5) && feet.y > at.y - Real(3.5);
+                if (here) {
+                    if (!u.on) { if (prefabUseOffered(*uses, i)) setPrefabUse(ctx.world, e, i, true); }
+                    else if (u.use.seconds > 0) u.left = std::max(u.left, u.use.seconds);
+                } else if (u.on && u.use.seconds <= 0 && u.use.back.empty()) {
+                    setPrefabUse(ctx.world, e, i, false);
+                }
+            }
+        }
+    }
 
     InteractCommand cmd;
     const bool commanded = takeInteractCommand(ctx.world, player, "prefab", cmd);

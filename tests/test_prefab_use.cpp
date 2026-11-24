@@ -1,6 +1,7 @@
 // What a person can do to a stamped prefab (#191, step 9): a line's `uses`, and doing them on a copy.
 #include "test_framework.h"
 
+#include "../src/engine/audio/sfx.h"
 #include "../src/engine/components.h"
 #include "../src/engine/model_motion.h"
 #include "../src/engine/prefab_stamp.h"
@@ -220,6 +221,86 @@ TEST_CASE(a_use_that_needs_another_waits_for_it_and_holds_it_open) {
     std::string why;
     CHECK(!readPrefabLine("washer", line, q, std::string(), &why));
     CHECK(why.find("names 'lid'") != std::string::npos);
+}
+
+// THE SHIPPED MICROWAVE (Glenn, 2026-11-23: "opening the door should stop the microwave"): it is not switched on with
+// its door open (`unless`), opening the door turns it off (`stops`), and its lamp is lit while it runs or stands open.
+// The fridge's freezer drawers pull out only with the freezer's door open; the automatic doors say how near.
+TEST_CASE(opening_a_microwaves_door_stops_it_and_a_freezers_drawers_wait_for_its_door) {
+    World world;
+    ModelStore store;
+    Prefab p;
+    CHECK(findPrefab("microwave", p));
+    const Entity e = stampPrefab(world, nullptr, p, Transform(), std::string(), nullptr, &store);
+    CHECK(e.valid());
+    if (!e.valid()) return;
+    const PrefabUses* uses = world.get<PrefabUses>(e);
+    CHECK(uses != nullptr && uses->uses.size() >= 2);
+    if (uses == nullptr || uses->uses.size() < 2) return;
+    std::size_t run = 99, door = 99;
+    for (std::size_t i = 0; i < uses->uses.size(); ++i) {
+        if (uses->uses[i].use.id == "run") run = i;
+        if (uses->uses[i].use.id == "door") door = i;
+    }
+    CHECK(run != 99 && door != 99);
+    if (run == 99 || door == 99) return;
+    CHECK(doPrefabUse(world, e, run));                      // switched on
+    CHECK(world.get<PrefabUses>(e)->uses[run].on);
+    CHECK(!world.get<PrefabUses>(e)->uses[run].use.light.empty());
+    CHECK(doPrefabUse(world, e, door));                     // the door is opened ...
+    CHECK(world.get<PrefabUses>(e)->uses[door].on);
+    CHECK(!world.get<PrefabUses>(e)->uses[run].on);         // ... and it has stopped
+    CHECK(!prefabUseOffered(*world.get<PrefabUses>(e), run));   // and will not start with the door open
+    CHECK(doPrefabUse(world, e, door));                     // shut
+    CHECK(prefabUseOffered(*world.get<PrefabUses>(e), run));
+
+    Prefab f;
+    CHECK(findPrefab("fridge", f));
+    const Entity fe = stampPrefab(world, nullptr, f, Transform(), std::string(), nullptr, &store);
+    CHECK(fe.valid());
+    if (!fe.valid()) return;
+    const PrefabUses* fu = world.get<PrefabUses>(fe);
+    std::size_t freezer = 99;
+    int drawers = 0;
+    for (std::size_t i = 0; fu != nullptr && i < fu->uses.size(); ++i) {
+        if (fu->uses[i].use.id == "freezer") freezer = i;
+        if (fu->uses[i].use.say == "pull out") { ++drawers; CHECK(!prefabUseOffered(*fu, i)); }
+    }
+    CHECK(freezer != 99 && drawers == 2);
+    if (freezer == 99) return;
+    CHECK(doPrefabUse(world, fe, freezer));
+    for (std::size_t i = 0; i < world.get<PrefabUses>(fe)->uses.size(); ++i)
+        if (world.get<PrefabUses>(fe)->uses[i].use.say == "pull out") CHECK(doPrefabUse(world, fe, i));
+
+    Prefab d;
+    CHECK(findPrefab("automatic_doors", d));
+    CHECK(!d.uses.empty() && d.uses[0].near > 2.0);
+    Prefab r;
+    CHECK(findPrefab("revolving_door", r));
+    CHECK(r.uses.size() == 3 && r.uses[0].near > 1.0);
+}
+
+// A TUNE IS MADE FROM ITS NOTES (audio/sfx.h tune; tunes.lua): as long as its beats, never clipping, the same every
+// time, and a loop without a seam -- a note held over the end rings on at the start.
+TEST_CASE(a_tune_is_made_from_its_notes_and_loops_without_a_seam) {
+    std::vector<sfx::TuneNote> notes;
+    for (int i = 0; i < 8; ++i) { sfx::TuneNote n; n.pitch = 60 + i; n.start = i; n.length = 1; notes.push_back(n); }
+    const uint32_t rate = 24000;
+    for (sfx::TuneVoice voice : {sfx::TuneVoice::Piano, sfx::TuneVoice::Record}) {
+        const std::vector<float> a = sfx::tune(notes, voice, 120.0, rate, 3), b = sfx::tune(notes, voice, 120.0, rate, 3);
+        CHECK(a.size() == static_cast<std::size_t>(8 * 0.5 * rate));   // eight beats at 120 a minute: four seconds
+        CHECK(a == b);
+        float peak = 0, energy = 0;
+        for (float v : a) { peak = std::max(peak, std::fabs(v)); energy += v * v; }
+        CHECK(peak > 0.5f && peak <= 0.81f);
+        CHECK(energy / a.size() > 1e-4f);
+        // the last note still rings as the clip ends, and the start carries on from it: no jump at the seam greater
+        // than between any two samples of the last note itself
+        float seam = std::fabs(a.front() - a.back()), step = 0;
+        for (std::size_t i = a.size() - 2000; i + 1 < a.size(); ++i) step = std::max(step, std::fabs(a[i + 1] - a[i]));
+        CHECK(seam <= step * 1.5f + 0.02f);
+    }
+    CHECK(sfx::tune({}, sfx::TuneVoice::Piano, 120.0).empty());
 }
 
 TEST_CASE(a_pattern_use_is_made_for_every_part_that_fits_and_a_push_coasts_to_a_stop) {

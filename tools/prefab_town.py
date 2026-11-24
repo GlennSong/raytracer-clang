@@ -108,9 +108,9 @@ ROOMS = [
         P("kitchen_wall_cupboard", -3.1, B + 0.26, 0, 1.45), P("kitchen_wall_cupboard", -1.7, B + 0.26, 0, 1.45),
         P("pedal_bin", -0.9, B + 0.35), P("dining_table", -2.8, 0.4), P("dining_chair", -3.2, 1.2, 180), P("dining_chair", -2.4, 1.2, 180),
         P("dining_chair", -3.2, -0.4, 0), P("dining_chair", -2.4, -0.4, 0), P("laptop", -2.8, 0.4, 0, TOP["table"]),
-        P("tv_unit", 2.6, B + 0.33), P("sofa", 2.6, 0.9, 180), P("coffee_table", 2.6, -0.8), P("globe", 2.9, -0.8, 0, TOP["low"]),
+        P("tv_unit", 2.6, B + 0.33), P("sofa", 2.6, 0.9, 180), P("coffee_table", 2.6, -0.8), P("globe", 2.9, -0.8, 0, TOP["low"]), P("metronome", 2.25, -0.8, 0, TOP["low"]),
         P("recliner", 4.3, -0.6, 250), P("rocking_chair", 0.7, 0.2, 110), P("grandfather_clock", 4.6, B + 0.25),
-        P("upright_piano", -0.4, 3.55, 180), P("metronome", -0.8, 3.75, 180, 1.23), P("record_player", 4.5, 2.6, 270, TOP["worktop"]),
+        P("upright_piano", -0.4, 3.55, 180), P("record_player", 4.5, 2.6, 270, TOP["worktop"]),
         P("kitchen_base", 4.6, 2.6, 270), P("curtains", 2.6, 3.8, 180), P("ceiling_fan", 2.6, 0, 0, 2.9), P("potted_plant", 0.6, B + 0.3),
     ]),
     dict(name="flat: bedroom and bathroom", w=9, yaw=180, door=1.02, floor="wood", things=[

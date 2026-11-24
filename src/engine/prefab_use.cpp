@@ -71,6 +71,7 @@ std::vector<PrefabUse> expanded(const ProcModel& model, const PrefabUse& use) {
                 one.id = withStar(use.id, star);
                 one.needs = withStar(use.needs, star);
                 one.unless = withStar(use.unless, star);
+                one.stops = withStar(use.stops, star);
                 for (std::vector<std::pair<std::string, Real>>* list : {&one.move, &one.run, &one.sway})
                     for (std::pair<std::string, Real>& n : *list) n.first = withStar(n.first, star);
                 out.push_back(one);
@@ -170,6 +171,12 @@ bool setPrefabUse(World& world, Entity instance, std::size_t index, bool on) {
     u.moving = !u.use.move.empty() && u.use.speed > 0;
     // A use that cannot be undone by hand and has no time of its own (a button pressed) lets go by itself.
     if (on && u.use.back.empty() && u.use.seconds <= 0 && u.use.run.empty() && !u.use.move.empty()) u.left = Real(0.4);
+    // DOING THIS STOPS THAT (a use's `stops`): opening the door turns the machine off.
+    if (on && !was && !u.use.stops.empty()) {
+        const std::string stops = u.use.stops;
+        for (std::size_t i = 0; i < uses->uses.size(); ++i)
+            if (i != index && uses->uses[i].on && uses->uses[i].use.id == stops) setPrefabUse(world, instance, i, false);
+    }
     return true;
 }
 

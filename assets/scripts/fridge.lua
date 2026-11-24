@@ -1,6 +1,7 @@
 -- A FRIDGE WITH DOORS THAT OPEN (#191): a tall white box, the freezer below and the fridge above, each with its
 -- own door on a node (`fridge_door`, `freezer_door`), hinged on the left and opening 120 degrees. Inside: glass
--- shelves, a lit back, bins in the door. Markers: a handle on each door, and `light` inside.
+-- shelves, a lit back, bins in the door; in the freezer two drawers that slide out (`drawer_1`, `drawer_2`, each with
+-- a marker `drawer_N_handle`). Markers: a handle on each door, and `light` inside.
 -- It stands on y = 0 at its own origin, its doors facing +z.
 local kit = require "model_kit"
 local V = kit.V
@@ -31,8 +32,25 @@ c.box("hard", V(0, FOOT + (H - FOOT) / 2, -D / 2 + T + 0.002), V(W - 2 * T, H - 
 local low, high = FOOT + FZ + T / 2, H - T
 for i = 1, 3 do c.box("glass", V(0, low + (high - low) * i / 4, -0.01), V(W - 2 * T, 0.006, D - T - 0.08), 0.0, V(0.8, 0.9, 0.9), 1) end
 c.box("light", V(0, high - 0.05, -D / 2 + T + 0.02), V(0.2, 0.03, 0.02), 0.0, V(1, 1, 0.95), 1)
-for i = 1, 2 do c.box("hard", V(0, FOOT + T + (FZ - T) * (i - 0.5) / 2, 0), V(W - 2 * T - 0.02, (FZ - T) / 2 - 0.02, D - T - 0.06), 0.01, LINER, 1) end   -- the freezer's drawers
 kit.put(m, m, c)
+-- the freezer's two drawers, each on a node that slides out (`drawer_1` below, `drawer_2` above): a tray with a clear
+-- front, frozen things in it
+for i = 1, 2 do
+  local dh, dw, dd = (FZ - T) / 2 - 0.03, W - 2 * T - 0.02, D - T - 0.08
+  local y0 = FOOT + T + (FZ - T) * (i - 1) / 2 + 0.01
+  local dr = m:node("drawer_" .. i, { pos = { 0, y0, 0.01 }, motion = { slide = { 0, 0, 1 }, min = 0, max = 0.4 } })
+  local k = kit.maker()
+  k.box("hard", V(0, 0.006, 0), V(dw, 0.012, dd), 0.0, LINER, 1)
+  for _, x in ipairs{ -dw / 2 + 0.005, dw / 2 - 0.005 } do k.box("hard", V(x, dh / 2, 0), V(0.01, dh, dd), 0.0, LINER, 1) end
+  k.box("hard", V(0, dh / 2, -dd / 2 + 0.005), V(dw, dh, 0.01), 0.0, LINER, 1)
+  k.box("glass", V(0, dh / 2, dd / 2 - 0.005), V(dw, dh, 0.01), 0.0, V(0.8, 0.9, 0.95), 1)
+  k.box("hard", V(0, dh - 0.02, dd / 2 + 0.008), V(dw * 0.5, 0.025, 0.016), 0.006, LINER * 0.9, 1)                 -- its grip
+  local things = i == 1 and { { -0.12, V(0.85, 0.3, 0.25) }, { 0.06, V(0.3, 0.5, 0.8) }, { 0.17, V(0.9, 0.85, 0.5) } }
+                         or { { -0.14, V(0.4, 0.7, 0.4) }, { 0.0, V(0.95, 0.95, 0.9) }, { 0.14, V(0.7, 0.4, 0.6) } }
+  for _, t in ipairs(things) do k.box("hard", V(t[1], 0.012 + dh * 0.3, 0.02), V(0.1, dh * 0.6, dd * 0.55), 0.008, t[2], 1) end
+  kit.put(m, dr, k)
+  dr:marker("drawer_" .. i .. "_handle", { pos = { 0, dh - 0.02, dd / 2 + 0.03 }, role = "hold" })
+end
 kit.far_box(m, m, part, { W, H, D + DOOR }, { 0, H / 2, DOOR / 2 }, col, far)
 m:shape("back", { box = { W, H, T }, pos = { 0, H / 2, -D / 2 + T / 2 } })
 m:shape("left", { box = { T, H, D }, pos = { -W / 2 + T / 2, H / 2, 0 } })

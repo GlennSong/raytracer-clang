@@ -14,6 +14,7 @@
 #include "../audio/audio_engine.h"
 #include "../system.h"
 
+#include <nlohmann/json.hpp>
 #include <map>
 #include <string>
 #include <utility>
@@ -34,6 +35,7 @@ private:
     // clip is one of the engine's procedural sounds by name (audio/sfx.h), made once.
     struct Sound {
         std::string done, undone, arrived, shut, moving, running;
+        std::vector<std::string> playing;   // tunes, one after another each time the use is done: a loop while it is on
         float volume = 1.0f, pitch = 1.0f;
         Real range = 12.0;
     };
@@ -41,6 +43,8 @@ private:
     AudioClipHandle clip(FrameContext& ctx, const std::string& name);
     std::map<std::string, Sound> sounds_;
     std::map<std::string, AudioClipHandle> clips_;
+    nlohmann::json tunes_;                                        // tunes.lua: what a clip named "tune:<name>" plays
+    std::map<std::pair<uint64_t, std::size_t>, uint32_t> played_;   // per copy and use: how many times it has been done
     std::map<std::pair<uint64_t, std::size_t>, AudioVoiceHandle> loops_;   // (copy, use) -> its looping voice
     bool soundsRead_ = false;
 };

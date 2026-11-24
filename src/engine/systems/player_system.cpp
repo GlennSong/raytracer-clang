@@ -574,8 +574,7 @@ void PlayerSystem::update(FrameContext& ctx) {
             : Real(1);
     camera.eye = t->position + Vec3(0, kEyeAboveCentre * eyeScale, 0);
     // SEATED or LYING (InteractionSystem, engine/interaction.h): the eye is the pose's, turned once to face along
-    // it -- after that the mouse looks round as usual. First person while there: the shoulder rig frames the
-    // standing capsule, not the seat.
+    // it -- after that the mouse looks round as usual. In third person the shoulder rig frames the seat (below).
     Seated* seated = ctx.world.get<Seated>(playerEntity);
     if (seated) {
         camera.eye = seated->eye;
@@ -594,12 +593,13 @@ void PlayerSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
-    if ((thirdPerson || body_.is(body_.ragdoll)) && !seated) {   // limp: watched from outside, whichever view
+    if (thirdPerson || body_.is(body_.ragdoll)) {   // limp: watched from outside, whichever view
         // Over the shoulder: mouse look still steers the player heading — the
         // fly controller owns yaw/pitch exactly as in first person (CameraSystem
         // feeds it look input); the shoulder rig just frames that heading from
         // behind, fly pitch tilting the rig.
-        shoulder.setTarget(t->position, camera.yaw);
+        // (sat or lying on something: the rig frames the body where it is, not the capsule left standing)
+        shoulder.setTarget(seated ? seated->eye - Vec3(0, seated->look.y > 0.6 ? 0.2 : kEyeAboveCentre * eyeScale, 0) : t->position, camera.yaw);
         // Scroll dollies the shoulder arm (into its preset zoom range). Feed
         // ZOOM ONLY: the fly controller owns yaw/pitch, so a full update() would
         // double-apply the look delta on top of it — with zero look delta

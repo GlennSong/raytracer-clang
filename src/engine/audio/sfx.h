@@ -144,6 +144,20 @@ std::vector<float> metalGrab(uint32_t sampleRate = 48000, uint32_t seed = 1);   
 // firings per revolution). Callers multiply it; the mapping core owns the band.
 constexpr double kEngineRefHz = 56.0;
 
+// A TUNE, played (#191; Glenn, 2026-11-23: "would be fun to have musical functionality ... to play a song"): notes
+// rendered to one clip that LOOPS without a seam (a note still ringing at the end rings on over the start).
+// A note is a MIDI pitch (60 = middle C), when it starts and how long it is held, in beats, and how hard it is
+// struck (0..1). `voice`: a PIANO (struck strings: a bright attack, partials a little sharp of whole multiples,
+// the high ones dying first, the damper falling when the key is let go) or a RECORD (a mellow bell-like keyboard
+// through a worn record: its top rolled off, crackle and a little hiss over it).
+struct TuneNote {
+    int pitch = 60;
+    double start = 0, length = 1;
+    float velocity = 0.8f;
+};
+enum class TuneVoice { Piano, Record };
+std::vector<float> tune(const std::vector<TuneNote>& notes, TuneVoice voice, double bpm, uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 }  // namespace sfx
 }  // namespace engine
 

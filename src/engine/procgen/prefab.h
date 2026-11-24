@@ -79,6 +79,12 @@ namespace engine {
 struct PrefabUse {
     std::string at, say, back;
     std::string id, needs, unless;
+    // stops = "run": doing this use turns that one off (opening a microwave's door stops it).
+    std::string stops;
+    // near = 2.8: it is done by itself while someone is within that many metres of its marker (level with it), and
+    // stays done while they stay: an automatic door, a revolving door. A use with `seconds` lets go that long after
+    // they have gone; one without lets go at once.
+    Real near = 0;
     std::vector<std::pair<std::string, Real>> move;   // node, value (degrees or metres, as the line says)
     Real speed = 0;
     std::vector<std::pair<std::string, Real>> run;    // node, rate (degrees or metres a second)

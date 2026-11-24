@@ -42,6 +42,7 @@ kit.far_box(m, m, "metal", { 2 * R, 0.18, 2 * R }, { 0, H + 0.09, 0 }, col, far)
 kit.far_box(m, m, "glass", { 2 * R, H, 2 * R }, { 0, H / 2, 0 }, GLASS, far)
 m:marker("outside", { pos = { 0, 0, R + 0.8 }, turn = { 0, 180, 0 }, role = "stand" })
 m:marker("inside", { pos = { 0, 0, -R - 0.8 }, role = "stand" })
+m:marker("middle", { pos = { 0, 1.0, 0 } })     -- (the drum's own middle: who is within reach of it is in the door)
 
 local wings = m:node("wings", { pos = { 0, 0, 0 }, turn = { 0, 45, 0 }, motion = { turn = { 0, 1, 0 } } })
 local k = kit.maker()

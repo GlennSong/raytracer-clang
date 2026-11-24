@@ -52,6 +52,7 @@ elseif a.kind == "microwave" then
   kit.put(m, m, c)
   m:shape("body", { box = { W, H, D }, pos = { 0, H / 2, 0 } })
   m:marker("buttons", { pos = { W / 2 - 0.07, 0.1, D / 2 + 0.02 }, role = "press" })
+  m:marker("light", { pos = { -0.06, H - T - 0.03, 0 }, turn = { 90, 0, 0 }, role = "lamp" })   -- the lamp inside
   local plate = m:node("plate", { pos = { -0.06, T + 0.01, 0 }, motion = { turn = { 0, 1, 0 } } })
   local p = kit.maker()
   p.turned("glass", V(0, 0, 0), { { 0, 0 }, { 0.14, 0 }, { 0.15, 0.008 }, { 0, 0.006 } }, V(0.85, 0.9, 0.9), 1, 20)

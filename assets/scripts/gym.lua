@@ -60,7 +60,7 @@ elseif a.kind == "bench_press" then
   end
   c.rod("metal", V(-1.05, 1.06, -0.34), V(1.05, 1.06, -0.34), 0.015, GREY, 8)
   kit.put(m, m, c)
-  m:marker("lie", { pos = { 0, 0.48, 0.2 }, turn = { 0, 180, 0 }, role = "lie", size = 1.2 })
+  m:marker("lie", { pos = { 0, 0.48, -0.3 }, role = "lie", size = 1.2 })            -- (the head under the bar, feet toward +z)
   m:shape("bench", { box = { 0.3, 0.48, 1.2 }, pos = { 0, 0.24, 0.1 } })
   m:shape("uprights", { box = { 1.1, 1.1, 0.1 }, pos = { 0, 0.55, -0.4 } })
   return m

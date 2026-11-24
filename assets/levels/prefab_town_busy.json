@@ -2575,7 +2575,26 @@
   },
   {
    "id": 161,
-   "name": "flat: kitchen and living room / recliner 23",
+   "name": "flat: kitchen and living room / metronome 23",
+   "shape": "prefab",
+   "prefab": "metronome_in_use",
+   "position": [
+    -25.25,
+    0.468,
+    11.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 162,
+   "name": "flat: kitchen and living room / recliner 24",
    "shape": "prefab",
    "prefab": "recliner_in_use",
    "position": [
@@ -2593,8 +2612,8 @@
    }
   },
   {
-   "id": 162,
-   "name": "flat: kitchen and living room / rocking_chair 24",
+   "id": 163,
+   "name": "flat: kitchen and living room / rocking_chair 25",
    "shape": "prefab",
    "prefab": "rocking_chair_in_use",
    "position": [
@@ -2612,8 +2631,8 @@
    }
   },
   {
-   "id": 163,
-   "name": "flat: kitchen and living room / grandfather_clock 25",
+   "id": 164,
+   "name": "flat: kitchen and living room / grandfather_clock 26",
    "shape": "prefab",
    "prefab": "grandfather_clock",
    "position": [
@@ -2631,25 +2650,14 @@
    }
   },
   {
-   "id": 164,
-   "name": "flat: kitchen and living room / upright_piano 26",
+   "id": 165,
+   "name": "flat: kitchen and living room / upright_piano 27",
    "shape": "prefab",
    "prefab": "upright_piano_in_use",
    "position": [
     -22.6,
     0.05,
     7.45
-   ]
-  },
-  {
-   "id": 165,
-   "name": "flat: kitchen and living room / metronome 27",
-   "shape": "prefab",
-   "prefab": "metronome_in_use",
-   "position": [
-    -22.2,
-    1.28,
-    7.25
    ]
   },
   {

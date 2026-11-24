@@ -8,6 +8,7 @@
 --   shut      when its parts stop moving, the use off (a door meets its frame). No `shut`: `arrived` is heard
 --   moving    a loop for as long as its parts are on their way (a motor)
 --   running   a loop for as long as it runs (`run`), slowing with it as it coasts
+--   playing   music for as long as the use is on: a tune's name, or a list of them taken in turn ("tune:<a name in tunes.lua>")
 --   volume, pitch, range (metres)
 --
 -- A clip is one of the engine's procedural sounds, made from nothing (src/engine/audio/sfx.h), by these names:
@@ -28,4 +29,7 @@ return {
   click    = { done = "tick", undone = "tick", volume = 0.7, range = 6 },               -- a switch, a button, a lever
   bell     = { done = "ding", volume = 0.9, range = 30 },
   knock    = { done = "knock", volume = 0.6 },                                          -- a thing struck or pushed
+  -- MUSIC (tunes.lua): `playing` is tunes, one after another each time the use is started, each a loop while it is on
+  piano    = { playing = { "tune:parlour_waltz", "tune:rainy_window" }, volume = 0.9, range = 22 },
+  record   = { done = "tick", undone = "tick", playing = { "tune:sunday_record" }, volume = 0.7, range = 18 },
 }

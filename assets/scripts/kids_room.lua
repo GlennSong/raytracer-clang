@@ -42,7 +42,7 @@ if a.kind == "bed" then
   c.box("wood", V(0, 0.28, L / 2 + 0.02), V(W + 0.06, 0.32, 0.04), 0.02, wood, 1)
   for _, x in ipairs{ -W / 2, W / 2 } do for _, z in ipairs{ -L / 2, L / 2 } do c.box("wood", V(x, 0.06, z), V(0.06, 0.12, 0.06), 0.004, wood * 0.9, 1) end end
   bedding(0.28, W, L)
-  m:marker("lie", { pos = { 0, 0.46, 0.1 }, turn = { 0, 180, 0 }, role = "lie", size = L })
+  m:marker("lie", { pos = { 0, 0.46, -L / 2 + 0.3 }, role = "lie", size = L })      -- (the head, its +z toward the feet)
   m:shape("bed", { box = { W + 0.06, 0.45, L + 0.06 }, pos = { 0, 0.225, 0 } })
 elseif a.kind == "bunk_bed" then
   local W, L, H = 0.9, 1.9, 1.75
@@ -51,7 +51,7 @@ elseif a.kind == "bunk_bed" then
     c.box("wood", V(0, y - 0.05, 0), V(W + 0.06, 0.1, L), 0.006, wood, 1)
     for _, z in ipairs{ -L / 2, L / 2 } do c.box("wood", V(0, y + 0.2, z), V(W + 0.06, 0.34, 0.03), 0.006, wood, 1) end
     bedding(y, W, L - 0.08)
-    m:marker("lie_" .. i, { pos = { 0, y + 0.18, 0.1 }, turn = { 0, 180, 0 }, role = "lie", size = L })
+    m:marker("lie_" .. i, { pos = { 0, y + 0.18, -L / 2 + 0.34 }, role = "lie", size = L })
     m:shape("bunk_" .. i, { box = { W + 0.06, 0.25, L }, pos = { 0, y, 0 } })
   end
   c.box("wood", V(0, 1.55, -L / 2 + 0.01), V(W, 0.08, 0.03), 0.006, wood, 1)
