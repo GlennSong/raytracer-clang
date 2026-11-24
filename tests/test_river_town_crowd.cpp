@@ -314,13 +314,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(b.cars().size() == 391u);
         CHECK(withCar == 413);
         CHECK(b.markers().size() == 799u);
-        CHECK(mostOnRoad == 124);
+        CHECK(mostOnRoad == 125);
         CHECK(mostOnRoadAt == 10);
-        CHECK(b.counts().tripsBegun == 321u);
-        CHECK(b.counts().parkedReports == 245u);
+        CHECK(b.counts().tripsBegun == 320u);
+        CHECK(b.counts().parkedReports == 247u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 672u);
+        CHECK(b.machine()->counts().arrivals == 676u);
         CHECK(b.machine()->counts().noPlans == 0u);
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -353,7 +353,11 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // stood in the road 410 -> 87 s (a red light); most on the road 126 -> 124 (minute 11 -> 10), trips 312 -> 321,
         // parked 225 -> 245, arrivals 660 -> 672,
         // the buses' calls 154 -> 167, their legs 4.17 -> 3.79 times the free-flow time
-        CHECK(hash == 0xd99d3758b0039615ull);
+        // 0xd99d3758b0039615 -> 0xc5fa9c993e9148d7 (sitting 5: cars pull out of and into kerb spaces on the driving's
+        // curve, no drawn 2.5 s slide; the space a driver heads for is held for it): most on the road 124 -> 125 (still
+        // minute 10), trips 321 -> 320, parked 245 -> 247, arrivals 672 -> 676, boardings 40 -> 45; rings and touching
+        // spells still 0; the longest a bus stood in the road 87 -> 102 s (under the 180 s check); legs 3.79 -> 3.83 times
+        CHECK(hash == 0xc5fa9c993e9148d7ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
@@ -364,7 +368,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // THE RIDERS (ADR-0484): residents and the sim's own walkers wait, board and get off; no full bus left anyone
         {
             const citysim::BusRiders::Counts& rc = sim.buses().counts();
-            CHECK(rc.waits == 49u && rc.boardings == 40u && rc.alightings == 38u && rc.leftFull == 0u);
+            CHECK(rc.waits == 49u && rc.boardings == 45u && rc.alightings == 38u && rc.leftFull == 0u);
             CHECK(b.counts().busWaits == 41u && b.counts().busRides == 38u);
             CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
         }
