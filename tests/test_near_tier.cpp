@@ -1198,7 +1198,9 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     CHECK(c.intoPhysics == 114u);
     CHECK(c.intoLane == 90u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x03fb7f921747f374ull);
+    // ...and (#328: a trip ends in any lane of its destination's stretch unless it must end in its own; a driver letting
+    // me in at a merge is not given way to) 0x03fb7f921747f374 -> 0x4e80967d762cb46f, every count the same.
+    CHECK(hash == 0x4e80967d762cb46full);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

@@ -127,6 +127,9 @@ struct DriverView {
     // (corner_speed, slower_ahead) allows for covering that much road at it before I can brake (issue #281). Zero: I
     // decide afresh at every instant.
     Real decideInterval = 0;
+    // Whether my destination must be reached in its own lane (Trip::exactLane), not level with it in any lane of its
+    // stretch.
+    bool destinationExact = false;
 };
 
 // WORK SEVERAL FACTS SHARE for one driver, filled on first use and cleared between drivers. It holds only things

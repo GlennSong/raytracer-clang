@@ -174,6 +174,29 @@ RouteClass Driving::routeClass(uint32_t vehicleClass) const {
     return cls;
 }
 
+RouteClass Driving::routeClass(uint32_t vehicleClass, bool exactLane) const {
+    RouteClass cls = routeClass(vehicleClass);
+    cls.anyLaneAtEnd = !exactLane;
+    if (cls.anyLaneAtEnd && roads_) {
+        if (classParts_.size() <= vehicleClass) return cls;   // (no class set: any lane of the stretch)
+        ClassParts& parts = classParts_[vehicleClass];
+        if (!parts.made || parts.laneChanges != cls.laneChanges || parts.laneChangeLeast != cls.laneChangeLeast) {
+            engine::ReachRules rules;
+            rules.laneChanges = cls.laneChanges;
+            rules.laneChangeLeast = cls.laneChangeLeast;
+            rules.open.assign(roads_->paths.size(), 0);
+            for (std::size_t p = 0; p < roads_->paths.size(); ++p)
+                rules.open[p] = mayUse(*roads_, cls, engine::PathId(static_cast<uint32_t>(p))) ? 1 : 0;
+            parts.partOf = engine::reachableParts(*roads_, rules).partOf;
+            parts.made = true;
+            parts.laneChanges = cls.laneChanges;
+            parts.laneChangeLeast = cls.laneChangeLeast;
+        }
+        cls.partOf = &parts.partOf;
+    }
+    return cls;
+}
+
 RoomRoadReport Driving::roomRoadReport() const {
     if (!roomOn_ || !roads_) return RoomRoadReport();
     return reportRoomRoads(*roads_, rightOfWay_, ruleSet_, roadRules_, vehicleClasses_, roomRoads_, roomNumbers_,
@@ -798,6 +821,7 @@ void Driving::plan() {
 
         DriverView view{c,          cls,       t->person,  p.way,         *roads_,     cars_,     pathLists_,
                         ruleSet_,   roadRules_, lookAhead, &t->destination, &t->holds, &p.junctions, &rightOfWay_};
+        view.destinationExact = t->exactLane;
         if (junctionsOn_) {
             view.board = &board_;
             view.giveWay = &p.verdict;
@@ -885,7 +909,8 @@ void Driving::plan() {
         // (in the destination's own stretch it does not move over for it: level with it in any lane of that stretch is
         // there, as the arrive fact reads a destination -- a short stretch has no room for a move anyway)
         const bool lanesLooked = changingLanes() && !carried_.count(c.id);
-        if (lanesLooked && !c.besidePath.valid() && !sameSection(c.path, t->destination.path)) {
+        // (...unless it must end in the destination's own lane: then it moves over in that stretch too)
+        if (lanesLooked && !c.besidePath.valid() && (t->exactLane || !sameSection(c.path, t->destination.path))) {
             lane.need = lanesToCross(t->route, c.path, p.legReached);
             lane.last = lastChance(t->route, c.path, c.along, p.legReached);
             if (lane.need.onRoute && lane.need.lanes > 0) {
@@ -1424,6 +1449,7 @@ void Driving::setVehicleClasses(VehicleClasses classes) {
     vehicleClasses_ = std::move(classes);
     routeClasses_.clear();
     routeNotes_.clear();
+    classParts_.assign(vehicleClasses_.size(), ClassParts());   // (sized once: routes keep a pointer to their class's)
     if (roads_) {
         for (const VehicleClass& c : vehicleClasses_.all())
             routeClasses_.push_back(bindRouteClass(*roads_, c, &routeNotes_));
@@ -1432,7 +1458,9 @@ void Driving::setVehicleClasses(VehicleClasses classes) {
     }
 }
 
-Route Driving::routeFor(const Car& c, const PathPoint& to) const { return routeFromWhereItIs(c, routeClass(c.vehicleClass), to); }
+Route Driving::routeFor(const Car& c, const PathPoint& to, bool exactLane) const {
+    return routeFromWhereItIs(c, routeClass(c.vehicleClass, exactLane), to);
+}
 
 // A ROUTE FROM WHERE A PLACED CAR'S FRONT IS: as `cls` finds it, unless its first move across does not fit in what is
 // left of the lane it stands on (a car at rest at a junction's line, its new way beginning in the lane beside: it could
@@ -1733,7 +1761,7 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     // change lanes again past the junction. (Not by closing the stretch's other lanes to the whole route: a way round
     // the block often comes back along this same road, in the lane it missed.)
     ++laneChangeCounts_.missed;
-    RouteClass inLane = routeClass(c.vehicleClass);
+    RouteClass inLane = routeClass(c.vehicleClass, t.exactLane);
     inLane.keepLaneAtStart = true;
     PathPoint front;
     front.path = c.path;
@@ -1743,7 +1771,7 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
     // block; the router plans no change from where it stands without room for one)
     // -- taken only if it keeps its lane from here, as the first did (the change it missed is no way on)
     if (!route.found) {
-        Route round = findRoute(*model_, routeBounds_, routeClass(c.vehicleClass), front, t.destination);
+        Route round = findRoute(*model_, routeBounds_, routeClass(c.vehicleClass, t.exactLane), front, t.destination);
         if (round.found && lanesToCross(round, c.path, 0).lanes == 0) route = std::move(round);
     }
     if (!route.found) {
@@ -1755,7 +1783,7 @@ void Driving::changeLanes(Car& c, Trip& t, const Planned& p) {
         t.waitToChange = true;
         return;
     }
-    route.vehicle = routeClass(c.vehicleClass);
+    route.vehicle = routeClass(c.vehicleClass, t.exactLane);
     t.route = std::move(route);
     t.legReached = 0;
     c.held.decided = false;
@@ -1766,7 +1794,7 @@ void Driving::askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing) {
     ++thingCounts_.anotherWaysWanted;
     if (!thing.path.valid() || thing.path == c.path || thing.path.index >= roads_->paths.size()) return;
     // (a route is closed by its turns: the connector the thing stands on, or every connector into the lane it stands on)
-    RouteClass cls = routeClass(c.vehicleClass);
+    RouteClass cls = routeClass(c.vehicleClass, t.exactLane);
     const auto close = [&](engine::PathId p) {
         const std::vector<engine::PathId>::iterator at = std::lower_bound(cls.closed.begin(), cls.closed.end(), p);
         if (at == cls.closed.end() || *at != p) cls.closed.insert(at, p);
@@ -1784,7 +1812,7 @@ void Driving::askAnotherWayRound(Car& c, Trip& t, const ThingAhead& thing) {
     }
     Route route = routeFromWhereItIs(c, cls, t.destination);
     if (!route.found) return;
-    route.vehicle = routeClass(c.vehicleClass);
+    route.vehicle = routeClass(c.vehicleClass, t.exactLane);
     ++thingCounts_.anotherWays;
     t.route = std::move(route);
     t.legReached = 0;
@@ -2014,10 +2042,11 @@ bool Driving::removeCar(CarId id, std::string* why) {
     return true;
 }
 
-TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset) {
+TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset, bool exactLane) {
     Car* placed = findPlaced(car);
     if (!placed || tripOfCar_.count(car) != 0 || !onRoad(destination)) return TripId{};
-    Route route = routeFor(*placed, destination);
+    exactLane = exactLane || pullInOffset != 0;
+    Route route = routeFor(*placed, destination, exactLane);
     if (!route.found) {
         queueEvent(EventKind::NoRoute, car, TripId{}, person);
         return TripId{};
@@ -2031,6 +2060,7 @@ TripId Driving::beginTrip(CarId car, PersonId person, const PathPoint& destinati
     t.person = person;
     t.destination = destination;
     t.pullInOffset = pullInOffset;
+    t.exactLane = exactLane;
     t.beganAtTick = tickCount_;
     t.plannedMetres = route.metres;
     t.plannedSeconds = route.seconds;
@@ -2047,18 +2077,20 @@ const Route* Driving::route(TripId id) const {
     return t ? &t->route : nullptr;
 }
 
-bool Driving::changeDestination(TripId id, const PathPoint& destination, Real pullInOffset) {
+bool Driving::changeDestination(TripId id, const PathPoint& destination, Real pullInOffset, bool exactLane) {
     Trip* t = trips_.get(id);
     if (!t || !onRoad(destination)) return false;
     const Car* c = car(t->car);
     if (!c) return false;
-    Route route = routeFor(*c, destination);
+    exactLane = exactLane || pullInOffset != 0;
+    Route route = routeFor(*c, destination, exactLane);
     if (!route.found) {
         queueEvent(EventKind::NoRoute, t->car, id, t->person);
         return false;
     }
     t->destination = destination;
     t->pullInOffset = pullInOffset;
+    t->exactLane = exactLane;
     t->pullInBegun = false;
     t->pullInMissed = false;
     t->route = std::move(route);
@@ -2092,7 +2124,7 @@ void Driving::askAnotherWay(Car& c, Trip& t) {
     t.askedAnotherWayTick = tickCount_;
     ++planCounts_.askedAnotherWay;
     // A way from where it is that does not take that turn (closed for this one search only).
-    RouteClass cls = routeClass(c.vehicleClass);
+    RouteClass cls = routeClass(c.vehicleClass, t.exactLane);
     const std::vector<engine::PathId>::iterator at = std::lower_bound(cls.closed.begin(), cls.closed.end(), refused->connector);
     if (at == cls.closed.end() || *at != refused->connector) cls.closed.insert(at, refused->connector);
     Route route = routeFromWhereItIs(c, cls, t.destination);
@@ -2103,7 +2135,7 @@ void Driving::askAnotherWay(Car& c, Trip& t) {
     if (lightsRun_ && firstTurn.valid() && lampAt(*roads_, rightOfWay_, firstTurn, clockSeconds_) != Lamp::Green &&
         lampAt(*roads_, rightOfWay_, firstTurn, clockSeconds_) != Lamp::Dark)
         return;
-    route.vehicle = routeClass(c.vehicleClass);   // later questions of the route see the class as it is
+    route.vehicle = routeClass(c.vehicleClass, t.exactLane);   // later questions of the route see the class as it is
     ++planCounts_.tookAnotherWay;
     t.route = std::move(route);
     t.legReached = 0;
@@ -2116,7 +2148,7 @@ bool Driving::reroute(TripId id) {
     if (!t) return false;
     const Car* c = car(t->car);
     if (!c) return false;
-    Route route = routeFor(*c, t->destination);
+    Route route = routeFor(*c, t->destination, t->exactLane);
     if (!route.found) {
         queueEvent(EventKind::NoRoute, t->car, id, t->person);
         return false;
@@ -2263,6 +2295,7 @@ uint64_t Driving::stateHash() const {
         // A missed turn (sitting 5): only with the lane change step, so a run without it hashes as it did.
         if (changingLanes()) h.pod(t->missedOn.index);
         if (changingLanes()) h.pod(static_cast<uint8_t>(t->waitToChange));
+        if (t->exactLane) h.pod(static_cast<uint8_t>(1));   // (a trip that must end in its own lane)
         if (t->pullInOffset != 0) {   // (a trip ending in a kerb space; one ending in the lane hashes as before)
             h.pod(t->pullInOffset);
             h.pod(static_cast<uint8_t>(t->pullInBegun));

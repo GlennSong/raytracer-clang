@@ -303,6 +303,42 @@ TEST_CASE(route_lane_changes_table_for_a_far_turn) {
     }
 }
 
+// THE END IN ANY LANE OF THE DESTINATION'S STRETCH (#328): straight on along one road, the destination in the offside
+// lane of a later section. Ending in its own lane, the kerb-side lane must change into it in that stretch; ending in any
+// lane (RouteClass::anyLaneAtEnd, as the driving's arrived fact reads a destination), every lane of that stretch
+// finishes, and no change is planned -- except into a lane of another part (RouteClass::partOf).
+TEST_CASE(route_ends_in_any_lane_of_the_destinations_stretch_when_asked) {
+    const TestRoadSpec spec = specWith(2, DrivesOn::Left);
+    TestRoads t = driving_test::gridRoads(4, 4, spec);
+    const engine::PathId start = t.laneLeaving(1, 0, Heading::East, 1);   // the kerb-side lane
+    const engine::PathId offThere = t.laneLeaving(1, 1, Heading::East, 0);
+    const engine::PathId kerbThere = t.laneLeaving(1, 1, Heading::East, 1);
+    const PathPoint to = at(offThere, 50);
+    const Route exact = route(t, at(start, 10), to);
+    CHECK(exact.found && exact.legs.size() == 2u);
+    if (!exact.found || exact.legs.size() != 2u) return;
+    CHECK(laneIn(exact, 1, 1).changesIfStaying == kCannotFinish);
+    CHECK(lanesToCross(exact, kerbThere).lanes == 1u);
+
+    RouteClass any = carOn(t.model.laneLevel);
+    any.anyLaneAtEnd = true;
+    const Route anyLane = findRoute(t.model, studyRoads(t.model), any, at(start, 10), to);
+    CHECK(anyLane.found && anyLane.legs.size() == 2u);
+    if (!anyLane.found || anyLane.legs.size() != 2u) return;
+    CHECK(laneIn(anyLane, 1, 1).changesIfStaying == 0u);
+    CHECK(lanesToCross(anyLane, kerbThere).lanes == 0u);
+    CHECK(!lastChance(anyLane, kerbThere, 30).needed);
+
+    // ...the kerb-side lane in a part of its own (as a dead pocket would be): it does not finish, the change is back
+    std::vector<uint32_t> parts(t.model.laneLevel.paths.size(), 0);
+    parts[kerbThere.index] = 1;
+    any.partOf = &parts;
+    const Route apart = findRoute(t.model, studyRoads(t.model), any, at(start, 10), to);
+    CHECK(apart.found && apart.legs.size() == 2u);
+    if (!apart.found || apart.legs.size() != 2u) return;
+    CHECK(laneIn(apart, 1, 1).changesIfStaying == kCannotFinish);
+}
+
 // ---- 4. the way ahead -----------------------------------------------------------------------------------------------
 
 TEST_CASE(route_way_ahead_through_junctions_lane_end_destination) {

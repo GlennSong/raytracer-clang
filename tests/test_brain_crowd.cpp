@@ -458,7 +458,10 @@ TEST_CASE(level_brain_crowd_the_residents_make_their_day) {
         // 0xf7e7889934759abd -> 0x5dba6ae139896c49 (the alpha review, P1-1): the lane-change safety check looked a car up
         // by its id as if it were its record, so with the crowd's sparse ids it read a stranger (or no one) as the
         // follower behind a gap -- now the real follower: trips 337 -> 334, parked 271 -> 269, arrivals 473 -> 470
-        CHECK(hash == 0x5dba6ae139896c49ull);
+        // 0x5dba6ae139896c49 -> 0x0d2187ca9267ab1b (#328: a trip ends in any lane of its destination's stretch unless it
+        // must end in its own; a driver letting me in at a merge is not given way to): every count the same (the
+        // residents' trips end in kerb spaces, in their own lane)
+        CHECK(hash == 0x0d2187ca9267ab1bull);
         CHECK(d.kerbMoveCounts().pulledIn == 269u && d.kerbMoveCounts().stoppedInLane == 0u);
         CHECK(b.counts().putInSpace == 0u && b.counts().worstKerbHandOver < 0.01);
     }

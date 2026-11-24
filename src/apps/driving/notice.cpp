@@ -291,7 +291,7 @@ struct OnMyWay {
     Real metres = 0;          // below zero only when it lies (at most `behind`) behind my front
     engine::PathId path;
 };
-OnMyWay placeOnMyWay(const DriverView& v, const PathPoint& place, Real behind) {
+OnMyWay placeOnMyWay(const DriverView& v, const PathPoint& place, Real behind, bool exactLane = false) {
     OnMyWay out;
     if (!knownPath(v.roads, v.me.path)) return out;
     Real toStart = -v.me.along;   // from my front to the start of the path being looked at
@@ -299,7 +299,10 @@ OnMyWay placeOnMyWay(const DriverView& v, const PathPoint& place, Real behind) {
         const engine::PathId id = wayPath(v, i);
         if (!knownPath(v.roads, id) || toStart > v.lookAhead) break;
         Real along = 0;
-        if (levelOn(v.roads, place, id, along)) {
+        // (in its own lane only, when the place must be reached there; else level with it in any lane of its stretch)
+        const bool level = exactLane ? id == place.path : levelOn(v.roads, place, id, along);
+        if (exactLane && level) along = place.along;
+        if (level) {
             const Real metres = toStart + along;
             if (metres >= -behind && metres <= v.lookAhead) {
                 out.found = true;
@@ -315,7 +318,7 @@ OnMyWay placeOnMyWay(const DriverView& v, const PathPoint& place, Real behind) {
 
 void noticeDestination(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     if (!v.destination) return;
-    const OnMyWay at = placeOnMyWay(v, *v.destination, 0);
+    const OnMyWay at = placeOnMyWay(v, *v.destination, 0, v.destinationExact);
     if (!at.found) return;
     setNumber(out, at.metres);
     out.aboutPath = at.path;
@@ -337,7 +340,7 @@ void noticeHoldAhead(const DriverView& v, NoticeScratch&, NoticedFact& out) {
 
 void noticeArrived(const DriverView& v, NoticeScratch&, NoticedFact& out) {
     if (!v.destination) return;
-    const OnMyWay at = placeOnMyWay(v, *v.destination, kArrivedWithin);
+    const OnMyWay at = placeOnMyWay(v, *v.destination, kArrivedWithin, v.destinationExact);
     setYes(out, v.me.speed < kStandingBelow && at.found && at.metres <= kArrivedWithin);
     if (at.found) {
         out.aboutPath = at.path;

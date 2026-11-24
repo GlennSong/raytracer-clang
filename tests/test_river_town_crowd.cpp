@@ -426,7 +426,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // follower behind a gap by id as if it were a record index (the crowd's ids are sparse) -- now the real one, so
         // more changes wait for a safe gap: most on the road 203 -> 206, trips 444 -> 433, parked 303 -> 277, arrivals
         // 612 -> 597, bus calls 166 -> 165; the longest a bus stood in the road 99 s -> 117 s (passes)
-        CHECK(hash == 0x537a4261659664d2ull);
+        // 0x537a4261659664d2 -> 0x982f4b5f055d37a8 (#328: as brain_crowd's; buses end at their stops in the kerb lane):
+        // every count the same
+        CHECK(hash == 0x982f4b5f055d37a8ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);

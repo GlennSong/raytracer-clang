@@ -140,17 +140,28 @@ bool judgeLanes(const GiveWayInputs& in, Real hard, Real patience, GiveWayJudgem
                 // A DRIVER ON THE OTHER LANE HOLDING BACK TO LET ME IN is not coming, nor is anybody queued behind it
                 // in its lane (arriving no sooner): they cannot pass it (#323, the zipper at a merge).
                 Real heldBackFrom = kNever;
+                bool heldBackByAny = false;
                 if (in.lettingIn)
                     for (const Announcement& e : in.board.on(cid)) {
                         if (e.onPath != otherPath) continue;
                         const std::map<CarId, CarId>::const_iterator li = in.lettingIn->find(CarId(e.who));
-                        // (one already on the stretch is not holding back: it is there)
-                        if (li != in.lettingIn->end() && li->second == in.me.id && e.arriveIn > 0)
-                            heldBackFrom = std::min(heldBackFrom, e.arriveIn);
+                        // (the driver itself is behind me whatever its arrival -- it lets in only a car whose rear
+                        // is ahead of its front -- so I never give way to it: giving way to one whose front stood at
+                        // the stretch's start ("on it"), I waited for it for good and it for me, the lab's 110-car
+                        // queue behind a ramp's merge. Those behind it only when it has not reached the stretch: one
+                        // already on it beside it is there)
+                        if (li == in.lettingIn->end() || li->second != in.me.id) continue;
+                        heldBackByAny = true;
+                        if (e.arriveIn > 0) heldBackFrom = std::min(heldBackFrom, e.arriveIn);
                     }
                 for (const Announcement& e : in.board.on(cid)) {
                     if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
+                    // (the one holding back, and those arriving no sooner than it: queued behind it)
                     if (e.arriveIn >= heldBackFrom) continue;
+                    if (heldBackByAny) {
+                        const std::map<CarId, CarId>::const_iterator li = in.lettingIn->find(CarId(e.who));
+                        if (li != in.lettingIn->end() && li->second == in.me.id) continue;
+                    }
                     if (queuedBehindMe(in, e.who)) continue;
                     Question by = Question::None;
                     if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;

@@ -107,6 +107,10 @@ struct Trip {
     // by then too: it stands straight in the space. Begun once (pullInBegun); a trip that began too near its end for the
     // curve to fit ends in the lane instead (pullInMissed, counted: KerbMoveCounts::stoppedInLane).
     Real pullInOffset = 0;
+    // ITS OWN LANE AT THE END: the trip ends in the destination's own lane, not level with it in any lane of its stretch
+    // (RouteClass::anyLaneAtEnd off; the arrived fact asks the lane too). Set by the host (a bus at its stop), and always
+    // for a trip that pulls into a kerb space.
+    bool exactLane = false;
     bool pullInBegun = false;
     bool pullInMissed = false;
     // THE WAY AHEAD as of the driver's last decision (route.h wayAhead): the paths the car moves along until it decides
@@ -495,7 +499,9 @@ public:
     // place on the road (an unknown path, or a distance off its ends). Refused too when the destination is on the road
     // but there is no route there for the car's class: then a NoRoute event is queued for the car (with a null trip).
     // `pullInOffset`: the trip ends in the kerb space that far beside the destination (Trip::pullInOffset; 0: in the lane).
-    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset = 0);
+    // `exactLane`: it ends in the destination's own lane (Trip::exactLane; a pull-in always does), not level with it in any
+    // lane of its stretch.
+    TripId beginTrip(CarId car, PersonId person, const PathPoint& destination, Real pullInOffset = 0, bool exactLane = false);
     // The trip, or null when the handle is null or stale (its trip has ended).
     const Trip* trip(TripId id) const;
     std::size_t tripCount() const { return trips_.size(); }
@@ -508,6 +514,8 @@ public:
     // turnsClosedForRoom). A host that
     // finds places to send cars uses the same, so it never picks a place only a closed turn reaches.
     RouteClass routeClass(uint32_t vehicleClass) const;
+    // ...for a trip: ending in any lane of its destination's stretch unless it must end in that lane (Trip::exactLane)
+    RouteClass routeClass(uint32_t vehicleClass, bool exactLane) const;
     // LANE CHANGES (lane_change.h; sitting 5)
     Real followAcceleration(const Car& who, Real gap, Real speedAhead) const;
     bool sameSection(engine::PathId a, engine::PathId b) const;
@@ -533,7 +541,7 @@ public:
     // place not on the road.
     // A new destination (a cab given a new fare, a bus's next stop), routed from where the car is now. When there is
     // no route there, the trip keeps its old destination and route, a NoRoute event is queued, and the answer is false.
-    bool changeDestination(TripId id, const PathPoint& destination, Real pullInOffset = 0);
+    bool changeDestination(TripId id, const PathPoint& destination, Real pullInOffset = 0, bool exactLane = false);
     // ROUTE AGAIN from where the car is now to the same destination (after a missed turn). When there is no route, the
     // old one is kept, a NoRoute event is queued, and the answer is false.
     bool reroute(TripId id);
@@ -604,7 +612,7 @@ private:
     bool onRoad(const PathPoint& p) const;
     Car* findPlaced(CarId id);
     // The route for a placed car from its front to `to`, for its class.
-    Route routeFor(const Car& c, const PathPoint& to) const;
+    Route routeFor(const Car& c, const PathPoint& to, bool exactLane) const;
     Route routeFromWhereItIs(const Car& c, RouteClass cls, const PathPoint& to) const;
     void queueEvent(EventKind kind, CarId car, TripId trip, PersonId person);
     // Each record's trip (a null handle for a car not on one), by its place in cars_: walks cars_ and tripOfCar_
@@ -683,6 +691,16 @@ private:
     const engine::LaneGraph* roads_ = nullptr;   // the model's lane level (&model_->laneLevel), or null
     VehicleClasses vehicleClasses_;
     RouteBounds routeBounds_;                 // studyRoads(*model_), measured once
+    // THE PARTS EACH CLASS CAN GO ROUND (lane_graph.h reachableParts, by the class's own moves), worked out when first
+    // asked and again when the moves change (lane changes on or off): a trip ending in any lane of its destination's
+    // stretch ends only in one of the destination lane's part (RouteClass::partOf).
+    struct ClassParts {
+        bool made = false;
+        bool laneChanges = false;
+        Real laneChangeLeast = 0;
+        std::vector<uint32_t> partOf;
+    };
+    mutable std::vector<ClassParts> classParts_;
     std::vector<RouteClass> routeClasses_;    // each vehicle class bound to the road, by class index
     std::vector<std::string> routeNotes_;
     std::vector<Car> cars_;     // every placed car, in car-id order

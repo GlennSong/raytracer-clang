@@ -99,6 +99,16 @@ struct RouteClass {
     // to change past it (a driver that missed its lane, routed again from where it is: the driving's missed turn,
     // sitting 5). Not in that stretch at all, should the route come back along it.
     bool keepLaneAtStart = false;
+    // THE END IN ANY LANE of the destination's stretch (section): a car level with its destination in any lane of that
+    // stretch is there (the driving's `arrived` fact reads a destination so), so the last leg's lanes all finish, and no
+    // move across is planned for it -- a car stood for good at the end of the lane before, two metres short of room to
+    // move into the destination's lane, when the lane it was in ran straight on beside it (#328). Off, the route ends in
+    // the destination's own lane (a trip that pulls into a kerb space, a bus at its stop).
+    bool anyLaneAtEnd = false;
+    // ...but only the lanes in the destination lane's own part (lane_graph.h ReachableParts, per path, for this class's
+    // moves): a car ending in a lane of that stretch that leads only into a dead pocket of road could never go on (the
+    // lab's car that found no destination for 1600 s). Null: any lane of the stretch.
+    const std::vector<uint32_t>* partOf = nullptr;
     // Connectors CLOSED to the class, sorted: turns it could never (or too seldom) be granted room beyond (room.h
     // turnsClosedForRoom: into a stretch it cannot stop in, with every way on through the next junction barred to it).
     // Driving fills it once it has the rules; bindRouteClass leaves it empty.

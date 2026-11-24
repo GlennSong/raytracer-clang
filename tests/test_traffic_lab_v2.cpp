@@ -205,7 +205,14 @@ constexpr double kLongestStand = 100.0;
 // line is not coming): 0x5cbc93953af33b13 -> 0x4f08df2944d83a94. At 5 minutes arrived 183 -> 185, standing 103 -> 102,
 // lost a km 55.7 -> 55.6 s; deadlocks 0, touches 0. The same failures (queues, Jumps #320); kLongestStand is no longer
 // checked (above).
-constexpr uint64_t kFiveMinuteStateHash = 0x4f08df2944d83a94ull;
+// Retaken (#328, two things that disagreed): a trip ends level with its destination in any lane of the stretch, as
+// the arrived fact always read it, so the router no longer plans a move across into the destination's own lane (a car
+// stood for good at the end of the lane beside, its move no longer fitting) -- unless the trip must end in that lane (a
+// bus at its stop, a pull-in), and only in lanes of the destination lane's own part; and a driver letting me in at a
+// merge is never given way to, whatever its arrival (a ramp car and a freeway car each waited for the other for good,
+// 222 cars queued behind them by 30 minutes): 0x4f08df2944d83a94 -> 0xeded05b162a7469c. At 5 minutes arrived 185 ->
+// 177, standing 102 -> 100; at 30 minutes 49 -> 213 moving, no loops, no touches. The same failures (queues, Jumps #320).
+constexpr uint64_t kFiveMinuteStateHash = 0xeded05b162a7469cull;
 // THE SOAK'S LIMITS (thirty minutes, issues #265 and #284):
 // - THE LONGEST STAND: two of the lab's longest light cycles (kSoakStandCycles times RightOfWayCounts::longestCycle,
 //   92.8 s at six-approach junction 21 since #284: 185.6 s). The arithmetic: a car that arrives just as its turn's

@@ -279,7 +279,8 @@ bool DrivingHost::sendOn(driving::Driving& d, engine::Entity e) {
         // A BUS drives to the stop it is bound for
         driving::PathPoint to;
         const driving::TripId trip = busStopPoint(d, bus->line, bus->stop, to)
-                                         ? d.beginTrip(driving::CarId(body.id), driving::PersonId(body.id), to)
+                                         ? d.beginTrip(driving::CarId(body.id), driving::PersonId(body.id), to, 0,
+                                                       /*exactLane=*/true)   // (it calls at the stop, beside the kerb)
                                          : driving::TripId();
         if (!trip.valid()) {
             ++counts_.routesNotFound;

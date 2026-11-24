@@ -632,8 +632,15 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
             uint32_t staying = kCannotFinish;
             if (usable && knownPath(roads, rl.lane)) {
                 if (last) {
-                    const bool finishes = r.endConnector.valid() ? roads.paths[r.endConnector.index].from == rl.lane
-                                                                 : rl.lane == to.path;
+                    const bool finishes =
+                        r.endConnector.valid()
+                            ? roads.paths[r.endConnector.index].from == rl.lane
+                            : rl.lane == to.path || (cls.anyLaneAtEnd && knownPath(roads, to.path) &&
+                                                     roads.paths[to.path.index].section.valid() &&
+                                                     roads.paths[rl.lane.index].section == roads.paths[to.path.index].section &&
+                                                     (!cls.partOf || (rl.lane.index < cls.partOf->size() &&
+                                                                      to.path.index < cls.partOf->size() &&
+                                                                      (*cls.partOf)[rl.lane.index] == (*cls.partOf)[to.path.index])));
                     if (finishes) staying = 0;
                 } else {
                     bestStepOn(r, roads, static_cast<uint32_t>(i), rl.lane, &staying);
