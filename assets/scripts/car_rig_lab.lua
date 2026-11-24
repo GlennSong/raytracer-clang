@@ -1,0 +1,154 @@
+-- THE CAR RIG LAB: an EXISTING kit car (vehicle_kit.lua, sedan by default) built as a model on the car rig (rigs.lua).
+-- Nothing in the game reads this; it is the model sheet's view of what the car port will make.
+-- Any kit car: --args '{"name":"pickup"}' (the names are vehicle_kit.lua SPECS).
+--   * the body and the fixed cabin on the root;
+--   * each of the kit's panels (doors, hood, trunk) on the rig's joint of the same name, placed at the kit's own
+--     hinge point, its meshes moved into the hinge's space;
+--   * ONE tire model (tyre + rim) used at four wheels, the right-hand ones flipped under their spin joints;
+--   * the kit's lamps and the driver's hip point as markers; the kit's materials by name;
+--   * collision shapes: boxes for the body, the cabin and each panel, a sphere per wheel (--shapes draws them);
+--   * three levels of detail: the full car, a simpler one from 40 m, one mesh from 150 m (--at 60, --at 200).
+-- Try: rt_model_sheet assets/scripts/car_rig_lab.lua --set door_front_l=50 --set door_rear_r=40 --set hood=45 \
+--        --set trunk=50 --set steer_front_l=25 --set steer_front_r=25
+local kit = require "vehicle_kit"
+local rigs = require "rigs"
+-- What it takes (the model studio shows these as a form): which kit car, how smooth, and whether to build the
+-- lower levels of detail. The cars are whatever vehicle_kit.lua's SPECS holds.
+local cars = {}
+for car in pairs(kit.SPECS) do cars[#cars + 1] = car end
+table.sort(cars)
+cars.default = "sedan"
+local a = params{
+  name = cars,
+  level = { 1, min = 0, max = 2 },   -- subdivision: 0 the faceted cage, 1 smooth
+  levels = true,                     -- also build the middle and far levels of detail
+}
+local name, level = a.name, a.level
+local P = kit.SPECS[name]()
+local built = kit.build(P, level, { panels = true })
+local lift = built.lift
+
+local COLOR = { glass = { 0.60, 0.66, 0.70 }, trim = { 0.04, 0.04, 0.045 }, grille = { 0.06, 0.06, 0.065 },
+                chrome = { 0.75, 0.76, 0.78 }, lamp = { 0.95, 0.95, 0.92 }, lamp_red = { 0.8, 0.05, 0.05 },
+                seat = { 0.22, 0.20, 0.19 }, dash = { 0.08, 0.08, 0.09 }, carpet = { 0.10, 0.10, 0.11 },
+                gasket = { 0.03, 0.03, 0.03 }, liner = { 0.30, 0.29, 0.28 }, steer = { 0.06, 0.06, 0.06 } }
+local LOOK = { body = { roughness = 0.30, metallic = 0.55 }, glass = { roughness = 0.05 }, chrome = { roughness = 0.2, metallic = 0.9 } }
+
+local car = model.new(name)
+local function made_of(mat)                      -- the car's material of that name, made the first time it is asked for
+  if not car:has_material(mat) then car:material(mat, material.new(LOOK[mat] or { roughness = 0.6 })) end
+  return mat
+end
+local function painted(mat, m) return mesh.paint(m, mat == "body" and (built.color or { 0.5, 0.5, 0.5 }) or (COLOR[mat] or { 0.5, 0.5, 0.5 })) end
+local function sorted(t) local k = {} for n in pairs(t or {}) do k[#k + 1] = n end table.sort(k) return k end   -- not pairs' order
+
+-- the body and the fixed cabin
+for _, mat in ipairs(sorted(built.parts)) do car:add(mesh.translate(painted(mat, built.parts[mat]), { 0, lift, 0 }), made_of(mat)) end
+for _, mat in ipairs(sorted(built.cabin)) do car:add(mesh.translate(painted(mat, built.cabin[mat]), { 0, lift, 0 }), made_of(mat)) end
+
+-- the joints: the kit's panels at the kit's hinges, the wheels at the kit's wheel places
+local places = {}
+for pname, pn in pairs(built.panels or {}) do
+  local h = pn.hinge
+  places[pname] = { pos = { h.pivot[1], h.pivot[2] + lift, h.pivot[3] }, max = h.open }   -- this car's own opening
+end
+local side = { [true] = "_l", [false] = "_r" }
+for _, w in ipairs(built.wheels) do
+  places["susp_" .. (w.front and "front" or "rear") .. side[w.pos[1] > 0]] = { pos = { w.pos[1], w.pos[2] + lift, w.pos[3] } }
+end
+local joint = rigs.apply(car, "car", places)
+
+-- each panel's meshes, moved into its hinge's space
+for _, pname in ipairs(sorted(built.panels)) do
+  local pn = built.panels[pname]
+  local to_hinge = { -pn.hinge.pivot[1], -pn.hinge.pivot[2], -pn.hinge.pivot[3] }
+  for _, mat in ipairs(sorted(pn.parts)) do joint[pname]:add(mesh.translate(painted(mat, pn.parts[mat]), to_hinge), made_of(mat)) end
+  for _, mat in ipairs(sorted(pn.cabin)) do joint[pname]:add(mesh.translate(painted(mat, pn.cabin[mat]), to_hinge), made_of(mat)) end
+end
+
+-- one tire, four wheels
+local wheel = kit.wheel(P.wheel_r, P.wheel_w, level)
+local tire = model.new("tire")
+tire:material("rubber", material.new{ roughness = 0.9 })
+tire:material("alloy", material.new{ roughness = 0.25, metallic = 0.9 })
+tire:add(mesh.paint(wheel.tyre, { 0.05, 0.05, 0.055 }), "rubber")
+tire:add(mesh.paint(wheel.rim, { 0.75, 0.76, 0.78 }), "alloy")
+local tire_hosts = {}        -- the nodes the tire hangs on: each level that keeps its joints uses it there again
+for _, w in ipairs(built.wheels) do
+  local left = w.pos[1] > 0
+  local spin = joint["spin_" .. (w.front and "front" or "rear") .. side[left]]
+  local host = left and spin or spin:node("tire_" .. (w.front and "front" or "rear") .. "_r", { turn = { 0, 180, 0 } })
+  host:use(tire)
+  tire_hosts[#tire_hosts + 1] = host
+end
+
+-- LEVELS OF DETAIL. The joints and markers serve every level. Every level is BUILT BY THE KIT, none is derived from
+-- another: the kit's meshes are grids of quads along the car's lines, and a level built that way keeps them.
+--   * From 40 m: the kit's body before it is subdivided (its level 0: a quarter of the faces, the same lines), shaded
+--     smooth, with coarse lamp and grille patches. Still the whole car: the panels on their joints, so an open door
+--     reads from across the street, the cabin, and the tire's own 16-sided build.
+--   * From 150 m: simpler in STRUCTURE: the same low build with no separate panels, the outside only, and a plain
+--     disc for each wheel. No joints to pose.
+--   (What was tried first, and why not. The middle level as `simplify = 0.3` of the full car: it measures and looks
+--   worse than either neighbour, with nearly half of a hood's triangles thinner than 10:1 and edges the length of the
+--   panel, because the simplifier weighs only how far the surface moves and knows nothing of the kit's lines. The far
+--   level as one crushed mesh: the simplifier eats the small separate shells, the wheels first, and crumples the
+--   thin panels. `simplify` is for things with no recipe to build them lower.)
+if a.levels then
+  local low_wheel = kit.wheel(P.wheel_r, P.wheel_w, 0)
+  local mid_tire = tire:level(40)
+  tire:add(mesh.paint(low_wheel.tyre, { 0.05, 0.05, 0.055 }), "rubber", { level = mid_tire })
+  tire:add(mesh.paint(low_wheel.rim, { 0.75, 0.76, 0.78 }), "alloy", { level = mid_tire })
+  local far_tire = tire:level(150)
+  tire:add(mesh.paint(mesh.rotate_z(mesh.cylinder(P.wheel_r, P.wheel_w, 10), math.pi / 2), { 0.05, 0.05, 0.055 }), "rubber", { level = far_tire })
+
+  local mid = car:level(40)
+  local smooth = level > 0 and 40 or nil          -- a faceted car (level 0) stays faceted
+  local m = kit.build(kit.SPECS[name](), 0, { panels = true, coarse = true, autosmooth = smooth })
+  for _, mat in ipairs(sorted(m.parts)) do car:add(mesh.translate(painted(mat, m.parts[mat]), { 0, m.lift, 0 }), made_of(mat), { level = mid }) end
+  for _, mat in ipairs(sorted(m.cabin)) do car:add(mesh.translate(painted(mat, m.cabin[mat]), { 0, m.lift, 0 }), made_of(mat), { level = mid }) end
+  for _, pname in ipairs(sorted(m.panels)) do
+    -- into the FULL car's hinge space: the joint stands at the full build's hinge, a few millimetres from this one's
+    local pn, pv = m.panels[pname], built.panels[pname].hinge.pivot
+    local to_hinge = { -pv[1], m.lift - lift - pv[2], -pv[3] }
+    for _, mat in ipairs(sorted(pn.parts)) do joint[pname]:add(mesh.translate(painted(mat, pn.parts[mat]), to_hinge), made_of(mat), { level = mid }) end
+    for _, mat in ipairs(sorted(pn.cabin)) do joint[pname]:add(mesh.translate(painted(mat, pn.cabin[mat]), to_hinge), made_of(mat), { level = mid }) end
+  end
+
+  for _, host in ipairs(tire_hosts) do host:use(tire, nil, { level = mid }) end   -- the tire picks its own level
+
+  local far = car:level(150)
+  local low = kit.build(kit.SPECS[name](), 0, { coarse = true })
+  for _, mat in ipairs{ "body", "glass", "lamp", "lamp_red", "grille" } do
+    if low.parts[mat] then car:add(mesh.translate(painted(mat, low.parts[mat]), { 0, low.lift, 0 }), made_of(mat), { level = far }) end
+  end
+  local wheels = {}
+  for _, w in ipairs(built.wheels) do wheels[#wheels + 1] = { pos = { w.pos[1], w.pos[2] + lift, w.pos[3] } } end
+  car:use(tire, wheels, { level = far })
+end
+
+-- COLLISION SHAPES: a box for the lower body and one for the cabin on the root, a box on each panel's joint (so an
+-- open door is solid where the door is), and a sphere on each wheel's suspension joint.
+do
+  local W, H, L = built.size[1], built.size[2], built.size[3]
+  car:shape("body", { box = { W, H * 0.42, L }, pos = { 0, H * 0.36, 0 } })
+  car:shape("cabin", { box = { W * 0.86, H * 0.36, L * 0.46 }, pos = { 0, H * 0.78, -L * 0.06 } })
+  for _, pname in ipairs(sorted(built.panels)) do
+    local pn = built.panels[pname]
+    local lo, hi, pv = pn.lo, pn.hi, pn.hinge.pivot
+    joint[pname]:shape(pname, { box = { math.max(hi[1] - lo[1], 0.05), math.max(hi[2] - lo[2], 0.05), hi[3] - lo[3] },
+                                pos = { 0.5 * (lo[1] + hi[1]) - pv[1], 0.5 * (lo[2] + hi[2]) - pv[2], 0.5 * (lo[3] + hi[3]) - pv[3] } })
+  end
+  for _, w in ipairs(built.wheels) do
+    local wname = (w.front and "front" or "rear") .. side[w.pos[1] > 0]
+    joint["susp_" .. wname]:shape("wheel_" .. wname, { sphere = P.wheel_r })
+  end
+end
+
+-- markers: the lamps and the driver's hip point
+for _, l in ipairs(built.lights or {}) do
+  local front = l.name:sub(1, 4) == "head"
+  car:marker(l.name, { pos = { l.pos[1], l.pos[2] + lift, l.pos[3] }, turn = { 0, front and 0 or 180, 0 }, role = "lamp", size = 0.15 })
+end
+car:marker("driver", { pos = { built.driver_seat[1], built.driver_seat[2] + lift, built.driver_seat[3] }, role = "seat", size = 0.25 })
+return car

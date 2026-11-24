@@ -128,6 +128,13 @@ struct MeshBuilder {
     static MeshPath pathHelix(const Vec3& centre, double radius, double pitch, double turns, int segsPerTurn = 32);
     // a smooth curve THROUGH `points` (centripetal Catmull-Rom: no cusps or overshoot), `count` points at even spacing
     static MeshPath pathSpline(const std::vector<Vec3>& points, bool closed = false, int count = 64);
+    // a smooth curve PULLED TOWARD `control` points without passing through them (a B-spline: each point of the curve
+    // is a blend of the few control points nearest it, so moving one reshapes only its own stretch, and the curve
+    // has no kink anywhere). An open curve starts at the first control point and ends at the last; a closed one is
+    // a loop round them all. `degree` 3 is the usual smooth curve, 2 a tighter one, 1 the straight lines between the
+    // control points. `count` points at even spacing. Where pathSpline is for "go through here", this is for "about
+    // this shape, and smooth": bodywork, a fairing, a road's centreline from a rough sketch.
+    static MeshPath pathBSpline(const std::vector<Vec3>& control, bool closed = false, int count = 64, int degree = 3);
     // a cubic Bezier from p0 to p3 pulled toward p1 and p2, `count` points at even spacing
     static MeshPath pathBezier(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, int count = 32);
     // the path again, its points `spacing` metres apart along it (ends kept)
@@ -155,6 +162,31 @@ struct MeshBuilder {
     // circles, a car's sections.
     static RenderMesh loft(const std::vector<std::vector<Vec3>>& sections, bool closedRings = true, bool caps = true,
                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A SHEET through a grid of points: `rows` of the same count each, one face thick, drawn on ONE side -- the side
+    // `toward` points to (each face turned to it), or, when `toward` is zero, the side from which the rows run left to
+    // right as they go away from you. u runs 0..1 along the first row, v the metres from row to row. A sail, an awning,
+    // a fender skin, a curved panel. (A solid wants a loft, or a sheet given thickness.)
+    static RenderMesh sheet(const std::vector<std::vector<Vec3>>& rows, const Vec3& toward = Vec3(0, 0, 0),
+                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A SMOOTH SURFACE PULLED TOWARD A GRID OF CONTROL POINTS (a B-spline surface): `control` is rows of points, the
+    // same count in each; the surface starts and ends on the outer rows and columns' own curves, passes through the
+    // four corner points, and is pulled toward the rest. Moving one control point swells or dents only the surface
+    // near it, smoothly. `across` points along each row and `up` rows are made, as a sheet (above: `toward`, `color`,
+    // `creaseDeg`, and its uv). A hood, a fender, a hull plate, a tent.
+    static RenderMesh bsplineSurface(const std::vector<std::vector<Vec3>>& control, int across = 16, int up = 16, int degree = 3,
+                                     const Vec3& toward = Vec3(0, 0, 0), const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // RULED: the sheet of straight lines joining two curves, point for point by their share of each curve's length,
+    // in `steps` bands between them and `count` points along (0: the longer curve's own count). A ramp between two
+    // edges, a blade, a hood between two rails, a twisted ribbon.
+    static RenderMesh ruled(const MeshPath& a, const MeshPath& b, int steps = 1, int count = 0,
+                            const Vec3& toward = Vec3(0, 0, 0), const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A PATCH: the sheet filling four boundary curves (a Coons patch). `bottom` and `top` run the same way, `left`
+    // from bottom's start to top's start and `right` from bottom's end to top's end; where the corners do not quite
+    // meet, the curves win along their own edges. `across` points along bottom and top, `up` along left and right.
+    // A car's roof between its rails, a tent panel, a saddle, a hull plate.
+    static RenderMesh patch(const MeshPath& bottom, const MeshPath& top, const MeshPath& left, const MeshPath& right,
+                            int across = 12, int up = 12, const Vec3& toward = Vec3(0, 0, 0),
+                            const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
     // A SUPERQUADRIC (Barr's superellipsoid): radii `r`; `e1` shapes it top to bottom and `e2` round it (1: round,
     // under 1: squarer, 0.1 nearly a box; 2: a diamond). One word from a box with soft edges to a sphere to a cylinder
     // with round ends: pebbles, cushions, buttons, soap-bar seats, rounded car parts.
@@ -265,6 +297,13 @@ struct MeshBuilder {
     // Winding is kept. POSITIONS ONLY: a kept vertex keeps its other attributes as they were, so the caller re-derives
     // normals, UVs and colours (an implicit surface's from its field). Returns the triangles left.
     static std::size_t simplify(RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30);
+    // A SIMPLER COPY OF A SURFACE, ready to draw: what `mesh.simplify` gives a recipe and what a model's lower levels
+    // are made by. `simplify` works on faces that share vertices and moves positions only, so this welds by position
+    // first (unless `weldFirst` is false), simplifies, drops the vertices no triangle uses any more, and gives the
+    // result creased normals (`creaseDegrees`; negative leaves the normals alone). Colours ride on the vertices that
+    // are kept; uvs do not survive. `left`, when given, is the triangles left.
+    static RenderMesh simplifiedSurface(const RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30, bool weldFirst = true,
+                                        double creaseDegrees = 50.0, std::size_t* left = nullptr);
     // MANIFOLD BY SPLITTING: where two sheets of a mesh touch at a vertex (an isosurface's pinch where a feature is
     // thinner than its cell -- an edge then sits on four faces), the vertex is split, one copy for each fan of faces
     // round it that are joined through edges of exactly two faces. Positions are kept (the sheets still touch); the
@@ -425,6 +464,8 @@ struct MeshBuilder {
     // Fewer than four non-coplanar points: empty. Incremental (O(n^2)) -- for the small sets of a joint, a cap, a
     // rock (the tree's branch junctions: the hull of the limbs' end rings, ADR-0181).
     static std::vector<std::array<uint32_t, 3>> convexHull(const std::vector<Vec3>& points);
+    // ...and as a mesh: flat shaded, faces wound outward, in `color`. Empty when `convexHull` is.
+    static RenderMesh hullMesh(const std::vector<Vec3>& points, const Vec3& color = Vec3(1, 1, 1));
     // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,
@@ -526,6 +567,24 @@ struct MeshBuilder {
     };
     static RenderMesh weld(const RenderMesh& mesh);
     static RenderMesh weld(const RenderMesh& mesh, const WeldTolerance& tol);
+
+    // --- BOOLEANS (mesh_boolean.cpp, over the Manifold library; #191 step 3) -----------------------------------------
+    // JOIN two solids (Union), CUT the second out of the first (Subtract), or KEEP only where they overlap (Intersect).
+    // Exact: the result's faces are pieces of the two inputs' own faces, cut along the lines where the solids cross.
+    // BOTH INPUTS MUST BE CLOSED SOLIDS: every edge shared by exactly two faces, no loose sheet, no hole. A mesh that
+    // is not is refused, and `error` says which one and how many open edges it has; nothing is guessed.
+    // The result comes back as two meshes: the faces that came from `a` and the faces that came from `b` (a hole's
+    // walls, when subtracting), so each can keep its own material. Every vertex keeps what it carried -- normal, uv,
+    // colour, tangent -- blended along a cut edge; a subtracted solid's faces come back turned to face into the
+    // cavity. Faces are wound by triFacing like every other mesh.
+    enum class BooleanOp { Union, Subtract, Intersect };
+    struct BooleanResult {
+        RenderMesh fromA, fromB;
+        std::string error;   // empty when it worked
+        bool ok() const { return error.empty(); }
+        RenderMesh whole() const { return merged({fromA, fromB}); }
+    };
+    static BooleanResult boolean(const RenderMesh& a, const RenderMesh& b, BooleanOp op);
 };
 
 }  // namespace engine

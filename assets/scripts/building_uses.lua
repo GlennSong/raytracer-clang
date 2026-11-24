@@ -97,6 +97,7 @@ building_uses = {
     plaza          = "office",
     police         = "office",
     school         = "civic",
+    high_school    = "school",
     teaching_hall  = "civic",
     university     = "civic",
 

@@ -276,10 +276,25 @@ struct RoomLight {
     Real halfU = 0, halfV = 0, floorY = 0;
 };
 
+struct BuildingParams;
+// How far inside the facade line the inner face of the outside wall is (the wall's depth).
+Real outsideWallDepth(const BuildingParams& p);
+
+// A DOORWAY BETWEEN ROOMS as the interior was grown (growInterior): the middle of its sill on the finished floor,
+// the way its wall runs, and the clear opening. A door prefab is stood in it (BuildingInteriorSystem, a level's
+// citysim.prefabDoors). The wall's own cut reads the same rule (room_plan.h doorwayCentre).
+struct Doorway {
+    Vec3 at;
+    Vec2 along;
+    Real width = 0, height = 0;
+    bool glass = false;   // in a glass wall (an office front)
+};
+
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<RoomLight> roomLights;    // the ceiling fittings' lights (growInterior only)
+    std::vector<Doorway> doorways;        // the doorways between rooms (growInterior only)
     std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
     std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding)

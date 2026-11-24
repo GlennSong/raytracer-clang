@@ -22,6 +22,7 @@ does not require it. "Measured against" counts too.
 | Clipper2 1.5.4 | polygon clipping | `third_party/Clipper2` | Angus Johnson, github.com/AngusJohnson/Clipper2 | Boost 1.0 |
 | CDT 1.4.5 | constrained Delaunay triangulation | `third_party/CDT` | Artem Amirkhanov, github.com/artem-ogre/CDT | MPL 2.0 (file-level copyleft: changes to CDT's files stay MPL and public) |
 | meshoptimizer 1.2 | lossless vertex and index codecs for baked building meshes (ADR-0224) | `third_party/meshoptimizer` (submodule) | Arseny Kapoulkine, github.com/zeux/meshoptimizer | MIT |
+| Manifold 3.5.5 | joining, cutting and overlapping closed solid meshes, behind `MeshBuilder::boolean` and Lua's `mesh.union` / `subtract` / `intersect` (#191) | `third_party/manifold` (submodule) | Emmett Lalish and the Manifold authors, github.com/elalish/manifold | Apache 2.0 |
 | nanosvg | SVG rasterising (city map) | `third_party/nanosvg` | Mikko Mononen, github.com/memononen/nanosvg | zlib |
 | nlohmann/json 3.11.3 | JSON | `third_party/nlohmann` | Niels Lohmann, github.com/nlohmann/json | MIT |
 | stb_truetype, stb_image, stb_image_write | fonts, images | `third_party/stb`, `third_party/tinygltf` | Sean Barrett, github.com/nothings/stb | Public domain or MIT |

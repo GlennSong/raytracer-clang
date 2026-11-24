@@ -95,6 +95,8 @@ struct GameplayContext {
 //   log(msg)
 //   entity.alive(e) / get_position(e) / set_position(e,v) / translate(e,v)
 //   entity.set_yaw(e, radians) / look_along(e, fwd[, up]) / snap_prev(e)
+//   entity.model_set(e, node, value[, speed]) / model_get(e, node) / model_marker(e, name)
+//                                    -- a stamped prefab's moving nodes: degrees for a turn, metres for a slide
 //   input.pressed(name) / held(name) / axis(name)        -- bound actions
 //   camera.eye() / forward() / right()                   -- the active view
 //   camera.first_person()                                -- eyes, not a rig?

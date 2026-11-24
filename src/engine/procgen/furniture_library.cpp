@@ -29,7 +29,7 @@ Piece FurnitureLibrary::pick(const FurnPick& p, Real w, Real d, uint32_t hash) c
     Piece best = Piece::Count;
     Real bestArea = -1;
     uint32_t bestKey = 0;
-    for (int i = 0; i < kPieceCount; ++i) {
+    for (int i = 0; i < kPieceMax; ++i) {
         if (!has_[static_cast<std::size_t>(i)]) continue;
         const FurnitureAsset& a = assets_[static_cast<std::size_t>(i)];
         if (a.family != p.family) continue;
@@ -68,20 +68,20 @@ const RoomProgram* FurnitureLibrary::program(const std::string& name) const {
 
 void FurnitureLibrary::set(FurnitureAsset a) {
     const int i = static_cast<int>(a.piece);
-    if (i < 0 || i >= kPieceCount) return;
+    if (i < 0 || i >= kPieceMax) return;
     assets_[static_cast<std::size_t>(i)] = std::move(a);
     has_[static_cast<std::size_t>(i)] = true;
 }
 
 const FurnitureAsset* FurnitureLibrary::find(Piece p) const {
     const int i = static_cast<int>(p);
-    if (i < 0 || i >= kPieceCount || !has_[static_cast<std::size_t>(i)]) return nullptr;
+    if (i < 0 || i >= kPieceMax || !has_[static_cast<std::size_t>(i)]) return nullptr;
     return &assets_[static_cast<std::size_t>(i)];
 }
 
 std::vector<Piece> FurnitureLibrary::goodsFor(const std::vector<std::string>& tags) const {
     std::vector<Piece> out;
-    for (int i = 0; i < kPieceCount; ++i) {
+    for (int i = 0; i < kPieceMax; ++i) {
         if (!has_[static_cast<std::size_t>(i)]) continue;
         const FurnitureAsset& a = assets_[static_cast<std::size_t>(i)];
         if (a.family != "goods") continue;

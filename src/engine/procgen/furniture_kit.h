@@ -68,7 +68,19 @@ struct FurniturePiece {
     std::vector<std::array<Vec3, 2>> colliders;
 };
 
-// The piece, modelled once per (piece, variant) and cached (thread-safe). Variant: bits 0-2 the fabric, 3-4 the
+// PREFAB PIECES (#191, "One catalog": the floor planner places prefabs). The kit's own pieces are the list above,
+// modelled by furniture_models.lua and drawn in batches. A PREFAB PIECE is a further piece that is not modelled
+// here at all: it is a line in prefabs.lua, and where the planner places one a copy of that prefab is stood
+// (BuildingInteriorSystem). To the planner it is a piece like any other, with a name, a footprint, a family and
+// tags (assets/scripts/furniture_library.lua says them: `prefab = true, size = {w, h, d}`), so a room program asks
+// for it by name or by what it is. Its numbers follow the kit's: Piece::Count + 1 and up, to kPieceMax - 1.
+constexpr int kPieceMax = 256;
+// Register a prefab as a piece (or find it, if it already is one). Piece::Count when the name is a kit piece's or
+// there is no room left.
+Piece registerPrefabPiece(const std::string& name, const Vec3& size);
+bool pieceIsPrefab(Piece p);
+
+// The piece, modelled once per (piece, variant) and cached (thread-safe). A prefab piece has a size and no mesh. Variant: bits 0-2 the fabric, 3-4 the
 // wood, the rest free for the recipe's own style dice.
 const FurniturePiece& furniturePiece(Piece p, uint32_t variant);
 const char* furniturePieceName(Piece p);

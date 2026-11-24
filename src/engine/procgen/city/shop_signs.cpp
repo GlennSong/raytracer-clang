@@ -98,6 +98,12 @@ std::string shopName(uint8_t trade, uint32_t seed) {
         case 16:  // konbini (invented names only: never a real chain's)
             switch (form % 4) { case 0: return J() + " 24"; case 1: return "Daily " + J(); case 2: return H() + " Mart 24";
                                 default: return E() + " Convenience"; }
+        case 17:  // barber
+            switch (form % 4) { case 0: return E() + " Barbers"; case 1: return H() + " Cuts"; case 2: return "Barber " + J();
+                                default: return "The " + E() + " Chair"; }
+        case 18:  // gym
+            switch (form % 4) { case 0: return E() + " Fitness"; case 1: return H() + " Gym"; case 2: return "Iron " + H();
+                                default: return J() + " Dojo"; }
         case 5:   // pharmacy
             switch (form % 3) { case 0: return H() + " Pharmacy"; case 1: return E() + " Drug"; default: return E() + " Apothecary"; }
         default:

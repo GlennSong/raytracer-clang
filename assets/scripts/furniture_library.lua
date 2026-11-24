@@ -453,3 +453,63 @@ do
     end
   end
 end
+
+-- PREFAB PIECES (#191, "One catalog": the floor planner places prefabs; Glenn, 2026-11-22: "I want to see new
+-- prefabs used and integrated"). Each is a line in prefabs.lua of the same name, NOT a kit piece: it has moving
+-- parts and things a person can do to it, and where a room program places one a copy of the prefab is stood
+-- (BuildingInteriorSystem). Here it is given what the planner needs to place it: `size` (its footprint box: across,
+-- up, out from the wall), a family, tags, and the floor kept free in front of it.
+--
+-- The tags are each piece's own, so no room program that asks by family and tags gets one of these by surprise:
+-- a program names the piece (furniture_rooms.lua, "PREFAB PIECES IN ROOMS").
+local function prefab(size, family, tags, front)
+  return { prefab = true, size = size, family = family, tags = tags, clearance = { front = front or 0.7 } }
+end
+furniture_library.dishwasher        = prefab({ 0.60, 0.85, 0.66 }, "appliance", { "dishwasher" }, 0.9)
+furniture_library.washing_machine   = prefab({ 0.60, 0.85, 0.68 }, "appliance", { "laundry" }, 0.8)
+furniture_library.dryer             = prefab({ 0.60, 0.85, 0.68 }, "appliance", { "laundry", "dryer" }, 0.8)
+furniture_library.pedal_bin         = prefab({ 0.31, 0.46, 0.39 }, "fixture", { "bin" }, 0.4)
+furniture_library.shower            = prefab({ 0.90, 2.11, 0.92 }, "fixture", { "shower" }, 0.7)
+furniture_library.grandfather_clock = prefab({ 0.52, 2.07, 0.31 }, "decor", { "clock" }, 0.4)
+furniture_library.upright_piano     = prefab({ 1.49, 1.22, 0.61 }, "decor", { "piano" }, 0.9)
+furniture_library.rocking_chair     = prefab({ 0.62, 1.13, 1.25 }, "seating", { "rocking" }, 0.3)
+furniture_library.toy_chest         = prefab({ 0.82, 0.47, 0.44 }, "storage", { "toys" }, 0.6)
+furniture_library.shredder          = prefab({ 0.38, 0.92, 0.31 }, "appliance", { "shredder" }, 0.6)
+furniture_library.server_rack       = prefab({ 0.60, 2.00, 0.93 }, "appliance", { "server" }, 1.0)
+furniture_library.flip_chart        = prefab({ 0.80, 1.86, 0.77 }, "decor", { "flip_chart" }, 0.8)
+furniture_library.ticket_dispenser  = prefab({ 0.36, 1.50, 0.36 }, "fixture", { "queue" }, 0.6)
+furniture_library.vending_machine   = prefab({ 1.00, 1.83, 0.70 }, "appliance", { "vending" }, 0.9)
+furniture_library.atm               = prefab({ 0.64, 1.64, 0.65 }, "appliance", { "atm" }, 0.9)
+furniture_library.luggage_cart      = prefab({ 0.60, 1.74, 1.10 }, "decor", { "luggage" }, 0.5)
+furniture_library.room_safe         = prefab({ 0.42, 0.30, 0.43 }, "storage", { "safe" }, 0.5)
+furniture_library.iv_stand          = prefab({ 0.50, 1.70, 0.55 }, "fixture", { "drip" }, 0.2)
+furniture_library.exam_lamp         = prefab({ 0.54, 1.81, 1.04 }, "fixture", { "exam_lamp" }, 0.3)
+
+-- A CHILD'S ROOM's pieces (kids_room.lua), which the `child_room` program places (furniture_rooms.lua)
+furniture_library.kids_bed   = prefab({ 0.96, 0.75, 1.80 }, "sleeping", { "child" }, 0.5)
+furniture_library.bunk_bed   = prefab({ 1.10, 1.75, 1.97 }, "sleeping", { "child", "bunk" }, 0.6)
+furniture_library.kids_desk  = prefab({ 0.90, 1.25, 0.90 }, "surface", { "child" }, 0.4)
+furniture_library.toy_shelf  = prefab({ 1.20, 0.80, 0.32 }, "storage", { "child", "toys" }, 0.6)
+furniture_library.play_mat   = prefab({ 2.00, 0.07, 1.40 }, "decor", { "child" }, 0.0)
+furniture_library.dollhouse  = prefab({ 0.90, 1.02, 0.46 }, "decor", { "child", "toys" }, 0.5)
+furniture_library.kids_easel = prefab({ 0.66, 1.20, 0.50 }, "decor", { "child" }, 0.4)
+
+-- A BARBER'S and A GYM's pieces (barber_shop.lua, gym.lua), which the trades' own programs place ("shop:barber",
+-- "shop:gym", furniture_rooms.lua)
+furniture_library.barber_chair   = prefab({ 0.64, 1.49, 1.04 }, "seating", { "barber" }, 0.4)
+furniture_library.barber_station = prefab({ 1.10, 2.20, 0.48 }, "storage", { "barber" }, 0.9)
+furniture_library.backwash_chair = prefab({ 0.60, 1.06, 1.18 }, "seating", { "barber" }, 0.6)
+furniture_library.hood_dryer     = prefab({ 0.54, 1.72, 0.90 }, "decor", { "barber" }, 0.4)
+furniture_library.salon_trolley  = prefab({ 0.40, 0.89, 0.36 }, "storage", { "barber" }, 0.3)
+furniture_library.barber_waiting_seats = prefab({ 2.50, 0.99, 0.54 }, "seating", { "barber", "waiting" }, 0.7)
+furniture_library.treadmill      = prefab({ 0.74, 1.32, 1.55 }, "gym", { "cardio" }, 0.6)
+furniture_library.exercise_bike  = prefab({ 0.50, 1.16, 1.04 }, "gym", { "cardio" }, 0.5)
+furniture_library.rowing_machine = prefab({ 0.50, 0.87, 2.52 }, "gym", { "cardio" }, 0.5)
+furniture_library.weight_machine = prefab({ 1.12, 2.75, 1.30 }, "gym", { "weights" }, 0.7)
+furniture_library.punch_bag      = prefab({ 0.76, 2.24, 1.06 }, "gym", { "weights" }, 0.7)
+furniture_library.dumbbell_rack  = prefab({ 1.88, 0.93, 0.60 }, "gym", { "weights" }, 0.9)
+furniture_library.bench_press    = prefab({ 2.10, 1.28, 1.40 }, "gym", { "weights" }, 0.6)
+furniture_library.yoga_mats      = prefab({ 2.82, 0.64, 1.80 }, "gym", { "floor" }, 0.2)
+furniture_library.mirror_wall    = prefab({ 3.02, 2.04, 0.22 }, "decor", { "gym" }, 0.6)
+furniture_library.gym_bench      = prefab({ 1.60, 0.46, 0.44 }, "seating", { "gym" }, 0.5)
+furniture_library.lockers        = prefab({ 1.30, 1.91, 0.52 }, "storage", { "gym" }, 0.8)

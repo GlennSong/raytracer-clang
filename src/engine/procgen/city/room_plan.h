@@ -135,6 +135,10 @@ struct Room {
     RoomKind kind = RoomKind::Office;
     uint8_t style = 0;      // a shop's trade
     Poly2 frame;         // a curved room's rectangle for the furniture: inside the polygon, along the arc's chord
+    // WHICH HOME on its storey it is a room of (a flat's rooms share one number; 0: not known -- on a floor that is
+    // one dwelling, every room is the one home). The furniture reads it to tell a home's bedrooms from its
+    // neighbour's: the smaller of two is a child's room (furniture.cpp).
+    uint16_t home = 0;
 };
 
 // AN OPENING IN AN OUTSIDE WALL (Glenn, 2026-10-13: "a tv sitting in front of the front doorway ... a shelf in a store
@@ -252,6 +256,13 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
 constexpr Real kRoomDoorW = human::INNER_DOOR_WIDTH;
 constexpr Real kRoomDoorH = human::DOOR_HEIGHT;
 constexpr Real kRoomWallT = 0.12;
+// A WALL'S DOORWAY (RoomWall::doorAt), the one rule its cut, its glass, its collider and its door leaf all read: a
+// wall of length L has one when it names a place for it and is long enough, centred where it asked but never
+// nearer than 0.3 m to the wall's end.
+inline bool wallHasDoorway(Real doorAt, Real L) { return doorAt >= 0 && L > kRoomDoorW + 0.6; }
+inline Real doorwayCentre(Real doorAt, Real L) {
+    return std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+}
 // A masonry plate narrower than this, with no core, is one dwelling a floor.
 constexpr Real kWholeFloorShortSide = 13.0;
 

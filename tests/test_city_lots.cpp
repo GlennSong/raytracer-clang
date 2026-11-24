@@ -362,6 +362,9 @@ TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
         "teaching_hall", "campus_library", "residence_hall", "big_box",
         // ...and a beach town's car parks: whole blocks the level names (LotParams::parkingAt), or a town's own mix
         "car_park",
+        // ...and the high school: a whole large block with its grounds round it, which a level names
+        // (LotParams::recipeAt) until the landmark planner learns to find it a lot that size
+        "high_school",
     };
     std::vector<std::string> silent;
     for (int i = 0; i < architectRecipeCount(); ++i) {

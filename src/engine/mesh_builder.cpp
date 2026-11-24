@@ -879,6 +879,16 @@ std::vector<MeshBuilder::CellChunk> MeshBuilder::chunkByCell(const RenderMesh& m
     return out;
 }
 
+RenderMesh MeshBuilder::hullMesh(const std::vector<Vec3>& points, const Vec3& color) {
+    RenderMesh m;
+    for (const std::array<uint32_t, 3>& t : convexHull(points)) {
+        const Vec3& a = points[t[0]]; const Vec3& b = points[t[1]]; const Vec3& c = points[t[2]];
+        const Vec3 out = cross(b - a, c - a);   // the hull gives its triangles counter-clockwise seen from outside
+        if (out.length() > 0.0) emitTri(m, a, b, c, normalize(out), color);
+    }
+    return m;
+}
+
 std::vector<std::array<uint32_t, 3>> MeshBuilder::convexHull(const std::vector<Vec3>& pts) {
     using Face = std::array<uint32_t, 3>;
     std::vector<Face> faces;
@@ -938,6 +948,21 @@ std::vector<std::array<uint32_t, 3>> MeshBuilder::convexHull(const std::vector<V
     return faces;
 }
 
+
+RenderMesh MeshBuilder::simplifiedSurface(const RenderMesh& mesh, std::size_t targetTris, double maxError, bool weldFirst,
+                                          double creaseDegrees, std::size_t* left) {
+    RenderMesh out = mesh;
+    if (weldFirst) {
+        WeldTolerance tol;
+        tol.positionOnly = true;
+        out = weld(mesh, tol);
+    }
+    const std::size_t remaining = simplify(out, targetTris, maxError);
+    out = weld(out);   // drop the vertices no triangle uses any more
+    if (creaseDegrees >= 0.0) autosmooth(out, creaseDegrees);
+    if (left != nullptr) *left = remaining;
+    return out;
+}
 
 std::size_t MeshBuilder::simplify(RenderMesh& mesh, std::size_t targetTris, double maxError) {
     const std::size_t nv = mesh.vertices.size();

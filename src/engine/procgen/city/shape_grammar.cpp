@@ -1,3 +1,4 @@
+#include "space_graph.h"   // cellUseName: a room kind's name (RT_ROOMS_DEBUG)
 #include "shape_grammar.h"
 #include "roads/lanes/geom2d.h"   // the Clipper offsets (tierArmsOk)
 #include "../../../proc_rng.h"
@@ -17,6 +18,7 @@
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
 #include "../noise.h"             // emitSoftBox's lumps
+#include <map>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -5406,9 +5408,22 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // (RT_FURNITURE_BLIND_OPENINGS=1: the A/B -- furnished as before the outside doors and windows were known)
         static const bool blindOpenings = std::getenv("RT_FURNITURE_BLIND_OPENINGS") != nullptr;
         if (!blindOpenings) rp.openings = storeyOpenings(spk.plan, params, ki, baseY + spk.y0, spk.h, entranceEdge);
+        if (std::getenv("RT_ROOMS_DEBUG")) {   // what this storey was laid as: its rooms by kind
+            std::map<std::string, int> kinds;
+            for (const Room& room : rp.rooms) ++kinds[cellUseName(room.kind)];
+            std::string line;
+            for (const std::pair<const std::string, int>& kn : kinds) line += " " + std::to_string(kn.second) + " " + kn.first + ",";
+            std::fprintf(stderr, "[rooms] civic %d storey %d: %zu rooms:%s %zu walls\n", params.civicRooms, ki, rp.rooms.size(), line.c_str(), rp.walls.size());
+        }
         if (rp.walls.empty() && rp.rooms.empty()) continue;   // (rooms without walls -- an open office's zones -- are furnished)
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
+        for (const RoomWall& w : rp.walls) {   // (each doorway those walls were cut with, for a door to stand in)
+            const Real L = (w.b - w.a).length();
+            if (!wallHasDoorway(w.doorAt, L)) continue;
+            const Vec2 d = (w.b - w.a) * (Real(1) / L), p = w.a + d * doorwayCentre(w.doorAt, L);
+            out.doorways.push_back(Doorway{Vec3(p.x, baseY + spk.y0 + 0.05, p.y), d, kRoomDoorW, kRoomDoorH - Real(0.05), w.glass});
+        }
         // A SHOP'S FLOOR AND CEILING in its trade's finish (a checker where it is tiled), just proud of the slab's.
         // (A mall's upper level too: its slab top is the floor there; its concourse is the slab's own marble, holed.)
         if (ki == 0 || (params.bigBox == 6 && ki == 1)) {
@@ -5447,7 +5462,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
         // the ceiling's underside: the next storey's floor slab is 0.25 m deep
         const std::size_t firstPiece = out.furniture.size();
-        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25, &out.roomLights);
+        // (the furniture stands on the FINISHED floor, the slab's top 5 cm over the storey's level: stood at the level
+        // itself, every piece was sunk 5 cm into the floor, which hid a stool's base and a desk's feet. Glenn,
+        // 2026-11-21: "the bases of those objects are under the floor")
+        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0 + 0.05, params.seed, baseY + spk.y0 + spk.h - 0.25, &out.roomLights);
         // which SHOP UNIT each new piece furnishes (the room it stands in): whose people sit and serve there
         {
             std::vector<int16_t> unitOf(rp.rooms.size(), -1);
@@ -7084,5 +7102,7 @@ RenderMesh fireEscapeCollider(const Poly2& plan, const BuildingParams& params, R
     if (params.fireEscape) emitFireEscape(nullptr, &col, plan, params, baseY, true);
     return col;
 }
+
+Real outsideWallDepth(const BuildingParams& p) { return interiorInset(p); }
 
 }  // namespace engine

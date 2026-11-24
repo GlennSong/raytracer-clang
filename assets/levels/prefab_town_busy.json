@@ -1,0 +1,5496 @@
+{
+ "version": 1,
+ "watch_scripts": true,
+ "name": "prefab_town_busy",
+ "_note": "PREFAB TOWN (#191): 339 prefabs stood in 14 rooms, along a street, in a park and on a square. Written by tools/prefab_town.py from the tables in it: edit those and run it again, not this file. Every piece that has an `_in_use` prefab is that one: all moving parts working at once, as a load test.",
+ "player": {
+  "position": [
+   -24,
+   1.2,
+   0
+  ],
+  "collider": {
+   "shape": "capsule",
+   "radius": 0.3,
+   "halfHeight": 0.6
+  },
+  "friction": 0.5
+ },
+ "environment": {
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.7,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "entities": [
+  {
+   "id": 1,
+   "name": "ground",
+   "shape": "box",
+   "position": [
+    18,
+    -0.2,
+    0
+   ],
+   "size": [
+    160,
+    0.4,
+    110
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.44,
+     0.4
+    ],
+    "metallic": 0.0,
+    "roughness": 1.0,
+    "opacity": 1.0,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "checkerboard": false
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 2,
+   "name": "the place",
+   "shape": "script",
+   "file": "prefab_town.lua",
+   "seed": 1,
+   "opts": {
+    "rooms": [
+     {
+      "name": "konbini",
+      "x": -23.0,
+      "z": -11.0,
+      "w": 10,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 3.24,
+      "floor": "tile"
+     },
+     {
+      "name": "cafe",
+      "x": -13.5,
+      "z": -11.0,
+      "w": 9,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 1.02,
+      "floor": "wood"
+     },
+     {
+      "name": "office",
+      "x": -3.0,
+      "z": -11.0,
+      "w": 12,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 1.92,
+      "floor": "carpet"
+     },
+     {
+      "name": "gym",
+      "x": 8.0,
+      "z": -11.0,
+      "w": 10,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 1.02,
+      "floor": "tile"
+     },
+     {
+      "name": "gym: free weights and mats",
+      "x": 17.5,
+      "z": -11.0,
+      "w": 9,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 1.02,
+      "floor": "wood"
+     },
+     {
+      "name": "barber",
+      "x": 26.5,
+      "z": -11.0,
+      "w": 9,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 1.02,
+      "floor": "tile"
+     },
+     {
+      "name": "station hall",
+      "x": 38.0,
+      "z": -11.0,
+      "w": 14,
+      "d": 8.0,
+      "yaw": 0,
+      "door": 3.24,
+      "floor": "tile"
+     },
+     {
+      "name": "flat: kitchen and living room",
+      "x": -23.0,
+      "z": 11.0,
+      "w": 10,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "wood"
+     },
+     {
+      "name": "flat: bedroom and bathroom",
+      "x": -13.5,
+      "z": 11.0,
+      "w": 9,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "wood"
+     },
+     {
+      "name": "flat: child's room",
+      "x": -6.0,
+      "z": 11.0,
+      "w": 6,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "carpet"
+     },
+     {
+      "name": "playroom and nursery",
+      "x": 0.5,
+      "z": 11.0,
+      "w": 7,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "carpet"
+     },
+     {
+      "name": "clinic",
+      "x": 8.5,
+      "z": 11.0,
+      "w": 9,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "tile"
+     },
+     {
+      "name": "schoolroom and library",
+      "x": 18.0,
+      "z": 11.0,
+      "w": 10,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "wood"
+     },
+     {
+      "name": "bakery",
+      "x": 27.0,
+      "z": 11.0,
+      "w": 8,
+      "d": 8.0,
+      "yaw": 180,
+      "door": 1.02,
+      "floor": "tile"
+     }
+    ],
+    "street": {
+     "x0": -32,
+     "x1": 52,
+     "half": 4.0,
+     "walk": 3.0
+    },
+    "grounds": [
+     {
+      "x": 60,
+      "z": 18,
+      "w": 22,
+      "d": 22,
+      "kind": "grass"
+     },
+     {
+      "x": 60,
+      "z": -18,
+      "w": 22,
+      "d": 22,
+      "kind": "paving"
+     }
+    ]
+   }
+  },
+  {
+   "id": 3,
+   "name": "konbini / automatic_doors 1",
+   "shape": "prefab",
+   "prefab": "automatic_doors_in_use",
+   "position": [
+    -23.0,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 4,
+   "name": "konbini / drinks_fridge 2",
+   "shape": "prefab",
+   "prefab": "drinks_fridge_in_use",
+   "position": [
+    -26.6,
+    0.05,
+    -14.5
+   ]
+  },
+  {
+   "id": 5,
+   "name": "konbini / drinks_fridge 3",
+   "shape": "prefab",
+   "prefab": "drinks_fridge_in_use",
+   "position": [
+    -24.5,
+    0.05,
+    -14.5
+   ]
+  },
+  {
+   "id": 6,
+   "name": "konbini / drinks_fridge_single 4",
+   "shape": "prefab",
+   "prefab": "drinks_fridge_single_in_use",
+   "position": [
+    -22.8,
+    0.05,
+    -14.5
+   ]
+  },
+  {
+   "id": 7,
+   "name": "konbini / ice_cream_freezer 5",
+   "shape": "prefab",
+   "prefab": "ice_cream_freezer_in_use",
+   "position": [
+    -25.5,
+    0.05,
+    -11.6
+   ]
+  },
+  {
+   "id": 8,
+   "name": "konbini / shelving 6",
+   "shape": "prefab",
+   "prefab": "shelving",
+   "position": [
+    -22.2,
+    0.05,
+    -10.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 9,
+   "name": "konbini / shelving 7",
+   "shape": "prefab",
+   "prefab": "shelving",
+   "position": [
+    -22.2,
+    0.05,
+    -12.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 10,
+   "name": "konbini / shelving 8",
+   "shape": "prefab",
+   "prefab": "shelving",
+   "position": [
+    -23.2,
+    0.05,
+    -10.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 11,
+   "name": "konbini / shelving 9",
+   "shape": "prefab",
+   "prefab": "shelving",
+   "position": [
+    -23.2,
+    0.05,
+    -12.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 12,
+   "name": "konbini / shop_counter 10",
+   "shape": "prefab",
+   "prefab": "shop_counter",
+   "position": [
+    -19.4,
+    0.05,
+    -9.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 13,
+   "name": "konbini / kitchen_base 11",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -18.4,
+    0.05,
+    -14.6
+   ]
+  },
+  {
+   "id": 14,
+   "name": "konbini / microwave 12",
+   "shape": "prefab",
+   "prefab": "microwave_in_use",
+   "position": [
+    -18.4,
+    0.95,
+    -14.6
+   ]
+  },
+  {
+   "id": 15,
+   "name": "konbini / kitchen_base 13",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -19.0,
+    0.05,
+    -14.6
+   ]
+  },
+  {
+   "id": 16,
+   "name": "konbini / espresso_machine 14",
+   "shape": "prefab",
+   "prefab": "espresso_machine_in_use",
+   "position": [
+    -19.0,
+    0.95,
+    -14.6
+   ]
+  },
+  {
+   "id": 17,
+   "name": "konbini / atm 15",
+   "shape": "prefab",
+   "prefab": "atm",
+   "position": [
+    -18.5,
+    0.05,
+    -12.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 18,
+   "name": "konbini / basket_stack 16",
+   "shape": "prefab",
+   "prefab": "basket_stack",
+   "position": [
+    -24.9,
+    0.05,
+    -7.7
+   ]
+  },
+  {
+   "id": 19,
+   "name": "konbini / shopping_cart 17",
+   "shape": "prefab",
+   "prefab": "shopping_cart",
+   "position": [
+    -26.2,
+    0.05,
+    -8.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 20,
+   "name": "konbini / capsule_machines 18",
+   "shape": "prefab",
+   "prefab": "capsule_machines_in_use",
+   "position": [
+    -27.5,
+    0.05,
+    -9.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 21,
+   "name": "konbini / postcard_rack 19",
+   "shape": "prefab",
+   "prefab": "postcard_rack_in_use",
+   "position": [
+    -20.8,
+    0.05,
+    -7.8
+   ]
+  },
+  {
+   "id": 22,
+   "name": "konbini / wall_clock 20",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    -20.5,
+    2.35,
+    -14.91
+   ]
+  },
+  {
+   "id": 23,
+   "name": "cafe / door_glass 1",
+   "shape": "prefab",
+   "prefab": "door_glass_in_use",
+   "position": [
+    -13.5,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 24,
+   "name": "cafe / bar_counter 2",
+   "shape": "prefab",
+   "prefab": "bar_counter",
+   "position": [
+    -11.3,
+    0.05,
+    -12.8
+   ]
+  },
+  {
+   "id": 25,
+   "name": "cafe / espresso_machine 3",
+   "shape": "prefab",
+   "prefab": "espresso_machine_in_use",
+   "position": [
+    -11.0,
+    1.176,
+    -12.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 26,
+   "name": "cafe / cash_register 4",
+   "shape": "prefab",
+   "prefab": "cash_register_in_use",
+   "position": [
+    -11.9,
+    1.176,
+    -12.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 27,
+   "name": "cafe / beer_taps 5",
+   "shape": "prefab",
+   "prefab": "beer_taps_in_use",
+   "position": [
+    -10.5,
+    1.176,
+    -12.75
+   ]
+  },
+  {
+   "id": 28,
+   "name": "cafe / bar_stool_swivel 6",
+   "shape": "prefab",
+   "prefab": "bar_stool_swivel_in_use",
+   "position": [
+    -12.0,
+    0.05,
+    -11.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 29,
+   "name": "cafe / bar_stool_swivel 7",
+   "shape": "prefab",
+   "prefab": "bar_stool_swivel_in_use",
+   "position": [
+    -11.3,
+    0.05,
+    -11.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 30,
+   "name": "cafe / bar_stool_swivel 8",
+   "shape": "prefab",
+   "prefab": "bar_stool_swivel_in_use",
+   "position": [
+    -10.6,
+    0.05,
+    -11.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 31,
+   "name": "cafe / fridge 9",
+   "shape": "prefab",
+   "prefab": "fridge_in_use",
+   "position": [
+    -9.6,
+    0.05,
+    -14.6
+   ]
+  },
+  {
+   "id": 32,
+   "name": "cafe / kitchen_base 10",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -10.3,
+    0.05,
+    -14.6
+   ]
+  },
+  {
+   "id": 33,
+   "name": "cafe / stand_mixer 11",
+   "shape": "prefab",
+   "prefab": "stand_mixer_in_use",
+   "position": [
+    -10.3,
+    0.95,
+    -14.6
+   ]
+  },
+  {
+   "id": 34,
+   "name": "cafe / round_table_turning 12",
+   "shape": "prefab",
+   "prefab": "round_table_turning_in_use",
+   "position": [
+    -15.8,
+    0.05,
+    -10.4
+   ]
+  },
+  {
+   "id": 35,
+   "name": "cafe / bistro_chair 13",
+   "shape": "prefab",
+   "prefab": "bistro_chair",
+   "position": [
+    -15.8,
+    0.05,
+    -9.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 36,
+   "name": "cafe / bistro_chair 14",
+   "shape": "prefab",
+   "prefab": "bistro_chair",
+   "position": [
+    -15.8,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 37,
+   "name": "cafe / bistro_chair 15",
+   "shape": "prefab",
+   "prefab": "bistro_chair",
+   "position": [
+    -16.9,
+    0.05,
+    -10.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 38,
+   "name": "cafe / bistro_chair 16",
+   "shape": "prefab",
+   "prefab": "bistro_chair",
+   "position": [
+    -14.7,
+    0.05,
+    -10.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 39,
+   "name": "cafe / booth 17",
+   "shape": "prefab",
+   "prefab": "booth",
+   "position": [
+    -16.9,
+    0.05,
+    -13.9
+   ]
+  },
+  {
+   "id": 40,
+   "name": "cafe / display_turntable 18",
+   "shape": "prefab",
+   "prefab": "display_turntable_in_use",
+   "position": [
+    -12.6,
+    1.176,
+    -12.8
+   ]
+  },
+  {
+   "id": 41,
+   "name": "cafe / wall_clock 19",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    -14.5,
+    2.35,
+    -14.91
+   ]
+  },
+  {
+   "id": 42,
+   "name": "cafe / ceiling_fan 20",
+   "shape": "prefab",
+   "prefab": "ceiling_fan_in_use",
+   "position": [
+    -15.0,
+    2.95,
+    -10.5
+   ]
+  },
+  {
+   "id": 43,
+   "name": "cafe / potted_plant 21",
+   "shape": "prefab",
+   "prefab": "potted_plant",
+   "position": [
+    -17.7,
+    0.05,
+    -7.4
+   ]
+  },
+  {
+   "id": 44,
+   "name": "office / double_door 1",
+   "shape": "prefab",
+   "prefab": "double_door_in_use",
+   "position": [
+    -3.0,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 45,
+   "name": "office / standing_desk 2",
+   "shape": "prefab",
+   "prefab": "standing_desk_in_use",
+   "position": [
+    -7.2,
+    0.05,
+    -13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 46,
+   "name": "office / standing_desk 3",
+   "shape": "prefab",
+   "prefab": "standing_desk_in_use",
+   "position": [
+    -5.2,
+    0.05,
+    -13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 47,
+   "name": "office / standing_desk 4",
+   "shape": "prefab",
+   "prefab": "standing_desk_in_use",
+   "position": [
+    -3.2,
+    0.05,
+    -13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 48,
+   "name": "office / office_chair_adjustable 5",
+   "shape": "prefab",
+   "prefab": "office_chair_adjustable_in_use",
+   "position": [
+    -7.2,
+    0.05,
+    -14.1
+   ]
+  },
+  {
+   "id": 49,
+   "name": "office / office_chair_adjustable 6",
+   "shape": "prefab",
+   "prefab": "office_chair_adjustable_in_use",
+   "position": [
+    -5.2,
+    0.05,
+    -14.1
+   ]
+  },
+  {
+   "id": 50,
+   "name": "office / office_chair_adjustable 7",
+   "shape": "prefab",
+   "prefab": "office_chair_adjustable_in_use",
+   "position": [
+    -3.2,
+    0.05,
+    -14.1
+   ]
+  },
+  {
+   "id": 51,
+   "name": "office / desk 8",
+   "shape": "prefab",
+   "prefab": "desk",
+   "position": [
+    -7.2,
+    0.05,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 52,
+   "name": "office / desk 9",
+   "shape": "prefab",
+   "prefab": "desk",
+   "position": [
+    -5.2,
+    0.05,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 53,
+   "name": "office / desk 10",
+   "shape": "prefab",
+   "prefab": "desk",
+   "position": [
+    -3.2,
+    0.05,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 54,
+   "name": "office / office_chair 11",
+   "shape": "prefab",
+   "prefab": "office_chair",
+   "position": [
+    -7.2,
+    0.05,
+    -10.9
+   ]
+  },
+  {
+   "id": 55,
+   "name": "office / office_chair 12",
+   "shape": "prefab",
+   "prefab": "office_chair",
+   "position": [
+    -5.2,
+    0.05,
+    -10.9
+   ]
+  },
+  {
+   "id": 56,
+   "name": "office / office_chair 13",
+   "shape": "prefab",
+   "prefab": "office_chair",
+   "position": [
+    -3.2,
+    0.05,
+    -10.9
+   ]
+  },
+  {
+   "id": 57,
+   "name": "office / desk_lamp 14",
+   "shape": "prefab",
+   "prefab": "desk_lamp_in_use",
+   "position": [
+    -7.7,
+    0.79,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 58,
+   "name": "office / desk_lamp 15",
+   "shape": "prefab",
+   "prefab": "desk_lamp_in_use",
+   "position": [
+    -5.7,
+    0.79,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 59,
+   "name": "office / desk_lamp 16",
+   "shape": "prefab",
+   "prefab": "desk_lamp_in_use",
+   "position": [
+    -3.7,
+    0.79,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 60,
+   "name": "office / laptop 17",
+   "shape": "prefab",
+   "prefab": "laptop_in_use",
+   "position": [
+    -7.0,
+    0.79,
+    -10.1
+   ]
+  },
+  {
+   "id": 61,
+   "name": "office / paper_trimmer 18",
+   "shape": "prefab",
+   "prefab": "paper_trimmer_in_use",
+   "position": [
+    -4.9,
+    0.79,
+    -10.1
+   ]
+  },
+  {
+   "id": 62,
+   "name": "office / desk_fan 19",
+   "shape": "prefab",
+   "prefab": "desk_fan_in_use",
+   "position": [
+    -2.8,
+    0.79,
+    -10.1
+   ]
+  },
+  {
+   "id": 63,
+   "name": "office / filing_cabinet 20",
+   "shape": "prefab",
+   "prefab": "filing_cabinet_in_use",
+   "position": [
+    -2.0,
+    0.05,
+    -10.1
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 64,
+   "name": "office / desk_pedestal 21",
+   "shape": "prefab",
+   "prefab": "desk_pedestal_in_use",
+   "position": [
+    -6.2,
+    0.05,
+    -13.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 65,
+   "name": "office / printer 22",
+   "shape": "prefab",
+   "prefab": "printer_in_use",
+   "position": [
+    -0.6,
+    0.05,
+    -14.6
+   ]
+  },
+  {
+   "id": 66,
+   "name": "office / shredder 23",
+   "shape": "prefab",
+   "prefab": "shredder_in_use",
+   "position": [
+    0.3,
+    0.05,
+    -14.7
+   ]
+  },
+  {
+   "id": 67,
+   "name": "office / store_cupboard 24",
+   "shape": "prefab",
+   "prefab": "store_cupboard",
+   "position": [
+    1.3,
+    0.05,
+    -14.7
+   ]
+  },
+  {
+   "id": 68,
+   "name": "office / server_rack 25",
+   "shape": "prefab",
+   "prefab": "server_rack_in_use",
+   "position": [
+    2.4,
+    0.05,
+    -12.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 69,
+   "name": "office / whiteboard 26",
+   "shape": "prefab",
+   "prefab": "whiteboard_in_use",
+   "position": [
+    0.2,
+    0.05,
+    -10.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 200
+   }
+  },
+  {
+   "id": 70,
+   "name": "office / flip_chart 27",
+   "shape": "prefab",
+   "prefab": "flip_chart_in_use",
+   "position": [
+    1.6,
+    0.05,
+    -9.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 220
+   }
+  },
+  {
+   "id": 71,
+   "name": "office / ceiling_fan 28",
+   "shape": "prefab",
+   "prefab": "ceiling_fan_in_use",
+   "position": [
+    -5.0,
+    2.95,
+    -11.0
+   ]
+  },
+  {
+   "id": 72,
+   "name": "office / wall_clock 29",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    -5.2,
+    2.45,
+    -14.91
+   ]
+  },
+  {
+   "id": 73,
+   "name": "office / fire_hose_cabinet 30",
+   "shape": "prefab",
+   "prefab": "fire_hose_cabinet_in_use",
+   "position": [
+    -8.85,
+    0.95,
+    -8.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 74,
+   "name": "office / room_safe 31",
+   "shape": "prefab",
+   "prefab": "room_safe_in_use",
+   "position": [
+    2.5,
+    0.05,
+    -7.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 75,
+   "name": "office / potted_plant 32",
+   "shape": "prefab",
+   "prefab": "potted_plant",
+   "position": [
+    -8.5,
+    0.05,
+    -7.5
+   ]
+  },
+  {
+   "id": 76,
+   "name": "office / monitor_arm 33",
+   "shape": "prefab",
+   "prefab": "monitor_arm_in_use",
+   "position": [
+    -5.2,
+    0.79,
+    -10.25
+   ]
+  },
+  {
+   "id": 77,
+   "name": "gym / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    8.0,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 78,
+   "name": "gym / treadmill 2",
+   "shape": "prefab",
+   "prefab": "treadmill_in_use",
+   "position": [
+    4.2,
+    0.05,
+    -13.6
+   ]
+  },
+  {
+   "id": 79,
+   "name": "gym / treadmill 3",
+   "shape": "prefab",
+   "prefab": "treadmill_in_use",
+   "position": [
+    5.4,
+    0.05,
+    -13.6
+   ]
+  },
+  {
+   "id": 80,
+   "name": "gym / exercise_bike 4",
+   "shape": "prefab",
+   "prefab": "exercise_bike_in_use",
+   "position": [
+    7.1,
+    0.05,
+    -13.9
+   ]
+  },
+  {
+   "id": 81,
+   "name": "gym / exercise_bike 5",
+   "shape": "prefab",
+   "prefab": "exercise_bike_in_use",
+   "position": [
+    8.1,
+    0.05,
+    -13.9
+   ]
+  },
+  {
+   "id": 82,
+   "name": "gym / rowing_machine 6",
+   "shape": "prefab",
+   "prefab": "rowing_machine_in_use",
+   "position": [
+    9.6,
+    0.05,
+    -13.6
+   ]
+  },
+  {
+   "id": 83,
+   "name": "gym / weight_machine 7",
+   "shape": "prefab",
+   "prefab": "weight_machine_in_use",
+   "position": [
+    11.6,
+    0.05,
+    -13.6
+   ]
+  },
+  {
+   "id": 84,
+   "name": "gym / punch_bag 8",
+   "shape": "prefab",
+   "prefab": "punch_bag_in_use",
+   "position": [
+    4.5,
+    0.05,
+    -9.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 85,
+   "name": "gym / lockers 9",
+   "shape": "prefab",
+   "prefab": "lockers_in_use",
+   "position": [
+    12.6,
+    0.05,
+    -9.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 86,
+   "name": "gym / lockers 10",
+   "shape": "prefab",
+   "prefab": "lockers_in_use",
+   "position": [
+    12.6,
+    0.05,
+    -8.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 87,
+   "name": "gym / stand_fan 11",
+   "shape": "prefab",
+   "prefab": "stand_fan_in_use",
+   "position": [
+    10.2,
+    0.05,
+    -7.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 200
+   }
+  },
+  {
+   "id": 88,
+   "name": "gym / drinking_fountain 12",
+   "shape": "prefab",
+   "prefab": "drinking_fountain",
+   "position": [
+    3.5,
+    0.05,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 89,
+   "name": "gym / wall_clock 13",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    8.0,
+    2.45,
+    -14.91
+   ]
+  },
+  {
+   "id": 90,
+   "name": "gym / turnstile 14",
+   "shape": "prefab",
+   "prefab": "turnstile_in_use",
+   "position": [
+    9.6,
+    0.05,
+    -8.4
+   ]
+  },
+  {
+   "id": 91,
+   "name": "gym: free weights and mats / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    17.5,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 92,
+   "name": "gym: free weights and mats / mirror_wall 2",
+   "shape": "prefab",
+   "prefab": "mirror_wall",
+   "position": [
+    16.3,
+    0.05,
+    -14.87
+   ]
+  },
+  {
+   "id": 93,
+   "name": "gym: free weights and mats / dumbbell_rack 3",
+   "shape": "prefab",
+   "prefab": "dumbbell_rack",
+   "position": [
+    14.5,
+    0.05,
+    -14.25
+   ]
+  },
+  {
+   "id": 94,
+   "name": "gym: free weights and mats / bench_press 4",
+   "shape": "prefab",
+   "prefab": "bench_press",
+   "position": [
+    16.9,
+    0.05,
+    -12.6
+   ]
+  },
+  {
+   "id": 95,
+   "name": "gym: free weights and mats / bench_press 5",
+   "shape": "prefab",
+   "prefab": "bench_press",
+   "position": [
+    18.9,
+    0.05,
+    -12.6
+   ]
+  },
+  {
+   "id": 96,
+   "name": "gym: free weights and mats / yoga_mats 6",
+   "shape": "prefab",
+   "prefab": "yoga_mats",
+   "position": [
+    15.1,
+    0.05,
+    -9.4
+   ]
+  },
+  {
+   "id": 97,
+   "name": "gym: free weights and mats / gym_bench 7",
+   "shape": "prefab",
+   "prefab": "gym_bench",
+   "position": [
+    20.9,
+    0.05,
+    -8.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 98,
+   "name": "gym: free weights and mats / lockers 8",
+   "shape": "prefab",
+   "prefab": "lockers_in_use",
+   "position": [
+    21.4,
+    0.05,
+    -11.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 99,
+   "name": "gym: free weights and mats / lockers 9",
+   "shape": "prefab",
+   "prefab": "lockers_in_use",
+   "position": [
+    21.4,
+    0.05,
+    -12.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 100,
+   "name": "gym: free weights and mats / punch_bag 10",
+   "shape": "prefab",
+   "prefab": "punch_bag_in_use",
+   "position": [
+    20.1,
+    0.05,
+    -10.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 101,
+   "name": "gym: free weights and mats / towel_shelf 11",
+   "shape": "prefab",
+   "prefab": "towel_shelf",
+   "position": [
+    20.9,
+    1.25,
+    -14.98
+   ]
+  },
+  {
+   "id": 102,
+   "name": "barber / door_glass 1",
+   "shape": "prefab",
+   "prefab": "door_glass_in_use",
+   "position": [
+    26.5,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 103,
+   "name": "barber / barber_station 2",
+   "shape": "prefab",
+   "prefab": "barber_station",
+   "position": [
+    23.3,
+    0.05,
+    -14.74
+   ]
+  },
+  {
+   "id": 104,
+   "name": "barber / barber_station 3",
+   "shape": "prefab",
+   "prefab": "barber_station",
+   "position": [
+    25.1,
+    0.05,
+    -14.74
+   ]
+  },
+  {
+   "id": 105,
+   "name": "barber / barber_station 4",
+   "shape": "prefab",
+   "prefab": "barber_station",
+   "position": [
+    26.9,
+    0.05,
+    -14.74
+   ]
+  },
+  {
+   "id": 106,
+   "name": "barber / barber_chair 5",
+   "shape": "prefab",
+   "prefab": "barber_chair",
+   "position": [
+    23.3,
+    0.05,
+    -13.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 107,
+   "name": "barber / barber_chair 6",
+   "shape": "prefab",
+   "prefab": "barber_chair",
+   "position": [
+    26.9,
+    0.05,
+    -13.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 108,
+   "name": "barber / barber_chair_oxblood 7",
+   "shape": "prefab",
+   "prefab": "barber_chair_oxblood",
+   "position": [
+    25.1,
+    0.05,
+    -13.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 109,
+   "name": "barber / backwash_chair 8",
+   "shape": "prefab",
+   "prefab": "backwash_chair",
+   "position": [
+    29.9,
+    0.05,
+    -13.8
+   ]
+  },
+  {
+   "id": 110,
+   "name": "barber / towel_shelf 9",
+   "shape": "prefab",
+   "prefab": "towel_shelf",
+   "position": [
+    28.7,
+    1.25,
+    -14.98
+   ]
+  },
+  {
+   "id": 111,
+   "name": "barber / salon_trolley 10",
+   "shape": "prefab",
+   "prefab": "salon_trolley",
+   "position": [
+    24.2,
+    0.05,
+    -13.6
+   ]
+  },
+  {
+   "id": 112,
+   "name": "barber / hood_dryer 11",
+   "shape": "prefab",
+   "prefab": "hood_dryer",
+   "position": [
+    30.1,
+    0.05,
+    -11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 113,
+   "name": "barber / barber_waiting_seats 12",
+   "shape": "prefab",
+   "prefab": "barber_waiting_seats",
+   "position": [
+    23.9,
+    0.05,
+    -7.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 114,
+   "name": "barber / barber_pole 13",
+   "shape": "prefab",
+   "prefab": "barber_pole",
+   "position": [
+    27.9,
+    0.05,
+    -6.75
+   ]
+  },
+  {
+   "id": 115,
+   "name": "barber / cash_register 14",
+   "shape": "prefab",
+   "prefab": "cash_register_in_use",
+   "position": [
+    29.9,
+    0.95,
+    -8.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 116,
+   "name": "barber / shop_counter 15",
+   "shape": "prefab",
+   "prefab": "shop_counter",
+   "position": [
+    29.9,
+    0.05,
+    -8.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 117,
+   "name": "barber / wall_clock 16",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    26.0,
+    2.55,
+    -14.91
+   ]
+  },
+  {
+   "id": 118,
+   "name": "station hall / automatic_doors 1",
+   "shape": "prefab",
+   "prefab": "automatic_doors_in_use",
+   "position": [
+    38.0,
+    0.05,
+    -7.0
+   ]
+  },
+  {
+   "id": 119,
+   "name": "station hall / flap_gate 2",
+   "shape": "prefab",
+   "prefab": "flap_gate_in_use",
+   "position": [
+    35.8,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 120,
+   "name": "station hall / flap_gate 3",
+   "shape": "prefab",
+   "prefab": "flap_gate_in_use",
+   "position": [
+    38.0,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 121,
+   "name": "station hall / flap_gate 4",
+   "shape": "prefab",
+   "prefab": "flap_gate_in_use",
+   "position": [
+    40.2,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 122,
+   "name": "station hall / turnstile_full 5",
+   "shape": "prefab",
+   "prefab": "turnstile_full_in_use",
+   "position": [
+    33.4,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 123,
+   "name": "station hall / queue_posts 6",
+   "shape": "prefab",
+   "prefab": "queue_posts",
+   "position": [
+    42.4,
+    0.05,
+    -11.5
+   ]
+  },
+  {
+   "id": 124,
+   "name": "station hall / departure_board 7",
+   "shape": "prefab",
+   "prefab": "departure_board_in_use",
+   "position": [
+    38.0,
+    1.65,
+    -14.9
+   ]
+  },
+  {
+   "id": 125,
+   "name": "station hall / ticket_machine 8",
+   "shape": "prefab",
+   "prefab": "ticket_machine",
+   "position": [
+    31.5,
+    0.05,
+    -9.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 126,
+   "name": "station hall / ticket_machine 9",
+   "shape": "prefab",
+   "prefab": "ticket_machine",
+   "position": [
+    31.5,
+    0.05,
+    -8.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 127,
+   "name": "station hall / coin_lockers 10",
+   "shape": "prefab",
+   "prefab": "coin_lockers_in_use",
+   "position": [
+    44.5,
+    0.05,
+    -8.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 128,
+   "name": "station hall / waiting_seats 11",
+   "shape": "prefab",
+   "prefab": "waiting_seats",
+   "position": [
+    34.0,
+    0.05,
+    -14.5
+   ]
+  },
+  {
+   "id": 129,
+   "name": "station hall / waiting_seats 12",
+   "shape": "prefab",
+   "prefab": "waiting_seats",
+   "position": [
+    42.0,
+    0.05,
+    -14.5
+   ]
+  },
+  {
+   "id": 130,
+   "name": "station hall / baggage_scanner 13",
+   "shape": "prefab",
+   "prefab": "baggage_scanner_in_use",
+   "position": [
+    41.6,
+    0.05,
+    -8.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 131,
+   "name": "station hall / mall_directory 14",
+   "shape": "prefab",
+   "prefab": "mall_directory",
+   "position": [
+    34.8,
+    0.05,
+    -8.2
+   ]
+  },
+  {
+   "id": 132,
+   "name": "station hall / vending_machine_red 15",
+   "shape": "prefab",
+   "prefab": "vending_machine_red",
+   "position": [
+    44.5,
+    0.05,
+    -13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 133,
+   "name": "station hall / ticket_dispenser 16",
+   "shape": "prefab",
+   "prefab": "ticket_dispenser_in_use",
+   "position": [
+    36.4,
+    0.05,
+    -8.4
+   ]
+  },
+  {
+   "id": 134,
+   "name": "station hall / teller_window 17",
+   "shape": "prefab",
+   "prefab": "teller_window_in_use",
+   "position": [
+    32.8,
+    0.95,
+    -9.8
+   ]
+  },
+  {
+   "id": 135,
+   "name": "station hall / kitchen_base 18",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    32.5,
+    0.05,
+    -9.8
+   ]
+  },
+  {
+   "id": 136,
+   "name": "station hall / kitchen_base 19",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    33.1,
+    0.05,
+    -9.8
+   ]
+  },
+  {
+   "id": 137,
+   "name": "station hall / wall_clock 20",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    43.0,
+    2.55,
+    -14.91
+   ]
+  },
+  {
+   "id": 138,
+   "name": "station hall / luggage_cart 21",
+   "shape": "prefab",
+   "prefab": "luggage_cart",
+   "position": [
+    39.8,
+    0.05,
+    -8.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 40
+   }
+  },
+  {
+   "id": 139,
+   "name": "flat: kitchen and living room / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    -23.0,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 140,
+   "name": "flat: kitchen and living room / fridge 2",
+   "shape": "prefab",
+   "prefab": "fridge_in_use",
+   "position": [
+    -18.4,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 141,
+   "name": "flat: kitchen and living room / oven 3",
+   "shape": "prefab",
+   "prefab": "oven_in_use",
+   "position": [
+    -19.1,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 142,
+   "name": "flat: kitchen and living room / kitchen_base 4",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -19.7,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 143,
+   "name": "flat: kitchen and living room / kitchen_sink 5",
+   "shape": "prefab",
+   "prefab": "kitchen_sink",
+   "position": [
+    -20.3,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 144,
+   "name": "flat: kitchen and living room / dishwasher 6",
+   "shape": "prefab",
+   "prefab": "dishwasher_in_use",
+   "position": [
+    -20.9,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 145,
+   "name": "flat: kitchen and living room / kitchen_base 7",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -21.5,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 146,
+   "name": "flat: kitchen and living room / toaster 8",
+   "shape": "prefab",
+   "prefab": "toaster_in_use",
+   "position": [
+    -19.7,
+    0.95,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 147,
+   "name": "flat: kitchen and living room / rice_cooker 9",
+   "shape": "prefab",
+   "prefab": "rice_cooker_in_use",
+   "position": [
+    -21.4,
+    0.95,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 148,
+   "name": "flat: kitchen and living room / kitchen_wall_cupboard 10",
+   "shape": "prefab",
+   "prefab": "kitchen_wall_cupboard",
+   "position": [
+    -19.9,
+    1.5,
+    14.74
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 149,
+   "name": "flat: kitchen and living room / kitchen_wall_cupboard 11",
+   "shape": "prefab",
+   "prefab": "kitchen_wall_cupboard",
+   "position": [
+    -21.3,
+    1.5,
+    14.74
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 150,
+   "name": "flat: kitchen and living room / pedal_bin 12",
+   "shape": "prefab",
+   "prefab": "pedal_bin_in_use",
+   "position": [
+    -22.1,
+    0.05,
+    14.65
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 151,
+   "name": "flat: kitchen and living room / dining_table 13",
+   "shape": "prefab",
+   "prefab": "dining_table",
+   "position": [
+    -20.2,
+    0.05,
+    10.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 152,
+   "name": "flat: kitchen and living room / dining_chair 14",
+   "shape": "prefab",
+   "prefab": "dining_chair",
+   "position": [
+    -19.8,
+    0.05,
+    9.8
+   ]
+  },
+  {
+   "id": 153,
+   "name": "flat: kitchen and living room / dining_chair 15",
+   "shape": "prefab",
+   "prefab": "dining_chair",
+   "position": [
+    -20.6,
+    0.05,
+    9.8
+   ]
+  },
+  {
+   "id": 154,
+   "name": "flat: kitchen and living room / dining_chair 16",
+   "shape": "prefab",
+   "prefab": "dining_chair",
+   "position": [
+    -19.8,
+    0.05,
+    11.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 155,
+   "name": "flat: kitchen and living room / dining_chair 17",
+   "shape": "prefab",
+   "prefab": "dining_chair",
+   "position": [
+    -20.6,
+    0.05,
+    11.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 156,
+   "name": "flat: kitchen and living room / laptop 18",
+   "shape": "prefab",
+   "prefab": "laptop_in_use",
+   "position": [
+    -20.2,
+    0.81,
+    10.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 157,
+   "name": "flat: kitchen and living room / tv_unit 19",
+   "shape": "prefab",
+   "prefab": "tv_unit",
+   "position": [
+    -25.6,
+    0.05,
+    14.67
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 158,
+   "name": "flat: kitchen and living room / sofa 20",
+   "shape": "prefab",
+   "prefab": "sofa",
+   "position": [
+    -25.6,
+    0.05,
+    10.1
+   ]
+  },
+  {
+   "id": 159,
+   "name": "flat: kitchen and living room / coffee_table 21",
+   "shape": "prefab",
+   "prefab": "coffee_table",
+   "position": [
+    -25.6,
+    0.05,
+    11.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 160,
+   "name": "flat: kitchen and living room / globe 22",
+   "shape": "prefab",
+   "prefab": "globe_in_use",
+   "position": [
+    -25.9,
+    0.468,
+    11.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 161,
+   "name": "flat: kitchen and living room / metronome 23",
+   "shape": "prefab",
+   "prefab": "metronome_in_use",
+   "position": [
+    -25.25,
+    0.468,
+    11.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 162,
+   "name": "flat: kitchen and living room / recliner 24",
+   "shape": "prefab",
+   "prefab": "recliner_in_use",
+   "position": [
+    -27.3,
+    0.05,
+    11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 70
+   }
+  },
+  {
+   "id": 163,
+   "name": "flat: kitchen and living room / rocking_chair 25",
+   "shape": "prefab",
+   "prefab": "rocking_chair_in_use",
+   "position": [
+    -23.7,
+    0.05,
+    10.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 290
+   }
+  },
+  {
+   "id": 164,
+   "name": "flat: kitchen and living room / grandfather_clock 26",
+   "shape": "prefab",
+   "prefab": "grandfather_clock",
+   "position": [
+    -27.6,
+    0.05,
+    14.75
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 165,
+   "name": "flat: kitchen and living room / upright_piano 27",
+   "shape": "prefab",
+   "prefab": "upright_piano_in_use",
+   "position": [
+    -22.6,
+    0.05,
+    7.45
+   ]
+  },
+  {
+   "id": 166,
+   "name": "flat: kitchen and living room / record_player 28",
+   "shape": "prefab",
+   "prefab": "record_player_in_use",
+   "position": [
+    -27.5,
+    0.95,
+    8.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 167,
+   "name": "flat: kitchen and living room / kitchen_base 29",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    -27.6,
+    0.05,
+    8.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 168,
+   "name": "flat: kitchen and living room / curtains 30",
+   "shape": "prefab",
+   "prefab": "curtains_in_use",
+   "position": [
+    -25.6,
+    0.05,
+    7.2
+   ]
+  },
+  {
+   "id": 169,
+   "name": "flat: kitchen and living room / ceiling_fan 31",
+   "shape": "prefab",
+   "prefab": "ceiling_fan_in_use",
+   "position": [
+    -25.6,
+    2.95,
+    11.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 170,
+   "name": "flat: kitchen and living room / potted_plant 32",
+   "shape": "prefab",
+   "prefab": "potted_plant",
+   "position": [
+    -23.6,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 171,
+   "name": "flat: bedroom and bathroom / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    -13.5,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 172,
+   "name": "flat: bedroom and bathroom / bed 2",
+   "shape": "prefab",
+   "prefab": "bed",
+   "position": [
+    -10.9,
+    0.05,
+    13.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 173,
+   "name": "flat: bedroom and bathroom / nightstand 3",
+   "shape": "prefab",
+   "prefab": "nightstand",
+   "position": [
+    -9.6,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 174,
+   "name": "flat: bedroom and bathroom / nightstand 4",
+   "shape": "prefab",
+   "prefab": "nightstand",
+   "position": [
+    -12.2,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 175,
+   "name": "flat: bedroom and bathroom / sliding_wardrobe 5",
+   "shape": "prefab",
+   "prefab": "sliding_wardrobe_in_use",
+   "position": [
+    -14.1,
+    0.05,
+    14.67
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 176,
+   "name": "flat: bedroom and bathroom / wall_bed 6",
+   "shape": "prefab",
+   "prefab": "wall_bed_in_use",
+   "position": [
+    -9.3,
+    0.05,
+    9.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 177,
+   "name": "flat: bedroom and bathroom / venetian_blind 7",
+   "shape": "prefab",
+   "prefab": "venetian_blind_in_use",
+   "position": [
+    -10.9,
+    1.25,
+    14.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 178,
+   "name": "flat: bedroom and bathroom / toilet_lidded 8",
+   "shape": "prefab",
+   "prefab": "toilet_lidded_in_use",
+   "position": [
+    -17.4,
+    0.05,
+    14.55
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 179,
+   "name": "flat: bedroom and bathroom / vanity 9",
+   "shape": "prefab",
+   "prefab": "vanity",
+   "position": [
+    -16.1,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 180,
+   "name": "flat: bedroom and bathroom / bathroom_cabinet 10",
+   "shape": "prefab",
+   "prefab": "bathroom_cabinet_in_use",
+   "position": [
+    -17.92,
+    1.35,
+    12.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 181,
+   "name": "flat: bedroom and bathroom / shower 11",
+   "shape": "prefab",
+   "prefab": "shower_in_use",
+   "position": [
+    -17.45,
+    0.05,
+    10.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 182,
+   "name": "flat: bedroom and bathroom / bathtub 12",
+   "shape": "prefab",
+   "prefab": "bathtub",
+   "position": [
+    -17.1,
+    0.05,
+    7.5
+   ]
+  },
+  {
+   "id": 183,
+   "name": "flat: bedroom and bathroom / pedal_bin 13",
+   "shape": "prefab",
+   "prefab": "pedal_bin_in_use",
+   "position": [
+    -16.7,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 184,
+   "name": "flat: bedroom and bathroom / washing_machine 14",
+   "shape": "prefab",
+   "prefab": "washing_machine_in_use",
+   "position": [
+    -15.1,
+    0.05,
+    7.4
+   ]
+  },
+  {
+   "id": 185,
+   "name": "flat: bedroom and bathroom / dryer 15",
+   "shape": "prefab",
+   "prefab": "dryer_in_use",
+   "position": [
+    -15.8,
+    0.05,
+    7.4
+   ]
+  },
+  {
+   "id": 186,
+   "name": "flat: bedroom and bathroom / wall_clock 16",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    -10.9,
+    2.35,
+    7.1
+   ]
+  },
+  {
+   "id": 187,
+   "name": "flat: child's room / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    -6.0,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 188,
+   "name": "flat: child's room / bunk_bed 2",
+   "shape": "prefab",
+   "prefab": "bunk_bed",
+   "position": [
+    -3.7,
+    0.05,
+    13.95
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 189,
+   "name": "flat: child's room / toy_shelf 3",
+   "shape": "prefab",
+   "prefab": "toy_shelf",
+   "position": [
+    -6.2,
+    0.05,
+    14.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 190,
+   "name": "flat: child's room / toy_chest 4",
+   "shape": "prefab",
+   "prefab": "toy_chest_in_use",
+   "position": [
+    -8.2,
+    0.05,
+    14.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 191,
+   "name": "flat: child's room / kids_desk 5",
+   "shape": "prefab",
+   "prefab": "kids_desk",
+   "position": [
+    -8.4,
+    0.05,
+    10.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 192,
+   "name": "flat: child's room / play_mat 6",
+   "shape": "prefab",
+   "prefab": "play_mat",
+   "position": [
+    -5.6,
+    0.05,
+    10.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 193,
+   "name": "flat: child's room / toy_blocks 7",
+   "shape": "prefab",
+   "prefab": "toy_blocks",
+   "position": [
+    -5.1,
+    0.05,
+    9.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 194,
+   "name": "flat: child's room / rocking_horse 8",
+   "shape": "prefab",
+   "prefab": "rocking_horse_in_use",
+   "position": [
+    -7.0,
+    0.05,
+    8.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 30
+   }
+  },
+  {
+   "id": 195,
+   "name": "flat: child's room / dollhouse 9",
+   "shape": "prefab",
+   "prefab": "dollhouse",
+   "position": [
+    -3.6,
+    0.05,
+    8.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 196,
+   "name": "flat: child's room / roller_blind 10",
+   "shape": "prefab",
+   "prefab": "roller_blind_in_use",
+   "position": [
+    -6.2,
+    2.65,
+    14.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 197,
+   "name": "playroom and nursery / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    0.5,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 198,
+   "name": "playroom and nursery / cradle 2",
+   "shape": "prefab",
+   "prefab": "cradle_in_use",
+   "position": [
+    3.1,
+    0.05,
+    13.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 199,
+   "name": "playroom and nursery / baby_mobile 3",
+   "shape": "prefab",
+   "prefab": "baby_mobile_in_use",
+   "position": [
+    3.1,
+    2.05,
+    13.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 200,
+   "name": "playroom and nursery / kids_bed_red 4",
+   "shape": "prefab",
+   "prefab": "kids_bed_red",
+   "position": [
+    -2.1,
+    0.05,
+    14.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 201,
+   "name": "playroom and nursery / play_table 5",
+   "shape": "prefab",
+   "prefab": "play_table",
+   "position": [
+    0.3,
+    0.05,
+    10.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 202,
+   "name": "playroom and nursery / kids_easel 6",
+   "shape": "prefab",
+   "prefab": "kids_easel",
+   "position": [
+    3.1,
+    0.05,
+    9.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 203,
+   "name": "playroom and nursery / toy_shelf 7",
+   "shape": "prefab",
+   "prefab": "toy_shelf",
+   "position": [
+    0.5,
+    0.05,
+    14.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 204,
+   "name": "playroom and nursery / play_mat 8",
+   "shape": "prefab",
+   "prefab": "play_mat",
+   "position": [
+    -1.1,
+    0.05,
+    12.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 205,
+   "name": "playroom and nursery / rocking_chair 9",
+   "shape": "prefab",
+   "prefab": "rocking_chair_in_use",
+   "position": [
+    1.7,
+    0.05,
+    13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 210
+   }
+  },
+  {
+   "id": 206,
+   "name": "playroom and nursery / toy_chest 10",
+   "shape": "prefab",
+   "prefab": "toy_chest_in_use",
+   "position": [
+    -2.3,
+    0.05,
+    8.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 207,
+   "name": "clinic / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    8.5,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 208,
+   "name": "clinic / care_bed 2",
+   "shape": "prefab",
+   "prefab": "care_bed_in_use",
+   "position": [
+    11.7,
+    0.05,
+    13.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 209,
+   "name": "clinic / care_bed 3",
+   "shape": "prefab",
+   "prefab": "care_bed_in_use",
+   "position": [
+    9.1,
+    0.05,
+    13.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 210,
+   "name": "clinic / iv_stand 4",
+   "shape": "prefab",
+   "prefab": "iv_stand_in_use",
+   "position": [
+    10.9,
+    0.05,
+    14.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 211,
+   "name": "clinic / iv_stand 5",
+   "shape": "prefab",
+   "prefab": "iv_stand_in_use",
+   "position": [
+    8.2,
+    0.05,
+    14.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 212,
+   "name": "clinic / curtains 6",
+   "shape": "prefab",
+   "prefab": "curtains_in_use",
+   "position": [
+    10.4,
+    0.05,
+    13.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 213,
+   "name": "clinic / exam_couch 7",
+   "shape": "prefab",
+   "prefab": "exam_couch",
+   "position": [
+    4.9,
+    0.05,
+    13.8
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 214,
+   "name": "clinic / exam_lamp 8",
+   "shape": "prefab",
+   "prefab": "exam_lamp_in_use",
+   "position": [
+    5.9,
+    0.05,
+    13.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 215,
+   "name": "clinic / wheelchair 9",
+   "shape": "prefab",
+   "prefab": "wheelchair_in_use",
+   "position": [
+    6.9,
+    0.05,
+    10.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 340
+   }
+  },
+  {
+   "id": 216,
+   "name": "clinic / waiting_seats 10",
+   "shape": "prefab",
+   "prefab": "waiting_seats",
+   "position": [
+    11.1,
+    0.05,
+    7.5
+   ]
+  },
+  {
+   "id": 217,
+   "name": "clinic / desk 11",
+   "shape": "prefab",
+   "prefab": "desk",
+   "position": [
+    5.7,
+    0.05,
+    9.4
+   ]
+  },
+  {
+   "id": 218,
+   "name": "clinic / reception_bell 12",
+   "shape": "prefab",
+   "prefab": "reception_bell_in_use",
+   "position": [
+    6.1,
+    0.79,
+    9.3
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 219,
+   "name": "clinic / office_chair 13",
+   "shape": "prefab",
+   "prefab": "office_chair",
+   "position": [
+    5.7,
+    0.05,
+    10.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 220,
+   "name": "clinic / ticket_dispenser 14",
+   "shape": "prefab",
+   "prefab": "ticket_dispenser_in_use",
+   "position": [
+    7.6,
+    0.05,
+    7.8
+   ]
+  },
+  {
+   "id": 221,
+   "name": "clinic / store_cupboard 15",
+   "shape": "prefab",
+   "prefab": "store_cupboard",
+   "position": [
+    4.3,
+    0.05,
+    8.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 222,
+   "name": "clinic / wall_clock 16",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    6.7,
+    2.45,
+    14.91
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 223,
+   "name": "clinic / fire_hose_cabinet 17",
+   "shape": "prefab",
+   "prefab": "fire_hose_cabinet_in_use",
+   "position": [
+    12.85,
+    0.95,
+    9.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 224,
+   "name": "schoolroom and library / door 1",
+   "shape": "prefab",
+   "prefab": "door_in_use",
+   "position": [
+    18.0,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 225,
+   "name": "schoolroom and library / flip_desk 2",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    22.0,
+    0.05,
+    11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 226,
+   "name": "schoolroom and library / flip_desk 3",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    20.8,
+    0.05,
+    11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 227,
+   "name": "schoolroom and library / flip_desk 4",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    19.6,
+    0.05,
+    11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 228,
+   "name": "schoolroom and library / flip_desk 5",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    22.0,
+    0.05,
+    10.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 229,
+   "name": "schoolroom and library / flip_desk 6",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    20.8,
+    0.05,
+    10.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 230,
+   "name": "schoolroom and library / flip_desk 7",
+   "shape": "prefab",
+   "prefab": "flip_desk_in_use",
+   "position": [
+    19.6,
+    0.05,
+    10.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 231,
+   "name": "schoolroom and library / school_chair 8",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    22.0,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 232,
+   "name": "schoolroom and library / school_chair 9",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    20.8,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 233,
+   "name": "schoolroom and library / school_chair 10",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    19.6,
+    0.05,
+    11.05
+   ]
+  },
+  {
+   "id": 234,
+   "name": "schoolroom and library / school_chair 11",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    22.0,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 235,
+   "name": "schoolroom and library / school_chair 12",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    20.8,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 236,
+   "name": "schoolroom and library / school_chair 13",
+   "shape": "prefab",
+   "prefab": "school_chair",
+   "position": [
+    19.6,
+    0.05,
+    9.45
+   ]
+  },
+  {
+   "id": 237,
+   "name": "schoolroom and library / lecture_blackboards 14",
+   "shape": "prefab",
+   "prefab": "lecture_blackboards_in_use",
+   "position": [
+    20.8,
+    0.05,
+    14.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 238,
+   "name": "schoolroom and library / school_bell 15",
+   "shape": "prefab",
+   "prefab": "school_bell_in_use",
+   "position": [
+    22.85,
+    1.55,
+    8.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 239,
+   "name": "schoolroom and library / projector_screen 16",
+   "shape": "prefab",
+   "prefab": "projector_screen_in_use",
+   "position": [
+    20.8,
+    3.0,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 240,
+   "name": "schoolroom and library / bookcase 17",
+   "shape": "prefab",
+   "prefab": "bookcase",
+   "position": [
+    16.6,
+    0.05,
+    14.75
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 241,
+   "name": "schoolroom and library / bookcase 18",
+   "shape": "prefab",
+   "prefab": "bookcase",
+   "position": [
+    15.4,
+    0.05,
+    14.75
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 242,
+   "name": "schoolroom and library / bookcase 19",
+   "shape": "prefab",
+   "prefab": "bookcase",
+   "position": [
+    14.2,
+    0.05,
+    14.75
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 243,
+   "name": "schoolroom and library / library_ladder 20",
+   "shape": "prefab",
+   "prefab": "library_ladder_in_use",
+   "position": [
+    15.4,
+    0.05,
+    14.55
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 244,
+   "name": "schoolroom and library / book_truck 21",
+   "shape": "prefab",
+   "prefab": "book_truck",
+   "position": [
+    16.0,
+    0.05,
+    11.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 210
+   }
+  },
+  {
+   "id": 245,
+   "name": "schoolroom and library / reading_table 22",
+   "shape": "prefab",
+   "prefab": "reading_table",
+   "position": [
+    15.2,
+    0.05,
+    9.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 246,
+   "name": "schoolroom and library / globe 23",
+   "shape": "prefab",
+   "prefab": "globe_in_use",
+   "position": [
+    15.2,
+    0.8,
+    9.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 247,
+   "name": "schoolroom and library / wall_clock 24",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    17.8,
+    2.55,
+    14.91
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 248,
+   "name": "schoolroom and library / flip_chart 25",
+   "shape": "prefab",
+   "prefab": "flip_chart_in_use",
+   "position": [
+    18.6,
+    0.05,
+    13.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 200
+   }
+  },
+  {
+   "id": 249,
+   "name": "bakery / door_glass 1",
+   "shape": "prefab",
+   "prefab": "door_glass_in_use",
+   "position": [
+    27.0,
+    0.05,
+    7.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 250,
+   "name": "bakery / deck_oven 2",
+   "shape": "prefab",
+   "prefab": "deck_oven_in_use",
+   "position": [
+    29.6,
+    0.05,
+    14.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 251,
+   "name": "bakery / dough_mixer 3",
+   "shape": "prefab",
+   "prefab": "dough_mixer_in_use",
+   "position": [
+    27.9,
+    0.05,
+    14.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 252,
+   "name": "bakery / kitchen_base 4",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    26.5,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 253,
+   "name": "bakery / kitchen_base 5",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    25.9,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 254,
+   "name": "bakery / kitchen_base 6",
+   "shape": "prefab",
+   "prefab": "kitchen_base",
+   "position": [
+    25.3,
+    0.05,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 255,
+   "name": "bakery / shop_scales 7",
+   "shape": "prefab",
+   "prefab": "shop_scales_in_use",
+   "position": [
+    26.4,
+    0.95,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 256,
+   "name": "bakery / stand_mixer 8",
+   "shape": "prefab",
+   "prefab": "stand_mixer_in_use",
+   "position": [
+    25.4,
+    0.95,
+    14.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 257,
+   "name": "bakery / kitchen_swing_doors 9",
+   "shape": "prefab",
+   "prefab": "kitchen_swing_doors_in_use",
+   "position": [
+    24.0,
+    0.05,
+    12.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 258,
+   "name": "bakery / bar_counter 10",
+   "shape": "prefab",
+   "prefab": "bar_counter",
+   "position": [
+    27.6,
+    0.05,
+    9.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 259,
+   "name": "bakery / cash_register 11",
+   "shape": "prefab",
+   "prefab": "cash_register_in_use",
+   "position": [
+    28.1,
+    1.176,
+    9.7
+   ]
+  },
+  {
+   "id": 260,
+   "name": "bakery / display_turntable 12",
+   "shape": "prefab",
+   "prefab": "display_turntable_in_use",
+   "position": [
+    27.1,
+    1.176,
+    9.7
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 261,
+   "name": "bakery / drinks_fridge_single 13",
+   "shape": "prefab",
+   "prefab": "drinks_fridge_single_in_use",
+   "position": [
+    23.6,
+    0.05,
+    9.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 262,
+   "name": "bakery / wall_clock 14",
+   "shape": "prefab",
+   "prefab": "wall_clock",
+   "position": [
+    24.5,
+    2.45,
+    14.91
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 263,
+   "name": "north pavement / vending_machine 1",
+   "shape": "prefab",
+   "prefab": "vending_machine_in_use",
+   "position": [
+    -21.0,
+    0.0,
+    -6.6
+   ]
+  },
+  {
+   "id": 264,
+   "name": "north pavement / kiddie_ride_car 2",
+   "shape": "prefab",
+   "prefab": "kiddie_ride_car_in_use",
+   "position": [
+    -26.5,
+    0.0,
+    -6.2
+   ]
+  },
+  {
+   "id": 265,
+   "name": "north pavement / kiddie_ride_rocket 3",
+   "shape": "prefab",
+   "prefab": "kiddie_ride_rocket_in_use",
+   "position": [
+    -25.2,
+    0.0,
+    -6.2
+   ]
+  },
+  {
+   "id": 266,
+   "name": "north pavement / newspaper_box 4",
+   "shape": "prefab",
+   "prefab": "newspaper_box_in_use",
+   "position": [
+    -17.5,
+    0.0,
+    -6.4
+   ]
+  },
+  {
+   "id": 267,
+   "name": "north pavement / litter_bin 5",
+   "shape": "prefab",
+   "prefab": "litter_bin_in_use",
+   "position": [
+    -16.5,
+    0.0,
+    -6.4
+   ]
+  },
+  {
+   "id": 268,
+   "name": "north pavement / sandwich_board 6",
+   "shape": "prefab",
+   "prefab": "sandwich_board",
+   "position": [
+    -11.5,
+    0.0,
+    -6.0
+   ]
+  },
+  {
+   "id": 269,
+   "name": "north pavement / barber_pole 7",
+   "shape": "prefab",
+   "prefab": "barber_pole",
+   "position": [
+    -9.2,
+    1.6,
+    -6.92
+   ]
+  },
+  {
+   "id": 270,
+   "name": "north pavement / awning 8",
+   "shape": "prefab",
+   "prefab": "awning_in_use",
+   "position": [
+    -13.5,
+    2.7,
+    -6.9
+   ]
+  },
+  {
+   "id": 271,
+   "name": "north pavement / patio_umbrella 9",
+   "shape": "prefab",
+   "prefab": "patio_umbrella_in_use",
+   "position": [
+    -15.6,
+    0.0,
+    -5.3
+   ]
+  },
+  {
+   "id": 272,
+   "name": "north pavement / picnic_table 10",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    -15.6,
+    0.0,
+    -5.3
+   ]
+  },
+  {
+   "id": 273,
+   "name": "north pavement / park_bench 11",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -3.0,
+    0.0,
+    -6.4
+   ]
+  },
+  {
+   "id": 274,
+   "name": "north pavement / bike_rack 12",
+   "shape": "prefab",
+   "prefab": "bike_rack",
+   "position": [
+    3.0,
+    0.0,
+    -6.2
+   ]
+  },
+  {
+   "id": 275,
+   "name": "north pavement / mailbox 13",
+   "shape": "prefab",
+   "prefab": "mailbox_in_use",
+   "position": [
+    13.5,
+    0.0,
+    -5.0
+   ]
+  },
+  {
+   "id": 276,
+   "name": "north pavement / street_lamp 14",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -18.0,
+    0.0,
+    -4.4
+   ]
+  },
+  {
+   "id": 277,
+   "name": "north pavement / street_lamp 15",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    6.0,
+    0.0,
+    -4.4
+   ]
+  },
+  {
+   "id": 278,
+   "name": "north pavement / hydrant 16",
+   "shape": "prefab",
+   "prefab": "hydrant",
+   "position": [
+    11.0,
+    0.0,
+    -4.5
+   ]
+  },
+  {
+   "id": 279,
+   "name": "north pavement / mailboxes 17",
+   "shape": "prefab",
+   "prefab": "mailboxes_in_use",
+   "position": [
+    24.5,
+    0.0,
+    -6.6
+   ]
+  },
+  {
+   "id": 280,
+   "name": "south pavement / park_bench 1",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    -14.0,
+    0.0,
+    6.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 281,
+   "name": "south pavement / litter_bin 2",
+   "shape": "prefab",
+   "prefab": "litter_bin_in_use",
+   "position": [
+    -12.5,
+    0.0,
+    6.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 282,
+   "name": "south pavement / street_lamp 3",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    -20.0,
+    0.0,
+    4.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 283,
+   "name": "south pavement / street_lamp 4",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    4.0,
+    0.0,
+    4.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 284,
+   "name": "south pavement / awning 5",
+   "shape": "prefab",
+   "prefab": "awning_in_use",
+   "position": [
+    20.0,
+    2.7,
+    6.9
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 285,
+   "name": "south pavement / sandwich_board 6",
+   "shape": "prefab",
+   "prefab": "sandwich_board",
+   "position": [
+    18.5,
+    0.0,
+    6.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 286,
+   "name": "south pavement / bike_rack 7",
+   "shape": "prefab",
+   "prefab": "bike_rack",
+   "position": [
+    -2.0,
+    0.0,
+    6.2
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180.0
+   }
+  },
+  {
+   "id": 287,
+   "name": "street end / parking_barrier 1",
+   "shape": "prefab",
+   "prefab": "parking_barrier_in_use",
+   "position": [
+    -29.0,
+    0.0,
+    -2.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 288,
+   "name": "street end / rising_bollard 2",
+   "shape": "prefab",
+   "prefab": "rising_bollard_in_use",
+   "position": [
+    -29.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": 289,
+   "name": "street end / rising_bollard 3",
+   "shape": "prefab",
+   "prefab": "rising_bollard_in_use",
+   "position": [
+    -29.0,
+    0.0,
+    2.0
+   ]
+  },
+  {
+   "id": 290,
+   "name": "street end / rising_bollard 4",
+   "shape": "prefab",
+   "prefab": "rising_bollard_in_use",
+   "position": [
+    -29.0,
+    0.0,
+    3.0
+   ]
+  },
+  {
+   "id": 291,
+   "name": "street end / parked_sedan 5",
+   "shape": "prefab",
+   "prefab": "parked_sedan",
+   "position": [
+    -23.0,
+    0.0,
+    2.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 292,
+   "name": "street end / parked_pickup 6",
+   "shape": "prefab",
+   "prefab": "parked_pickup",
+   "position": [
+    -16.0,
+    0.0,
+    -2.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 293,
+   "name": "playground / playground_swing 1",
+   "shape": "prefab",
+   "prefab": "playground_swing_in_use",
+   "position": [
+    56.0,
+    0.0,
+    14.0
+   ]
+  },
+  {
+   "id": 294,
+   "name": "playground / playground_seesaw 2",
+   "shape": "prefab",
+   "prefab": "playground_seesaw_in_use",
+   "position": [
+    63.5,
+    0.0,
+    13.5
+   ]
+  },
+  {
+   "id": 295,
+   "name": "playground / playground_roundabout 3",
+   "shape": "prefab",
+   "prefab": "playground_roundabout_in_use",
+   "position": [
+    55.5,
+    0.0,
+    21.0
+   ]
+  },
+  {
+   "id": 296,
+   "name": "playground / playground_slide 4",
+   "shape": "prefab",
+   "prefab": "playground_slide",
+   "position": [
+    63.5,
+    0.0,
+    20.5
+   ]
+  },
+  {
+   "id": 297,
+   "name": "playground / park_bench 5",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    60.0,
+    0.0,
+    9.5
+   ]
+  },
+  {
+   "id": 298,
+   "name": "playground / park_bench 6",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    51.4,
+    0.0,
+    18.0
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 299,
+   "name": "playground / litter_bin 7",
+   "shape": "prefab",
+   "prefab": "litter_bin_in_use",
+   "position": [
+    61.8,
+    0.0,
+    9.5
+   ]
+  },
+  {
+   "id": 300,
+   "name": "playground / drinking_fountain 8",
+   "shape": "prefab",
+   "prefab": "drinking_fountain",
+   "position": [
+    51.5,
+    0.0,
+    12.0
+   ]
+  },
+  {
+   "id": 301,
+   "name": "playground / park_sculpture 9",
+   "shape": "prefab",
+   "prefab": "park_sculpture",
+   "position": [
+    68.0,
+    0.0,
+    10.0
+   ]
+  },
+  {
+   "id": 302,
+   "name": "playground / oak 10",
+   "shape": "prefab",
+   "prefab": "oak",
+   "position": [
+    68.5,
+    0.0,
+    25.5
+   ]
+  },
+  {
+   "id": 303,
+   "name": "playground / oak 11",
+   "shape": "prefab",
+   "prefab": "oak",
+   "position": [
+    51.5,
+    0.0,
+    26.0
+   ]
+  },
+  {
+   "id": 304,
+   "name": "playground / boulder 12",
+   "shape": "prefab",
+   "prefab": "boulder",
+   "position": [
+    67.0,
+    0.0,
+    25.0
+   ]
+  },
+  {
+   "id": 305,
+   "name": "playground / garden_gate 13",
+   "shape": "prefab",
+   "prefab": "garden_gate_in_use",
+   "position": [
+    50.0,
+    0.0,
+    8.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 306,
+   "name": "playground / picnic_table 14",
+   "shape": "prefab",
+   "prefab": "picnic_table",
+   "position": [
+    60.0,
+    0.0,
+    26.0
+   ]
+  },
+  {
+   "id": 307,
+   "name": "playground / bbq 15",
+   "shape": "prefab",
+   "prefab": "bbq_in_use",
+   "position": [
+    62.2,
+    0.0,
+    26.4
+   ]
+  },
+  {
+   "id": 308,
+   "name": "playground / porch_swing 16",
+   "shape": "prefab",
+   "prefab": "porch_swing_in_use",
+   "position": [
+    68.2,
+    0.0,
+    18.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 309,
+   "name": "playground / rotary_dryer 17",
+   "shape": "prefab",
+   "prefab": "rotary_dryer_in_use",
+   "position": [
+    58.5,
+    0.0,
+    17.5
+   ]
+  },
+  {
+   "id": 310,
+   "name": "playground / weathervane 18",
+   "shape": "prefab",
+   "prefab": "weathervane_in_use",
+   "position": [
+    69.5,
+    0.0,
+    13.5
+   ]
+  },
+  {
+   "id": 311,
+   "name": "playground / wind_chime 19",
+   "shape": "prefab",
+   "prefab": "wind_chime_in_use",
+   "position": [
+    50.8,
+    0.0,
+    22.5
+   ]
+  },
+  {
+   "id": 312,
+   "name": "square / fountain_plaza 1",
+   "shape": "prefab",
+   "prefab": "fountain_plaza",
+   "position": [
+    60.0,
+    0.0,
+    -18.0
+   ]
+  },
+  {
+   "id": 313,
+   "name": "square / flagpole 2",
+   "shape": "prefab",
+   "prefab": "flagpole_in_use",
+   "position": [
+    52.0,
+    0.0,
+    -11.0
+   ]
+  },
+  {
+   "id": 314,
+   "name": "square / park_bench 3",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    56.0,
+    0.0,
+    -12.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 315,
+   "name": "square / park_bench 4",
+   "shape": "prefab",
+   "prefab": "park_bench",
+   "position": [
+    64.0,
+    0.0,
+    -12.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 316,
+   "name": "square / escalator_up 5",
+   "shape": "prefab",
+   "prefab": "escalator_up",
+   "position": [
+    53.0,
+    0.0,
+    -22.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 317,
+   "name": "square / revolving_door 6",
+   "shape": "prefab",
+   "prefab": "revolving_door_in_use",
+   "position": [
+    67.5,
+    0.0,
+    -13.0
+   ]
+  },
+  {
+   "id": 318,
+   "name": "square / lift_doors 7",
+   "shape": "prefab",
+   "prefab": "lift_doors_in_use",
+   "position": [
+    65.0,
+    0.0,
+    -8.4
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 319,
+   "name": "square / garage_door 8",
+   "shape": "prefab",
+   "prefab": "garage_door_in_use",
+   "position": [
+    70.2,
+    0.0,
+    -16.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 320,
+   "name": "square / roller_shutter 9",
+   "shape": "prefab",
+   "prefab": "roller_shutter_in_use",
+   "position": [
+    70.2,
+    0.0,
+    -22.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 270
+   }
+  },
+  {
+   "id": 321,
+   "name": "square / ballot_box 10",
+   "shape": "prefab",
+   "prefab": "ballot_box_in_use",
+   "position": [
+    64.0,
+    0.0,
+    -22.0
+   ]
+  },
+  {
+   "id": 322,
+   "name": "square / street_lamp 11",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    51.0,
+    0.0,
+    -26.0
+   ]
+  },
+  {
+   "id": 323,
+   "name": "square / street_lamp 12",
+   "shape": "prefab",
+   "prefab": "street_lamp",
+   "position": [
+    69.0,
+    0.0,
+    -10.0
+   ]
+  },
+  {
+   "id": 324,
+   "name": "square / front_door_red 13",
+   "shape": "prefab",
+   "prefab": "front_door_red",
+   "position": [
+    50.5,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 325,
+   "name": "square / front_door_green 14",
+   "shape": "prefab",
+   "prefab": "front_door_green",
+   "position": [
+    52.6,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 326,
+   "name": "square / front_door_wood 15",
+   "shape": "prefab",
+   "prefab": "front_door_wood",
+   "position": [
+    54.7,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 327,
+   "name": "square / back_door 16",
+   "shape": "prefab",
+   "prefab": "back_door",
+   "position": [
+    56.8,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 328,
+   "name": "square / fire_exit 17",
+   "shape": "prefab",
+   "prefab": "fire_exit",
+   "position": [
+    58.9,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 329,
+   "name": "square / shop_door 18",
+   "shape": "prefab",
+   "prefab": "shop_door",
+   "position": [
+    61.0,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 330,
+   "name": "square / apartment_entrance 19",
+   "shape": "prefab",
+   "prefab": "apartment_entrance",
+   "position": [
+    63.1,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 331,
+   "name": "square / office_entrance 20",
+   "shape": "prefab",
+   "prefab": "office_entrance",
+   "position": [
+    65.2,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 332,
+   "name": "square / school_entrance 21",
+   "shape": "prefab",
+   "prefab": "school_entrance",
+   "position": [
+    67.3,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 333,
+   "name": "square / civic_entrance 22",
+   "shape": "prefab",
+   "prefab": "civic_entrance",
+   "position": [
+    69.4,
+    0.0,
+    -7.6
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 334,
+   "name": "square / sash_window 23",
+   "shape": "prefab",
+   "prefab": "sash_window_in_use",
+   "position": [
+    52.0,
+    0.9,
+    -27.0
+   ]
+  },
+  {
+   "id": 335,
+   "name": "square / casement_window 24",
+   "shape": "prefab",
+   "prefab": "casement_window_in_use",
+   "position": [
+    54.0,
+    0.9,
+    -27.0
+   ]
+  },
+  {
+   "id": 336,
+   "name": "square / shoji_screens 25",
+   "shape": "prefab",
+   "prefab": "shoji_screens_in_use",
+   "position": [
+    57.0,
+    0.0,
+    -27.0
+   ]
+  },
+  {
+   "id": 337,
+   "name": "square / cinema_seats 26",
+   "shape": "prefab",
+   "prefab": "cinema_seats_in_use",
+   "position": [
+    63.5,
+    0.0,
+    -26.5
+   ]
+  },
+  {
+   "id": 338,
+   "name": "square / lecture_seats 27",
+   "shape": "prefab",
+   "prefab": "lecture_seats_in_use",
+   "position": [
+    67.5,
+    0.0,
+    -26.5
+   ]
+  },
+  {
+   "id": 339,
+   "name": "square / dj_deck 28",
+   "shape": "prefab",
+   "prefab": "dj_deck_in_use",
+   "position": [
+    60.5,
+    0.0,
+    -9.5
+   ],
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 180
+   }
+  },
+  {
+   "id": 340,
+   "name": "square / mirror_ball 29",
+   "shape": "prefab",
+   "prefab": "mirror_ball_in_use",
+   "position": [
+    60.5,
+    3.0,
+    -9.5
+   ]
+  },
+  {
+   "id": 341,
+   "name": "square / clothes_rail_round 30",
+   "shape": "prefab",
+   "prefab": "clothes_rail_round_in_use",
+   "position": [
+    55.5,
+    0.0,
+    -9.5
+   ]
+  }
+ ]
+}

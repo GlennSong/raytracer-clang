@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -544,7 +545,8 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
     return out;
 }
 
-PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat) {
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat,
+                  const std::vector<int>* against) {
     PolyMesh out = extractOffset(m, sel, -thickness, true);   // the back: its points first, in nsum order
     const int k = out.matId(mat);
     for (PolyMesh::Face& f : out.faces) f.mat = k;
@@ -565,6 +567,13 @@ PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickne
         const auto& v = m.faces[static_cast<std::size_t>(f)].v;
         for (std::size_t i = 0; i < v.size(); ++i) de.insert(dkey(v[i], v[(i + 1) % v.size()]));
     }
+    std::unordered_set<long long> facing;   // with `against`: the directed edges of the faces a wall may stand along
+    if (against != nullptr) {
+        for (int f : *against) {
+            const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+            for (std::size_t i = 0; i < v.size(); ++i) facing.insert(dkey(v[i], v[(i + 1) % v.size()]));
+        }
+    }
     std::unordered_map<int, int> front;   // skin points on the outline, copied in
     auto frontOf = [&](int i) {
         auto it = front.find(i);
@@ -580,6 +589,7 @@ PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickne
         for (std::size_t i = 0; i < v.size(); ++i) {
             const int a = v[i], b = v[(i + 1) % v.size()];
             if (de.count(dkey(b, a))) continue;
+            if (against != nullptr && !facing.count(dkey(b, a))) continue;   // not along one of the faces asked for
             PolyMesh::Face w;
             w.v = {frontOf(b), frontOf(a), back[a], back[b]};
             w.group = face.group;
@@ -649,6 +659,541 @@ void creaseCorners(PolyMesh& m, const std::vector<int>& sel, double angleDeg, fl
         if (d0.lengthSquared() < 1e-14 || d1.lengthSquared() < 1e-14) continue;
         if (dot(normalize(d0), normalize(d1)) < cosLim) m.setCorner(v, s);
     }
+}
+
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel, int rounds) {
+    std::vector<int> made = bevelFlat(m, width, angleDeg, sel);
+    // ROUNDING: cut the strip's own two edges back, and then the edges that leaves, each pass by the width that
+    // makes the facets across the bend equal (worked out for a square edge; near enough for others). Each pass is
+    // kept to the edges of the faces the bevel has made, so nothing else in the mesh is touched.
+    double facet = width * std::sqrt(2.0), apex = 135.0;
+    for (int pass = 1; pass < rounds && !made.empty(); ++pass) {
+        const double half = apex * 0.5 * M_PI / 180.0;
+        const double cut = facet / (2.0 + 2.0 * std::sin(half));
+        const double turn = 180.0 - apex;                        // how far the surface turns at each edge now
+        const std::vector<int> more = bevelFlat(m, cut, turn * 0.6, made);
+        made.insert(made.end(), more.begin(), more.end());
+        facet = 2.0 * cut * std::sin(half);
+        apex = (apex + 180.0) * 0.5;
+    }
+    return made;
+}
+
+std::vector<int> bevelFlat(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel) {
+    std::vector<int> made;
+    if (width <= 0 || m.faces.empty()) return made;
+    const int nf = static_cast<int>(m.faces.size());
+    const std::size_t np = m.pts.size();
+    std::vector<char> chosen(static_cast<std::size_t>(nf), sel.empty() ? 1 : 0);
+    for (int f : sel)
+        if (f >= 0 && f < nf) chosen[static_cast<std::size_t>(f)] = 1;
+
+    // which face has each directed edge, and at which corner
+    std::unordered_map<long long, std::pair<int, int>> owner;
+    // (the points, normals and middles as they are BEFORE anything is moved: every move is measured from these)
+    const std::vector<Vec3> was = m.pts;
+    std::vector<Vec3> normal(static_cast<std::size_t>(nf)), middle(static_cast<std::size_t>(nf));
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+        normal[static_cast<std::size_t>(f)] = m.faceNormal(f);
+        middle[static_cast<std::size_t>(f)] = m.faceCentroid(f);
+        for (std::size_t i = 0; i < v.size(); ++i) owner[dkey(v[i], v[(i + 1) % v.size()])] = {f, static_cast<int>(i)};
+    }
+    const double cosLim = std::cos(angleDeg * M_PI / 180.0);
+    // a -> b is sharp: it has a twin, the two faces turn more than the angle, and the selection takes it
+    auto sharp = [&](int a, int b) {
+        const std::unordered_map<long long, std::pair<int, int>>::const_iterator f = owner.find(dkey(a, b)), g = owner.find(dkey(b, a));
+        if (f == owner.end() || g == owner.end()) return false;
+        if (!chosen[static_cast<std::size_t>(f->second.first)] && !chosen[static_cast<std::size_t>(g->second.first)]) return false;
+        return dot(normal[static_cast<std::size_t>(f->second.first)], normal[static_cast<std::size_t>(g->second.first)]) < cosLim;
+    };
+
+    // Round each point: the faces there in order, cut into FANS at the sharp edges. Every fan gets a point of its own.
+    // fanPoint[(face, corner)] = the point that corner of that face now uses.
+    std::vector<std::vector<int>> cornerPoint(static_cast<std::size_t>(nf));
+    for (int f = 0; f < nf; ++f) cornerPoint[static_cast<std::size_t>(f)] = m.faces[static_cast<std::size_t>(f)].v;
+    std::vector<std::pair<int, int>> firstCorner(np, {-1, -1});
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+        for (std::size_t i = 0; i < v.size(); ++i)
+            if (firstCorner[static_cast<std::size_t>(v[i])].first < 0) firstCorner[static_cast<std::size_t>(v[i])] = {f, static_cast<int>(i)};
+    }
+    struct Cap { std::vector<int> pts; int like; };
+    std::vector<Cap> caps;
+    for (std::size_t p = 0; p < np; ++p) {
+        if (firstCorner[p].first < 0) continue;
+        const int v = static_cast<int>(p);
+        // Walk the faces round v: from a face, across its edge v -> next, to the face on the other side. A point on
+        // the mesh's open border, or one faces meet at more than once round, is left as it is.
+        struct Corner { int face, corner, next, prev; };
+        std::vector<Corner> ring;
+        bool whole = true;
+        std::pair<int, int> at = firstCorner[p];
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::vector<int>& fv = m.faces[static_cast<std::size_t>(at.first)].v;
+            const int n = static_cast<int>(fv.size());
+            ring.push_back(Corner{at.first, at.second, fv[static_cast<std::size_t>((at.second + 1) % n)], fv[static_cast<std::size_t>((at.second + n - 1) % n)]});
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator twin = owner.find(dkey(ring.back().next, v));
+            if (twin == owner.end()) { whole = false; break; }
+            // the twin face has next -> v; its corner AT v is the one after
+            const int tn = static_cast<int>(m.faces[static_cast<std::size_t>(twin->second.first)].v.size());
+            at = {twin->second.first, (twin->second.second + 1) % tn};
+            if (at == firstCorner[p]) break;
+            if (guard == 4095) whole = false;
+        }
+        if (!whole) continue;
+        const int count = static_cast<int>(ring.size());
+        // ring[i]'s edge v -> next is shared with ring[i + 1], whose edge prev -> v it is
+        std::vector<char> cut(static_cast<std::size_t>(count));
+        int cuts = 0;
+        for (int i = 0; i < count; ++i) {
+            cut[static_cast<std::size_t>(i)] = sharp(v, ring[static_cast<std::size_t>(i)].next) ? 1 : 0;
+            cuts += cut[static_cast<std::size_t>(i)];
+        }
+        if (cuts < 2) continue;   // none: nothing to do. One: the bevel runs out to a point here.
+        // start just after a cut, so fans are runs of the ring
+        int start = 0;
+        while (!cut[static_cast<std::size_t>((start + count - 1) % count)]) ++start;
+        std::vector<int> fanPts;
+        bool reusedOwn = false;
+        for (int i = 0; i < count;) {
+            int j = i;
+            while (!cut[static_cast<std::size_t>((start + j) % count)]) ++j;
+            // the fan is ring[start + i .. start + j]: bounded by the sharp edge before its first face (that face's
+            // prev -> v) and the sharp edge after its last (that face's v -> next)
+            const Corner& first = ring[static_cast<std::size_t>((start + i) % count)];
+            const Corner& last = ring[static_cast<std::size_t>((start + j) % count)];
+            const Vec3 here = was[p];
+            auto into = [&](const Corner& c, int other) {
+                // in the face's plane, square to the sharp edge, pointing into the face
+                const Vec3 along = normalize(was[static_cast<std::size_t>(other)] - here);
+                Vec3 in = cross(normal[static_cast<std::size_t>(c.face)], along);
+                if (dot(in, middle[static_cast<std::size_t>(c.face)] - here) < 0) in = in * -1.0;
+                return normalize(in);
+            };
+            const Vec3 a = into(first, first.prev), b = into(last, last.next);
+            // the move that is `width` from both edges: x a + y b with (x a + y b).a = (x a + y b).b = width
+            const double ab = dot(a, b);
+            // NO FOLDING: a face is drawn back from both ends of an edge, so each end may take a little under half
+            // of the shortest edge it runs along. A width asked wider than that is held to it here.
+            const double room = 0.45 * std::min((was[static_cast<std::size_t>(first.prev)] - here).length(), (was[static_cast<std::size_t>(last.next)] - here).length());
+            const double w = std::min(width, room);
+            Vec3 move;
+            if (1.0 - ab * ab < 1e-6) move = normalize(a + b) * w;           // the two edges run on in a line
+            else move = (a + b) * (w / (1.0 + ab));
+            int point;
+            if (!reusedOwn) { point = v; reusedOwn = true; }
+            else { point = static_cast<int>(m.pts.size()); m.pts.push_back(here); }
+            m.pts[static_cast<std::size_t>(point)] = here + move;
+            for (int k = i; k <= j; ++k) {
+                const Corner& c = ring[static_cast<std::size_t>((start + k) % count)];
+                cornerPoint[static_cast<std::size_t>(c.face)][static_cast<std::size_t>(c.corner)] = point;
+            }
+            fanPts.push_back(point);
+            i = j + 1;
+        }
+        // three or more fans leave a hole at the corner: closed by a face through the fans' points, the other way
+        // round from the walk (the strips' ends run with it)
+        if (fanPts.size() >= 3) caps.push_back(Cap{std::vector<int>(fanPts.rbegin(), fanPts.rend()), ring[0].face});
+    }
+
+    // the strips: one per sharp edge, between the two faces' own copies of its ends
+    const int bevelGroup = m.groupId("bevel");
+    auto addFace = [&](std::vector<int> pts, int like) {
+        std::vector<int> tidy;
+        for (int q : pts)
+            if (tidy.empty() || tidy.back() != q) tidy.push_back(q);
+        if (tidy.size() > 1 && tidy.front() == tidy.back()) tidy.pop_back();
+        if (tidy.size() < 3) return;
+        PolyMesh::Face nfce = m.faces[static_cast<std::size_t>(like)];
+        nfce.v = tidy;
+        nfce.group = bevelGroup;
+        made.push_back(static_cast<int>(m.faces.size()));
+        m.faces.push_back(std::move(nfce));
+    };
+    for (int f = 0; f < nf; ++f) {
+        const std::vector<int> v = m.faces[static_cast<std::size_t>(f)].v;   // (a copy: the faces grow)
+        const int n = static_cast<int>(v.size());
+        for (int i = 0; i < n; ++i) {
+            const int a = v[static_cast<std::size_t>(i)], b = v[static_cast<std::size_t>((i + 1) % n)];
+            if (a > b || !sharp(a, b)) continue;     // each edge once, from its lower end
+            const std::pair<int, int> g = owner[dkey(b, a)];
+            const int gn = static_cast<int>(m.faces[static_cast<std::size_t>(g.first)].v.size());
+            const int aF = cornerPoint[static_cast<std::size_t>(f)][static_cast<std::size_t>(i)];
+            const int bF = cornerPoint[static_cast<std::size_t>(f)][static_cast<std::size_t>((i + 1) % n)];
+            const int bG = cornerPoint[static_cast<std::size_t>(g.first)][static_cast<std::size_t>(g.second)];
+            const int aG = cornerPoint[static_cast<std::size_t>(g.first)][static_cast<std::size_t>((g.second + 1) % gn)];
+            m.creases.erase({std::min(a, b), std::max(a, b)});
+            addFace({bF, aF, aG, bG}, f);
+        }
+    }
+    for (const Cap& c : caps) addFace(c.pts, c.like);
+    for (int f = 0; f < nf; ++f) m.faces[static_cast<std::size_t>(f)].v = cornerPoint[static_cast<std::size_t>(f)];
+    return made;
+}
+
+namespace {
+
+// THE ONE CUTTER under loopCut and slice. `cuts`: an undirected edge (low point, high point) -> how far along it from
+// the low point a new point goes. `also`: points already there that the cut passes through. Every face that has the
+// cut entering and leaving it (exactly two cut points, not neighbours) becomes two faces along it; a face with one
+// cut point just gains the point. Returns the new points, in the order of `cuts`.
+std::vector<int> cutEdges(PolyMesh& m, const std::map<std::pair<int, int>, double>& cuts, const std::unordered_set<int>& also) {
+    std::map<std::pair<int, int>, int> made;
+    std::vector<int> fresh;
+    for (const std::pair<const std::pair<int, int>, double>& c : cuts) {
+        const int lo = c.first.first, hi = c.first.second;
+        const Vec3 at = m.pts[static_cast<std::size_t>(lo)] + (m.pts[static_cast<std::size_t>(hi)] - m.pts[static_cast<std::size_t>(lo)]) * c.second;
+        const int p = static_cast<int>(m.pts.size());
+        m.pts.push_back(at);
+        made[c.first] = p;
+        fresh.push_back(p);
+        const float crease = m.crease(lo, hi);
+        if (crease > 0.0f) {
+            m.setCrease(lo, hi, 0.0f);
+            m.setCrease(lo, p, crease);
+            m.setCrease(p, hi, crease);
+        }
+    }
+    const std::unordered_set<int> freshSet(fresh.begin(), fresh.end());
+    const std::size_t nf = m.faces.size();
+    for (std::size_t f = 0; f < nf; ++f) {
+        const std::vector<int> old = m.faces[f].v;
+        std::vector<int> v;
+        std::vector<int> marks;   // positions in v of cut points
+        for (std::size_t i = 0; i < old.size(); ++i) {
+            const int x = old[i], y = old[(i + 1) % old.size()];
+            if (also.count(x)) marks.push_back(static_cast<int>(v.size()));
+            v.push_back(x);
+            const std::map<std::pair<int, int>, int>::const_iterator it = made.find({std::min(x, y), std::max(x, y)});
+            if (it != made.end()) { marks.push_back(static_cast<int>(v.size())); v.push_back(it->second); }
+        }
+        if (v.size() == old.size() && marks.size() != 2) continue;
+        const int n = static_cast<int>(v.size());
+        const bool across = marks.size() == 2 && marks[1] - marks[0] > 1 && marks[0] + n - marks[1] > 1;
+        if (!across) { m.faces[f].v = v; continue; }
+        PolyMesh::Face second = m.faces[f];
+        std::vector<int> one(v.begin() + marks[0], v.begin() + marks[1] + 1), two(v.begin() + marks[1], v.end());
+        two.insert(two.end(), v.begin(), v.begin() + marks[0] + 1);
+        m.faces[f].v = one;
+        second.v = two;
+        m.faces.push_back(std::move(second));
+    }
+    return fresh;
+}
+
+}  // namespace
+
+bool unsubdivide(PolyMesh& m, int keep) {
+    const int np = static_cast<int>(m.pts.size());
+    if (keep < 0 || keep >= np || m.faces.empty()) return false;
+    std::unordered_map<long long, std::pair<int, int>> owner;
+    std::vector<std::pair<int, int>> firstCorner(static_cast<std::size_t>(np), {-1, -1});
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const std::vector<int>& v = m.faces[f].v;
+        if (v.size() != 4) return false;
+        for (std::size_t i = 0; i < 4; ++i) {
+            owner[dkey(v[i], v[(i + 1) % 4])] = {static_cast<int>(f), static_cast<int>(i)};
+            if (firstCorner[static_cast<std::size_t>(v[i])].first < 0) firstCorner[static_cast<std::size_t>(v[i])] = {static_cast<int>(f), static_cast<int>(i)};
+        }
+    }
+    // Round each point: its faces in order (the walk goes clockwise seen from outside), and in each the point after
+    // it (a neighbour along an edge) and the point across the face from it. A point on the mesh's open border has a
+    // fan of faces from one border edge to the other, not a ring; `nbrs` are its neighbours along edges, in order.
+    struct Ring { std::vector<int> next, across, face, nbrs; bool closed = true; };
+    std::vector<Ring> rings(static_cast<std::size_t>(np));
+    for (int p = 0; p < np; ++p) {
+        if (firstCorner[static_cast<std::size_t>(p)].first < 0) continue;      // a point no face uses
+        Ring& r = rings[static_cast<std::size_t>(p)];
+        // on a border, begin at the face whose edge INTO p has no face on its other side
+        std::pair<int, int> begin = firstCorner[static_cast<std::size_t>(p)];
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::vector<int>& fv = m.faces[static_cast<std::size_t>(begin.first)].v;
+            const int prev = fv[static_cast<std::size_t>((begin.second + 3) % 4)];
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator back = owner.find(dkey(p, prev));
+            if (back == owner.end()) { r.closed = false; r.nbrs.push_back(prev); break; }
+            begin = back->second;                                               // that face has p -> prev: p is its corner
+            if (begin == firstCorner[static_cast<std::size_t>(p)]) break;       // all the way round: no border here
+            if (guard == 4095) return false;
+        }
+        std::pair<int, int> at = begin;
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::vector<int>& fv = m.faces[static_cast<std::size_t>(at.first)].v;
+            r.next.push_back(fv[static_cast<std::size_t>((at.second + 1) % 4)]);
+            r.across.push_back(fv[static_cast<std::size_t>((at.second + 2) % 4)]);
+            r.face.push_back(at.first);
+            r.nbrs.push_back(r.next.back());
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator twin = owner.find(dkey(r.next.back(), p));
+            if (twin == owner.end()) {
+                if (r.closed) return false;                                     // a border met only one way round
+                break;
+            }
+            at = {twin->second.first, (twin->second.second + 1) % 4};
+            if (at == begin) break;
+            if (guard == 4095) return false;
+        }
+    }
+    // Two colours along the edges: the points that could stay (corners and face middles) and the edge middles.
+    std::vector<int> colour(static_cast<std::size_t>(np), -1);
+    std::vector<int> queue{keep};
+    colour[static_cast<std::size_t>(keep)] = 0;
+    if (rings[static_cast<std::size_t>(keep)].nbrs.empty()) return false;
+    for (std::size_t q = 0; q < queue.size(); ++q) {
+        const int p = queue[q];
+        for (int n : rings[static_cast<std::size_t>(p)].nbrs) {
+            if (colour[static_cast<std::size_t>(n)] < 0) { colour[static_cast<std::size_t>(n)] = 1 - colour[static_cast<std::size_t>(p)]; queue.push_back(n); }
+            else if (colour[static_cast<std::size_t>(n)] == colour[static_cast<std::size_t>(p)]) return false;
+        }
+    }
+    // Straight on through each edge middle (it has four edges): the points on either side belong together. That
+    // sorts the first colour into the corners and the face middles.
+    std::vector<int> parent(static_cast<std::size_t>(np));
+    for (int i = 0; i < np; ++i) parent[static_cast<std::size_t>(i)] = i;
+    auto find = [&](int x) {
+        while (parent[static_cast<std::size_t>(x)] != x) x = parent[static_cast<std::size_t>(x)] = parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(x)])];
+        return x;
+    };
+    for (int p = 0; p < np; ++p) {
+        if (colour[static_cast<std::size_t>(p)] != 1) continue;
+        const Ring& r = rings[static_cast<std::size_t>(p)];
+        // inside the mesh an edge middle has four edges, two straight-through pairs; on the border it has three:
+        // the two along the border are the pair, the third goes in to a face middle
+        if (r.closed && r.nbrs.size() == 4) {
+            parent[static_cast<std::size_t>(find(r.nbrs[0]))] = find(r.nbrs[2]);
+            parent[static_cast<std::size_t>(find(r.nbrs[1]))] = find(r.nbrs[3]);
+        } else if (!r.closed && r.nbrs.size() == 3) {
+            parent[static_cast<std::size_t>(find(r.nbrs[0]))] = find(r.nbrs[2]);
+        } else {
+            return false;
+        }
+    }
+    const int kept = find(keep);
+    auto stays = [&](int p) { return colour[static_cast<std::size_t>(p)] == 0 && find(p) == kept; };
+    // Every face must run corner, edge middle, face middle, edge middle.
+    for (const PolyMesh::Face& f : m.faces) {
+        int corners = 0, middles = 0;
+        for (int i = 0; i < 4; ++i) {
+            const int p = f.v[static_cast<std::size_t>(i)];
+            if (colour[static_cast<std::size_t>(p)] < 0) return false;
+            if (stays(p)) { ++corners; if (stays(f.v[static_cast<std::size_t>((i + 2) % 4)])) return false; }
+            else if (colour[static_cast<std::size_t>(p)] == 0) ++middles;
+        }
+        if (corners != 1 || middles != 1) return false;
+    }
+    // A face per face middle: the corners across from it, round it (against the walk, so it faces as they did).
+    std::vector<PolyMesh::Face> faces;
+    for (int p = 0; p < np; ++p) {
+        if (colour[static_cast<std::size_t>(p)] != 0 || stays(p) || rings[static_cast<std::size_t>(p)].next.empty()) continue;
+        const Ring& r = rings[static_cast<std::size_t>(p)];
+        if (!r.closed || r.across.size() < 3) return false;
+        PolyMesh::Face nf = m.faces[static_cast<std::size_t>(r.face[0])];
+        nf.v.assign(r.across.rbegin(), r.across.rend());
+        faces.push_back(std::move(nf));
+    }
+    // Creases: an edge whose two halves were both creased is creased, a level sharper.
+    std::map<std::pair<int, int>, float> creases;
+    for (int p = 0; p < np; ++p) {
+        if (colour[static_cast<std::size_t>(p)] != 1) continue;
+        const Ring& r = rings[static_cast<std::size_t>(p)];
+        for (int k = 0; k < (r.closed ? 2 : 1); ++k) {
+            const int a = r.nbrs[static_cast<std::size_t>(k)], b = r.nbrs[static_cast<std::size_t>(k + 2)];
+            if (!stays(a) || !stays(b)) continue;
+            const float sa = m.crease(a, p), sb = m.crease(p, b);
+            if (sa <= 0.0f || sb <= 0.0f) continue;
+            const float s = std::max(sa, sb);
+            creases[{std::min(a, b), std::max(a, b)}] = s >= PolyMesh::kInfCrease ? s : s + 1.0f;
+        }
+    }
+    // Only the corners are left: number them again.
+    std::vector<int> renumber(static_cast<std::size_t>(np), -1);
+    std::vector<Vec3> pts;
+    for (int p = 0; p < np; ++p)
+        if (stays(p)) { renumber[static_cast<std::size_t>(p)] = static_cast<int>(pts.size()); pts.push_back(m.pts[static_cast<std::size_t>(p)]); }
+    for (PolyMesh::Face& f : faces)
+        for (int& v : f.v) v = renumber[static_cast<std::size_t>(v)];
+    std::map<int, float> corners;
+    for (const std::pair<const int, float>& c : m.corners)
+        if (c.first >= 0 && c.first < np && renumber[static_cast<std::size_t>(c.first)] >= 0) corners[renumber[static_cast<std::size_t>(c.first)]] = c.second;
+    m.pts = std::move(pts);
+    m.faces = std::move(faces);
+    m.creases.clear();
+    for (const std::pair<const std::pair<int, int>, float>& c : creases) m.setCrease(renumber[static_cast<std::size_t>(c.first.first)], renumber[static_cast<std::size_t>(c.first.second)], c.second);
+    m.corners = std::move(corners);
+    return true;
+}
+
+int nearestPoint(const PolyMesh& m, Vec3 at) {
+    int best = -1;
+    double bestD = 1e300;
+    for (std::size_t i = 0; i < m.pts.size(); ++i) {
+        const double d = (m.pts[i] - at).lengthSquared();
+        if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+std::vector<int> loopCut(PolyMesh& m, int a, int b, double t) {
+    std::unordered_map<long long, std::pair<int, int>> owner;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const std::vector<int>& v = m.faces[f].v;
+        for (std::size_t i = 0; i < v.size(); ++i) owner[dkey(v[i], v[(i + 1) % v.size()])] = {static_cast<int>(f), static_cast<int>(i)};
+    }
+    if (a == b || (!owner.count(dkey(a, b)) && !owner.count(dkey(b, a)))) return {};
+    t = std::clamp(t, 1e-6, 1.0 - 1e-6);
+    std::map<std::pair<int, int>, double> cuts;
+    std::vector<std::pair<int, int>> order;   // the crossed edges as (near a's side, near b's side), in walk order
+    auto note = [&](int x, int y, bool front) {   // x on a's side
+        const std::pair<int, int> key{std::min(x, y), std::max(x, y)};
+        if (cuts.count(key)) return false;
+        cuts[key] = x < y ? t : 1.0 - t;
+        if (front) order.insert(order.begin(), {x, y}); else order.push_back({x, y});
+        return true;
+    };
+    note(a, b, false);
+    // across the quad that has x -> y to its far edge, again and again
+    auto walk = [&](int x, int y, bool front) {
+        for (int guard = 0; guard < 1 << 20; ++guard) {
+            const std::unordered_map<long long, std::pair<int, int>>::const_iterator it = owner.find(dkey(x, y));
+            if (it == owner.end()) return;                                   // the open border
+            const std::vector<int>& v = m.faces[static_cast<std::size_t>(it->second.first)].v;
+            if (v.size() != 4) return;                                       // not a quad: the cut ends here
+            const int c = v[static_cast<std::size_t>((it->second.second + 2) % 4)], d = v[static_cast<std::size_t>((it->second.second + 3) % 4)];
+            // x -> y -> c -> d: the far edge is c -> d, d on x's side. Its other face has d -> c.
+            // (walking on from a -> b, x is on a's side and so is d; walking back from b -> a, x is on b's side)
+            if (!note(front ? c : d, front ? d : c, front)) return;           // back where it began
+            x = d;
+            y = c;
+        }
+    };
+    walk(a, b, false);
+    walk(b, a, true);
+    std::map<std::pair<int, int>, int> index;
+    int k = 0;
+    for (const std::pair<const std::pair<int, int>, double>& c : cuts) index[c.first] = k++;
+    const std::vector<int> fresh = cutEdges(m, cuts, {});
+    std::vector<int> ring;
+    for (const std::pair<int, int>& e : order) ring.push_back(fresh[static_cast<std::size_t>(index[{std::min(e.first, e.second), std::max(e.first, e.second)}])]);
+    return ring;
+}
+
+std::vector<int> slice(PolyMesh& m, Vec3 point, Vec3 normal, double eps) {
+    if (normal.lengthSquared() < 1e-20) return {};
+    normal = normalize(normal);
+    std::vector<double> side(m.pts.size());
+    std::unordered_set<int> on;
+    for (std::size_t i = 0; i < m.pts.size(); ++i) {
+        side[i] = dot(m.pts[i] - point, normal);
+        if (std::fabs(side[i]) <= eps) { side[i] = 0; on.insert(static_cast<int>(i)); }
+    }
+    std::map<std::pair<int, int>, double> cuts;
+    for (const PolyMesh::Face& f : m.faces)
+        for (std::size_t i = 0; i < f.v.size(); ++i) {
+            const int x = f.v[i], y = f.v[(i + 1) % f.v.size()];
+            const double sx = side[static_cast<std::size_t>(x)], sy = side[static_cast<std::size_t>(y)];
+            if (sx * sy >= 0) continue;                 // both on one side, or an end on the plane
+            const int lo = std::min(x, y), hi = std::max(x, y);
+            const double slo = side[static_cast<std::size_t>(lo)], shi = side[static_cast<std::size_t>(hi)];
+            cuts[{lo, hi}] = slo / (slo - shi);
+        }
+    std::vector<int> out = cutEdges(m, cuts, on);
+    out.insert(out.end(), on.begin(), on.end());
+    return out;
+}
+
+std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vector<int>& b) {
+    // a region's rim as one loop of points, in the direction its faces run round it; empty unless it is one loop
+    auto rimOf = [&](const std::vector<int>& sel) {
+        std::unordered_set<long long> de;
+        for (int f : sel) {
+            const std::vector<int>& v = m.faces[static_cast<std::size_t>(f)].v;
+            for (std::size_t i = 0; i < v.size(); ++i) de.insert(dkey(v[i], v[(i + 1) % v.size()]));
+        }
+        std::unordered_map<int, int> next;
+        std::size_t edges = 0;
+        for (long long k : de) {
+            const int x = static_cast<int>(k >> 32), y = static_cast<int>(k & 0xffffffff);
+            if (de.count(dkey(y, x))) continue;
+            if (next.count(x)) return std::vector<int>();     // the rim touches itself
+            next[x] = y;
+            ++edges;
+        }
+        std::vector<int> loop;
+        if (next.empty()) return loop;
+        const int start = next.begin()->first;
+        int at = start;
+        do {
+            loop.push_back(at);
+            const std::unordered_map<int, int>::const_iterator it = next.find(at);
+            if (it == next.end()) return std::vector<int>();
+            at = it->second;
+        } while (at != start && loop.size() <= edges);
+        if (loop.size() != edges) return std::vector<int>();  // more than one loop
+        return loop;
+    };
+    std::unordered_set<int> gone(a.begin(), a.end());
+    for (int f : b)
+        if (!gone.insert(f).second) return {};                // a face in both
+    for (int f : gone)
+        if (f < 0 || f >= static_cast<int>(m.faces.size())) return {};
+    const std::vector<int> ra = rimOf(a), rb = rimOf(b);
+    const int n = static_cast<int>(ra.size());
+    if (n < 3 || rb.size() != ra.size()) return {};
+    // B's rim runs the other way round as seen from A: A's point i goes with B's point (s - i). The s with the
+    // shortest rungs is the pairing with the least twist.
+    int best = 0;
+    double bestLen = 1e300;
+    for (int s = 0; s < n; ++s) {
+        double len = 0;
+        for (int i = 0; i < n; ++i) len += (m.pts[static_cast<std::size_t>(ra[static_cast<std::size_t>(i)])] - m.pts[static_cast<std::size_t>(rb[static_cast<std::size_t>(((s - i) % n + n) % n)])]).length();
+        if (len < bestLen) { bestLen = len; best = s; }
+    }
+    const PolyMesh::Face like = m.faces[static_cast<std::size_t>(a.front())];
+    std::vector<PolyMesh::Face> kept;
+    kept.reserve(m.faces.size());
+    for (std::size_t f = 0; f < m.faces.size(); ++f)
+        if (!gone.count(static_cast<int>(f))) kept.push_back(std::move(m.faces[f]));
+    m.faces = std::move(kept);
+    std::vector<int> made;
+    for (int i = 0; i < n; ++i) {
+        const int a0 = ra[static_cast<std::size_t>(i)], a1 = ra[static_cast<std::size_t>((i + 1) % n)];
+        const int b0 = rb[static_cast<std::size_t>(((best - i) % n + n) % n)], b1 = rb[static_cast<std::size_t>(((best - i - 1) % n + n) % n)];
+        PolyMesh::Face q = like;
+        q.v = {a0, a1, b1, b0};      // a0 -> a1 as the face taken away had it; b1 -> b0 as B's had it
+        made.push_back(static_cast<int>(m.faces.size()));
+        m.faces.push_back(std::move(q));
+    }
+    // A HOLE THAT OPENS ONTO AN EDGE (a doorway down to the floor): there a new quad lies back to back with a face
+    // already there (the wall's underside between the same four points). The two cancel: both go, and the hole is
+    // open on that side.
+    std::map<std::vector<int>, int> bySorted;
+    for (std::size_t f = 0; f + made.size() < m.faces.size(); ++f) {
+        if (m.faces[f].v.size() != 4) continue;
+        std::vector<int> key = m.faces[f].v;
+        std::sort(key.begin(), key.end());
+        bySorted[key] = static_cast<int>(f);
+    }
+    std::unordered_set<int> cancel;
+    for (int f : made) {
+        std::vector<int> key = m.faces[static_cast<std::size_t>(f)].v;
+        std::sort(key.begin(), key.end());
+        const std::map<std::vector<int>, int>::const_iterator it = bySorted.find(key);
+        if (it == bySorted.end()) continue;
+        cancel.insert(f);
+        cancel.insert(it->second);
+    }
+    if (!cancel.empty()) {
+        std::vector<PolyMesh::Face> left;
+        std::vector<int> stillMade;
+        const std::unordered_set<int> madeSet(made.begin(), made.end());
+        for (std::size_t f = 0; f < m.faces.size(); ++f) {
+            if (cancel.count(static_cast<int>(f))) continue;
+            if (madeSet.count(static_cast<int>(f))) stillMade.push_back(static_cast<int>(left.size()));
+            left.push_back(std::move(m.faces[f]));
+        }
+        m.faces = std::move(left);
+        made = stillMade;
+    }
+    return made;
 }
 
 void mirrorX(PolyMesh& m, double eps) {

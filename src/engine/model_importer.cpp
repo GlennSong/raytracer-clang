@@ -129,53 +129,11 @@ bool ModelImporter::validate(const std::string& path, std::string& error) {
     return ok;
 }
 
-CpuModel ModelImporter::loadCpu(const std::string& path) {
-    tinygltf::Model model;
-    tinygltf::TinyGLTF loader;
-    std::string err, warn;
-
-    bool ok = false;
-    if (path.size() >= 4 && path.substr(path.size() - 4) == ".glb") {
-        ok = loader.LoadBinaryFromFile(&model, &err, &warn, path);
-    } else {
-        ok = loader.LoadASCIIFromFile(&model, &err, &warn, path);
-    }
-
-    if (!warn.empty()) std::cerr << "[WARN] glTF: " << warn << "\n";
-    if (!err.empty()) std::cerr << "[ERROR] glTF: " << err << "\n";
-
-    if (!ok) {
-        std::cerr << "[ERROR] Failed to load: " << path << "\n";
-        return {};
-    }
-
-    CpuModel result;
-
-    // Place meshes by the node graph: a glTF mesh sits where its node puts it
-    // (the helmet's root node rotates it Z-up -> Y-up). Walk the scene, recording
-    // each mesh's accumulated world transform; meshes with no node stay identity.
-    std::vector<Mat4> meshWorld(model.meshes.size(), Mat4::identity());
-    {
-        std::function<void(int, const Mat4&)> walk = [&](int ni, const Mat4& parent) {
-            if (ni < 0 || ni >= static_cast<int>(model.nodes.size())) return;
-            const auto& node = model.nodes[ni];
-            Mat4 world = parent * nodeMatrix(node);
-            if (node.mesh >= 0 && node.mesh < static_cast<int>(meshWorld.size()))
-                meshWorld[node.mesh] = world;
-            for (int c : node.children) walk(c, world);
-        };
-        int sceneIdx = model.defaultScene >= 0 ? model.defaultScene : 0;
-        if (sceneIdx < static_cast<int>(model.scenes.size()))
-            for (int root : model.scenes[sceneIdx].nodes) walk(root, Mat4::identity());
-    }
-
-    for (size_t meshIdx = 0; meshIdx < model.meshes.size(); ++meshIdx) {
-        const auto& mesh = model.meshes[meshIdx];
-        for (const auto& prim : mesh.primitives) {
-            if (prim.mode != -1 && prim.mode != TINYGLTF_MODE_TRIANGLES)
-                continue;
-
-            RenderMesh renderMesh;
+// One glTF primitive as engine geometry and its material: indices turned to the engine's clockwise winding,
+// positions, normals, tangents (made when the file has none) and uvs, in the mesh's own space. `colours`: also the
+// vertex colours (COLOR_0). False when the primitive has no positions.
+static bool readGltfPrimitive(const tinygltf::Model& model, const tinygltf::Primitive& prim, RenderMesh& renderMesh,
+                              CpuMaterial& mat, bool colours) {
 
             // Indices
             if (prim.indices >= 0) {
@@ -201,7 +159,7 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
 
             // Position (required)
             auto posIt = prim.attributes.find("POSITION");
-            if (posIt == prim.attributes.end()) continue;
+            if (posIt == prim.attributes.end()) return false;
             const auto& posAcc = model.accessors[posIt->second];
             size_t vertexCount = posAcc.count;
             renderMesh.vertices.resize(vertexCount);
@@ -259,7 +217,19 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
             }
 
             // Material — factors + decoded texture images (CPU; uploaded later).
-            CpuMaterial mat;
+            if (colours) {
+                // COLOR_0: where a model keeps its hue (floats; RGB or RGBA)
+                auto colIt = prim.attributes.find("COLOR_0");
+                if (colIt != prim.attributes.end()) {
+                    const auto& acc = model.accessors[colIt->second];
+                    if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
+                        const uint8_t* data = accessorData(model, acc);
+                        size_t stride = accessorStride(model, acc);
+                        for (size_t i = 0; i < vertexCount && i < acc.count; i++)
+                            renderMesh.vertices[i].color = readVec3(data + i * stride);
+                    }
+                }
+            }
             if (prim.material >= 0 && prim.material < static_cast<int>(model.materials.size())) {
                 const auto& gmat = model.materials[prim.material];
                 const auto& pbr = gmat.pbrMetallicRoughness;
@@ -283,7 +253,64 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
                 mat.normalTex = extractGltfImage(model, gmat.normalTexture.index);
                 mat.emissiveTex = extractGltfImage(model, gmat.emissiveTexture.index);
                 mat.aoTex = extractGltfImage(model, gmat.occlusionTexture.index);
+                mat.name = gmat.name;
+                mat.doubleSided = gmat.doubleSided;
+                mat.extrasJson = gmat.extras_json_string;
+                mat.sourceIndex = prim.material;
             }
+
+            return true;
+}
+
+CpuModel ModelImporter::loadCpu(const std::string& path) {
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
+
+    bool ok = false;
+    if (path.size() >= 4 && path.substr(path.size() - 4) == ".glb") {
+        ok = loader.LoadBinaryFromFile(&model, &err, &warn, path);
+    } else {
+        ok = loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    }
+
+    if (!warn.empty()) std::cerr << "[WARN] glTF: " << warn << "\n";
+    if (!err.empty()) std::cerr << "[ERROR] glTF: " << err << "\n";
+
+    if (!ok) {
+        std::cerr << "[ERROR] Failed to load: " << path << "\n";
+        return {};
+    }
+
+    CpuModel result;
+
+    // Place meshes by the node graph: a glTF mesh sits where its node puts it
+    // (the helmet's root node rotates it Z-up -> Y-up). Walk the scene, recording
+    // each mesh's accumulated world transform; meshes with no node stay identity.
+    std::vector<Mat4> meshWorld(model.meshes.size(), Mat4::identity());
+    {
+        std::function<void(int, const Mat4&)> walk = [&](int ni, const Mat4& parent) {
+            if (ni < 0 || ni >= static_cast<int>(model.nodes.size())) return;
+            const auto& node = model.nodes[ni];
+            Mat4 world = parent * nodeMatrix(node);
+            if (node.mesh >= 0 && node.mesh < static_cast<int>(meshWorld.size()))
+                meshWorld[node.mesh] = world;
+            for (int c : node.children) walk(c, world);
+        };
+        int sceneIdx = model.defaultScene >= 0 ? model.defaultScene : 0;
+        if (sceneIdx < static_cast<int>(model.scenes.size()))
+            for (int root : model.scenes[sceneIdx].nodes) walk(root, Mat4::identity());
+    }
+
+    for (size_t meshIdx = 0; meshIdx < model.meshes.size(); ++meshIdx) {
+        const auto& mesh = model.meshes[meshIdx];
+        for (const auto& prim : mesh.primitives) {
+            if (prim.mode != -1 && prim.mode != TINYGLTF_MODE_TRIANGLES)
+                continue;
+
+            RenderMesh renderMesh;
+            CpuMaterial mat;
+            if (!readGltfPrimitive(model, prim, renderMesh, mat, false)) continue;
 
             // Bake the node's world transform into the geometry (positions as
             // points, normals/tangents as directions), so every backend gets the
@@ -304,6 +331,45 @@ CpuModel ModelImporter::loadCpu(const std::string& path) {
     std::cout << "[INFO] Parsed model: " << path
               << " (" << result.meshes.size() << " mesh(es))\n";
     return result;
+}
+
+CpuTree ModelImporter::loadCpuTree(const std::string& path) {
+    CpuTree out;
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
+    loader.SetStoreOriginalJSONForExtrasAndExtensions(true);   // a node's and a material's extras, as written
+    std::string err, warn;
+    const bool binary = path.size() >= 4 && path.substr(path.size() - 4) == ".glb";
+    const bool ok = binary ? loader.LoadBinaryFromFile(&model, &err, &warn, path) : loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    if (!ok) {
+        out.error = err.empty() ? "cannot read " + path : err;
+        return out;
+    }
+    out.meshes.resize(model.meshes.size());
+    for (size_t mi = 0; mi < model.meshes.size(); ++mi)
+        for (const auto& prim : model.meshes[mi].primitives) {
+            if (prim.mode != -1 && prim.mode != TINYGLTF_MODE_TRIANGLES) continue;
+            CpuMesh m;
+            if (readGltfPrimitive(model, prim, m.geometry, m.material, true)) out.meshes[mi].push_back(std::move(m));
+        }
+    out.nodes.resize(model.nodes.size());
+    for (size_t ni = 0; ni < model.nodes.size(); ++ni) {
+        const auto& node = model.nodes[ni];
+        CpuTreeNode& n = out.nodes[ni];
+        n.name = node.name;
+        n.local = nodeMatrix(node);
+        n.mesh = node.mesh >= 0 && node.mesh < static_cast<int>(out.meshes.size()) ? node.mesh : -1;
+        n.extrasJson = node.extras_json_string;
+        for (int c : node.children)
+            if (c >= 0 && c < static_cast<int>(out.nodes.size())) { n.children.push_back(c); out.nodes[static_cast<size_t>(c)].parent = static_cast<int>(ni); }
+    }
+    const int sceneIdx = model.defaultScene >= 0 ? model.defaultScene : 0;
+    if (sceneIdx < static_cast<int>(model.scenes.size())) {
+        out.roots = model.scenes[static_cast<size_t>(sceneIdx)].nodes;
+        out.sceneExtrasJson = model.scenes[static_cast<size_t>(sceneIdx)].extras_json_string;
+    }
+    out.ok = true;
+    return out;
 }
 
 ImportedModel ModelImporter::load(const std::string& path, Renderer& renderer) {

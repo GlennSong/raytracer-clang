@@ -16,7 +16,9 @@
 #include "../engine/systems/door_system.h"
 #include "../engine/systems/ladder_system.h"
 #include "../engine/systems/elevator_system.h"
+#include "../engine/systems/model_motion_system.h"
 #include "../engine/systems/interaction_system.h"
+#include "../engine/systems/prefab_use_system.h"
 #include "../engine/systems/interact_broker_system.h"
 #include "../engine/systems/tool_cycle_system.h"
 #include "../engine/systems/beacon_light_system.h"
@@ -24,6 +26,7 @@
 #include "../engine/systems/residency_system.h"
 #include "../engine/systems/grass_system.h"
 #include "../engine/systems/flashlight_system.h"
+#include "../engine/systems/model_overlay_system.h"
 #include "../engine/systems/watch_system.h"
 #include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
@@ -178,10 +181,19 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // The gun is a Lua ScriptBehaviour on the player (gun.lua, ADR-0024; the one gun since ADR-0283);
     // ScriptSystem drives it. The script is attached in onEnter, once the player
     // entity exists. A build without scripting has no gun.
-    addSystem<ScriptSystem>().setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
+    ScriptSystem& scripts = addSystem<ScriptSystem>();
+    scripts.setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
         const Vec3 d = to - from;
         Vec3 hit;
         return d.lengthSquared() > 1e-8 && physSys.physicsWorld().castRay(from, d * 1.05, hit);
+    });
+    // A behaviour may `require` a library beside it (a prefab's script: model_moves.lua). Found as a recipe's
+    // modules are, and watched once read, so an edit to the library reloads a watched level too.
+    scripts.setModuleSource([this, find = makeModuleSource(std::filesystem::path(levelFile).parent_path().string())](
+                                const std::string& name, std::string& source, std::string& resolvedPath) {
+        if (!find(name, source, resolvedPath)) return false;
+        watch.add(resolvedPath);
+        return true;
     });
 #endif
 #endif
@@ -256,6 +268,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
     addSystem<LadderSystem>(&physSys);  // roof ladders + vehicles' ladders: climb; fire escapes' colliders (engine/ladder.h)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
+    addSystem<ModelMotionSystem>(&physSys);  // stamped prefabs' moving nodes: pieces and kinematic bodies follow (#191 step 8)
+    addSystem<PrefabUseSystem>();         // open, switch on, sit: what a stamped prefab offers (#191 step 9)
     addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
     // all in when it picks the focus (engine/interact_broker.h).
@@ -277,6 +291,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<LightSystem>();   // picks the frame's lights from everything that gives off light (ADR-0362)
     addSystem<ProbeSystem>();   // the reflection probes along the streets, and which to capture (ADR-0374)
     addSystem<RenderSystem>();
+    addSystem<ModelOverlaySystem>();   // stamped models' shapes, markers and joints, when asked (#191)
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.
     auto& audioSys = addSystem<AudioSystem>();   // AudioSource/PlaySound -> AudioEngine (ADR-0069)
@@ -386,10 +401,17 @@ void ArenaState::update(FrameContext& ctx) {
                 window, arenaRenderer, levelFile, makeEditorState, bridge));
             return;
         }
-        if (watch.tick())
-            ctx.transition.replaceWith(std::make_unique<ArenaState>(
-                window, arenaRenderer, levelFile, makeEditorState, bridge));
+        if (watch.tick()) ctx.transition.replaceWith(reloaded(ctx));
     }
+}
+
+std::unique_ptr<ArenaState> ArenaState::reloaded(FrameContext& ctx) const {
+    std::unique_ptr<ArenaState> next = std::make_unique<ArenaState>(window, arenaRenderer, levelFile, makeEditorState, bridge);
+    ctx.world.each<Transform, ControlledBy>([&](Entity, Transform& t, ControlledBy&) {
+        next->keepPlace_ = true;
+        next->keptPlace_ = t.position;
+    });
+    return next;
 }
 
 void ArenaState::onEnter(FrameContext& ctx) {
@@ -449,6 +471,13 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // document's spawn. The position rides the settings the editor camera
     // already persists on state exit (flyEye*), and the facing carries over
     // for free — the play camera restores flyYaw/Pitch.
+    if (keepPlace_) {
+        // (a body's own place, so only a hand's width of lift: what it stood on may have changed shape)
+        ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform& t, ControlledBy&) {
+            t.position = keptPlace_ + Vec3(0, 0.1, 0);
+            if (PrevTransform* prev = ctx.world.get<PrevTransform>(e)) prev->value = t;
+        });
+    }
     if (fromHere_) {
         // Drop the capsule in from a little above the eye rather than placing its
         // base exactly at the camera point: the eye sits in open (renderable)

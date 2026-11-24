@@ -29,6 +29,13 @@
 #include "../log.h"
 #include "bake_dialog.h"
 #include "level_cache_panel.h"
+#include "model_studio.h"
+#include <nlohmann/json.hpp>
+#include "../engine/model_inspect.h"
+#include "../engine/model_motion.h"
+#include "../engine/scripting/model_recipes.h"
+#include "../engine/model_overlay.h"
+#include "../engine/scripting/prefab_list.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #ifdef RT_ROADS_LANES
@@ -287,6 +294,8 @@ struct LogConsole {
     QPlainTextEdit* view = nullptr;
     std::mutex mutex;
     std::vector<std::pair<engine::logging::Level, QString>> pending;
+    // every line as it is drained, for a panel that reads its own news out of the log (the model studio)
+    std::function<void(bool isError, const QString& line)> onLine;
 
     QDockWidget* buildDock(QMainWindow* main) {
         auto* dock = new QDockWidget("Console", main);
@@ -316,6 +325,7 @@ struct LogConsole {
                               : level == engine::logging::Level::Warn ? "[WARN] "
                                                                       : "";
             view->appendPlainText(tag + text);
+            if (onLine) onLine(level == engine::logging::Level::Error, text);
         }
     }
 };
@@ -692,8 +702,14 @@ int main(int argc, char** argv) {
     QApplication qtApp(argc, argv);
 
     std::string levelPath = "assets/levels/arena.json";
-    for (int i = 1; i < argc; i++)
+    // --model <name>: start in the model studio on assets/scripts/<name>.lua (model_studio.h)
+    std::string studioScript, studioPrefab;
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc) { studioScript = argv[++i]; continue; }
+        // --prefab <name>: start in the model studio viewing that line of prefabs.lua
+        if (std::strcmp(argv[i], "--prefab") == 0 && i + 1 < argc) { studioPrefab = argv[++i]; continue; }
         if (argv[i][0] != '-') levelPath = argv[i];
+    }
 
     auto hostedOwned = std::make_unique<engine::HostedWindow>();
     engine::HostedWindow* hosted = hostedOwned.get();
@@ -751,10 +767,20 @@ int main(int argc, char** argv) {
     mainWindow.resizeDocks({levelCacheDock}, {380}, Qt::Horizontal);
     std::function<void()> refreshLevelCache;
 
+    // THE MODEL STUDIO (model_studio.h): a script pane beside the viewport; the viewport shows the script's model.
+    // Its openLevel is set once openScene exists, below.
+    auto* modelDock = new QDockWidget("Model script", &mainWindow);
+    auto* modelStudio = new ModelStudioPanel(modelDock);
+    modelDock->setWidget(modelStudio);
+    mainWindow.addDockWidget(Qt::LeftDockWidgetArea, modelDock);
+    mainWindow.tabifyDockWidget(hierarchyDock, modelDock);
+    hierarchyDock->raise();
+
     // Engine log console, tabbed with the asset browser.
     LogConsole console;
     BakeJob bakeJob;
     QDockWidget* consoleDock = console.buildDock(&mainWindow);
+    console.onLine = [modelStudio](bool isError, const QString& line) { modelStudio->noteLog(isError, line); };
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
     mainWindow.tabifyDockWidget(assetsDock, consoleDock);
 
@@ -940,6 +966,206 @@ int main(int argc, char** argv) {
         viewport->setFocus();
         if (refreshLevelCache) refreshLevelCache();
     };
+
+    // The model studio opens its own small level the same way; the dock comes forward and takes room for a script.
+    modelStudio->openLevel = [&, modelDock](const std::string& path) {
+        openScene(path);
+        modelDock->show();
+        modelDock->raise();
+        if (modelDock->width() < 560) mainWindow.resizeDocks({modelDock}, {620}, Qt::Horizontal);
+        // ...and height for the script and the model's tree under it (the bottom docks give way)
+        // (the level cache panel has nothing to say about a studio level and is the tall one down there: put away
+        // while the studio is open; View > it, or opening another level's cache, brings it back)
+        levelCacheDock->hide();
+        mainWindow.resizeDocks({modelDock, assetsDock}, {700, 170}, Qt::Vertical);
+    };
+    // The Arguments box: a Lua table as the JSON a level carries (the engine reads the Lua).
+    modelStudio->argsToJson = [](const QString& lua, QString& json, QString& error) {
+        std::string out, why;
+        const bool ok = engine::luaTableToJson(lua.toStdString(), out, &why);
+        json = QString::fromStdString(out);
+        error = QString::fromStdString(why);
+        return ok;
+    };
+    modelStudio->recipeParams = [](const QString& recipe) { return QString::fromStdString(engine::recipeParams(recipe.toStdString())); };
+    // A PREFAB VIEWED: the engine's own reading and writing of prefabs.lua (scripting/prefab_list.h); the panel only
+    // shows it. Its form goes at the top of the Inspector dock, above the entity's properties.
+    modelStudio->prefabNames = []() {
+        QStringList names;
+        for (const std::string& name : engine::namedPrefabs()) names << QString::fromStdString(name);
+        return names;
+    };
+    modelStudio->prefabData = [](const QString& name) { return QString::fromStdString(engine::prefabJson(name.toStdString())); };
+    modelStudio->prefabFields = []() { return QString::fromStdString(engine::prefabFieldsJson()); };
+    modelStudio->savePrefab = [](const QString& name, const QString& lineJson) {
+        std::string why;
+        const nlohmann::json line = nlohmann::json::parse(lineJson.toStdString(), nullptr, false);
+        if (line.is_discarded()) return QString("the form's line is not JSON");
+        return engine::savePrefab(name.toStdString(), line, std::string(), &why) ? QString() : QString::fromStdString(why);
+    };
+    modelStudio->setOverlay = [](bool shapes, bool markers, bool joints) {
+        engine::ModelOverlay& o = engine::modelOverlay();
+        o.shapes = shapes; o.markers = markers; o.joints = joints;
+    };
+    modelStudio->getOverlay = [](bool& shapes, bool& markers, bool& joints) {
+        const engine::ModelOverlay& o = engine::modelOverlay();
+        shapes = o.shapes; markers = o.markers; joints = o.joints;
+    };
+    modelStudio->showInspector = [inspectorDock]() { inspectorDock->show(); inspectorDock->raise(); };
+    if (auto* scroll = qobject_cast<QScrollArea*>(inspectorDock->widget()))
+        if (auto* column = scroll->widget() != nullptr ? qobject_cast<QVBoxLayout*>(scroll->widget()->layout()) : nullptr)
+            column->insertWidget(0, modelStudio->prefabForm());
+    // "Copy view": where the camera is, and a screenshot of the viewport taken now.
+    modelStudio->viewNote = [&]() -> QString {
+        const engine::CameraState& cam = app.renderView().camera;
+        const std::string shot = engine::nextScreenshotPath(engine::screenshotFolder(app.settings()));
+        const bool asked = app.renderer().requestFrameDump(shot);
+        QString text = QString("Camera: at (%1, %2, %3) looking toward (%4, %5, %6)\n")
+                           .arg(cam.position.x, 0, 'f', 2).arg(cam.position.y, 0, 'f', 2).arg(cam.position.z, 0, 'f', 2)
+                           .arg(cam.target.x, 0, 'f', 2).arg(cam.target.y, 0, 'f', 2).arg(cam.target.z, 0, 'f', 2);
+        if (asked) text += "Screenshot: " + QString::fromStdString(shot) + "\n";
+        return text;
+    };
+    // The model in the viewport, in numbers.
+    modelStudio->modelNumbers = [&]() -> QString {
+        engine::World* world = bridge.world();
+        if (world == nullptr) return QString();
+        std::shared_ptr<const engine::ProcModel> model;
+        std::size_t pieces = 0, bodies = 0;
+        world->each<engine::ModelInstance>([&](engine::Entity, engine::ModelInstance& mi) {
+            if (model != nullptr) return;
+            model = mi.model;
+            pieces = mi.pieces.size();
+            bodies = mi.bodies.size();
+        });
+        if (model == nullptr) return QString();
+        const RenderMesh full = engine::flattenModel(*model);
+        Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+        for (const Vertex& v : full.vertices) {
+            lo = Vec3(std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z));
+            hi = Vec3(std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z));
+        }
+        if (full.vertices.empty()) return QString("nothing drawn");
+        QString text = QString("%1 x %2 x %3 m (wide, tall, deep); %L4 triangles").arg(hi.x - lo.x, 0, 'f', 2).arg(hi.y - lo.y, 0, 'f', 2).arg(hi.z - lo.z, 0, 'f', 2)
+                           .arg(static_cast<qulonglong>(full.indices.size() / 3));
+        for (std::size_t i = 1; i < model->levelFrom.size(); ++i)
+            text += QString(", %L1 from %2 m").arg(static_cast<qulonglong>(engine::flattenModel(*model, model->levelFrom[i]).indices.size() / 3)).arg(model->levelFrom[i], 0, 'f', 0);
+        int moving = 0;
+        for (const engine::ProcNode& n : model->nodes) moving += n.motion.kind != engine::ProcMotion::Kind::None ? 1 : 0;
+        text += QString("; %1 pieces drawn; %2 collision shapes (%3 bodies); %4 nodes (%5 moving); %6 markers")
+                    .arg(pieces).arg(model->colliders.size()).arg(bodies).arg(model->nodes.size()).arg(moving).arg(model->markerCount());
+        return text;
+    };
+    // The model's tree: its nodes, each under its parent, and what hangs on each.
+    auto studioInstance = [&]() -> engine::Entity {
+        engine::Entity found;
+        if (engine::World* world = bridge.world())
+            world->each<engine::ModelInstance>([&](engine::Entity e, engine::ModelInstance&) { if (!found.valid()) found = e; });
+        return found;
+    };
+    modelStudio->modelTree = [&]() -> std::vector<StudioRow> {
+        // (the engine's one description of a stamped model, model_inspect.h, which the control channel's `model?`
+        // gives to a tool too: the studio only draws it)
+        std::vector<StudioRow> rows;
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        if (world == nullptr || !instance.valid()) return rows;
+        const nlohmann::json tree = nlohmann::json::parse(engine::modelTreeJson(*world, instance), nullptr, false);
+        if (!tree.is_array()) return rows;
+        for (const nlohmann::json& r : tree) {
+            StudioRow row;
+            row.depth = r.value("depth", 0);
+            row.kind = QString::fromStdString(r.value("kind", std::string()));
+            row.name = QString::fromStdString(r.value("name", std::string()));
+            row.detail = QString::fromStdString(r.value("detail", std::string()));
+            row.line = r.value("line", 0);
+            row.piece = r.value("piece", -1);
+            row.joint = QString::fromStdString(r.value("joint", std::string()));
+            row.turn = r.value("turn", true);
+            row.lo = r.value("lo", 0.0);
+            row.hi = r.value("hi", 0.0);
+            row.value = r.value("value", 0.0);
+            rows.push_back(row);
+        }
+        return rows;
+    };
+    modelStudio->selectPiece = [&](int piece) {
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi != nullptr && piece >= 0 && piece < static_cast<int>(mi->pieces.size())) bridge.select(mi->pieces[static_cast<std::size_t>(piece)]);
+    };
+    modelStudio->setJoint = [&](const QString& joint, double value) {
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi == nullptr || mi->model == nullptr) return;
+        const engine::ProcNode* node = mi->model->jointAt(joint.toStdString());
+        if (node == nullptr) return;
+        const double unit = node->motion.kind == engine::ProcMotion::Kind::Turn ? 3.14159265358979323846 / 180.0 : 1.0;
+        std::string why;
+        if (!engine::setModelTarget(*world, instance, joint.toStdString(), value * unit, 0, &why)) LOG_WARN << "[studio] " << why;
+    };
+    // THE STUDIO ON THE CONTROL CHANNEL (docs/control-channel.md): what a tool beside the person can ask and do.
+    // Registered by the editor, so a plain viewer does not offer them. (The model itself is the engine's: models?,
+    // model?, model_set work in both.)
+    app.commands().add("studio?", "studio?",
+                       "The model studio as JSON: the script open, its arguments, unsaved edits, the status line (and whether it is an error), the model's numbers, what was last picked and its script line.",
+                       [modelStudio](const engine::ControlCommand&) -> std::string { return "ok " + modelStudio->describe().toStdString(); }, "editor");
+    app.commands().add("studio_open", "studio_open <script>",
+                       "Open a model script in the studio: a name under assets/scripts (crane) or a path to a .lua there.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_open <script>";
+        QString script = QString::fromStdString(cmd.args[0]);
+        if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
+        if (!QFileInfo::exists(script)) return "err no such script: " + script.toStdString();
+        modelStudio->openScript(script);
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_prefab", "studio_prefab <name | none>",
+                       "View a prefab from prefabs.lua in the studio: its model's script in the pane, the prefab in the viewport as a level would place it. `none`: the open script's model alone.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_prefab <name | none>";
+        modelStudio->openPrefab(cmd.args[0] == "none" ? QString() : QString::fromStdString(cmd.args[0]));
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_prefab_set", "studio_prefab_set <part>[.<key>] <value | none>",
+                       "Change the viewed prefab as the Inspector's form does, rewriting its entry in prefabs.lua: model <name>; physics.body static|none; physics.friction <n>; draw.class <class>; draw.distance <metres>; script <file>. `none` leaves an optional one unsaid.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.size() < 2) return "err studio_prefab_set <part>[.<key>] <value | none>";
+        const QString what = QString::fromStdString(cmd.args[0]), value = QString::fromStdString(cmd.args[1]);
+        const QString why = modelStudio->setPrefabField(what.section('.', 0, 0), what.section('.', 1), value == "none" ? QString() : value);
+        if (!why.isEmpty()) return "err " + why.toStdString();
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+    app.commands().add("studio_args", "studio_args <a Lua table | none>",
+                       "Run the studio's script with these arguments ({ kind = \"tree\", seed = 3 }) and rebuild; `none` clears them.",
+                       [modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        const QString text = QString::fromStdString(cmd.rest).trimmed();
+        if (!modelStudio->setArguments(text == "none" ? QString() : text)) return "err " + modelStudio->describe().toStdString();
+        return "ok rebuilding";
+    }, "editor");
+    app.commands().add("studio_pick", "studio_pick <piece>",
+                       "Select one of the model's drawn pieces in the viewport (the `piece` of a part row of model?), as a click on it would.",
+                       [&, modelStudio](const engine::ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err studio_pick <piece>";
+        const int piece = std::atoi(cmd.args[0].c_str());
+        engine::World* world = bridge.world();
+        const engine::Entity instance = studioInstance();
+        const engine::ModelInstance* mi = world != nullptr && instance.valid() ? world->get<engine::ModelInstance>(instance) : nullptr;
+        if (mi == nullptr || piece < 0 || piece >= static_cast<int>(mi->pieces.size())) return "err no such piece";
+        const engine::Entity e = mi->pieces[static_cast<std::size_t>(piece)];
+        bridge.select(e);
+        const engine::ModelPiece* p = world->get<engine::ModelPiece>(e);
+        if (p != nullptr) modelStudio->showPiece(p->line, QString::fromStdString(p->what));
+        return "ok " + modelStudio->describe().toStdString();
+    }, "editor");
+
+    // Assets: double-clicking a .lua under assets/scripts opens it in the studio (a level still opens as a level).
+    QObject::connect(assetsView, &QTreeView::doubleClicked, [&, modelStudio, assetsModel](const QModelIndex& index) {
+        const QString path = assetsModel->filePath(index);
+        if (path.endsWith(".lua") && QFileInfo(path).absolutePath() == QFileInfo("assets/scripts").absoluteFilePath()) modelStudio->openScript(path);
+    });
 
     // File > Recently Opened: the last few scenes you've opened, newest first,
     // persisted in settings.json. Rebuilt each time the menu opens so it always
@@ -1197,6 +1423,22 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     stopAction->setToolTip("Stop and return to edit mode (Esc asks first)");
+    // Play and Stop on the control channel: a tool beside the person starts and ends a playtest of what is open
+    // (the model studio's level included), as the toolbar's buttons do.
+    app.commands().add("play", "play [here]",
+                       "Start a playtest of the open level, as the toolbar's Play does; `here` starts at the editor's camera.",
+                       [&, startPlay](const engine::ControlCommand& cmd) -> std::string {
+        if (!bridge.editable()) return "err already playing";
+        startPlay(!cmd.args.empty() && cmd.args[0] == "here");
+        return "ok playing";
+    }, "editor");
+    app.commands().add("stop", "stop",
+                       "End the playtest and return to edit mode, as the toolbar's Stop does.",
+                       [&](const engine::ControlCommand&) -> std::string {
+        if (bridge.editable()) return "err not playing";
+        app.requestState(makeEditor());
+        return "ok editing";
+    }, "editor");
 
     // Esc while playing: pause, free the mouse, and ASK (Glenn: "a dialog ... if I want to
     // quit the simulation so I can cancel out of it"). Keep playing restores the pause state
@@ -1487,6 +1729,38 @@ int main(int argc, char** argv) {
     // The scene we boot with counts as recently opened (normalized like the rest).
     engine::recordRecentScene(app.settings(), relativeScenePath(levelPath));
     app.pushState(makeEditor());
+    if (!studioScript.empty()) {
+        QString script = QString::fromStdString(studioScript);
+        if (!script.endsWith(".lua")) script = "assets/scripts/" + script + ".lua";
+        QTimer::singleShot(0, [modelStudio, script]() { modelStudio->openScript(script); });
+    }
+    if (!studioPrefab.empty()) {
+        const QString name = QString::fromStdString(studioPrefab);
+        QTimer::singleShot(0, [modelStudio, name]() { modelStudio->openPrefab(name); });
+    }
+    // RT_STUDIO_ARGS=<a Lua table>: type that into the studio's Arguments box a few seconds in (unattended checking)
+    if (const char* typed = std::getenv("RT_STUDIO_ARGS"); typed && *typed) {
+        const QString text = QString::fromUtf8(typed);
+        QTimer::singleShot(3000, [modelStudio, text]() { modelStudio->setArguments(text); });
+    }
+    // RT_STUDIO_PRESS=copy|lists: press that button of the studio a few seconds in, for checking it unattended
+    // (as RT_EDITOR_WINDOW_SHOT is for the window). "copy" also prints what went to the clipboard.
+    if (const char* press = std::getenv("RT_STUDIO_PRESS"); press && *press) {
+        const std::string which = press;
+        QTimer::singleShot(4000, [modelStudio, which]() {
+            if (which == "lists") modelStudio->addToLists();
+            // "pose": move the model's first two moving nodes (as the tree's boxes do)
+            if (which == "pose") {
+                int moved = 0;
+                for (const StudioRow& row : modelStudio->modelTree())
+                    if (!row.joint.isEmpty() && moved++ < 2) modelStudio->setJoint(row.joint, row.turn ? 40.0 : 1.0);
+            }
+            if (which == "copy") {
+                modelStudio->copyView();
+                LOG_INFO << "[studio] copied:\n" << QApplication::clipboard()->text().toStdString();
+            }
+        });
+    }
     app.begin();
     // The same control socket the standalone viewer opens (RT_CONTROL=0 turns
     // it off): an already-open editor is attachable for scripted captures and
@@ -1667,7 +1941,17 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     QTimer panelTimer;
+    engine::Entity studioShown;   // the piece the studio last showed the line of
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
+        // The model studio: a piece of the model picked in the viewport shows the script line that made it.
+        if (engine::World* world = bridge.world(); world != nullptr && !modelStudio->scriptPath().isEmpty()) {
+            const engine::Entity picked = bridge.selected();
+            if (picked.valid() && !(picked == studioShown)) {
+                if (const engine::ModelPiece* piece = world->get<engine::ModelPiece>(picked)) modelStudio->showPiece(piece->line, QString::fromStdString(piece->what));
+            }
+            studioShown = picked;
+        }
+        modelStudio->refreshOverlayBoxes();   // (the control channel's model_overlay may have changed them)
         panels.refresh();
         refreshChrome();
         pollBakeJob();

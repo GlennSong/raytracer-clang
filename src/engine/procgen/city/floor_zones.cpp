@@ -1353,7 +1353,11 @@ bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::ve
         if (w.doorAt >= 0) w.doorAt = dot(door0 - w.a, normalize(w.b - w.a)) / std::max(Real(1e-6), (w.b - w.a).length());
     }
     std::vector<Room> rs;
+    // (this flat's number: from where its door is, so it is the same number every time the floor is laid)
+    const uint16_t home = static_cast<uint16_t>(1 + lowbias32((static_cast<uint32_t>(std::lround(door.x * 10.0)) * 73856093u) ^
+                                                              (static_cast<uint32_t>(std::lround(door.y * 10.0)) * 19349663u)) % 65000u);
     for (Room r : lay.rooms) {
+        r.home = home;
         ensureCCW(r.rect);
         const Poly2 cut = largestOuter(G::intersectSets(G::fromRing(r.rect), G::fromRing(Z.poly)));
         if (cut.size() < 3 || area(cut) < 1.5) continue;
@@ -1528,7 +1532,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     RoomPlan rp;
     rp.topology = prog.residential ? PlateTopology::Apartments : PlateTopology::Ring;
     rp.office = !prog.residential && prog.workplace;
-    if (storey < 1) return rp;
+    if (storey < 1 && !prog.ground) return rp;   // (a ground floor is a lobby or shops, unless the program lays it too)
     Poly2 plan = plate;
     ensureCCW(plan);
     // the building's habit may cut the plate its own way (a budget hotel's narrow rooms)

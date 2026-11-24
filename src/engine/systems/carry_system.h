@@ -36,6 +36,7 @@ private:
     void pickUp(FrameContext& ctx, Entity player, Entity e);
     void putDown(FrameContext& ctx, const Vec3& velocity);
     bool stow(FrameContext& ctx, Entity car, const Vec3& from);
+    bool putOnSlot(FrameContext& ctx, Entity owner, const Vec3& from);   // what is held, onto a prefab's free slot
     void spawn(FrameContext& ctx, const std::string& name, const Vec3& at, Real yaw);
 };
 

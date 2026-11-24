@@ -107,8 +107,12 @@ PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double of
 // THICKNESS for a skin (ADR-0352: a door, a hood, the body's side of the opening): the region's back -- its faces
 // offset `thickness` inward and turned to face in, in material `mat` -- and a wall along every edge of its outline
 // joining the skin to that back, all as a NEW poly to append. The walls face out of the region, so a door seen
-// edge-on is a solid slab.
-PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat);
+// edge-on is a solid slab. With `against`, a wall is built only where the outline runs along one of THOSE faces: the
+// body's side of a door opening wants its wall at the opening, not a second one buried in the body along the far
+// side of the ring of faces that was thickened (that one shared its edge with two skin faces: three faces on one
+// edge, which no closed skin has).
+PolyMesh solidify(const PolyMesh& m, const std::vector<int>& sel, double thickness, const std::string& mat,
+                  const std::vector<int>* against = nullptr);
 // The faces outside `sel` that share a corner with it (one ring round the region).
 std::vector<int> ringAround(const PolyMesh& m, const std::vector<int>& sel);
 
@@ -127,6 +131,70 @@ void mirrorX(PolyMesh& m, double eps = 1e-4);
 PolyMesh subdivide(const PolyMesh& m, int levels);
 
 // Face selection helpers.
+// EDGE BEVEL (#191; the first of the modelling tools Glenn asked for, 2026-11-20): cut every sharp edge back to a
+// flat strip (a chamfer), so a hard-surface part has an edge that catches the light. An edge is sharp when its two
+// faces meet at more than `angleDeg` (the angle between their normals). Each face keeps its plane and is drawn back
+// `width` metres from each of its sharp edges; a strip joins the two faces along the edge, and where three or more
+// sharp edges meet, a small face closes the corner. A closed mesh stays closed and outward-facing.
+//
+// Returns the new faces (strips and corners), which are also put in the group "bevel" with the material, panel and
+// colour of a face beside them. `sel`, when not empty, limits the bevel to edges between two faces of the selection
+// or on its outline (so one panel's rim can be bevelled alone).
+//
+// A width wider than a face has room for is held back, corner by corner, to a little under half the shortest edge
+// there, so a face is never folded over (the strip is then narrower than asked at that corner).
+//
+// What it does not do: keep creases on the edges it cuts (they are gone with the edge). An edge on the open border
+// of a mesh is left alone.
+//
+// `rounds` > 1 rounds the edge: after the first cut the strip's own edges are cut back, and then theirs, each pass
+// by the width that keeps the facets across the bend equal. 1: one flat strip. 2: three facets. 3: seven.
+std::vector<int> bevel(PolyMesh& m, double width, double angleDeg = 30.0, const std::vector<int>& sel = {}, int rounds = 1);
+// One flat cut (what `bevel` does once per round).
+std::vector<int> bevelFlat(PolyMesh& m, double width, double angleDeg, const std::vector<int>& sel);
+
+// LOOP CUT (#191): a new ring of edges through a run of quads. Starting at the edge between points `a` and `b`, the
+// cut crosses each quad to the edge opposite, on and on, until it comes back round, reaches the mesh's open border,
+// or meets a face that is not a quad. Each crossed edge gets a new point `t` of the way along it (0.5: the middle;
+// measured from a's side all the way round) and each crossed quad becomes two. A face the cut stops at gains the
+// new point on its edge, so a closed mesh stays closed. A crease on a crossed edge carries on over both halves.
+// Returns the new points in order; empty when a and b are not the two ends of an edge.
+std::vector<int> loopCut(PolyMesh& m, int a, int b, double t = 0.5);
+
+// SLICE: cut every face a plane passes through, along the plane. Each edge crossing the plane gets a point where it
+// crosses and each face crossed from one edge to another becomes two; nothing moves, so the shape is the same with
+// a ring of edges where the plane cuts it. (A loop cut follows the quads; a slice follows a plane, whatever the
+// faces.) A point within `eps` of the plane counts as on it. Returns the points on the cut, new and old.
+std::vector<int> slice(PolyMesh& m, Vec3 point, Vec3 normal, double eps = 1e-7);
+
+// BRIDGE: join two regions of faces by a tube. The faces of `a` and of `b` are taken away and the two holes' rims
+// joined by quads, rim point to rim point: two boxes facing each other become one solid, and a region on the top of
+// a block bridged to one on its underside is a hole through it. Each region must have one rim, the two with the
+// same number of points; the pairing is the one with the least twist. Returns the new quads (faces are renumbered:
+// selections made before are stale). Empty, and nothing changed, when the rims do not match. Where a new quad
+// would lie back to back with a face already there (a hole reaching the mesh's edge: a doorway down to the floor),
+// both go and the hole is open on that side.
+std::vector<int> bridge(PolyMesh& m, const std::vector<int>& a, const std::vector<int>& b);
+
+// UN-SUBDIVIDE (#191): take one level of subdivision back out. A mesh that came from `subdivide` (or has the same
+// pattern: all quads, every other point an edge's middle) loses its edge points and face points and keeps every
+// second loop: a quarter of the faces, in the same order and shape, for a lower level of detail that is still an
+// orderly grid (where the simplifier gives a scatter of triangles). The points that stay do not move, so the
+// result is the subdivided shape sampled, a little inside the cage that made it.
+//
+// `keep` names one point that must stay (a mesh's pattern has two sets of points that could be "the corners"; by
+// default the set holding point 0, which is the one `subdivide` wrote first). A crease that ran along both halves
+// of an edge runs along the whole edge, one level sharper.
+//
+// A mesh with an open border works too (a car body with a panel lifted out): the border keeps every second point.
+//
+// Returns false, and changes nothing, when the mesh does not have the pattern: a face that is not a quad, or loops
+// that do not pair off.
+bool unsubdivide(PolyMesh& m, int keep = 0);
+
+// The point nearest to `at` (for naming an edge to loopCut by where its ends are).
+int nearestPoint(const PolyMesh& m, Vec3 at);
+
 std::vector<int> selectAll(const PolyMesh& m);
 std::vector<int> selectGroup(const PolyMesh& m, const std::string& group);
 std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const Vec3& centroid, const Vec3& normal)>& pred);

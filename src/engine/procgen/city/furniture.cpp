@@ -5,6 +5,7 @@
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
 #include "../../mesh_builder.h"
+#include <map>
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -578,6 +579,24 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
     // The building's wood and kitchen style; the fabric varies a little room to room within its palette.
     const uint32_t wood = (hb >> 3) & 3u, style = (hb >> 9) & 3u;
 
+    // A CHILD'S ROOM (Glenn, 2026-11-21: "what about children's rooms?"): in a home with two bedrooms or more, the
+    // smallest is a child's in about two homes in three (the home's own dice), and is furnished by the `child_room`
+    // program. A home is the rooms that share Room::home; on a floor that is one dwelling, all of them.
+    std::vector<uint8_t> childRoom(rp.rooms.size(), 0);
+    if (FurnitureLibrary::global().program("child_room") != nullptr && !rp.office) {
+        std::map<uint32_t, std::vector<std::size_t>> beds;   // home -> its bedrooms
+        for (std::size_t i = 0; i < rp.rooms.size(); ++i) {
+            if (rp.rooms[i].kind != RoomKind::Bed) continue;
+            const uint32_t home = rp.rooms[i].home != 0 ? rp.rooms[i].home : rp.topology == PlateTopology::WholeFloor ? 70000u : 0u;
+            if (home != 0) beds[home].push_back(i);
+        }
+        for (const std::pair<const uint32_t, std::vector<std::size_t>>& h : beds) {
+            if (h.second.size() < 2 || lowbias32(seed ^ (h.first * 2654435761u)) % 100u >= 65u) continue;
+            std::size_t least = h.second[0];
+            for (std::size_t i : h.second) if (std::fabs(area(rp.rooms[i].rect)) < std::fabs(area(rp.rooms[least].rect))) least = i;
+            childRoom[least] = 1;
+        }
+    }
     for (const Room& room : rp.rooms) {
         // (a room with a FRAME is furnished inside it: the ring's curved corner office, every lot of a zoned office
         // floor -- whose outline may be a trapezoid or an L even with four corners)
@@ -627,7 +646,13 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         Placement p;
         // a bath room where people do not live (a school's, a museum's, an office's) is a restroom: toilets, basins
         const bool restroom = room.kind == RoomKind::Bath && rp.office;
-        const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : programFor(room.kind));
+        const bool child = childRoom[static_cast<std::size_t>(&room - rp.rooms.data())] != 0;
+        const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : child ? "child_room" : programFor(room.kind));
+        // A SHOP is furnished by its trade's own program where there is one ("shop:barber", furniture_rooms.lua); the
+        // trades without one are still fitted out in code below. A new trade is a program, never a new case there.
+        if (room.kind == RoomKind::Shop)
+            if (const TradeInfo* t = tradeById(room.style))
+                if (const RoomProgram* own = FurnitureLibrary::global().program(std::string("shop:") + t->name)) prog = own;
         // a department store's SALES FLOOR is furnished as its department: the trade's own program
         // ("sales_floor:boutique", furniture_rooms.lua) where there is one
         if (room.kind == RoomKind::SalesFloor)

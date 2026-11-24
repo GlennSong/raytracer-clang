@@ -44,7 +44,8 @@ DayNightState applyDayNight(Scene& scene, const DayNightCycle& cycle,
 // world space (an entity's `position`), matching the realtime loader so offline
 // and viewer agree — e.g. a planet sat in front of the camera rather than at the
 // origin.
-void bakeProcModel(const ProcModel& model, Scene& scene, const Vec3& offset = Vec3());
+// `distance`: the level of detail to bake, as the model is seen from that many metres away (0: the full model).
+void bakeProcModel(const ProcModel& model, Scene& scene, const Vec3& offset = Vec3(), Real distance = 0);
 
 // A camera read from the level's sidecar (CameraStore format,
 // <level>.cameras.json) for offline rendering. Pose is position + forward —

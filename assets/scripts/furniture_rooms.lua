@@ -582,3 +582,111 @@ furniture_rooms.dorm = {
 }
 -- (a DORM is its own room kind and program, apart from a home's bedroom: its pieces are picked by the "dorm" tag --
 -- singles, not the double; a wardrobe each -- so the two can change independently)
+
+-- PREFAB PIECES IN ROOMS (#191, "One catalog"; Glenn, 2026-11-22: "I want to see new prefabs used and integrated").
+-- Steps added to the programs above, each naming a prefab piece (furniture_library.lua, "PREFAB PIECES"): a thing
+-- with moving parts that a person can use, stood as a prefab where the planner places it. They are added at the
+-- END of each program, so everything a room held before is placed first and stands where it stood; a prefab piece
+-- takes a wall that is still clear, or is left out of a room with none.
+local function also(room, steps)
+  for _, step in ipairs(steps) do table.insert(furniture_rooms[room], step) end
+end
+local ANY = { 1, 3, 2, 0 }
+also("kitchen", {
+  { wall = { 0.60, 0.66 }, sides = "long", clear = 0.9, pick = "dishwasher" },
+  { wall = { 0.34, 0.40 }, sides = ANY, pick = "pedal_bin" },
+})
+also("flat", {
+  { wall = { 0.60, 0.68 }, sides = ANY, clear = 0.8, pick = "washing_machine" },
+})
+also("bath", {
+  { wall = { 0.60, 0.68 }, sides = ANY, clear = 0.6, pick = "washing_machine" },
+  { wall = { 0.34, 0.40 }, sides = ANY, pick = "pedal_bin" },
+})
+also("restroom", {
+  { wall = { 0.34, 0.40 }, sides = { 1, 3 }, pick = "pedal_bin" },
+})
+also("living", {
+  { wall = { 0.56, 0.32 }, sides = ANY, tall = true, clear = 0.4, pick = "grandfather_clock" },
+  { wall = { 1.50, 0.62 }, sides = ANY, clear = 0.9, min_w = 5.0, pick = "upright_piano" },
+})
+also("bedroom", {
+  { wall = { 0.84, 0.46 }, sides = ANY, clear = 0.6, min_w = 4.2, pick = "toy_chest" },
+})
+also("copy_room", {
+  { wall = { 0.40, 0.32 }, sides = ANY, clear = 0.6, pick = "shredder" },
+})
+also("meeting", {
+  { wall = { 0.82, 0.78 }, sides = { 1, 3 }, clear = 0.8, pick = "flip_chart" },
+})
+also("waiting", {
+  { wall = { 0.40, 0.40 }, sides = { 1, 3, 0 }, clear = 0.6, pick = "ticket_dispenser" },
+  { wall = { 1.02, 0.72 }, sides = { 3, 1, 0 }, tall = true, clear = 0.9, pick = "vending_machine" },
+})
+also("foyer", {
+  { wall = { 1.02, 0.72 }, sides = { 3, 1, 2 }, tall = true, clear = 0.9, pick = "vending_machine" },
+})
+also("hotel_lobby", {
+  { wall = { 0.66, 0.66 }, sides = ANY, tall = true, clear = 0.9, pick = "atm" },
+  { wall = { 0.64, 1.12 }, sides = ANY, clear = 0.5, pick = "luggage_cart" },
+})
+also("hotel_room", {
+  { wall = { 0.44, 0.44 }, sides = ANY, clear = 0.5, pick = "room_safe" },
+})
+also("ward", {
+  { wall = { 0.52, 0.56 }, sides = ANY, count = { per = 4.0, min = 1, max = 3 }, pick = "iv_stand" },
+})
+also("exam", {
+  { wall = { 0.56, 1.06 }, sides = ANY, pick = "exam_lamp" },
+})
+
+-- A CHILD'S ROOM (furniture.cpp: the smaller bedroom of a home with two or more, in about two homes in three). A
+-- bunk bed or a single bed, a building at a time, its head to a wall; a desk; the toy shelf and the toy chest; a
+-- play mat by the wall opposite; a dollhouse or an easel where there is room. Every piece is a prefab.
+furniture_rooms.child_room = {
+  { one_of = {
+      { wall = { 1.12, 2.0 }, sides = "long", ring_sides = { 1, 3, 0 }, tall = true, pick = "bunk_bed" },
+      { wall = { 0.98, 1.84 }, sides = "long", ring_sides = { 1, 3, 0 }, pick = "kids_bed" },
+    } },
+  { wall = { 0.92, 0.92 }, sides = { 1, 3, 2, 0 }, clear = 0.3, pick = "kids_desk" },
+  { wall = { 1.22, 0.34 }, sides = ANY, clear = 0.5, pick = "toy_shelf" },
+  { wall = { 0.84, 0.46 }, sides = ANY, clear = 0.5, pick = "toy_chest" },
+  { wall = { 2.02, 1.42 }, sides = { 2, 0, 1, 3 }, min_w = 3.0, pick = "play_mat" },
+  { wall = { 0.92, 0.48 }, sides = ANY, clear = 0.4, min_w = 3.4, pick = "dollhouse" },
+  { wall = { 0.68, 0.52 }, sides = ANY, clear = 0.4, min_w = 3.8, pick = "kids_easel" },
+}
+
+-- A BARBER'S (the trade `barber`, trades.lua; the shop's room is furnished by the program named "shop:" and its
+-- trade). The till at the back with someone behind it; down the side walls a mirror station each with its chair
+-- turned to the mirror; the backwash chair and a dryer; seats to wait on by the window. Every piece but the
+-- counter is a prefab (barber_shop.lua).
+furniture_rooms["shop:barber"] = {
+  { wall = { 1.8, 1.6 }, sides = { 2 }, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+  { wall = { 1.6, 2.0 }, sides = { 1, 3 }, count = { per = 1.9, min = 1, max = 4 }, tall = true,
+    set = {
+      { pick = "barber_station", x = 0.8 },
+      { pick = "barber_chair", x = 0.8, z = 1.95, faces = "wall", fit = { 0.7, 1.1 } },
+    } },
+  { wall = { 2.52, 0.56 }, sides = { 0, 3, 1 }, clear = 0.6, pick = "barber_waiting_seats" },
+  { wall = { 0.62, 1.2 }, sides = { 3, 1, 2 }, clear = 0.5, pick = "backwash_chair" },
+  { wall = { 0.56, 0.92 }, sides = ANY, clear = 0.3, pick = "hood_dryer" },
+  { wall = { 0.42, 0.38 }, sides = ANY, clear = 0.3, pick = "salon_trolley" },
+}
+
+-- A GYM (the trade `gym`): the desk at the back; a mirror down one wall; treadmills and bikes in rows along the
+-- side walls; the rower; the weights corner (rack, bench, machine, bag); mats where the room is wide; lockers and
+-- a bench to change on. Every piece but the counter is a prefab (gym.lua, lockers.lua).
+furniture_rooms["shop:gym"] = {
+  { wall = { 1.8, 1.6 }, sides = { 2 }, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+  { wall = { 3.04, 0.24 }, sides = { 1, 3 }, tall = true, clear = 0.8, pick = "mirror_wall" },
+  { wall = { 0.9, 1.6 }, sides = { 3, 1 }, count = { per = 1.1, min = 1, max = 4 }, clear = 0.5, pick = "treadmill" },
+  { wall = { 0.7, 1.1 }, sides = { 1, 3 }, count = { per = 0.9, min = 1, max = 4 }, clear = 0.5, pick = "exercise_bike" },
+  { wall = { 1.9, 0.62 }, sides = { 2, 1, 3 }, clear = 0.9, pick = "dumbbell_rack" },
+  { wall = { 2.12, 1.42 }, sides = ANY, clear = 0.5, pick = "bench_press" },
+  { wall = { 1.14, 1.32 }, sides = ANY, tall = true, clear = 0.6, pick = "weight_machine" },
+  { wall = { 0.6, 2.54 }, sides = ANY, clear = 0.4, min_w = 5.0, pick = "rowing_machine" },
+  { wall = { 0.8, 1.1 }, sides = ANY, tall = true, clear = 0.6, pick = "punch_bag" },
+  { wall = { 2.84, 1.82 }, sides = ANY, min_w = 6.5, pick = "yoga_mats" },
+  { wall = { 1.32, 0.54 }, sides = { 2, 3, 1 }, tall = true, clear = 0.8, pick = "lockers" },
+  { wall = { 1.62, 0.46 }, sides = ANY, clear = 0.5, pick = "gym_bench" },
+}

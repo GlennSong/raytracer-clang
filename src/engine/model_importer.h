@@ -31,6 +31,11 @@ struct CpuMaterial {
     float metallic = 1.0f, roughness = 1.0f, opacity = 1.0f;
     Vec3 emission{0, 0, 0};
     CpuImage baseColorTex, normalTex, metallicRoughnessTex, aoTex, emissiveTex;
+    // What the file says about the material itself, for a reader that keeps materials apart (a model's table):
+    std::string name;
+    bool doubleSided = false;
+    std::string extrasJson;      // its extras as JSON text ("" when none), from loadCpuTree only
+    int sourceIndex = -1;        // which of the file's materials it is (-1: the primitive named none)
 };
 struct CpuMesh {
     RenderMesh geometry;   // positions/normals/uvs/tangents in object space
@@ -40,6 +45,26 @@ struct CpuModel {
     std::vector<CpuMesh> meshes;
 };
 
+// A glTF FILE WITH ITS TREE KEPT (#191: a model read from a file). `loadCpu` bakes every mesh into the file's world
+// space and drops the nodes; a model needs them: the parenting is its rig, an object with no mesh is a marker, and
+// names say the rest. Geometry here is in each mesh's OWN space (nothing baked), with the vertex colours.
+struct CpuTreeNode {
+    std::string name;
+    int parent = -1;             // an index into CpuTree::nodes; -1: a top object of the scene
+    std::vector<int> children;
+    Mat4 local;                  // its transform under its parent (translation, rotation and scale as one matrix)
+    int mesh = -1;               // an index into CpuTree::meshes; -1: an empty
+    std::string extrasJson;      // its extras as JSON text ("" when none): custom properties from Blender
+};
+struct CpuTree {
+    bool ok = false;
+    std::string error;
+    std::vector<CpuTreeNode> nodes;
+    std::vector<int> roots;                        // the scene's top objects
+    std::vector<std::vector<CpuMesh>> meshes;      // each mesh's primitives, one per material
+    std::string sceneExtrasJson;
+};
+
 class ModelImporter {
 public:
     static ImportedModel load(const std::string& path, Renderer& renderer);
@@ -47,6 +72,9 @@ public:
     // Parse to CPU geometry + decoded images (no GPU). The offline tracer uses
     // this directly; load() uploads it. Empty model on failure.
     static CpuModel loadCpu(const std::string& path);
+
+    // Parse to CPU geometry keeping the file's node tree (see CpuTree). `ok` false with `error` on failure.
+    static CpuTree loadCpuTree(const std::string& path);
 
     // Parse-only check (no GPU upload) — the editor's asset import validates
     // files before copying them into the project. False fills `error`.

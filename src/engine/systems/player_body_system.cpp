@@ -89,9 +89,13 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
     driving_ = p && body && cc && p->mode == PlayerPose::Mode::Drive && world.has<InVehicle>(player);
     // in third person (or limp) whatever it is doing; never in someone else's seat model or sat at a pose the
     // first-person camera holds (Seated: a bench, a bed)
+    // SAT OR LYING ON SOMETHING (Seated: a chair, a bed, a prefab's seat; Glenn, 2026-11-23: "when laying down in
+    // first person or sitting could be nice to see the body when looking down", "no third person view for the
+    // prefabs"): the body is drawn there in either view -- in first person without its head, which the eye is in.
+    const Seated* seated = player.valid() ? world.get<Seated>(player) : nullptr;
+    const bool third = ctx.settings.getBool("playerThirdPerson", false);
     const bool visible = driving_ ||
-                         (p && body && cc && !world.has<InVehicle>(player) && !world.has<Seated>(player) &&
-                          (ragdoll || ctx.settings.getBool("playerThirdPerson", false)));
+                         (p && body && cc && !world.has<InVehicle>(player) && (seated != nullptr || ragdoll || third));
     if (!made_) {
         if (!visible) return;
         const MeshHandle box = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(1, 1, 1)), "player:arm_block");
@@ -159,6 +163,27 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             blocks[static_cast<std::size_t>(i)].orientation = p->ragdollRot[i];
             blocks[static_cast<std::size_t>(i)].size = BlockBody::parts()[static_cast<std::size_t>(i)].size * s;
         }
+    } else if (seated != nullptr) {
+        const Real scale = (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight;
+        Vec3 face = flat(seated->look);
+        face = face.lengthSquared() > 1e-6 ? normalize(face) : facing_;
+        BodyPose pose;
+        if (seated->look.y > 0.6) {
+            // LYING on the back: the eye is the head's; the body runs from it along the way it looks, face up
+            const Vec3 up(0, 1, 0);
+            pose.scale = scale;
+            pose.position = seated->eye - Vec3(0, 0.13 * scale, 0) + face * (0.78 * scale);
+            pose.orientation = frameOf(normalize(cross(face * Real(-1), up)), face * Real(-1));
+        } else {
+            // SITTING: the chair pose the buses' riders sit in, its hip under the eye
+            pose = seatedOccupantPose(chairOccupant(), scale, SeatSway{});
+            const Quat yaw = yawTo(face);
+            pose.position = seated->eye - Vec3(0, 0.72 * scale, 0) + face * (0.06 * scale) + yaw.rotate(pose.position);
+            pose.orientation = yaw * pose.orientation;
+        }
+        facing_ = face;
+        stride_ = 0;
+        blocks = poseBlocks(pose);
     } else if (ps && ps->sitting) {
         // SAT DOWN as a passenger: the body in the seat (procgen/vehicle/occupant.h) -- a car's, low and reclined
         // under its roof, or a bus's or a train's, upright -- its hip `hipBelow` under the rider's centre, facing the
@@ -377,7 +402,8 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
     const std::array<BodyPiece, BlockBody::kParts> pieces = meshes_.pieces(ctx.assets, blocks, scale);
     for (int i = 0; i < BlockBody::kParts; ++i) {
         const BodyPiece& b = pieces[static_cast<std::size_t>(i)];
-        if (!b.drawn) {
+        const bool eyeInside = seated != nullptr && !third && i == BlockBody::Head;   // (first person: no head round the eye)
+        if (!b.drawn || eyeInside) {
             place(i, Vec3(0, -100000, 0), Quat::identity(), Vec3(1, 1, 1));
             if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
             continue;

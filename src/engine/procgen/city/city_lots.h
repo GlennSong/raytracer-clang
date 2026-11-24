@@ -293,6 +293,15 @@ struct LotParams {
     // than the 56 a downtown centre rolls.
     bool wholeBlocks = false;
     std::string recipe;
+    // ...or BLOCK BY BLOCK (citysim.recipeAt, the test level prefab_street): the block a point lies in grows this
+    // recipe, as ONE site (`whole`) or on each of the lots the parcel walk makes of it (a street of one kind of
+    // house). Blocks with no point are the district's, as in a city.
+    struct RecipeAt {
+        Vec2 at;
+        std::string recipe;
+        bool whole = true;
+    };
+    std::vector<RecipeAt> recipeAt;
     Real recipeCoreness = -1;
     // ...and where its stairs and lifts stand (citysim.stairs = "core" | "ends", citysim.lifts = "bank" | "facing":
     // BuildingParams::stairPlace / liftBanks; 0 leaves the recipe's)

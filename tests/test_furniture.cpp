@@ -219,7 +219,9 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         emitFurniture(placed, &col, rp, 20.0, p.seed);
         int pbeds = 0, shelves = 0, pictures = 0;
         for (const PlacedPiece& pp : placed) {
-            if (pp.piece == static_cast<uint8_t>(Piece::Bed)) ++pbeds;
+            // (a bed is the kit's, or a child's room's own: its bunk bed or small bed, which are prefab pieces)
+            const std::string name = furniturePieceName(static_cast<Piece>(pp.piece));
+            if (pp.piece == static_cast<uint8_t>(Piece::Bed) || name == "kids_bed" || name == "bunk_bed") ++pbeds;
             if (pp.piece == static_cast<uint8_t>(Piece::Shelving)) ++shelves;
             if (pp.piece == static_cast<uint8_t>(Piece::Picture)) ++pictures;
         }
@@ -289,7 +291,20 @@ TEST_CASE(a_storefront_ground_floor_is_shops_with_their_own_doors) {
     for (const PlacedPiece& pp : in.furniture)
         if (pp.piece == static_cast<uint8_t>(Piece::ShopCounter)) ++counters;
     std::printf("    [shops] ground floor: %zu pieces, %d counters\n", in.furniture.size(), counters);
-    CHECK(counters >= 2);
+    // WHICH SHOPS, and what each got. A counter is not every trade's (a restaurant has tables, a bar its bar), and
+    // which trades a street draws changes whenever a trade is added (the barber's and the gym, 2026-11-22: this
+    // building's five went from two counter trades to one). What must hold is that EVERY unit is fitted out.
+    std::vector<int> perUnit(in.units.size(), 0);
+    for (const PlacedPiece& pp : in.furniture)
+        if (pp.unit >= 0 && static_cast<std::size_t>(pp.unit) < perUnit.size()) ++perUnit[static_cast<std::size_t>(pp.unit)];
+    std::string trades;
+    for (const ShopFront& f : shopFrontsOf(plan, p)) trades += std::string(" ") + (tradeById(f.trade) ? tradeById(f.trade)->name : "?");
+    std::printf("    [shops] trades:%s; pieces per unit:", trades.c_str());
+    for (int n : perUnit) std::printf(" %d", n);
+    std::printf("\n");
+    CHECK(perUnit.size() >= 2);
+    for (int n : perUnit) CHECK(n >= 3);
+    CHECK(counters >= 1);
 }
 
 // BIG-BOX STORES (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"). Each chain: one door on the front
@@ -361,7 +376,7 @@ TEST_CASE(room_programs_furnish_every_home_and_office_room) {
         {{{0, 0}, {26, 0}, {26, 15}, {0, 15}}, true, false, 1},
         {{{0, 0}, {30, 0}, {30, 10.5}, {0, 10.5}}, true, false, 1},
     };
-    std::array<int, kPieceCount> with{}, bare{};
+    std::array<int, kPieceMax> with{}, bare{};
     int plans = 0;
     for (const Case& c : cases)
         for (uint32_t seed = 1; seed <= 6; ++seed)
@@ -391,7 +406,7 @@ TEST_CASE(room_programs_furnish_every_home_and_office_room) {
                 }
             }
     FurnitureLibrary::global() = saved;
-    auto n = [&](const std::array<int, kPieceCount>& t, Piece pc) { return t[static_cast<std::size_t>(pc)]; };
+    auto n = [&](const std::array<int, kPieceMax>& t, Piece pc) { return t[static_cast<std::size_t>(pc)]; };
     std::printf("    [programs] %d floors: desks %d, office chairs %d, beds %d, nightstands %d, wardrobes %d, sofas %d, "
                 "sinks %d, toilets %d, pods %d, cubicles %d, meeting tables %d\n", plans, n(with, Piece::Desk),
                 n(with, Piece::OfficeChair), n(with, Piece::Bed), n(with, Piece::Nightstand), n(with, Piece::Wardrobe),
@@ -450,7 +465,7 @@ TEST_CASE(campus_buildings_have_their_rooms_and_furniture) {
     UseShippedFurniture shipped;
     const Poly2 plans[3] = {{{0, 0}, {52, 0}, {52, 22}, {0, 22}}, {{0, 0}, {40, 0}, {40, 24}, {0, 24}},
                             {{0, 0}, {54, 0}, {54, 15}, {0, 15}}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     std::array<int, 32> kinds{};
     for (int campus = 1; campus <= 3; ++campus)
         for (int storey : {0, 1, 2}) {
@@ -1412,7 +1427,9 @@ TEST_CASE(furniture_keeps_out_of_the_outside_doors_and_off_the_windows) {
                         const FurniturePiece& kit = furniturePiece(pc, pp.variant);
                         const Vec2 c(pp.xform.m[0][3], pp.xform.m[2][3]);
                         const Vec2 X(pp.xform.m[0][0], pp.xform.m[2][0]), Z(pp.xform.m[0][2], pp.xform.m[2][2]);
-                        const Real hw = kit.size.x * 0.5, topY = y + kit.size.y;
+                        // (a piece stands on the finished floor, 5 cm over the storey's level; the planner's rule is about how far a
+                        // piece rises above the floor it stands on, so its top is measured from there)
+                        const Real hw = kit.size.x * 0.5, topY = y - 0.05 + kit.size.y;
                         for (const WallOpening& o : ops) {
                             const Vec2 d = normalize(o.b - o.a);
                             Vec2 in2(-d.y, d.x);   // into the building
@@ -1664,7 +1681,7 @@ TEST_CASE(ceiling_lights_never_overlap) {
 TEST_CASE(workplaces_are_furnished_as_offices) {
     UseShippedFurniture shipped;
     const Real sizes[][2] = {{48, 34}, {36, 24}, {30, 20}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     int workplaces = 0, floors = 0, hotelBeds = 0;
     for (int ri = 0; ri < architectRecipeCount(); ++ri) {
         const std::string rn = architectRecipeName(ri);
@@ -1713,7 +1730,7 @@ TEST_CASE(civic_buildings_have_their_own_rooms) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"school", "library", "museum", "university"};
     const Real sizes[][2] = {{36, 24}, {30, 20}, {48, 30}};
-    std::map<std::string, std::array<int, kPieceCount>> by;
+    std::map<std::string, std::array<int, kPieceMax>> by;
     for (const char* rn : recipes)
         for (uint32_t seed = 1; seed <= 3; ++seed)
             for (const auto& sz : sizes) {
@@ -1788,7 +1805,7 @@ TEST_CASE(chamfered_office_floors_take_the_office_floor) {
 TEST_CASE(the_hospital_has_wards_a_lobby_and_examination_rooms) {
     UseShippedFurniture shipped;
     const Real sizes[][2] = {{48, 34}, {40, 28}, {36, 24}};
-    std::array<int, kPieceCount> n{};
+    std::array<int, kPieceMax> n{};
     int hospitals = 0, wardFloors = 0, stations = 0, lobbies = 0, blocked = 0;
     for (uint32_t seed = 1; seed <= 4; ++seed)
         for (const auto& sz : sizes) {
@@ -1843,7 +1860,7 @@ TEST_CASE(civic_halls_are_furnished_for_what_they_are) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"church", "cinema", "market_hall", "police", "courthouse", "capitol"};
     const Real sizes[][2] = {{36, 24}, {30, 20}, {44, 28}};
-    std::map<std::string, std::array<int, kPieceCount>> by;
+    std::map<std::string, std::array<int, kPieceMax>> by;
     for (const char* rn : recipes)
         for (uint32_t seed = 1; seed <= 3; ++seed)
             for (const auto& sz : sizes) {
@@ -2089,6 +2106,57 @@ TEST_CASE(a_hotel_has_a_lobby_with_its_reception) {
 // THE KONBINI (Glenn, 2026-10-13: the convenience store, on the list after the station entrances). Two in three
 // grocers are a konbini now -- read off the facade's own hash, so no other unit on the street changes trade --
 // open round the clock (trades.h), with its counter by the door, a wall of drinks fridges, shelves and gondolas.
+// THE BARBER'S AND THE GYM (Glenn, 2026-11-22: "we should add them as new trades"): streets deal both, and each is
+// fitted out by its own program (furniture_rooms.lua "shop:barber", "shop:gym") from prefab pieces -- a barber's has
+// its chairs at their mirror stations, a gym its machines -- with someone's counter to stand behind.
+TEST_CASE(a_barbers_and_a_gym_are_trades_fitted_out_from_their_own_programs) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"brick_shop", "corner_shop", "commercial_block", "mixed_use", "oldtown_house", "oldtown_grand", "strip_mall"};
+    const Real sizes[][2] = {{20, 14}, {30, 20}, {40, 26}, {60, 30}};
+    int units = 0, barbers = 0, gyms = 0, barbersFitted = 0, gymsFitted = 0, chairs = 0, stations = 0, machines = 0, counters = 0;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 24; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.walkableGround = true;
+                p.openDoorway = true;
+                int b = 0, g = 0;
+                for (const ShopFront& f : shopFrontsOf(plan, p)) {
+                    ++units;
+                    b += f.trade == 17;
+                    g += f.trade == 18;
+                }
+                barbers += b;
+                gyms += g;
+                if (b + g == 0) continue;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);
+                int ch = 0, st = 0, ma = 0;
+                for (const PlacedPiece& pp : in.furniture) {
+                    const std::string name = furniturePieceName(static_cast<Piece>(pp.piece));
+                    ch += name == "barber_chair";
+                    st += name == "barber_station";
+                    ma += name == "treadmill" || name == "exercise_bike" || name == "bench_press" || name == "dumbbell_rack" || name == "weight_machine";
+                    counters += pp.piece == static_cast<uint8_t>(Piece::ShopCounter);
+                }
+                chairs += ch; stations += st; machines += ma;
+                barbersFitted += b > 0 && ch >= 1 && st >= 1;
+                gymsFitted += g > 0 && ma >= 2;
+            }
+    std::printf("    [trades] %d shop units: %d barbers (%d buildings fitted: %d chairs, %d stations), %d gyms (%d fitted: %d machines); %d counters\n",
+                units, barbers, barbersFitted, chairs, stations, gyms, gymsFitted, machines, counters);
+    const TradeInfo* bt = tradeById(17);
+    const TradeInfo* gt = tradeById(18);
+    CHECK(bt && std::string(bt->name) == "barber" && std::string(bt->placeType) == "shop");
+    CHECK(gt && std::string(gt->name) == "gym" && std::string(gt->placeType) == "shop");
+    CHECK(barbers > 5 && gyms > 3);            // (streets deal them)
+    CHECK(barbersFitted > 0 && chairs == stations);   // every chair has its mirror
+    CHECK(gymsFitted > 0);
+    CHECK(counters >= barbersFitted + gymsFitted);
+}
+
 TEST_CASE(small_grocers_are_konbini_round_the_clock) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"brick_shop", "corner_shop", "commercial_block", "mixed_use", "oldtown_house", "oldtown_grand"};

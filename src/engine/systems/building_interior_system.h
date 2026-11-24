@@ -7,12 +7,16 @@
 #include "../procgen/city/building_records.h"
 #include "../procgen/city/core_plan.h"   // the storey window rides the core (M5)
 #include "../furniture_draw.h"   // FurnitureDrawCache
+#include <nlohmann/json.hpp>
 #include <array>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <map>
+#include <memory>
+#include <string>
 namespace engine {
 
 class PhysicsSystem;
@@ -69,6 +73,7 @@ public:
 private:
     struct Resident {
         std::vector<Entity> entities;
+        std::vector<Entity> prefabs;     // kit pieces stood as prefabs (a level's prefabSwaps): unstamped on release
         std::vector<MeshHandle> meshes;
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
         int k0 = 0, k1 = -1;   // the storey window grown
@@ -92,6 +97,31 @@ private:
     std::unordered_map<int, std::array<TextureHandle, 4>> surfTex_;
     // The FURNITURE KIT's meshes on the GPU (buildings M4b): one per (piece, variant, finish), uploaded on first
     // use and kept -- every resident building's instance groups draw from them.
+    // PREFABS IN PLACE OF KIT PIECES (CityBuildings::prefabSwaps): the list read (kit piece -> the prefab that stands
+    // in its place, and how far from the wall its middle stands; < 0: half the kit piece's depth), and what
+    // dresses a stamped prefab's meshes.
+    struct Swap {
+        std::string prefab;
+        Real back = -1;
+        Real turn = 0;         // degrees about +y, on top of the kit piece's own facing (a prefab that faces the other way)
+        std::string surface;   // the prefab's marker that what stood on the kit piece now rides ("": nothing rides)
+    };
+    void readSwaps(const std::string& file);
+    // DOORS IN THE DOORWAYS (CityBuildings::prefabDoors, building_doors.lua): which door prefab hangs where. Each
+    // entry is a list of prefab names a building picks one of; an empty list leaves the doorway open.
+    struct DoorChoice { std::vector<std::string> front, back, inside, insideGlass; };
+    void readDoors(const std::string& file);
+    const std::vector<std::string>& doorsFor(const struct BuildingRecord& r, std::vector<std::string> DoorChoice::* which) const;
+    // One copy of door prefab `name`, its recipe run to fill an opening `width` x `height` (the recipe's fill_width
+    // and fill_height), its sill's middle at `at`, opening toward `out`.
+    Entity standDoor(World& world, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height);
+    std::string doorsFile_;
+    DoorChoice doorDefault_;
+    std::map<std::string, DoorChoice> doorByType_, doorByRecipe_;
+    nlohmann::json doorModels_;   // models.lua, read once: a door prefab's recipe and arguments
+    std::string swapsFile_;
+    std::map<std::string, Swap> swaps_;
+    std::shared_ptr<class ModelDresser> dresser_;   // (shared: its type is whole only in the .cpp)
     FurnitureDrawCache drawCache_;   // the kit's meshes + surface maps, shared by every resident
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;

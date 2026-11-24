@@ -32,7 +32,10 @@ end
 --   6 roof-right    7 roof-left      8 glass-base-left       9 shoulder-left    10 side-left
 local CORNERS = 10
 -- which corner-to-corner run a face belongs to
-local RUN = { bottom = { 1, 2 }, side_r = { 2, 4 }, glass_r = { 5, 6 }, roof = { 6, 7 }, glass_l = { 7, 8 }, side_l = { 8, 10 } }
+local RUN = { bottom = { 1, 2 }, side_r = { 2, 4 }, glass_r = { 5, 6 }, roof = { 6, 7 }, glass_l = { 7, 8 }, side_l = { 9, 1 } }
+-- (side_l is side_r's mirror: corners 4, 3, 2 mirror to 9, 10, 1, so it runs past the section's last point and back
+-- to its first. It was { 8, 10 } once: the ledge and the upper flank, with no sill, and the two flanks' creases
+-- differed, so a subdivided body came out different from left to right.)
 -- FILLET STEPS BY RADIUS: a sharp corner is one point, a small radius two, a big one four. A tiny radius
 -- stepped four times left millimetre strips down the whole body (the fleet test's slivers). The radii are
 -- the same at every station, so every section still has the same count.
@@ -77,6 +80,7 @@ function kit.body(P)
   local B = poly.loft{ sections = sections, stations = stations, cap_start = true, cap_end = true,
                        cap_crease = P.cap_crease or 1.4 }
 
+  local wraps = B:face_count() >= (#stations - 1) * n   -- the section's last quad (point n back to 1) is a face
   -- face index of the quad from ring k (1-based) point i (1-based): (k-1)*n + (i-1), 0-based
   local function face(k, i) return (k - 1) * n + (i - 1) end
   -- the quads of a run between two corners: quad i joins section points i and i+1 (1-based). `straight`
@@ -96,7 +100,8 @@ function kit.body(P)
     local a, b = RUN[name][1], RUN[name][2]
     local out = {}
     local i0, i1 = straight and last[a] or first[a], straight and first[b] - 1 or last[b] - 1
-    for i = i0, i1 do out[#out + 1] = i end
+    if b < a then i1 = i1 + n end                       -- a run that passes the section's last point
+    for i = i0, i1 do out[#out + 1] = (i - 1) % n + 1 end
     return out
   end
   -- `pred(zm, k, z0, z1)`: zm the row's middle, z0/z1 its two stations
@@ -106,7 +111,7 @@ function kit.body(P)
       local zm = 0.5 * (stations[k] + stations[k + 1])
       if pred(zm, k, stations[k], stations[k + 1]) then
         for _, i in ipairs(run(runName, straight)) do
-          if i < n then sel[#sel + 1] = face(k, i) end
+          if i < n or wraps then sel[#sel + 1] = face(k, i) end
         end
       end
     end
@@ -187,7 +192,6 @@ function kit.body(P)
   -- corners. A panel's outline is creased so it reads as a panel line, not a cut.
   local plan = kit.panel_plan(P)
   if plan then
-    local wraps = B:face_count() >= (#stations - 1) * n   -- the section's last quad (point n back to 1) is a face
     local function rows(lo, hi, i0, i1)
       local sel = {}
       for k = 1, #stations - 1 do
@@ -217,7 +221,10 @@ function kit.body(P)
       for _, f in ipairs(rows(d.lo, d.hi, sides[1].up[1], sides[1].up[2])) do sel[#sel + 1] = f end
       tag(sel, d.name)
     end
-    if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], first[9] - 1), "hood") end
+    -- across the top from the left belt corner to the right one, BOTH corners' rounding included: the mirror of
+    -- first[4] is last[9] (the section runs one way round, so a corner's points come in the other order on the far
+    -- side). It stopped at first[9] once, and the hood and the trunk lid took the left wing's shoulder but not the right's.
+    if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], last[9] - 1), "hood") end
     -- the tail above `y0`: every face at the back that faces back -- the cap and its window, and on a box whose
     -- roof meets the tail square (a van: its back wall above the belt is the roof run falling sheer) those rows too
     local tailZ = -P.length * 0.5 + 0.10
@@ -229,7 +236,7 @@ function kit.body(P)
     elseif plan.trunk and plan.trunk.kind == "gate" then
       tag(tail(plan.trunk.y0 or (P.tail_y[2] + 0.05)), "hatch")
     elseif plan.trunk then
-      local sel = rows(plan.trunk.lo, plan.trunk.hi, first[4], first[9] - 1)
+      local sel = rows(plan.trunk.lo, plan.trunk.hi, first[4], last[9] - 1)
       tag(sel, plan.trunk.kind == "hatch" and "hatch" or "trunk")
     end
   end
@@ -1226,8 +1233,9 @@ function kit.build(P, level, opts)
   local cz = 0.5 * (lo[3] + hi[3])
   S:translate{ 0, -cy, -cz }
   -- FACETED (Glenn: "I do like how the city bus's low poly style looks"): at level 0 every facet is flat
-  -- shaded; a subdivided body smooths within 40 degrees
-  local smoothing = level > 0 and 40 or 8
+  -- shaded; a subdivided body smooths within 40 degrees. opts.autosmooth (degrees) overrides: a level-0 build drawn
+  -- as a rounded car's middle level of detail wants the smooth shading without the subdivision
+  local smoothing = opts.autosmooth or (level > 0 and 40 or 8)
   local parts, panels = nil, nil
   if opts.panels then
     -- THE MOVING PANELS (ADR-0352), each its own meshes and its hinge; the body is what is left. Glenn: "some doors
@@ -1241,18 +1249,25 @@ function kit.build(P, level, opts)
     for _, name in ipairs(S:panels()) do
       if name ~= "body" then names[#names + 1] = name; sels[name] = S:select{ panel = name } end
     end
-    local bounds, thick = {}, {}
+    -- The body's side of an opening: the ring of body faces round the panel, given a back, and a wall ONLY along the
+    -- panel (the fourth argument). A wall round the whole ring put a second one inside the body along the ring's far
+    -- side, sharing its edge with two skin faces. A face in two panels' rings (the pillar between two doors) is
+    -- thickened once, by the first, and walled along EVERY panel it meets (so `against` is all the panels' faces).
+    local bounds, thick, jambed, anyPanel = {}, {}, {}, {}
+    for _, name in ipairs(names) do for _, f in ipairs(sels[name]) do anyPanel[#anyPanel + 1] = f end end
     for _, name in ipairs(names) do
       local lo2, hi2 = S:bounds(sels[name])
       bounds[name] = { lo2, hi2 }
       local t = name:sub(1, 5) == "door_" and 0.06 or 0.035
       local skin = solid(sels[name])
       local jamb = {}
-      for _, f in ipairs(S:ring(sels[name])) do if bodyFace[f] and not glassy[f] then jamb[#jamb + 1] = f end end
+      for _, f in ipairs(S:ring(sels[name])) do
+        if bodyFace[f] and not glassy[f] and not jambed[f] then jamb[#jamb + 1] = f; jambed[f] = true end
+      end
       thick[#thick + 1] = { skin, t }
-      thick[#thick + 1] = { jamb, t }
+      thick[#thick + 1] = { jamb, t, anyPanel }
     end
-    for _, th in ipairs(thick) do if #th[1] > 0 then S:append(S:solidify(th[1], th[2], "body")) end end
+    for _, th in ipairs(thick) do if #th[1] > 0 then S:append(S:solidify(th[1], th[2], "body", th[3])) end end
     parts = S:to_parts{ autosmooth = smoothing, panel = "body" }
     panels = {}
     for _, name in ipairs(names) do

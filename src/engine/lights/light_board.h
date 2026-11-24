@@ -28,7 +28,8 @@ struct LightCandidate {
 };
 
 // The producers, one channel each (Traffic: city cars' head and tail lamps, CityRenderSystem) (static emitters -- street lamps, station lamps -- are read by LightSystem itself).
-enum class LightChannel : int { Vehicles, Tool, Rooms, Cabs, Beacons, Traffic, Count };
+// (Prefabs: the lamps of stamped prefabs that are switched on, PrefabUseSystem)
+enum class LightChannel : int { Vehicles, Tool, Rooms, Cabs, Beacons, Traffic, Prefabs, Count };
 
 struct LightBoard {
     std::array<std::vector<LightCandidate>, static_cast<std::size_t>(LightChannel::Count)> channels;

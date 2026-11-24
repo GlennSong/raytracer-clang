@@ -9,6 +9,7 @@
 #include "../control/control_commands.h"
 #include "../world.h"
 #include "../components.h"          // Transform, PrevTransform
+#include "../model_motion.h"        // a model instance's moving nodes
 #include "../input/input_map.h"
 #include "../../renderer/renderer.h"  // CameraState, RenderMesh
 #include "../../rt_math.h"
@@ -96,6 +97,45 @@ int l_entity_set_yaw(lua_State* L) {
     checkTransform(L, 1)->orientation =
         Quat::fromAxisAngle(Vec3(0, 1, 0), luaL_checknumber(L, 2));
     return 0;
+}
+
+// --- a model instance's moving nodes (#191 step 8; engine/model_motion.h) ---
+// Lua speaks degrees for a turn and metres for a slide; the engine keeps radians.
+Real modelUnit(lua_State* L, Entity e, const char* node) {
+    const ModelInstance* mi = requireWorld(L)->get<ModelInstance>(e);
+    if (mi == nullptr || mi->model == nullptr) luaL_error(L, "entity is not a model instance (a stamped prefab)");
+    const ProcNode* joint = mi->model->jointAt(node);
+    if (joint == nullptr) luaL_error(L, "the model has no moving node named '%s'", node);
+    return joint->motion.kind == ProcMotion::Kind::Turn ? Real(3.14159265358979323846 / 180.0) : Real(1);
+}
+// entity.model_set(e, "boom", 40 [, speed]): head for 40 degrees (a slide: metres), `speed` degrees (metres) a
+// second; no speed: be there at once. The model's limits stop it.
+int l_entity_model_set(lua_State* L) {
+    const Entity e = unpackEntity(luaL_checkinteger(L, 1));
+    const char* node = luaL_checkstring(L, 2);
+    const Real unit = modelUnit(L, e, node);
+    const Real value = luaL_checknumber(L, 3) * unit;
+    const Real speed = lua_isnoneornil(L, 4) ? Real(0) : luaL_checknumber(L, 4) * unit;
+    std::string why;
+    if (!setModelTarget(*requireWorld(L), e, node, value, speed, &why)) luaL_error(L, "%s", why.c_str());
+    return 0;
+}
+// entity.model_get(e, "boom") -> where the node is now, in degrees (a slide: metres).
+int l_entity_model_get(lua_State* L) {
+    const Entity e = unpackEntity(luaL_checkinteger(L, 1));
+    const char* node = luaL_checkstring(L, 2);
+    const Real unit = modelUnit(L, e, node);
+    lua_pushnumber(L, modelValue(*requireWorld(L), e, node) / unit);
+    return 1;
+}
+// entity.model_marker(e, "hook") -> the marker's place in the world now, or nil when the model has none of that name.
+int l_entity_model_marker(lua_State* L) {
+    const Entity e = unpackEntity(luaL_checkinteger(L, 1));
+    Vec3 position;
+    Quat rotation;
+    if (!modelMarkerWorld(*requireWorld(L), e, luaL_checkstring(L, 2), position, rotation)) { lua_pushnil(L); return 1; }
+    pushVec3(L, position);
+    return 1;
 }
 
 // Orientation that faces local +Z along `fwd` (object's barrel/forward), with +Y
@@ -362,8 +402,26 @@ int l_events_off(lua_State* L) {
 
 }  // namespace
 
+// game.hour() -> the hour of the game's day, 0 to 24 (the day and night cycle's; GameClock), or nil in a level that
+// has no cycle. What a clock on a wall shows.
+int l_game_hour(lua_State* L) {
+    bool found = false;
+    double hour = 0;
+    requireWorld(L)->each<GameClock>([&](Entity, GameClock& c) { found = true; hour = c.hour; });
+    if (!found) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, hour);
+    return 1;
+}
+
 void openGameplayLibrary(ScriptVM& vm) {
     lua_State* L = luaState(vm);
+
+    static const luaL_Reg kGameFns[] = {
+        {"hour", l_game_hour},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kGameFns);
+    lua_setglobal(L, "game");
 
     lua_pushcfunction(L, l_log);
     lua_setglobal(L, "log");
@@ -376,6 +434,9 @@ void openGameplayLibrary(ScriptVM& vm) {
         {"set_yaw", l_entity_set_yaw},
         {"look_along", l_entity_look_along},
         {"snap_prev", l_entity_snap_prev},
+        {"model_set", l_entity_model_set},
+        {"model_get", l_entity_model_get},
+        {"model_marker", l_entity_model_marker},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kEntityFns);

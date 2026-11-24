@@ -505,6 +505,65 @@ std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate, uint32_t se
     return frames;
 }
 
+std::vector<float> tune(const std::vector<TuneNote>& notes, TuneVoice voice, double bpm, uint32_t sampleRate, uint32_t seed) {
+    if (notes.empty() || bpm <= 0) return {};
+    const double beat = 60.0 / bpm, rate = static_cast<double>(sampleRate), twoPi = 6.283185307179586;
+    double beats = 0;
+    for (const TuneNote& n : notes) beats = std::max(beats, n.start + n.length);
+    const std::size_t total = static_cast<std::size_t>(std::ceil(beats * beat * rate));
+    if (total == 0) return {};
+    std::vector<float> out(total, 0.0f);
+    for (const TuneNote& n : notes) {
+        const double f = 440.0 * std::pow(2.0, (n.pitch - 69) / 12.0);
+        const double held = std::max(0.05, n.length * beat);
+        // how long the string sings: low notes long, high notes short
+        const double tau = (voice == TuneVoice::Piano ? 1.7 : 1.1) * std::pow(2.0, -(n.pitch - 60) / 26.0);
+        const double release = voice == TuneVoice::Piano ? 0.14 : 0.25;
+        const std::size_t len = static_cast<std::size_t>((held + release * 5.0) * rate);
+        const std::size_t first = static_cast<std::size_t>(n.start * beat * rate);
+        const int partials = voice == TuneVoice::Piano ? 7 : 3;
+        for (int k = 1; k <= partials; ++k) {
+            // a struck string's partials run a little sharp, more so the higher they are
+            const double fk = voice == TuneVoice::Piano ? k * f * std::sqrt(1.0 + 0.0004 * k * k) : k * f;
+            if (fk > rate * 0.45) break;
+            const double amp = voice == TuneVoice::Piano ? std::pow(static_cast<double>(k), -1.25) * (k % 2 ? 1.0 : 0.7)
+                                                         : (k == 1 ? 1.0 : k == 2 ? 0.28 : 0.1);
+            const double tk = tau / std::sqrt(static_cast<double>(k));
+            const double step = twoPi * fk / rate;
+            for (std::size_t i = 0; i < len; ++i) {
+                const double t = i / rate;
+                double env = std::exp(-t / tk) * std::min(1.0, t / 0.004);
+                if (t > held) env *= std::exp(-(t - held) / release);
+                if (voice == TuneVoice::Record) env *= 1.0 + 0.06 * std::sin(twoPi * 5.2 * t);   // a slow shimmer
+                out[(first + i) % total] += static_cast<float>(n.velocity * amp * env * std::sin(step * i));
+            }
+        }
+    }
+    if (voice == TuneVoice::Record) {
+        // the record itself: the top rolled off (run round the loop twice so the seam is settled), then crackle and hiss
+        float lp = 0.0f;
+        const float a = static_cast<float>(1.0 - std::exp(-twoPi * 3800.0 / rate));
+        for (int pass = 0; pass < 2; ++pass)
+            for (std::size_t i = 0; i < total; ++i) { lp += a * (out[i] - lp); if (pass == 1) out[i] = lp; }
+        uint32_t r = seed * 2654435761u + 12345u;
+        auto next = [&]() { r = r * 1664525u + 1013904223u; return static_cast<float>((r >> 8) & 0xffffff) / 16777215.0f; };
+        float hiss = 0.0f;
+        for (std::size_t i = 0; i < total; ++i) {
+            hiss += 0.3f * ((next() - 0.5f) - hiss);
+            out[i] += hiss * 0.02f;
+            if (next() < 9.0f / static_cast<float>(rate)) {   // a click, about nine a second
+                const float click = (next() - 0.5f) * 0.5f;
+                for (std::size_t j = 0; j < 24; ++j) out[(i + j) % total] += click * std::exp(-static_cast<float>(j) / 5.0f);
+            }
+        }
+    }
+    float peak = 1e-6f;
+    for (float v : out) peak = std::max(peak, std::fabs(v));
+    const float gain = 0.8f / peak;
+    for (float& v : out) v *= gain;
+    return out;
+}
+
 }  // namespace sfx
 
 }  // namespace engine

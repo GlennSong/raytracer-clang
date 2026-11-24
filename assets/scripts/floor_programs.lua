@@ -153,6 +153,28 @@ floor_programs = {
     },
   },
 
+  -- A SCHOOL (the high school's wings; Glenn, 2026-11-21: "it has bedrooms in it and the hallways have a lot of
+  -- space"): classrooms along the windows either side of one corridor, a lab now and then, a staff room by the
+  -- stairs, the ground floor the same. The lots are a classroom wide and reach nearly to the middle, so what is
+  -- left for the hall is a corridor and no more.
+  school = {
+    ground = true,
+    lots = { window_depth = 5.4, aisle = 1.0, street = 1.2, lot_width = 8.4, interior_lot = 24, min_side = 3.0,
+             min_access = 1.4, min_lot_area = 24 },
+    fill = "hall",
+    shallow = "hall", shallow_depth = 0,
+    zones = {
+      { tag = "staff_room", kind = "office", sites = {"window", "corner"}, count = 1, near = "lobby", enclosed = true,
+        walls = "drywall", area = {18, 1e9}, min_depth = 3.0 },
+      { tag = "lab", kind = "lab", sites = {"window"}, share = 0.15, enclosed = true, walls = "drywall", near = "far",
+        area = {32, 1e9}, min_depth = 4.4 },
+      { tag = "classroom", kind = "classroom", sites = {"window", "corner"}, share = 1.0, enclosed = true,
+        walls = "drywall", area = {24, 1e9}, min_depth = 4.0 },
+      { tag = "store", kind = "closet", sites = {"interior"}, share = 1.0, enclosed = true, walls = "drywall", area = {3, 20} },
+      { tag = "hall", kind = "hall" },
+    },
+  },
+
   -- A RESIDENTS' FLOOR: an apartment tower's floor too small for flats even round the core off its lobby (a mid-rise
   -- whose lift core leaves 2-3 m of floor) is the residents' lounge, open round the core, reached from the lifts
   residents = {

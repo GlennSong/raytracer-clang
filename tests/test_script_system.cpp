@@ -311,3 +311,39 @@ TEST_CASE(script_block_spawn_is_swept_when_asked) {
     CHECK(swept == 1);
     CHECK(plain == 1);
 }
+
+TEST_CASE(a_behaviour_script_can_require_a_library_the_host_finds) {
+    // Several prefabs' scripts share one library (model_moves.lua). The host says how a name becomes source; the
+    // library is run once however many behaviours ask for it; and a system given no source still has no `require`.
+    World world;
+    const char* src = R"LUA(
+        local lib = require "shared_step"
+        local M = {}
+        function M:update(e, dt) entity.set_position(e, { lib.step(), 0, 0 }) end
+        return M
+    )LUA";
+    Entity a = makeScripted(world, src);
+    Entity b = makeScripted(world, src);
+    int asked = 0;
+    ScriptSystem sys;
+    sys.setModuleSource([&asked](const std::string& name, std::string& source, std::string& resolvedPath) {
+        if (name != "shared_step") return false;
+        ++asked;
+        source = "local n = 0  return { step = function() n = n + 1  return n end }";
+        resolvedPath = "shared_step.lua";
+        return true;
+    });
+    sys.tick(world, 0.016);
+    const Transform* ta = world.get<Transform>(a);
+    const Transform* tb = world.get<Transform>(b);
+    if (!ta || !tb) { CHECK(false); return; }
+    CHECK(asked == 1);                                            // one library, shared
+    CHECK_APPROX(ta->position.x + tb->position.x, 3.0, 1e-9);     // its counter went 1 then 2
+
+    World bare;
+    Entity c = makeScripted(bare, src, Vec3(7, 0, 0));
+    ScriptSystem none;
+    none.tick(bare, 0.016);                                       // the load fails and says so; nothing moves
+    const Transform* tc = bare.get<Transform>(c);
+    CHECK(tc != nullptr && tc->position.x == 7.0);
+}

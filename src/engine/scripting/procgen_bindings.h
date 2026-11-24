@@ -21,6 +21,11 @@ struct TextureData;
 // city.lua drives both a grid and a radial city). Objects -> keyed tables,
 // arrays -> 1-based tables (so a {r,g,b} colour reads straight back), primitives
 // map across. Call after openProcgenLibrary, before running the recipe.
+// What the recipe that ran in `vm` said it takes (its `params{ ... }`), as JSON: an array of { name, type
+// ("choice" | "number" | "text" | "bool"), default, choices?, whole?, min?, max? }, sorted by name. Empty when it
+// declared nothing. For a host that offers the arguments to a person (the model studio's form).
+std::string declaredParams(ScriptVM& vm);
+
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson);
 
 // Inject a HeightField as a Lua global (e.g. "ground") so a recipe can sample and
@@ -102,6 +107,21 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error = nullpt
 // and the caller must surface the error loudly, never apply half a book.
 ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
                                 std::string* error = nullptr);
+
+// MODEL FILES (#191, model step 6): `model.from_file("crane.glb")` and `model.from_files{ levels = { "crane_high.glb",
+// "crane_low.glb" }, distances = { 0, 80 } }` read a model made outside the engine (procgen/model_file.h says how a
+// file's names are read). As with `require`, a script gives a NAME, never a path: letters, digits, `_`, `-` and `.`
+// only, ending .glb or .gltf. The host maps names to files; the VM never touches the filesystem. Without this call
+// the two words say that this host loads no model files.
+using ModelFileSource = std::function<std::string(const std::string& name)>;   // the file's path, or "" when there is none
+void openModelFiles(ScriptVM& vm, ModelFileSource source);
+
+// THE MODEL STORE FROM A RECIPE (#191, model step 6): `model.get("tire")` gives the one model kept under that name
+// (scripting/model_recipes.h obtainModel), to be used as a piece. It is frozen: the words that change a model
+// refuse it. The host supplies how a name is turned into a model; without this call `model.get` says this host keeps
+// no named models.
+using ModelGetter = std::function<std::shared_ptr<const struct ProcModel>(const std::string& name, std::string* error)>;
+void openModelStore(ScriptVM& vm, ModelGetter get);
 
 // Run a procgen script that `return`s a mesh (typically from `polygonize`) and
 // hand back the result. Returns false (with `error` filled, if non-null) when

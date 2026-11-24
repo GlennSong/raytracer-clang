@@ -15,11 +15,13 @@
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "weather_cycle.h"               // WeatherClimate (DayNightConfig)
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
+#include "procgen/proc_model.h"         // ProcModel, ProcPose (ModelInstance)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "procgen/terrain_world_map.h"   // TerrainLodConfig's world maps (ADR-0205, ADR-0208)
 #include "world.h"
 #include <array>
+#include <map>
 #include <unordered_map>
 #include <cmath>
 #include <cstdint>
@@ -172,9 +174,79 @@ struct Renderable {
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;
+    // ONE MODEL, ONE DISTANCE (#191, step 7). lodAnchored: the distance tests above measure to `lodAnchor`, a world
+    // point, not to this mesh's own bounds: every piece of one model instance is given the model's own point, so
+    // the whole model changes level of detail at the same moment (and cross-fades as a lodCell does).
+    // `lodAnchorReach`: how far this piece's bounds centre is from the anchor, for the draw index.
+    bool lodAnchored = false;
+    Vec3 lodAnchor;
+    Real lodAnchorReach = 0;
     // Per-draw DATA on the model's bottom row (Mat4::m[3][0]), as an instance carries it, for a material flag that
     // reads it -- a vehicle's lit-lamp mask under FLAG_LAMP_STATE (ADR-0342). 0: none.
     float instanceData = 0.0f;
+};
+
+// A MODEL INSTANCE (#191, step 7): one copy of a model in the world, made by stamping a prefab (prefab_stamp.h).
+// It is the entity's one reference to its model; what draws it and what collides for it find the model through it.
+// The entity's Transform is where the model's own space stands in the world.
+struct ModelInstance {
+    std::string prefab;                      // its line in prefabs.lua
+    std::shared_ptr<const ProcModel> model;  // shared with every other copy (the model store's)
+    ProcPose pose;                           // THIS copy's value for each moving node (none given: at rest)
+    // MOTION (#191, step 8; engine/model_motion.h): where each moving node is headed and how fast (radians or
+    // metres a second). A node with no target stays where it is. ModelMotionSystem moves `pose` toward `target`
+    // each fixed step, stopping at the model's limits, and the pieces and bodies follow.
+    ProcPose target;
+    std::map<std::string, Real> speed;
+    // The pieces have been put somewhere new since the last fixed step (poseModelPieces sets it, whoever moved
+    // them: a target being approached, or a value set at once by a script). ModelMotionSystem brings their previous
+    // place up on the next step and clears it; without that the renderer, which draws between the previous place and
+    // this one, goes on drawing a part between where it was long ago and where it is.
+    bool settle = false;
+    // WHAT STANDS ON IT (engine/model_motion.h rideMarker): the copies tied to one of this copy's markers (each has
+    // a RidesMarker). Whenever this copy's pieces are put somewhere new, so are they: a mug on a desk that rises.
+    std::vector<Entity> riders;
+    // ...and the copies IN A BATCH that stand on it (rideMarkerInBatch): one transform of an instance group each,
+    // rewritten where its marker now carries it. The copy stays in its batch; only where it is drawn changes.
+    struct BatchRider {
+        Entity group;          // an entity with an InstanceGroup
+        uint32_t index = 0;    // which of its transforms
+        std::string marker;
+        Mat4 local;            // the copy's matrix in the marker's own frame
+    };
+    std::vector<BatchRider> batchRiders;
+    std::vector<Entity> pieces;              // the entities that draw it (each has a ModelPiece)
+    std::vector<Entity> bodies;              // the entities that hold its collision bodies
+};
+
+// A copy that stands ON another copy: tied to one of its markers, at the place it had there when it was tied
+// (engine/model_motion.h rideMarker). The marker is on a node; when that node moves the rider goes with it.
+struct RidesMarker {
+    Entity owner;
+    std::string marker;
+    Vec3 localPosition;   // in the marker's own frame
+    Quat localRotation;
+};
+
+// One collision body of a model instance that stands for ONE of the model's shapes (a box, sphere or capsule):
+// which shape, so it can be put where the shape's node is in the instance's pose. (Mesh shapes merged into one
+// static body have none.)
+struct ModelShape {
+    Entity owner;
+    int collider = -1;   // an index into the model's colliders
+};
+
+// One drawn piece of a model instance: a part of the model, or a part of one copy of a used piece. Its entity's
+// Transform is the owner's times `local`.
+struct ModelPiece {
+    Entity owner;
+    Mat4 local;          // where it stands in the model's space
+    Real from = 0;       // the band of distances it is drawn in (ProcModelDraw); until 0: no end
+    Real until = 0;
+    // WHAT MADE THIS (the model studio): the recipe line that put it there, and what it is in words ("steel on boom,
+    // 1,240 triangles"), for whatever shows a clicked piece.
+    int line = 0;
+    std::string what;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -553,6 +625,12 @@ struct Carryable {
     std::string name = "box";
     float mass = 10.0f;    // kg (its body's, once it is put down)
     Vec3 half{0.2, 0.2, 0.2};   // its box's half extents, its own frame
+};
+// A carried thing that has been PUT ON a slot of a stamped prefab (#191): a marker whose role is "slot" (a desk's
+// corner, a shelf). It rides that marker (RidesMarker), has no body, and the slot is taken while it is there.
+struct OnSlot {
+    Entity owner;
+    std::string marker;
 };
 struct CarriedBy {
     Entity holder;
@@ -993,6 +1071,22 @@ struct AuthoredPlace {
 // default, the same silent-override class as the bloom-settings stomp). A
 // level that authors a static sun sets enabled=false; one that wants the
 // cycle seeds its start time/speed. Absent block = cycle runs as before.
+// THE GAME'S CLOCK, where anything can read it (#191: a prefab's clock shows the game's time). One entity carries it;
+// DayNightSystem writes the hour of the game's day each frame. Absent in a level with no cycle.
+// A DOOR THAT SWINGS OUT OF A WALKER'S WAY (#191): on a door prefab stood in a building's doorway
+// (BuildingInteriorSystem). DoorSystem turns its leaves (the model's `door_1`, `door_2`) away from whoever comes
+// through and shuts them behind. The doorway stays open to walk through: the leaf is for show, as the old box leaf was.
+struct SwingDoor {
+    Vec2 foot, normal;        // the sill's middle and the way out (world XZ)
+    Real y = 0;               // the sill's height
+    Real target = 0;          // degrees its leaves were last sent to
+    double clearFor = 1e9;    // seconds since anyone was near
+};
+
+struct GameClock {
+    double hour = 12.0;   // 0..24
+};
+
 struct DayNightConfig {
     bool enabled = true;
     float timeOfDay = -1.0f;   // [0,1) start; <0 = keep the cycle's default

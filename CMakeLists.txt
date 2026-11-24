@@ -112,6 +112,9 @@ add_library(engine_core STATIC
     src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
+    src/engine/procgen/proc_model.cpp
+    src/engine/procgen/model_file.cpp
+    src/engine/procgen/model_store.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/tree_recipe.cpp
     src/engine/procgen/tree_lods.cpp
@@ -226,6 +229,11 @@ add_library(engine_core STATIC
     src/engine/script_assets.cpp
     src/engine/script_watch.cpp
     src/engine/level_loader.cpp
+    src/engine/model_spawn.cpp      # a model into the world: materials and collision shapes (#191)
+    src/engine/prefab_stamp.cpp     # a prefab stamped as one entity (#191)
+    src/engine/model_motion.cpp     # a model instance's moving nodes (#191)
+    src/engine/model_inspect.cpp    # a stamped model described: its tree as data (#191)
+    src/engine/model_overlay.cpp    # a stamped model's shapes, markers and joints as debug lines (#191)
     src/engine/drawn_road.cpp
     src/engine/level_params.cpp
     src/engine/level_writer.cpp
@@ -282,7 +290,11 @@ add_library(engine_core STATIC
     src/engine/systems/door_system.cpp
     src/engine/systems/ladder_system.cpp
     src/engine/systems/elevator_system.cpp
+    src/engine/systems/model_motion_system.cpp   # moves model instances and their kinematic bodies (#191)
+    src/engine/systems/model_overlay_system.cpp  # draws them when asked (#191)
     src/engine/systems/interaction_system.cpp
+    src/engine/systems/prefab_use_system.cpp     # stamped prefabs offer their uses to the broker (#191 step 9)
+    src/engine/prefab_use.cpp                    # what a person can do to a stamped prefab
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
@@ -344,6 +356,29 @@ add_library(meshopt_codecs STATIC
 )
 target_include_directories(meshopt_codecs SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer/src)
 target_link_libraries(engine_core PUBLIC meshopt_codecs)
+
+# Manifold (Apache-2.0, third_party/manifold, v3.5.5): exact booleans on closed meshes, behind the engine's own words
+# MeshBuilder::boolean / mesh.union, mesh.subtract, mesh.intersect (#191 step 3). Only engine/mesh_boolean.cpp includes
+# it. Built static, single-threaded, without its 2-D cross sections, tests or bindings; in a function so the switches
+# it reads do not leak into the rest of this build.
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/manifold/CMakeLists.txt" AND Git_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init -- third_party/manifold
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+function(rt_add_manifold)
+    set(BUILD_SHARED_LIBS OFF)
+    set(MANIFOLD_CROSS_SECTION OFF)
+    set(MANIFOLD_TEST OFF)
+    set(MANIFOLD_PAR OFF)
+    set(MANIFOLD_PYBIND OFF)
+    set(MANIFOLD_CBIND OFF)
+    set(MANIFOLD_JSBIND OFF)
+    set(MANIFOLD_DEBUG OFF)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/manifold ${CMAKE_BINARY_DIR}/manifold EXCLUDE_FROM_ALL)
+endfunction()
+rt_add_manifold()
+target_sources(engine_core PRIVATE src/engine/mesh_boolean.cpp)
+target_link_libraries(engine_core PRIVATE manifold)
 
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
@@ -459,6 +494,8 @@ if(RT_ENABLE_SCRIPTING)
     target_sources(engine_core PRIVATE
         src/engine/scripting/script_vm.cpp
         src/engine/scripting/script_modules.cpp
+        src/engine/scripting/model_recipes.cpp
+        src/engine/scripting/prefab_list.cpp
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
@@ -1064,6 +1101,19 @@ target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
         tests/test_script_vm.cpp
+        tests/test_mesh_lua_words.cpp
+        tests/test_model_nodes.cpp      # a model's tree of nodes: the record, Lua, the bake and the loader (#191)
+        tests/test_model_markers.cpp    # a model's markers and its table of materials (#191)
+        tests/test_model_uses.cpp       # one model placed inside another, stored once (#191)
+        tests/test_model_motion.cpp     # how a node may move, poses, and the rig tables (#191)
+        tests/test_model_levels.cpp     # a model's levels of detail (#191)
+        tests/test_mesh_shape.cpp       # triangle shape and left-against-right measures (#191)
+        tests/test_model_shapes.cpp     # a model's collision shapes on its nodes (#191)
+        tests/test_model_file.cpp       # a model written to a glTF file and read back (#191)
+        tests/test_model_store.cpp      # the model store and the list of named models (#191)
+        tests/test_prefab.cpp           # the prefab list, a model's draws by distance, stamping one entity (#191)
+        tests/test_prefab_use.cpp       # what a person can do to a stamped prefab: uses read, written and done (#191)
+        tests/test_openings.cpp         # openings.lua: a hole through a wall with a frame and a pane (#191)
         tests/test_script_modules.cpp
         tests/test_script_system.cpp
         tests/test_gun_script.cpp
@@ -1259,6 +1309,8 @@ if(RT_ENABLE_PHYSICS)
         tests/test_vehicle_drivetrain.cpp
         tests/test_offroad_course.cpp
         tests/test_physics_system.cpp
+        tests/test_prefab_physics.cpp   # a stamped crane's boom stops a falling box (#191 step 7)
+        tests/test_prefab_motion_physics.cpp   # a crane's boom, swung, sweeps a box off a post (#191 step 8)
         tests/test_fleet_springs.cpp    # every fleet car put down on its own springs (spawnHeight)
         tests/test_near_tier.cpp        # a physics car carrying out the new driving, against a lane car (ADR-0447)
         tests/test_bus_ride_level.cpp   # river_town: the player walks onto a bus, rides it, walks off (ADR-0486)
@@ -1717,6 +1769,7 @@ if(Qt6_FOUND)
         src/editor_app/property_inspector.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
+        src/editor_app/model_studio.cpp      # the model studio: a script pane whose model the viewport shows (#191)
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -1965,3 +2018,11 @@ endif()
 add_executable(rt_trees tools/rt_trees.cpp)
 target_link_libraries(rt_trees PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_trees PRIVATE src)
+
+# rt_model_sheet (#191 step 1): one Lua recipe -> four path-traced views in one PNG, with its size, counts and audit
+if(RT_ENABLE_SCRIPTING)
+    add_executable(rt_model_sheet tools/rt_model_sheet.cpp ${CORE_SOURCES})
+    target_link_libraries(rt_model_sheet PRIVATE engine_core Threads::Threads)
+    target_include_directories(rt_model_sheet PRIVATE src)
+    target_compile_options(rt_model_sheet PRIVATE -Wall -Wextra)
+endif()

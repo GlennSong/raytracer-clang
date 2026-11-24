@@ -16,7 +16,10 @@
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
 #include "engine/procgen/city/water_mesh.h" // buildWaterMesh (ocean/lake surface)
+#include <map>
 #include "engine/procgen/proc_model.h"      // ProcModel (script model cache)
+#include "engine/scripting/model_recipes.h" // obtainModel (a prefab entity's model)
+#include "engine/scripting/prefab_list.h"   // findPrefab
 #include "engine/level_params.h"            // shared level-JSON -> params readers
 #include "log.h"
 #include <unordered_map>
@@ -28,6 +31,7 @@
 #include "engine/scripting/script_vm.h"
 #include "engine/scripting/procgen_bindings.h"
 #include "engine/scripting/script_modules.h"
+#include "engine/scripting/model_recipes.h"
 #include "engine/script_assets.h"
 #include "engine/scripting/script_modules.h"
 #endif
@@ -373,10 +377,14 @@ static int addProcTexture(const TextureData& td, Scene& scene) {
     return scene.addTexture(std::move(tex));
 }
 
-void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
-    for (const ProcPart& part : m.parts) {
-        if (part.mesh.indices.empty()) continue;
-        const ProcMaterial& pm = part.material;
+void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset, Real distance) {
+    const int level = m.levelAt(distance);
+    // One scene material (and one copy of its maps) per material, made the first time something is made of it. The
+    // model's parts and every used piece's parts go through this, so a part looks the same placed once or many times.
+    std::map<const ProcMaterial*, int> sceneMaterial;
+    auto materialFor = [&](const ProcMaterial& pm) -> int {
+        const std::map<const ProcMaterial*, int>::iterator known = sceneMaterial.find(&pm);
+        if (known != sceneMaterial.end()) return known->second;
         Material mat = Material::pbr(Vec3(1, 1, 1), pm.metallic, pm.roughness);
         if (pm.textured) {
             // World-planar tiling frame (meshUV=false): no authored UVs needed;
@@ -390,26 +398,33 @@ void bakeProcModel(const ProcModel& m, Scene& scene, const Vec3& offset) {
             // at shade time — no baked texture, paint composites over the vertex colour.
             mat.surface = pm.surface;
         }
-        int mi = scene.addMaterial(mat);
-        addMeshAsTriangles(part.mesh, offset, Quat::identity(), Vec3(1, 1, 1), mi, scene);
-    }
-    // Instance groups -> one BLAS proto each, placed by the TLAS (ADR-0041).
-    for (const ProcInstanceGroup& g : m.instances) {
-        if (g.proto.indices.empty() || g.transforms.empty()) continue;
-        Material mat = Material::pbr(Vec3(1, 1, 1), g.metallic, g.roughness);
-        if (g.alphaFoliage) {                     // alpha-cut leaf cards
+        if (pm.alphaFoliage) {                    // alpha-cut leaf cards
             TextureData leaf = leafTexture(128);
             Texture tex;
             tex.width = leaf.width; tex.height = leaf.height;
             tex.channels = leaf.channels; tex.pixels = std::move(leaf.pixels);
             mat.alphaTex = scene.addTexture(std::move(tex));
         }
-        int mi = scene.addMaterial(mat);
-        int proto = scene.addProto(meshProtoTriangles(g.proto, mi));
-        for (const Mat4& xf : g.transforms) {
-            Mat4 placed = xf;                 // translate the instance by the offset
-            placed.m[0][3] += offset.x; placed.m[1][3] += offset.y; placed.m[2][3] += offset.z;
-            scene.addInstance(proto, placed);
+        const int mi = scene.addMaterial(mat);
+        sceneMaterial[&pm] = mi;
+        return mi;
+    };
+    for (const ProcPart& part : m.parts) {
+        if (part.mesh.indices.empty() || part.level != level) continue;
+        const int mi = materialFor(m.materialOf(part));
+        // A part is drawn at the node it hangs on. The root's frame is no move and no turn, so a flat model's parts
+        // land exactly where their vertices say.
+        const ProcFrame at = m.nodeFrame(part.node);
+        addMeshAsTriangles(part.mesh, offset + at.position, at.rotation, Vec3(1, 1, 1), mi, scene);
+    }
+    // Used pieces -> one BLAS proto per part of a piece, placed by the TLAS at every copy (ADR-0041). A piece used
+    // from several nodes is still one proto.
+    for (const ProcDrawnPiece& d : drawnPieces(m, distance)) {
+        const int proto = scene.addProto(meshProtoTriangles(d.part->mesh, materialFor(d.piece->materialOf(*d.part))));
+        for (const Mat4& xf : d.transforms) {
+            Mat4 at = xf;                     // translate the copy by the entity's own offset
+            at.m[0][3] += offset.x; at.m[1][3] += offset.y; at.m[2][3] += offset.z;
+            scene.addInstance(proto, at);
         }
     }
 }
@@ -526,6 +541,8 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             scriptVm = std::make_unique<ScriptVM>();
             openProcgenLibrary(*scriptVm);
             openModuleLoader(*scriptVm, makeModuleSource(levelDir));
+            openModelFiles(*scriptVm, makeModelFileSource(levelDir));
+            openModelStore(*scriptVm, [levelDir](const std::string& name, std::string* why) { return obtainModel(name, levelDir, why); });
         }
         return *scriptVm;
     };
@@ -781,6 +798,27 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
         // Lua recipe (ADR-0042): run a script returning a composable Model and
         // bake it — the same recipe the viewer runs, so a procgen scene renders
         // offline through the same pipeline (the renderer is the only divergence).
+        // A stamped prefab (#191 step 7; engine/prefab_stamp.h is the realtime twin): its model, baked where the
+        // entity stands. The offline bake places a model by an offset only, so a turned prefab is baked unturned
+        // and says so.
+        if (ent.value("shape", std::string()) == "prefab") {
+#ifdef RT_ENABLE_SCRIPTING
+            Prefab prefab;
+            std::string why;
+            std::shared_ptr<const ProcModel> model;
+            if (findPrefab(ent.value("prefab", std::string()), prefab, levelDir, &why)) model = obtainModel(prefab.model, levelDir, &why);
+            if (model == nullptr) {
+                LOG_ERROR << "prefab entity '" << ent.value("name", std::string()) << "': " << why;
+                continue;
+            }
+            if (ent.contains("orientation") || ent.contains("rotation"))
+                LOG_WARN << "prefab entity '" << ent.value("name", std::string()) << "': the offline bake does not turn a model; baked unturned";
+            bakeProcModel(*model, scene, parseVec3(ent.value("position", json())));
+#else
+            LOG_WARN << "prefab entity skipped (scripting disabled in this build)";
+#endif
+            continue;
+        }
         if (ent.value("shape", std::string()) == "script") {
 #ifdef RT_ENABLE_SCRIPTING
             Vec3 scriptPos = parseVec3(ent.value("position", json()));  // world placement

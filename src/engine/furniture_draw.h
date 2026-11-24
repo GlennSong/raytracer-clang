@@ -23,11 +23,20 @@ struct FurnitureDrawCache {
     std::unordered_map<int, std::array<TextureHandle, 4>> surfTex;  // baked surface maps by Surface id
 };
 
+// WHERE ONE PLACED PIECE IS DRAWN: an instance group and which of its transforms. A piece is in one group for each
+// finish it has. `spawnFurnitureGroups` fills `where` (one list per placed piece, in the order given) when asked, so
+// whoever must move one copy (a monitor on a desk that rises: engine/model_motion.h rideMarkerInBatch) can find it
+// without taking it out of its batch.
+struct FurnitureDrawn {
+    Entity group;
+    uint32_t index = 0;
+};
+
 // Create the groups for `pieces` (world transforms) in `world`, append their entities to `out`; returns the
 // triangles drawn. `tint` is the finish materials' fallback colour (materialFor's wallColor argument).
 std::size_t spawnFurnitureGroups(World& world, AssetManager& assets, Renderer* renderer, FurnitureDrawCache& cache,
                                  const std::vector<PlacedPiece>& pieces, const Vec3& tint, double drawDistance,
-                                 std::vector<Entity>& out);
+                                 std::vector<Entity>& out, std::vector<std::vector<FurnitureDrawn>>* where = nullptr);
 
 }  // namespace engine
 

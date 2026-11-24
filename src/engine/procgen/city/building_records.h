@@ -34,6 +34,14 @@ struct BuildingRecord {
 
 struct CityBuildings {
     std::vector<BuildingRecord> records;
+    // PREFABS IN PLACE OF KIT PIECES (#191, "One catalog"): a level's `citysim.prefabSwaps`, the name of a list
+    // (assets/scripts/prefab_swaps.lua) of kit pieces each to be stood as a prefab where the floor planner placed
+    // it. Empty: every piece is the kit's, as ever. BuildingInteriorSystem does the swap when an interior is built.
+    std::string prefabSwaps;
+    // DOORS IN THE DOORWAYS (#191): a level's `citysim.prefabDoors`, the name of a list (assets/scripts/
+    // building_doors.lua) of which door prefab hangs in a building's street door, its back door and the doorways
+    // between its rooms, by recipe and by kind of building. Empty: open doorways, as ever.
+    std::string prefabDoors;
 
     // 24 m spatial hash over plan bboxes (the RoadDeckField pattern).
     void buildIndex() {

@@ -23,14 +23,14 @@ namespace engine {
 // Every citysim field the lot pass reads, and who reads it:
 //   lots_producer.cpp lotsWanted, lot_grow_setup.cpp:  buildLots, planOnly, facadeDistance, detailDistance;
 //   level_params.cpp readLotGrowParams:                seed, buildChance, sidewalk, downtownRadius, midtownRadius,
-//                                                      plinth, hubRadius, wholeBlocks, recipe, coreness, stairs, lifts,
+//                                                      plinth, hubRadius, wholeBlocks, recipe, recipeAt, coreness, stairs, lifts,
 //                                                      districts, parcel, alleys, alleyWidth;
 //   city_grow.cpp growCity:                            blocks, sidewalk;
 //   city_producer.cpp cityRenderCell (the cell the lots are split by when written; also in the city key): renderCell.
 constexpr const char* kLotCitysimFields[] = {
     "alleyWidth", "alleys",      "blocks",         "buildChance",   "buildLots",     "coreness",
     "detailDistance", "districts", "downtownRadius", "facadeDistance", "hubRadius",   "lifts",
-    "midtownRadius", "parcel",   "planOnly",       "plinth",        "recipe",        "renderCell",
+    "midtownRadius", "parcel",   "planOnly",       "plinth",        "recipe",        "recipeAt",      "renderCell",
     "seed",         "sidewalk",  "stairs",         "wholeBlocks",
 };
 constexpr std::size_t kLotCitysimFieldCount = sizeof(kLotCitysimFields) / sizeof(kLotCitysimFields[0]);

@@ -1,3 +1,4 @@
+#include "../model_motion.h"   // setModelTarget: a door prefab's leaves
 #include "door_system.h"
 
 #include "../components.h"
@@ -54,6 +55,9 @@ void DoorSystem::fixedUpdate(FrameContext& ctx) {
     std::vector<const BuildingRecord*> nearby;
     cb->near(xz, ACTIVE_M, nearby);
     std::vector<int64_t> desired;
+    // WHERE THE LEVEL HANGS DOOR PREFABS (citysim.prefabDoors) there are no box leaves: the prefabs stood in the
+    // doorways (BuildingInteriorSystem) are the doors, and their leaves are swung below by the same rule.
+    if (!cb->prefabDoors.empty()) nearby.clear();
     for (const BuildingRecord* r : nearby) {
         if (!r->enterable) continue;
         const int64_t ri = r - cb->records.data();
@@ -98,6 +102,22 @@ void DoorSystem::fixedUpdate(FrameContext& ctx) {
         ctx.assets.releaseMesh(it->second.mesh);
         it = leaves_.erase(it);
     }
+
+    // THE DOOR PREFABS' LEAVES: away from the mover while they are within reach, shut again CLOSE_S after.
+    world.each<SwingDoor>([&](Entity e, SwingDoor& sd) {
+        const bool here = (xz - sd.foot).length() < TRIGGER_M && std::abs(pos.y - sd.y) < 2.5;
+        Real want = sd.target;
+        if (here) {
+            want = doorSwingSign(xz, vel, sd.foot, sd.normal) * Real(88);
+            sd.clearFor = 0;
+        } else {
+            sd.clearFor += dt;
+            if (sd.clearFor > CLOSE_S) want = 0;
+        }
+        if (want == sd.target) return;
+        sd.target = want;
+        for (const char* leaf : {"door_1", "door_2"}) setModelTarget(world, e, leaf, want, Real(230));
+    });
 
     // Swing state + pose. The hinge is the door's left jamb; the box pivots
     // around it by composing position and yaw from the SAME rotated tangent,

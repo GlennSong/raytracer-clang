@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_SCRIPTING_SCRIPT_SYSTEM_H
 #define RAYTRACER_ENGINE_SCRIPTING_SCRIPT_SYSTEM_H
 
+#include "script_modules.h"
 #include "../system.h"
 #include "script_vm.h"
 
@@ -54,6 +55,11 @@ public:
     // ray cast (the engine core links no physics); unset = no check.
     using BlockedFn = std::function<bool(const Vec3& from, const Vec3& to)>;
     void setMuzzleCheck(BlockedFn blocked) { blocked_ = std::move(blocked); }
+
+    // Give behaviour scripts `require "name"` (script_modules.h): the host says how a name becomes Lua source, as
+    // it does for recipes, so several prefabs' scripts can share one library (assets/scripts/model_moves.lua).
+    // Unset = a behaviour has no `require`, as before.
+    void setModuleSource(ScriptModuleSource source);
 
     // View mode for camera.first_person(): true when the view is the player's
     // own eyes (on foot, not the V shoulder rig, not a vehicle chase camera).

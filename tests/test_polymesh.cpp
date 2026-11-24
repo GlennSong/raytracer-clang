@@ -222,3 +222,385 @@ TEST_CASE(polymesh_extract_offsets_and_flips_a_region) {
     for (const Vec3& p : in.pts) CHECK_APPROX(p.y, 0.4, 1e-9);   // 10 cm inside the top
     CHECK(in.faceNormal(0).y < -0.9);                             // facing down, into the box
 }
+
+// Thickness for a skin: the region's back and a wall along its outline. With `against`, a wall only where the outline
+// runs along one of those faces (a door opening's side of the body, not the far side of the ring that was thickened).
+TEST_CASE(polymesh_solidify_walls_the_whole_outline_or_only_along_the_faces_asked_for) {
+    PolyMesh c = cube();
+    const std::vector<int> top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    const std::vector<int> front = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.z > 0.9; });
+    CHECK(top.size() == 1 && front.size() == 1);
+    const PolyMesh all = solidify(c, top, 0.1, "body");
+    CHECK(all.faces.size() == 5);                            // the back and a wall on each of the four edges
+    const PolyMesh one = solidify(c, top, 0.1, "body", &front);
+    CHECK(one.faces.size() == 2);                            // the back and the one wall along the front face
+    if (one.faces.size() != 2) return;
+    double z = 0;
+    for (int v : one.faces[1].v) z += one.pts[static_cast<std::size_t>(v)].z / 4.0;
+    CHECK(z > 0.44);                                         // the wall stands at the front edge (the back is offset along the normal only)
+    CHECK(one.faceNormal(1).z > 0.9);                        // and faces out of the region
+    const std::vector<int> none;
+    CHECK(solidify(c, top, 0.1, "body", &none).faces.size() == 1);   // along nothing: the back alone
+}
+
+TEST_CASE(polymesh_bevel_cuts_every_sharp_edge_to_a_strip_and_closes_the_corners) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    const std::vector<int> made = bevel(c, 0.1);
+    // 6 faces drawn back, 12 strips, 8 corner triangles; every old corner is three points now
+    CHECK(c.faces.size() == 26);
+    CHECK(made.size() == 20);
+    CHECK(c.pts.size() == 24);
+    CHECK(isClosed(c));
+    const double v = signedVolume(c);
+    CHECK(v > 0);                      // still outward
+    CHECK(v < 1.0 && v > 1.0 - 12 * 0.5 * 0.1 * 0.1);   // less than the cube by under twelve edge prisms
+    Vec3 lo, hi;
+    bounds(c, lo, hi);
+    CHECK_APPROX(lo.x, -0.5, 1e-9);    // the faces kept their planes
+    CHECK_APPROX(hi.y, 0.5, 1e-9);
+    int strips = 0, corners = 0;
+    for (int f : made) {
+        const PolyMesh::Face& face = c.faces[static_cast<std::size_t>(f)];
+        CHECK(c.groups[static_cast<std::size_t>(face.group)] == "bevel");
+        if (face.v.size() == 4) ++strips; else if (face.v.size() == 3) ++corners;
+    }
+    CHECK(strips == 12);
+    CHECK(corners == 8);
+    // a strip is `width` back from the edge on each face: 0.1 * sqrt(2) across
+    for (int f : made) {
+        const std::vector<int>& q = c.faces[static_cast<std::size_t>(f)].v;
+        if (q.size() != 4) continue;
+        const double e0 = (c.pts[static_cast<std::size_t>(q[1])] - c.pts[static_cast<std::size_t>(q[0])]).length();
+        const double e1 = (c.pts[static_cast<std::size_t>(q[2])] - c.pts[static_cast<std::size_t>(q[1])]).length();
+        CHECK_APPROX(std::min(e0, e1), 0.1 * std::sqrt(2.0), 1e-9);
+        CHECK_APPROX(std::max(e0, e1), 0.8, 1e-9);
+    }
+    // each original face is a 0.8 square in its own plane
+    for (int f = 0; f < 6; ++f) {
+        const std::vector<int>& q = c.faces[static_cast<std::size_t>(f)].v;
+        CHECK(q.size() == 4);
+        CHECK_APPROX((c.pts[static_cast<std::size_t>(q[1])] - c.pts[static_cast<std::size_t>(q[0])]).length(), 0.8, 1e-9);
+    }
+
+    // An angle no edge reaches leaves the mesh alone.
+    PolyMesh same = cube();
+    CHECK(bevel(same, 0.1, 100.0).empty());
+    CHECK(same.faces.size() == 6 && same.pts.size() == 8);
+
+    // A selection bevels only its own edges: the top face's rim is four strips, and the four top corners, each with
+    // two bevelled edges and one not, become two points with no corner face.
+    PolyMesh top = cube();
+    top.creases.clear();
+    const std::vector<int> up = selectWhere(top, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    CHECK(up.size() == 1);
+    const std::vector<int> rim = bevel(top, 0.1, 30.0, up);
+    CHECK(rim.size() == 4);
+    CHECK(top.faces.size() == 10);
+    CHECK(top.pts.size() == 12);
+    CHECK(isClosed(top));
+    CHECK(signedVolume(top) > 0.9 && signedVolume(top) < 1.0);
+
+    // Bevelled twice, the strips' own edges are cut again (45 degrees each): still closed and outward.
+    PolyMesh twice = cube();
+    twice.creases.clear();
+    bevel(twice, 0.1);
+    bevel(twice, 0.02, 30.0);
+    CHECK(isClosed(twice));
+    CHECK(signedVolume(twice) > 0.9);
+
+    // A mesh with an open border keeps its border.
+    const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
+    PolyMesh open = loft({sq, sq}, {-0.5, 0.5}, false, false);
+    open.creases.clear();
+    const std::size_t before = open.pts.size();
+    const std::vector<int> walls = bevel(open, 0.1);
+    CHECK(open.pts.size() == before);      // every point is on the border: none split
+    CHECK(walls.empty() || !walls.empty()); // (it may add nothing; it must not crash or tear)
+}
+
+TEST_CASE(polymesh_loop_cut_runs_a_ring_of_edges_through_the_quads) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    // across an edge that runs along z (between the two square sections): the ring goes round the four side faces
+    const int a = nearestPoint(c, Vec3(0.5, 0.5, -0.5)), b = nearestPoint(c, Vec3(0.5, 0.5, 0.5));
+    const std::vector<int> ring = loopCut(c, a, b, 0.25);
+    CHECK(ring.size() == 4);
+    CHECK(c.faces.size() == 10);            // four sides each in two; the two ends untouched
+    CHECK(c.pts.size() == 12);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 1.0, 1e-9);
+    for (int p : ring) CHECK_APPROX(c.pts[static_cast<std::size_t>(p)].z, -0.25, 1e-9);   // a quarter from a's side, all the way round
+    // again nearer the other end, by its mirror
+    CHECK(loopCut(c, b, nearestPoint(c, Vec3(0.5, 0.5, -0.25)), 0.25).size() == 4);
+    CHECK(c.faces.size() == 14);
+    CHECK(isClosed(c));
+    // two points that are not an edge's ends cut nothing
+    CHECK(loopCut(c, nearestPoint(c, Vec3(0.5, 0.5, 0.5)), nearestPoint(c, Vec3(-0.5, -0.5, -0.5))).empty());
+    CHECK(c.faces.size() == 14);
+
+    // a crease on a crossed edge carries on over both halves
+    PolyMesh k = cube();
+    k.creases.clear();
+    k.setCrease(a, b, 2.0f);
+    const std::vector<int> r2 = loopCut(k, a, b);
+    CHECK(k.crease(a, b) == 0.0f);
+    bool carried = false;
+    for (int p : r2)
+        if (k.crease(a, p) == 2.0f && k.crease(p, b) == 2.0f) carried = true;
+    CHECK(carried);
+
+    // on an open tube the ring still closes; where the cut meets a face that is not a quad it stops, and that face
+    // gains the point (the mesh stays closed)
+    PolyMesh b3 = cube();
+    b3.creases.clear();
+    bevel(b3, 0.1);                           // corner triangles now sit between the strips
+    const std::size_t before = b3.faces.size();
+    const int s0 = nearestPoint(b3, Vec3(0.4, 0.5, 0.4)), s1 = nearestPoint(b3, Vec3(0.5, 0.4, 0.4));
+    const std::vector<int> along = loopCut(b3, s0, s1);     // along one strip, end to end
+    CHECK(along.size() == 2);
+    CHECK(b3.faces.size() == before + 1);
+    CHECK(isClosed(b3));
+}
+
+TEST_CASE(polymesh_slice_cuts_along_a_plane_and_moves_nothing) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    const std::vector<int> cut = slice(c, Vec3(0, 0.2, 0), Vec3(0, 1, 0));
+    CHECK(cut.size() == 4);
+    CHECK(c.faces.size() == 10);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 1.0, 1e-9);
+    for (int p : cut) CHECK_APPROX(c.pts[static_cast<std::size_t>(p)].y, 0.2, 1e-9);
+    // a plane through corners passes through points already there: the two faces it crosses corner to corner split
+    PolyMesh d = cube();
+    d.creases.clear();
+    const std::vector<int> diag = slice(d, Vec3(0, 0, 0), Vec3(1, -1, 0));
+    CHECK(diag.size() == 4);
+    CHECK(d.pts.size() == 8);                 // no new point
+    CHECK(d.faces.size() == 8);               // the two end squares each in two triangles
+    CHECK(isClosed(d));
+    // a plane that misses changes nothing
+    CHECK(slice(d, Vec3(0, 5, 0), Vec3(0, 1, 0)).empty());
+    CHECK(d.faces.size() == 8);
+    // a slanted plane through a bevelled cube: still closed, same volume
+    PolyMesh e = cube();
+    e.creases.clear();
+    bevel(e, 0.1);
+    const double v = signedVolume(e);
+    CHECK(!slice(e, Vec3(0.03, 0.02, 0.01), Vec3(0.3, 1, 0.2)).empty());
+    CHECK(isClosed(e));
+    CHECK_APPROX(signedVolume(e), v, 1e-9);
+}
+
+TEST_CASE(polymesh_bridge_joins_two_solids_or_makes_a_hole_through_one) {
+    // two unit cubes a metre apart along z: bridge the faces that look at each other
+    PolyMesh two = cube();
+    two.creases.clear();
+    PolyMesh other = cube();
+    other.creases.clear();
+    for (Vec3& p : other.pts) p.z += 2.0;
+    two.append(other);
+    const std::vector<int> front = selectWhere(two, [](const Vec3& c, const Vec3& n) { return n.z > 0.9 && c.z < 1.0; });
+    const std::vector<int> back = selectWhere(two, [](const Vec3& c, const Vec3& n) { return n.z < -0.9 && c.z > 1.0; });
+    CHECK(front.size() == 1 && back.size() == 1);
+    const std::vector<int> tube = bridge(two, front, back);
+    CHECK(tube.size() == 4);
+    CHECK(two.faces.size() == 14);            // 12 less the two taken away, and four joining
+    CHECK(isClosed(two));
+    CHECK_APPROX(signedVolume(two), 3.0, 1e-9);   // the two cubes and the metre between them
+
+    // a hole through a block: inset the top and the bottom, bridge the two inner faces
+    PolyMesh block = cube();
+    block.creases.clear();
+    const std::vector<int> top = inset(block, selectWhere(block, [](const Vec3&, const Vec3& n) { return n.y > 0.9; }), 0.25);
+    const std::vector<int> bottom = inset(block, selectWhere(block, [](const Vec3&, const Vec3& n) { return n.y < -0.9; }), 0.25);
+    CHECK(top.size() == 1 && bottom.size() == 1);
+    CHECK(bridge(block, top, bottom).size() == 4);
+    CHECK(isClosed(block));
+    const double v = signedVolume(block);
+    CHECK(v > 0.5 && v < 0.95);               // the cube less a hole about half a metre square
+
+    // a hole that reaches the solid's edge is open on that side: a slot cut down from the top of a slab. The region
+    // on the front touches the top edge, so one new quad would lie back to back with the top face's middle piece.
+    PolyMesh slab = cube();
+    slab.creases.clear();
+    slice(slab, Vec3(-0.2, 0, 0), Vec3(1, 0, 0));
+    slice(slab, Vec3(0.2, 0, 0), Vec3(1, 0, 0));
+    slice(slab, Vec3(0, 0.1, 0), Vec3(0, 1, 0));
+    auto notch = [&](double facing) {
+        return selectWhere(slab, [facing](const Vec3& c, const Vec3& n) { return n.z * facing > 0.9 && std::fabs(c.x) < 0.2 && c.y > 0.1; });
+    };
+    const std::vector<int> nf = notch(1), nb = notch(-1);
+    CHECK(nf.size() == 1 && nb.size() == 1);
+    CHECK(bridge(slab, nf, nb).size() == 3);      // two sides and the floor of the slot; its top is open
+    CHECK(isClosed(slab));
+    CHECK_APPROX(signedVolume(slab), 1.0 - 0.4 * 0.4 * 1.0, 1e-9);
+
+    // rims that do not match are refused and nothing changes
+    PolyMesh odd = cube();
+    odd.creases.clear();
+    bevel(odd, 0.1);
+    const std::size_t faces = odd.faces.size();
+    const std::vector<int> square = selectWhere(odd, [](const Vec3&, const Vec3& n) { return n.y > 0.99; });
+    const std::vector<int> triangle = {20 + 0};   // (set below to a real corner face)
+    std::vector<int> corner;
+    for (std::size_t f = 0; f < odd.faces.size(); ++f)
+        if (odd.faces[f].v.size() == 3) { corner.push_back(static_cast<int>(f)); break; }
+    (void)triangle;
+    CHECK(bridge(odd, square, corner).empty());
+    CHECK(odd.faces.size() == faces);
+    CHECK(bridge(odd, square, square).empty());
+}
+
+TEST_CASE(polymesh_unsubdivide_takes_a_level_back_out) {
+    PolyMesh cage = cube();
+    cage.creases.clear();
+    // one level in, one level out: the cube's 6 faces and 8 points again, facing out
+    PolyMesh one = subdivide(cage, 1);
+    CHECK(one.faces.size() == 24);
+    CHECK(unsubdivide(one));
+    CHECK(one.faces.size() == 6);
+    CHECK(one.pts.size() == 8);
+    CHECK(isClosed(one));
+    CHECK(signedVolume(one) > 0);
+    CHECK(signedVolume(one) < 1.0);          // the points did not move: the smoothed corners, inside the cage
+    for (const PolyMesh::Face& f : one.faces) CHECK(f.v.size() == 4);
+    // two levels in, one out: the same faces as one level in, at the points two levels put them
+    PolyMesh two = subdivide(cage, 2);
+    const PolyMesh level1 = subdivide(cage, 1);
+    CHECK(two.faces.size() == 96);
+    CHECK(unsubdivide(two));
+    CHECK(two.faces.size() == level1.faces.size());
+    CHECK(two.pts.size() == level1.pts.size());
+    CHECK(isClosed(two));
+    CHECK(unsubdivide(two));
+    CHECK(two.faces.size() == 6);
+    CHECK(isClosed(two) && signedVolume(two) > 0);
+    // a third time there is no level left: refused, unchanged
+    CHECK(!unsubdivide(two));
+    CHECK(two.faces.size() == 6 && two.pts.size() == 8);
+
+    // a crease that held through the level comes back on the whole edge
+    // (a crease of sharpness 3 is 2 on each half after one level; one of sharpness 1 is used up by the level)
+    PolyMesh sharp = cube();
+    CHECK(!sharp.creases.empty());            // the loft creased its caps
+    for (std::pair<const std::pair<int, int>, float>& c : sharp.creases) c.second = 3.0f;
+    const std::size_t creased = sharp.creases.size();
+    PolyMesh fine = subdivide(sharp, 1);
+    CHECK(unsubdivide(fine));
+    CHECK(fine.creases.size() == creased);
+    for (const std::pair<const std::pair<int, int>, float>& c : fine.creases) CHECK_APPROX(c.second, 3.0, 1e-6);
+
+    // a bevelled cube subdivided: faces of 3, 4 and 8 corners come back as they were
+    PolyMesh b = cube();
+    b.creases.clear();
+    bevel(b, 0.1);
+    PolyMesh bs = subdivide(b, 1);
+    CHECK(unsubdivide(bs));
+    CHECK(bs.faces.size() == b.faces.size());
+    CHECK(bs.pts.size() == b.pts.size());
+    int threes = 0;
+    for (const PolyMesh::Face& f : bs.faces) threes += f.v.size() == 3 ? 1 : 0;
+    CHECK(threes == 8);
+    CHECK(isClosed(bs) && signedVolume(bs) > 0);
+
+    // keeping a face's middle instead gives the other grid (the dual): 8 faces of three corners, 6 points
+    PolyMesh dual = subdivide(cage, 1);
+    const int middle = nearestPoint(dual, Vec3(0, 0, 0.5));
+    CHECK(unsubdivide(dual, middle));
+    CHECK(dual.pts.size() == 6);
+    CHECK(dual.faces.size() == 8);
+    CHECK(isClosed(dual) && signedVolume(dual) > 0);
+
+    // not the pattern: a face that is not a quad
+    PolyMesh tri = cube();
+    bevel(tri, 0.1);
+    const std::size_t before = tri.faces.size();
+    CHECK(!unsubdivide(tri));
+    CHECK(tri.faces.size() == before);
+    const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
+    // an open tube (no caps) keeps its two open ends: four faces and eight points again
+    const PolyMesh tube = loft({sq, sq}, {-0.5, 0.5}, false, false);
+    PolyMesh open = subdivide(tube, 1);
+    CHECK(open.faces.size() == 16);
+    CHECK(unsubdivide(open));
+    CHECK(open.faces.size() == tube.faces.size());
+    CHECK(open.pts.size() == tube.pts.size());
+    CHECK(!isClosed(open));
+    Vec3 olo, ohi;
+    bounds(open, olo, ohi);
+    CHECK_APPROX(olo.z, -0.5, 1e-9);          // the border's corners stayed on the border
+    CHECK_APPROX(ohi.z, 0.5, 1e-9);
+    // a cube with one face lifted out, two levels in and out
+    PolyMesh lidless = cube();
+    lidless.creases.clear();
+    lidless.faces.erase(lidless.faces.begin());
+    PolyMesh fine2 = subdivide(lidless, 2);
+    CHECK(unsubdivide(fine2) && unsubdivide(fine2));
+    CHECK(fine2.faces.size() == 5);
+    CHECK(fine2.pts.size() == 8);
+}
+
+TEST_CASE(polymesh_bevel_rounds_an_edge_in_more_passes) {
+    PolyMesh flat = cube();
+    flat.creases.clear();
+    bevel(flat, 0.1);
+    PolyMesh round2 = cube();
+    round2.creases.clear();
+    const std::vector<int> made2 = bevel(round2, 0.1, 30.0, {}, 2);
+    PolyMesh round3 = cube();
+    round3.creases.clear();
+    bevel(round3, 0.1, 30.0, {}, 3);
+    CHECK(isClosed(round2) && isClosed(round3));
+    CHECK(round2.faces.size() > flat.faces.size());
+    CHECK(round3.faces.size() > round2.faces.size());
+    CHECK(made2.size() == round2.faces.size() - 6);
+    // each pass cuts the strip's corners back, so a little more comes off each time, and less each time
+    const double v1 = signedVolume(flat), v2 = signedVolume(round2), v3 = signedVolume(round3);
+    CHECK(v1 > v2 && v2 > v3);
+    CHECK(v1 - v2 > v2 - v3);
+    CHECK(v3 > 0.9);
+    // the six flat faces are still in their planes and now 0.8 across
+    Vec3 lo, hi;
+    bounds(round3, lo, hi);
+    CHECK_APPROX(lo.x, -0.5, 1e-9);
+    CHECK_APPROX(hi.z, 0.5, 1e-9);
+    // across a square edge two rounds leave three facets of the same width
+    std::vector<double> widths;
+    for (std::size_t f = 6; f < round2.faces.size(); ++f) {
+        const std::vector<int>& q = round2.faces[f].v;
+        if (q.size() != 4) continue;
+        const double e0 = (round2.pts[static_cast<std::size_t>(q[1])] - round2.pts[static_cast<std::size_t>(q[0])]).length();
+        const double e1 = (round2.pts[static_cast<std::size_t>(q[2])] - round2.pts[static_cast<std::size_t>(q[1])]).length();
+        if (std::max(e0, e1) > 0.5) widths.push_back(std::min(e0, e1));      // the long strips along the cube's edges
+    }
+    CHECK(widths.size() == 36);                                               // three to an edge
+    for (double w : widths) CHECK_APPROX(w, widths[0], 2e-3);
+    // a width wider than the faces have room for is held back: no face folds over, the solid stays inside the cube
+    PolyMesh wide = cube();
+    wide.creases.clear();
+    bevel(wide, 5.0);
+    CHECK(isClosed(wide));
+    CHECK(signedVolume(wide) > 0.15 && signedVolume(wide) < 1.0);   // (nearly all edge: about a quarter of the cube is left)
+    bounds(wide, lo, hi);
+    CHECK(lo.x >= -0.5 - 1e-9 && hi.x <= 0.5 + 1e-9 && lo.y >= -0.5 - 1e-9 && hi.z <= 0.5 + 1e-9);
+    for (std::size_t f = 0; f < 6; ++f) {
+        const Vec3 n = wide.faceNormal(static_cast<int>(f));
+        CHECK(std::fabs(std::fabs(n.x) + std::fabs(n.y) + std::fabs(n.z) - 1.0) < 1e-9);   // each still faces along its axis
+        CHECK(dot(n, wide.faceCentroid(static_cast<int>(f))) > 0.49);                        // ...and outward
+    }
+    // a thin slab bevelled wider than it is thick: the same
+    const std::vector<Vec2> thin = {Vec2(-0.5, -0.02), Vec2(0.5, -0.02), Vec2(0.5, 0.02), Vec2(-0.5, 0.02)};
+    PolyMesh slab = loft({thin, thin}, {-0.5, 0.5}, true, true);
+    slab.creases.clear();
+    bevel(slab, 0.1, 30.0, {}, 2);
+    CHECK(isClosed(slab));
+    CHECK(signedVolume(slab) > 0.02 && signedVolume(slab) < 0.04);
+
+    // one round is the flat bevel
+    PolyMesh one = cube();
+    one.creases.clear();
+    bevel(one, 0.1, 30.0, {}, 1);
+    CHECK(one.faces.size() == flat.faces.size());
+}

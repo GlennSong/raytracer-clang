@@ -36,7 +36,15 @@ bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err)
         const std::string name = lua_tostring(L, -2);
         const int t = lua_gettop(L);
         FurnitureAsset a;
-        if (!furniturePieceByName(name, a.piece)) { lua_settop(L, base); return fail(err, "unknown piece '" + name + "'"); }
+        // A PREFAB PIECE (furniture_kit.h): `prefab = true, size = {w, h, d}`. Not one of the kit's: a line in
+        // prefabs.lua of this name, which the planner may place as it places a kit piece.
+        lua_getfield(L, t, "prefab");
+        const bool prefab = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        if (prefab) {
+            a.piece = registerPrefabPiece(name, vec3Field(L, t, "size", Vec3(0.6, 0.9, 0.6)));
+            if (a.piece == Piece::Count) { lua_settop(L, base); return fail(err, "'" + name + "' cannot be a prefab piece (a kit piece's name, or too many)"); }
+        } else if (!furniturePieceByName(name, a.piece)) { lua_settop(L, base); return fail(err, "unknown piece '" + name + "'"); }
         a.family = strField(L, t, "family");
         lua_getfield(L, t, "tags");
         if (lua_istable(L, -1)) {
@@ -397,6 +405,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
         prog.residential = boolField(L, pt, "residential", false);
         prog.workplace = boolField(L, pt, "workplace", true);
+        prog.ground = boolField(L, pt, "ground", false);
         if (std::string d; !readDepartments(L, pt, prog.departments, d)) return bad(where + ": unknown department (trade) '" + d + "'");
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");

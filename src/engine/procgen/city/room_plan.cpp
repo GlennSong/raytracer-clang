@@ -2150,8 +2150,8 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
         const Vec2 nrm(d.y, -d.x);
         const Real reach = kRoomWallT * 0.5 + kPlayerR;
         Real d0 = -1, d1 = -1;
-        if (w.doorAt >= 0 && L > kRoomDoorW + 0.6) {
-            const Real c = std::min(std::max(w.doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+        if (wallHasDoorway(w.doorAt, L)) {
+            const Real c = doorwayCentre(w.doorAt, L);
             d0 = c - (kRoomDoorW * 0.5 - kPlayerR);
             d1 = c + (kRoomDoorW * 0.5 - kPlayerR);
         }
@@ -2275,7 +2275,8 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     }
     // A USE WITH A PROGRAM OF ITS OWN (building_uses.lua: a hotel's rooms): laid as it, round the core or the stair.
     // (Offices and flats have their own branches below: a block of flats' fallbacks, an office's curtain wall.)
-    if (storey >= 1 && !house && use != "office" && use != "apartments" && hasFloorProgram(use)) {
+    if ((storey >= 1 || (hasFloorProgram(use) && floorProgram(use).ground)) && !house && use != "office" && use != "apartments" &&
+        hasFloorProgram(use)) {
         const CorePlan hub = hubFor();
         if (hub.valid) {
             const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
@@ -2332,6 +2333,9 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     }
     const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0) ||
                                (civic == 9 && storey >= 1);   // (the fire crew's quarters: the residence hall's floor)
+    if (std::getenv("RT_CAMPUS_DEBUG") && (params.campus || civicCorridor))
+        std::fprintf(stderr, "[campus] storey %d: civic %d core %d plan %zu well %zu topo %d short %.1f long %.1f\n", storey, civic, core.valid ? 1 : 0,
+                     planIn.size(), stairWell.size(), static_cast<int>(topo), 2 * std::min(plateBox.half[0], plateBox.half[1]), longSide);
     if ((params.campus || civicCorridor) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
@@ -2461,8 +2465,8 @@ void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real 
     const Vec3 nA(nn.x, 0, nn.y), nB(-nn.x, 0, -nn.y), nD(d.x, 0, d.y), nDm(-d.x, 0, -d.y);
     const Real yt = y0 + h;
     Real d0 = -1, d1 = -1;
-    if (doorAt >= 0 && L > kRoomDoorW + 0.6) {
-        const Real c = std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+    if (wallHasDoorway(doorAt, L)) {
+        const Real c = doorwayCentre(doorAt, L);
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
@@ -2504,8 +2508,8 @@ void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real
     auto W = [&](Real x, Real y) { const Vec2 p = a + d * x; return Vec3(p.x, y, p.y); };
     const Real yt = y0 + h;
     Real d0 = -1, d1 = -1;
-    if (doorAt >= 0 && L > kRoomDoorW + 0.6) {
-        const Real c = std::min(std::max(doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+    if (wallHasDoorway(doorAt, L)) {
+        const Real c = doorwayCentre(doorAt, L);
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
@@ -2645,8 +2649,8 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
             wallRun(out.drywall, colliderOut, w.a, w.b, y0, h, kRoomWallT, w.doorAt, ca, &cb);
             const Real L = (w.b - w.a).length();
             Real d0 = -1, d1 = -1;   // (the doorway, as wallRun cuts it)
-            if (w.doorAt >= 0 && L > kRoomDoorW + 0.6) {
-                const Real c = std::min(std::max(w.doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+            if (wallHasDoorway(w.doorAt, L)) {
+                const Real c = doorwayCentre(w.doorAt, L);
                 d0 = c - kRoomDoorW * 0.5;
                 d1 = c + kRoomDoorW * 0.5;
             }

@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_SCRIPT_ASSETS_H
 #define RAYTRACER_ENGINE_SCRIPT_ASSETS_H
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,10 @@ std::string loadScriptCode(const std::string& file, const std::string& levelDir)
 // from the level JSON alone.
 ScriptModuleSource makeModuleSource(const std::string& levelDir,
                                     std::vector<std::string>* touched = nullptr);
+
+// Where `model.from_file("name.glb")` finds its file (procgen_bindings.h ModelFileSource): under assets/models, as a
+// script is found under assets/scripts, then beside the level.
+std::function<std::string(const std::string&)> makeModelFileSource(const std::string& levelDir);
 #endif
 
 }  // namespace engine

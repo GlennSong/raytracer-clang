@@ -158,6 +158,44 @@ recompiling, and lets one generative vocabulary serve every procgen project.
   (`spawnDocumentEntity`) carrying its recipe; the render/instance entities are
   runtime companions regenerated from it.
 
+### Model file names (convention; read and written by `engine/procgen/model_file.h`, #191 step 6)
+
+A model made outside the engine (a glTF file from Blender) says what its pieces are by their NAMES. These are this
+engine's own conventions (Glenn, 2026-11-19: "let's come up with our own conventions and use those"), not another
+engine's. Names are lower case with underscores. A model made by a recipe is written out the same way
+(`rt_model_sheet RECIPE.lua --glb model.glb`), so it opens in Blender as the tree it is and reads back as the model
+it was.
+
+- **A node:** every object that is not one of the kinds below. Its name is the node's name, and the file's parenting
+  is the model's tree. Its mesh is the node's parts, one material slot each.
+  - A scale on the object is put into its mesh when the file is read: a node has a position and a turn, no scale.
+  - A custom property `motion` says how the node may move: `{ kind = "turn" | "slide", axis = {x, y, z}, min, max }`,
+    degrees for a turn and metres for a slide; no `min` and `max` is a turn with no end.
+- **The root: one top object named `root`.** It is the model's own space. A file with no such object has its top
+  objects hang on a root of the model's own. Its custom property `levels` lists the distance each level of detail is
+  drawn from.
+- **A collision shape: `col_<kind>_<name>`.** The object is not drawn; it becomes one of the model's collision
+  shapes, named `<name>`, on the node it is under. `<kind>` says which simple solid it is, so a box stays a box and
+  is not treated as a mesh:
+  - `col_box_cabin`: the object's own box (its size and turn);
+  - `col_sphere_`, `col_capsule_`: the sphere or capsule that fits it (a capsule's length along the object's own y);
+  - `col_hull_`: the convex hull of its points;
+  - `col_mesh_`: its triangles as they are (static things only).
+- **A level of detail: `<name>_lod<N>`.** `body_lod1` is the next simpler mesh of the node `body`, `body_lod2` the
+  one after. The node's own mesh is level 0. The object is not a node.
+- **A marker: an empty** (an object with no mesh) **with nothing under it.** Its name is the marker's name and its
+  position and turn are the marker's. Custom properties: `role` (seat, lamp, hook; without one the role is `point`)
+  and `size` in metres.
+  - An empty that has children, or a `motion`, or the custom property `node = true`, is a node: a joint that carries
+    no mesh of its own.
+- **A copy of a used piece: an object with the custom property `use`** (a number). Every object with the same number
+  is a copy of one piece, placed where the object is; the first of them holds the piece (its mesh and everything
+  under it), and the others share its meshes. Four wheels are four objects with `use = 1`.
+- **A material's custom properties:** `tile` (metres a repeat of its maps), `surface`, `alpha_foliage`, and
+  `emission` when it is brighter than a glTF material can say.
+
+The same names mean the same things in a model built by a Lua recipe.
+
 ## Playable Scenes (Engine Rule)
 
 This is a game engine: a level is a world you move through, not a diorama you fly

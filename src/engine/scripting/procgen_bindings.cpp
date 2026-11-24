@@ -1,4 +1,6 @@
 #include "procgen_bindings.h"
+#include "../procgen/model_file.h"
+#include "../../log.h"
 #include "../mesh_audit.h"
 #include "furniture_library_lua.h"
 
@@ -736,6 +738,15 @@ int l_path_helix(lua_State* L) {   // (centre, radius, pitch, turns, segs_per_tu
 int l_path_spline(lua_State* L) {   // (points, {closed, count})
     pushPath(L, MeshBuilder::pathSpline(checkPoints(L, 1), lua_istable(L, 2) && optBoolField(L, 2, "closed", false),
                                         optIntField(L, 2, "count", 64)));
+    return 1;
+}
+// mesh.path.bspline(control, {closed = false, count = 64, degree = 3}) -> a smooth path pulled toward the control
+// points without passing through them (MeshBuilder::pathBSpline)
+int l_path_bspline(lua_State* L) {
+    const int degree = optIntField(L, 2, "degree", 3);
+    if (degree < 1 || degree > 5) return luaL_error(L, "path.bspline: degree is 1 to 5");
+    pushPath(L, MeshBuilder::pathBSpline(checkPoints(L, 1), lua_istable(L, 2) && optBoolField(L, 2, "closed", false),
+                                         optIntField(L, 2, "count", 64), degree));
     return 1;
 }
 int l_path_bezier(lua_State* L) {
@@ -2283,6 +2294,71 @@ int l_furniture_piece(lua_State* L) {
     lua_setfield(L, -2, "size");
     return 1;
 }
+// furniture.uses{ name = "sofa", variant = 0 } -> { { verb = "sit", label = "", eye = {x, y, z}, look = {x, y, z},
+// exit = {x, y, z} }, ... }: how a body uses a kit piece, as the furniture library describes it
+// (assets/scripts/furniture_library.lua: its verbs, those this build of the piece has), in PIECE space. Empty for a
+// piece with no description. What prop_models.lua turns into a model's seat markers, so a kit piece stamped as a
+// prefab is sat on from the one description (#191, "One catalog").
+int l_furniture_uses(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.uses: unknown piece '%s'", name.c_str());
+    const uint32_t variant = static_cast<uint32_t>(optField(L, 1, "variant", 0.0));
+    ensureFurnitureLibraryLoaded();
+    lua_newtable(L);
+    const FurnitureAsset* asset = FurnitureLibrary::global().find(pc);
+    if (asset == nullptr) return 1;
+    auto pushVec = [&](const Vec3& v, const char* key) {
+        lua_newtable(L);
+        lua_pushnumber(L, v.x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, v.y); lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, v.z); lua_rawseti(L, -2, 3);
+        lua_setfield(L, -2, key);
+    };
+    int n = 0;
+    for (const FurnVerb& v : asset->verbs) {
+        if (!verbOnPiece(*asset, v, variant)) continue;
+        lua_newtable(L);
+        lua_pushstring(L, verbName(v.verb)); lua_setfield(L, -2, "verb");
+        lua_pushstring(L, v.label.c_str()); lua_setfield(L, -2, "label");
+        pushVec(v.eye, "eye");
+        pushVec(v.look, "look");
+        pushVec(v.exit, "exit");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
+// furniture.anchors{ name = "nightstand", variant = 0 } -> { { id = "top", at = {x, y, z}, w = 0.3, d = 0.3 }, ... }: the
+// surfaces of a kit piece that take small things, as the furniture library describes them, in PIECE space. What
+// prop_models.lua turns into a model's SLOT markers, so a kit piece stamped as a prefab holds things where the city's
+// own planner stands them (#191, "One catalog").
+int l_furniture_anchors(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.anchors: unknown piece '%s'", name.c_str());
+    ensureFurnitureLibraryLoaded();
+    lua_newtable(L);
+    const FurnitureAsset* asset = FurnitureLibrary::global().find(pc);
+    if (asset == nullptr) return 1;
+    int n = 0;
+    for (const FurnAnchor& a : asset->anchors) {
+        lua_newtable(L);
+        lua_pushstring(L, a.id.c_str()); lua_setfield(L, -2, "id");
+        lua_newtable(L);
+        lua_pushnumber(L, a.at.x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, a.at.y); lua_rawseti(L, -2, 2);
+        lua_pushnumber(L, a.at.z); lua_rawseti(L, -2, 3);
+        lua_setfield(L, -2, "at");
+        lua_pushnumber(L, a.w); lua_setfield(L, -2, "w");
+        lua_pushnumber(L, a.d); lua_setfield(L, -2, "d");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_furniture_pieces(lua_State* L) {
     lua_newtable(L);
     for (int i = 0; i < kPieceCount; ++i) {
@@ -2444,11 +2520,27 @@ int l_scope_shell(lua_State* L) {
     return 1;
 }
 
-// mesh.quad(a, b, c, d, normal, color) -> mesh : one panel from four corners.
+// mesh.quad(a, b, c, d, normal, color, {uv_a, uv_b, uv_c, uv_d}?) -> mesh : one panel from four corners; with the
+// seventh argument, each corner's own {u, v} (MeshBuilder::emitQuadUV) instead of the 0..1 square.
 int l_mesh_quad(lua_State* L) {
     Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3),
          d = checkVec3(L, 4), nrm = checkVec3(L, 5);
     auto m = std::make_shared<RenderMesh>();
+    if (lua_istable(L, 7)) {
+        float uv[4][2];
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, 7, i + 1);
+            luaL_checktype(L, -1, LUA_TTABLE);
+            lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+            uv[i][0] = static_cast<float>(luaL_checknumber(L, -2));
+            uv[i][1] = static_cast<float>(luaL_checknumber(L, -1));
+            lua_pop(L, 3);
+        }
+        MeshBuilder::emitQuadUV(*m, a, b, c, d, nrm, optColor(L, 6), uv[0][0], uv[0][1], uv[1][0], uv[1][1], uv[2][0],
+                                uv[2][1], uv[3][0], uv[3][1]);
+        pushMesh(L, std::move(m));
+        return 1;
+    }
     MeshBuilder::emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
     pushMesh(L, std::move(m));
     return 1;
@@ -2567,6 +2659,304 @@ int l_mesh_audit(lua_State* L) {
     lua_pushinteger(L, a.flipped); lua_setfield(L, -2, "flipped");
     lua_pushinteger(L, a.degenerate); lua_setfield(L, -2, "degenerate");
     lua_pushinteger(L, static_cast<lua_Integer>(openEdges(m))); lua_setfield(L, -2, "open_edges");
+    return 1;
+}
+
+// --- THE CLEAN-UP AND RESHAPING WORDS (#191 step 2): the toolkit's weld, simplify, remesh, hole filling and hull, and
+// the primitives and raw emitters Lua could not reach. Each wraps the MeshBuilder function of the same name.
+
+std::vector<double> checkNumberList(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<double> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i); out.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1);
+    }
+    return out;
+}
+
+// mesh.weld(m, {position = 1e-4, direction = 1e-3, uv = 1e-4, color = 1/512, sliver = 1e-8, position_only = false})
+// -> mesh : vertices that are the same vertex become one; triangles with no area go (MeshBuilder::weld). With
+// position_only, vertices at one place become one whatever their normals and uvs (hard edges smooth away).
+int l_mesh_weld(lua_State* L) {
+    const RenderMesh& in = checkMesh(L, 1);
+    MeshBuilder::WeldTolerance tol;
+    if (lua_istable(L, 2)) {
+        tol.position = optNumField(L, 2, "position", tol.position);
+        tol.direction = optNumField(L, 2, "direction", tol.direction);
+        tol.uv = optNumField(L, 2, "uv", tol.uv);
+        tol.color = optNumField(L, 2, "color", tol.color);
+        tol.sliver = optNumField(L, 2, "sliver", tol.sliver);
+        tol.positionOnly = optBoolField(L, 2, "position_only", tol.positionOnly);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::weld(in, tol)));
+    return 1;
+}
+
+// What simplify, remesh and fill_holes share: they work on a surface whose faces share vertices, and they move
+// positions only. So each welds by position first (unless {weld = false}) and gives the result creased normals after
+// (unless {crease = false}; a number is the crease angle in degrees). Colours ride on the vertices that are kept;
+// uvs do not survive and want `mesh.unwrap` or a projection afterwards.
+std::shared_ptr<RenderMesh> surfaceForReshaping(lua_State* L, int meshIdx, int optsIdx) {
+    const RenderMesh& in = checkMesh(L, meshIdx);
+    if (lua_istable(L, optsIdx) && !optBoolField(L, optsIdx, "weld", true)) return std::make_shared<RenderMesh>(in);
+    MeshBuilder::WeldTolerance tol;
+    tol.positionOnly = true;
+    return std::make_shared<RenderMesh>(MeshBuilder::weld(in, tol));
+}
+void normalsAfterReshaping(lua_State* L, int optsIdx, RenderMesh& m) {
+    double crease = 50.0;
+    if (lua_istable(L, optsIdx)) {
+        lua_getfield(L, optsIdx, "crease");
+        const bool off = lua_isboolean(L, -1) && !lua_toboolean(L, -1);
+        if (lua_isnumber(L, -1)) crease = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        if (off) return;
+    }
+    MeshBuilder::autosmooth(m, crease);
+}
+
+// mesh.simplify(m, {tris = n | ratio = 0.5, max_error = metres, weld =, crease =}) -> mesh, triangles_left : fewer
+// triangles, the surface moved as little as possible (MeshBuilder::simplify). `max_error` is how far the surface may
+// move, in metres; without it only the count stops it.
+int l_mesh_simplify(lua_State* L) {
+    const RenderMesh& in = checkMesh(L, 1);
+    const bool opts = lua_istable(L, 2);
+    const bool weldFirst = !opts || optBoolField(L, 2, "weld", true);
+    // the triangles a ratio is taken of are the welded surface's, as they always were
+    MeshBuilder::WeldTolerance tol;
+    tol.positionOnly = true;
+    const std::size_t have = (weldFirst ? MeshBuilder::weld(in, tol) : in).indices.size() / 3;
+    std::size_t target = have / 2;
+    double maxError = 1e30;
+    double crease = 50.0;
+    if (opts) {
+        const double ratio = optNumField(L, 2, "ratio", 0.5);
+        target = static_cast<std::size_t>(std::max(0.0, optNumField(L, 2, "tris", std::floor(static_cast<double>(have) * ratio))));
+        const double metres = optNumField(L, 2, "max_error", -1.0);
+        if (metres >= 0.0) maxError = metres * metres;   // the C++ takes the squared distance
+        lua_getfield(L, 2, "crease");
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) crease = -1.0;   // crease = false: leave the normals
+        else if (lua_isnumber(L, -1)) crease = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    std::size_t left = 0;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::simplifiedSurface(in, target, maxError, weldFirst, crease, &left)));
+    lua_pushinteger(L, static_cast<lua_Integer>(left));
+    return 2;
+}
+
+// mesh.split_non_manifold(m) -> mesh, vertices_added : where two sheets touch at a vertex, the vertex is split so
+// every edge sits on at most two faces (MeshBuilder::splitNonManifold). Remeshing needs it.
+int l_mesh_split_non_manifold(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const std::size_t added = MeshBuilder::splitNonManifold(*m);
+    pushMesh(L, m);
+    lua_pushinteger(L, static_cast<lua_Integer>(added));
+    return 2;
+}
+
+// mesh.fill_holes(m, {max_edges = 16, weld =, crease =}) -> mesh, holes_filled : every small open loop is closed by a
+// fan round a new vertex at its middle (MeshBuilder::fillHoles).
+int l_mesh_fill_holes(lua_State* L) {
+    auto m = surfaceForReshaping(L, 1, 2);
+    const int maxEdges = std::max(3, optIntField(L, 2, "max_edges", 16));
+    const std::size_t filled = MeshBuilder::fillHoles(*m, static_cast<std::size_t>(maxEdges), [](const Vec3& p) { return p; });
+    normalsAfterReshaping(L, 2, *m);
+    pushMesh(L, m);
+    lua_pushinteger(L, static_cast<lua_Integer>(filled));
+    return 2;
+}
+
+// mesh.remesh(m, {edge = metres, iterations = 6, weld =, crease =}) -> mesh : even, near-equilateral triangles of about
+// `edge` metres (MeshBuilder::remesh). New vertices stay where the old flat faces put them: there is no surface to
+// project onto, so a coarse curved mesh is not made rounder by this.
+int l_mesh_remesh(lua_State* L) {
+    auto m = surfaceForReshaping(L, 1, 2);
+    const double edge = optNumField(L, 2, "edge", 0.0);
+    luaL_argcheck(L, edge > 0.0, 2, "mesh.remesh wants {edge = metres}");
+    MeshBuilder::splitNonManifold(*m);
+    MeshBuilder::remesh(*m, [edge](const Vec3&) { return edge; }, [](const Vec3& p) { return p; },
+                        std::max(1, optIntField(L, 2, "iterations", 6)));
+    *m = MeshBuilder::weld(*m);
+    normalsAfterReshaping(L, 2, *m);
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.hull(mesh | {points...}, color?) -> mesh : the convex hull, flat shaded, faces wound outward
+// (MeshBuilder::convexHull). Empty when the points are fewer than four or all in one plane. A collider's shape, a
+// rock's first form.
+int l_mesh_hull(lua_State* L) {
+    std::vector<Vec3> pts;
+    if (lua_istable(L, 1)) pts = checkVec3List(L, 1);
+    else for (const Vertex& v : checkMesh(L, 1).vertices) pts.push_back(v.position);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::hullMesh(pts, optColor(L, 2))));
+    return 1;
+}
+
+// mesh.tri(a, b, c, normal, color) -> mesh : one triangle, wound to face `normal` (MeshBuilder::emitTri); or, with
+// {uv_a, uv_b, uv_c} as a sixth argument, with its own uvs (emitTriUV).
+int l_mesh_tri(lua_State* L) {
+    const Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3), n = checkVec3(L, 4);
+    auto m = std::make_shared<RenderMesh>();
+    if (lua_istable(L, 6)) {
+        Vec2 uv[3];
+        for (int i = 0; i < 3; ++i) {
+            lua_rawgeti(L, 6, i + 1);
+            luaL_checktype(L, -1, LUA_TTABLE);
+            lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+            uv[i] = Vec2(luaL_checknumber(L, -2), luaL_checknumber(L, -1));
+            lua_pop(L, 3);
+        }
+        MeshBuilder::emitTriUV(*m, a, b, c, n, optColor(L, 5), static_cast<float>(uv[0].x), static_cast<float>(uv[0].y),
+                               static_cast<float>(uv[1].x), static_cast<float>(uv[1].y), static_cast<float>(uv[2].x),
+                               static_cast<float>(uv[2].y));
+    } else {
+        MeshBuilder::emitTri(*m, a, b, c, n, optColor(L, 5));
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.wedge{x, y, z} -> a ramp: a box cut corner to corner (MeshBuilder::wedge)
+int l_mesh_wedge(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::wedge(checkVec3(L, 1))));
+    return 1;
+}
+
+// mesh.cube_sphere(radius, face_res = 32, warp = true) -> a sphere of six evenly gridded faces, no pole pinch
+// (MeshBuilder::cubeSphere)
+int l_mesh_cube_sphere(lua_State* L) {
+    const bool warp = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::cubeSphere(static_cast<float>(luaL_checknumber(L, 1)),
+                                                                     static_cast<int>(luaL_optinteger(L, 2, 32)), warp)));
+    return 1;
+}
+
+// mesh.cross_cards(width, height, planes, normal = {0,1,0}) -> upright crossed quads through the origin: grass,
+// flowers, a far tree (MeshBuilder::crossCards)
+int l_mesh_cross_cards(lua_State* L) {
+    const Vec3 normal = lua_istable(L, 4) ? checkVec3(L, 4) : Vec3(0, 1, 0);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::crossCards(luaL_checknumber(L, 1), luaL_checknumber(L, 2),
+                                                                     static_cast<int>(luaL_optinteger(L, 3, 2)), normal)));
+    return 1;
+}
+
+// mesh.ribbon({points...}, {half_widths...}, {up = {0,1,0}, colours = {...}}) -> a flat strip along a curve, u across
+// it and v the metres along it (MeshBuilder::ribbon): a path, a strap, a frond
+int l_mesh_ribbon(lua_State* L) {
+    const std::vector<Vec3> pts = checkVec3List(L, 1);
+    const std::vector<double> half = checkNumberList(L, 2);
+    Vec3 up(0, 1, 0);
+    std::vector<Vec3> colours;
+    if (lua_istable(L, 3)) {
+        up = optVec3Field(L, 3, "up", up);
+        lua_getfield(L, 3, "colours");
+        if (lua_istable(L, -1)) colours = checkVec3List(L, lua_gettop(L));
+        lua_pop(L, 1);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::ribbon(pts, half, up, colours)));
+    return 1;
+}
+
+// mesh.project_uv(m, origin, u_axis, v_axis) -> mesh : flat uvs along any two axes, u = dot(p - origin, u_axis) and
+// the same for v; the axes carry the scale (a direction over a tile size) (MeshBuilder::projectUV)
+int l_mesh_project_uv(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::projectUV(*m, 0, checkVec3(L, 2), checkVec3(L, 3), checkVec3(L, 4));
+    pushMesh(L, m);
+    return 1;
+}
+
+// mesh.union(a, b) / mesh.subtract(a, b) / mesh.intersect(a, b) -> whole, from_a, from_b : join two closed solids, cut
+// the second out of the first, or keep only where they overlap (MeshBuilder::boolean). `whole` is the result as one
+// mesh; `from_a` and `from_b` are the same faces split by which input they came from (a hole's walls are `from_b`), for
+// giving each its own material. Both inputs must be closed solids; one that is not is a script error saying which.
+int booleanWord(lua_State* L, MeshBuilder::BooleanOp op) {
+    const MeshBuilder::BooleanResult r = MeshBuilder::boolean(checkMesh(L, 1), checkMesh(L, 2), op);
+    if (!r.ok()) return luaL_error(L, "mesh boolean: %s", r.error.c_str());
+    pushMesh(L, std::make_shared<RenderMesh>(r.whole()));
+    pushMesh(L, std::make_shared<RenderMesh>(r.fromA));
+    pushMesh(L, std::make_shared<RenderMesh>(r.fromB));
+    return 3;
+}
+int l_mesh_union(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Union); }
+int l_mesh_subtract(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Subtract); }
+int l_mesh_intersect(lua_State* L) { return booleanWord(L, MeshBuilder::BooleanOp::Intersect); }
+
+// The sheets (one face thick, drawn on one side). Each takes a last table {toward = {x,y,z}, color = {r,g,b},
+// crease = degrees}: `toward` is the side the sheet faces; without it, the side from which its rows run left to right
+// going away.
+struct SheetLook { Vec3 toward{0, 0, 0}; Vec3 color{1, 1, 1}; double crease = 40.0; };
+SheetLook checkSheetLook(lua_State* L, int idx) {
+    SheetLook look;
+    if (!lua_istable(L, idx)) return look;
+    look.toward = optVec3Field(L, idx, "toward", look.toward);
+    look.color = optVec3Field(L, idx, "color", look.color);
+    look.crease = optNumField(L, idx, "crease", look.crease);
+    return look;
+}
+// mesh.sheet({row1, row2, ...}, look?) -> a sheet through a grid of points, each row a list of {x,y,z}, the same count
+// each (MeshBuilder::sheet)
+int l_mesh_sheet(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec3>> rows;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        rows.push_back(checkVec3List(L, lua_gettop(L)));
+        lua_pop(L, 1);
+    }
+    const SheetLook look = checkSheetLook(L, 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::sheet(rows, look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.bspline_surface({row1, row2, ...}, {across = 16, up = 16, degree = 3, ...look}) -> a smooth sheet pulled
+// toward a grid of control points, each row a list of {x,y,z}, the same count each (MeshBuilder::bsplineSurface)
+int l_mesh_bspline_surface(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec3>> rows;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        rows.push_back(checkVec3List(L, lua_gettop(L)));
+        lua_pop(L, 1);
+    }
+    if (rows.size() < 2 || rows[0].size() < 2) return luaL_error(L, "bspline_surface: give two rows or more of two points or more");
+    for (const std::vector<Vec3>& row : rows)
+        if (row.size() != rows[0].size()) return luaL_error(L, "bspline_surface: every row has the same number of points");
+    const int degree = optIntField(L, 2, "degree", 3);
+    if (degree < 1 || degree > 5) return luaL_error(L, "bspline_surface: degree is 1 to 5");
+    const SheetLook look = checkSheetLook(L, 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::bsplineSurface(rows, optIntField(L, 2, "across", 16), optIntField(L, 2, "up", 16), degree,
+                                                                         look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.ruled(path_a, path_b, {steps = 1, count = 0, ...look}) -> the sheet of straight lines joining two curves
+// (MeshBuilder::ruled)
+int l_mesh_ruled(lua_State* L) {
+    const MeshPath a = checkPath(L, 1), b = checkPath(L, 2);
+    const SheetLook look = checkSheetLook(L, 3);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::ruled(a, b, optIntField(L, 3, "steps", 1), optIntField(L, 3, "count", 0),
+                                                                look.toward, look.color, look.crease)));
+    return 1;
+}
+// mesh.patch(bottom, top, left, right, {across = 12, up = 12, ...look}) -> the sheet filling four boundary curves:
+// bottom and top run the same way, left joins their starts and right their ends (MeshBuilder::patch)
+int l_mesh_patch(lua_State* L) {
+    const MeshPath bottom = checkPath(L, 1), top = checkPath(L, 2), left = checkPath(L, 3), right = checkPath(L, 4);
+    const SheetLook look = checkSheetLook(L, 5);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::patch(bottom, top, left, right, optIntField(L, 5, "across", 12),
+                                                                optIntField(L, 5, "up", 12), look.toward, look.color, look.crease)));
+    return 1;
+}
+
+// mesh.planar_uv(m, axis = "y", scale = 1) -> mesh : flat uvs looking along x, y or z; the other two position
+// components, times `scale`, become (u, v) (MeshBuilder::generatePlanarUVs)
+int l_mesh_planar_uv(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const char* axis = luaL_optstring(L, 2, "y");
+    const int index = axis[0] == 'x' ? 0 : axis[0] == 'z' ? 2 : 1;
+    MeshBuilder::generatePlanarUVs(*m, index, static_cast<float>(luaL_optnumber(L, 3, 1.0)));
+    pushMesh(L, m);
     return 1;
 }
 
@@ -3388,76 +3778,790 @@ int modelGc(lua_State* L) {
     return 0;
 }
 
-// model.new() -> an empty Model.
+// A model that may be changed: every word that adds to a model or alters it takes its model through this. A model
+// kept in the model store is shared by everything that shows it, so it is refused.
+void refuseFrozen(lua_State* L, const ProcModel& m) {
+    if (m.frozen) luaL_error(L, "the model '%s' is kept in the model store and shared, so it cannot be changed; use it as a piece (m:use)", m.name.c_str());
+}
+ProcModel& openModel(lua_State* L, int idx) {
+    ProcModel& m = checkModel(L, idx);
+    refuseFrozen(L, m);
+    return m;
+}
+
+// model.new([name]) -> an empty Model. The name ("tire") is what a file written from it calls each copy of it.
 int l_model_new(lua_State* L) {
-    pushModel(L, std::make_shared<ProcModel>());
+    ModelPtr m = std::make_shared<ProcModel>();
+    if (lua_type(L, 1) == LUA_TSTRING) m->name = lua_tostring(L, 1);
+    pushModel(L, std::move(m));
     return 1;
 }
 
-// m:add(mesh [, material]) -> m : append a part. With a material it is textured
-// (world-planar), else baked vertex-coloured. Chainable.
-int l_model_add(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+// m:name() -> the model's name ("" when it has none).
+int l_model_name(lua_State* L) {
+    lua_pushstring(L, checkModel(L, 1).name.c_str());
+    return 1;
+}
+
+// --- the model store (scripting/model_recipes.h) ---------------------------------------------------------------------
+int l_model_get_closed(lua_State* L) { return luaL_error(L, "this host keeps no named models (openModelStore)"); }
+
+constexpr const char* kModelGetterMt = "engine.procgen.ModelGetter";
+int modelGetterGc(lua_State* L) {
+    static_cast<ModelGetter*>(lua_touserdata(L, 1))->~ModelGetter();
+    return 0;
+}
+
+// model.get(name) -> model : the one model kept under that name in the model store, built if it has to be. Frozen:
+// use it as a piece.
+int l_model_get(lua_State* L) {
+    const ModelGetter& get = *static_cast<ModelGetter*>(lua_touserdata(L, lua_upvalueindex(1)));
+    ModelPtr model;
+    {
+        std::string why;
+        const std::string name = luaL_checkstring(L, 1);
+        model = std::const_pointer_cast<ProcModel>(get(name, &why));   // frozen: the changing words refuse it
+        if (model == nullptr) lua_pushstring(L, why.c_str());          // the reason outlives these strings
+    }
+    if (model == nullptr) return luaL_error(L, "model.get: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(model));
+    return 1;
+}
+
+// --- model files (procgen/model_file.h) ----------------------------------------------------------------------------
+// Until a host calls openModelFiles, the VM has no way to a file.
+int l_model_from_files_closed(lua_State* L) { return luaL_error(L, "this host loads no model files (openModelFiles)"); }
+
+constexpr const char* kModelFilesMt = "engine.procgen.ModelFileSource";
+int modelFilesGc(lua_State* L) {
+    static_cast<ModelFileSource*>(lua_touserdata(L, 1))->~ModelFileSource();
+    return 0;
+}
+
+// A file's name as a script may give it: letters, digits, `_`, `-`, `.`, ending .glb or .gltf, and no "..".
+bool modelFileNameOk(const std::string& name) {
+    if (name.empty() || name.find("..") != std::string::npos) return false;
+    for (const char c : name)
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) return false;
+    return (name.size() > 4 && name.compare(name.size() - 4, 4, ".glb") == 0) || (name.size() > 5 && name.compare(name.size() - 5, 5, ".gltf") == 0);
+}
+
+// The shared end of both words: the names at stack `namesIdx` (an array) resolved through the host and read. Leaves
+// the model on the stack; on any failure raises a Lua error (with no C++ object alive).
+int loadModelFromLua(lua_State* L, int namesIdx, int distancesIdx, const char* modelName) {
+    const ModelFileSource& source = *static_cast<ModelFileSource*>(lua_touserdata(L, lua_upvalueindex(1)));
+    ModelPtr loaded;
+    {
+        std::string why;
+        std::vector<std::string> paths, notes;
+        std::vector<Real> distances;
+        const lua_Integer n = luaL_len(L, namesIdx);
+        for (lua_Integer i = 1; i <= n && why.empty(); ++i) {
+            lua_geti(L, namesIdx, i);
+            const std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            if (!modelFileNameOk(name)) { why = "'" + name + "' is not a model file's name (letters, digits, _ - . only, ending .glb or .gltf)"; break; }
+            const std::string path = source(name);
+            if (path.empty()) why = "no model file named '" + name + "'";
+            else paths.push_back(path);
+        }
+        if (why.empty() && paths.empty()) why = "no files given";
+        if (why.empty() && distancesIdx != 0) {
+            const lua_Integer d = luaL_len(L, distancesIdx);
+            for (lua_Integer i = 1; i <= d; ++i) {
+                lua_geti(L, distancesIdx, i);
+                distances.push_back(static_cast<Real>(lua_tonumber(L, -1)));
+                lua_pop(L, 1);
+            }
+        }
+        if (why.empty()) {
+            const std::shared_ptr<ProcModel> read = loadModelFiles(paths, distances, &why, &notes);
+            if (read != nullptr) {
+                loaded = read;
+                if (modelName != nullptr) loaded->name = modelName;
+                for (const std::string& note : notes) LOG_WARN << "[model file] " << note;
+            }
+        }
+        if (loaded == nullptr) lua_pushstring(L, why.c_str());   // the reason outlives these strings
+    }
+    if (loaded == nullptr) return luaL_error(L, "model file: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(loaded));
+    return 1;
+}
+
+// model.from_file("crane.glb") -> model : one file, its levels of detail (if any) by `_lod<N>` names inside it.
+int l_model_from_file(lua_State* L) {
+    luaL_checkstring(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, 1);
+    lua_seti(L, -2, 1);
+    return loadModelFromLua(L, lua_gettop(L), 0, nullptr);
+}
+
+// model.from_files{ levels = { "high.glb", "mid.glb", "low.glb" }, distances = { 0, 40, 150 }, name = "crane" } -> model
+// : the full model's file first; each later file is a level of detail, its meshes matched to the first file's nodes
+// by name.
+int l_model_from_files(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "levels");
+    if (!lua_istable(L, -1)) return luaL_error(L, "model.from_files{ levels = { \"file.glb\", ... } }");
+    const int names = lua_gettop(L);
+    lua_getfield(L, 1, "distances");
+    const int distances = lua_istable(L, -1) ? lua_gettop(L) : 0;
+    lua_getfield(L, 1, "name");
+    const char* name = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;   // stays on the stack while it is read
+    return loadModelFromLua(L, names, distances, name);
+}
+
+// What a part is made of, from the argument at `idx`: a Material, the NAME of one the model holds (m:material), or
+// nothing for the plain material. Returns the index in the model's table. A name the model lacks stops the recipe.
+int materialArg(lua_State* L, int idx, ProcModel& m) {
+    if (MaterialPtr* mat = static_cast<MaterialPtr*>(luaL_testudata(L, idx, kMaterialMt))) return m.addMaterial("", *mat);
+    if (lua_type(L, idx) == LUA_TSTRING) {
+        const char* name = lua_tostring(L, idx);
+        const int found = m.findMaterial(name);
+        if (found < 0) return luaL_error(L, "the model has no material named '%s' (name one with m:material)", name);
+        return found;
+    }
+    return 0;
+}
+
+// Which level of detail something belongs to, from `{ level = n }` in the table at `opts` (0 or not a table: none
+// given). Lua counts levels from 1, the full model; returns the index from 0. A level the model lacks stops the recipe.
+int levelOpt(lua_State* L, int opts, const ProcModel& m) {
+    if (opts == 0 || !lua_istable(L, opts)) return 0;
+    lua_getfield(L, opts, "level");
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); return 0; }
+    const lua_Integer n = luaL_checkinteger(L, -1);
+    lua_pop(L, 1);
+    if (n < 1 || n > static_cast<lua_Integer>(m.levelFrom.size()))
+        return luaL_error(L, "the model has no level %d (it has %d; add one with m:level)", static_cast<int>(n), static_cast<int>(m.levelFrom.size()));
+    return static_cast<int>(n) - 1;
+}
+
+// A part from the arguments (mesh [, material] [, { level = n }]) starting at stack slot 2, hung on `node`.
+// WHAT MADE THIS: the line of the RECIPE that is running now. The outermost Lua frame is the recipe's own chunk;
+// a library it calls is another chunk. The line wanted is the deepest one that is still in the recipe's chunk: a
+// part added inside truss.build is put down to the recipe's line that called truss.build, and a part added inside
+// a function the recipe defines itself to the line in that function, which is the line its author wrote. 0 when no
+// script is running.
+int recipeLine(lua_State* L) {
+    lua_Debug ar;
+    std::vector<std::pair<std::string, int>> frames;    // innermost first: (the chunk it is in, its line)
+    for (int level = 0; lua_getstack(L, level, &ar) != 0; ++level) {
+        if (lua_getinfo(L, "Sl", &ar) == 0 || ar.currentline <= 0) continue;
+        frames.emplace_back(ar.source != nullptr ? ar.source : "", ar.currentline);
+    }
+    if (frames.empty()) return 0;
+    const std::string& recipe = frames.back().first;
+    for (const std::pair<std::string, int>& f : frames)
+        if (f.first == recipe) return f.second;
+    return frames.back().second;
+}
+
+void addPart(lua_State* L, ProcModel& m, int node) {
+    const int material = materialArg(L, 3, m);   // first: an error here must leave no mesh half made
+    const int level = levelOpt(L, lua_istable(L, 4) ? 4 : (lua_istable(L, 3) ? 3 : 0), m);
     ProcPart part;
     part.mesh = checkMesh(L, 2);
-    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
-        part.material = **mat;
+    part.material = material;
+    part.node = node;
+    part.level = level;
+    part.line = recipeLine(L);
     m.parts.push_back(std::move(part));
+}
+
+// The shared body of m:marker and n:marker: (name [, { pos = {x,y,z}, turn = {x,y,z}, size = metres, role = "seat" }])
+// from stack slot 2, on `node`. `turn` is in degrees, as a node's is; the marker faces along its own +z.
+void addMarkerFromLua(lua_State* L, ProcModel& m, int node) {
+    const char* name = luaL_checkstring(L, 2);
+    if (name[0] == '\0') { luaL_error(L, "a marker needs a name"); return; }
+    if (m.findMarker(name) != nullptr) { luaL_error(L, "the model already has a marker named '%s'", name); return; }
+    ProcFrame frame;
+    Real size = 0;
+    const char* role = "point";
+    if (!lua_isnoneornil(L, 3)) {
+        luaL_checktype(L, 3, LUA_TTABLE);
+        frame.position = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+        frame.rotation = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+        size = static_cast<Real>(optField(L, 3, "size", 0.0));
+        lua_getfield(L, 3, "role");                        // stays on the stack while `role` points into it
+        if (!lua_isnil(L, -1)) role = luaL_checkstring(L, -1);
+    }
+    ProcMarker marker;
+    marker.name = name;
+    marker.role = role;
+    marker.line = recipeLine(L);
+    marker.frame = frame;
+    marker.size = size;
+    m.addMarker(node, marker);
+}
+
+// m:add(mesh [, material] [, { level = n }]) -> m : append a part. `material` is a Material or the name of one the
+// model holds (m:material); a textured one is laid world-planar, and with none the part is baked vertex-coloured.
+// `level` is the level of detail it belongs to (m:level); without it, the full model. Chainable.
+int l_model_add(lua_State* L) {
+    addPart(L, openModel(L, 1), 0);
     lua_pushvalue(L, 1);
     return 1;
 }
 
-// m:add_instances(mesh, placements [, opts]) -> m : place a prototype many times.
-// placements is an array of { pos = {x,y,z}, yaw = radians, scale = number };
-// opts may set { roughness=, metallic=, alpha_foliage= }. Chainable.
-int l_model_add_instances(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
-    ProcInstanceGroup g;
-    g.proto = checkMesh(L, 2);
-    luaL_checktype(L, 3, LUA_TTABLE);
-    lua_Integer n = luaL_len(L, 3);
-    for (lua_Integer i = 1; i <= n; ++i) {
-        lua_geti(L, 3, i);
-        Vec3 pos = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
-        double yaw = optField(L, -1, "yaw", 0.0);
-        double scale = optField(L, -1, "scale", 1.0);
-        g.transforms.push_back(Mat4::trs(pos,
-            Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(yaw)),
-            Vec3(scale, scale, scale)));
-        lua_pop(L, 1);
+// --- nodes: the named pieces of a model (#191, model step 1) --------------------
+// A node is a named place in the model with its own position and turn under its parent: the door under the car, the
+// handle under the door. Lua holds a node as a small handle (the model and the node's number), so a recipe hangs
+// meshes and further nodes on it:
+//     local door = m:node("door_fl", { pos = { 0.8, 0.5, 1.1 }, turn = { 0, 20, 0 } })
+//     door:add(door_mesh, paint)                       -- the mesh is in the door's own space
+//     local handle = door:node("handle_fl", { pos = { 0, 0.4, -0.7 } })
+// The model itself is the root: m:add puts a mesh there, exactly as before nodes existed.
+constexpr const char* kNodeMt = "engine.procgen.ModelNode";
+struct NodeRef {
+    ModelPtr model;
+    int index = 0;
+};
+
+void pushNode(lua_State* L, ModelPtr m, int index) {
+    void* mem = lua_newuserdatauv(L, sizeof(NodeRef), 0);
+    new (mem) NodeRef{std::move(m), index};
+    luaL_setmetatable(L, kNodeMt);
+}
+NodeRef& checkNode(lua_State* L, int idx) { return *static_cast<NodeRef*>(luaL_checkudata(L, idx, kNodeMt)); }
+int nodeGc(lua_State* L) {
+    static_cast<NodeRef*>(lua_touserdata(L, 1))->~NodeRef();
+    return 0;
+}
+
+// How a node may move, from the table at `idx`: { turn = {x,y,z} [, min =, max =] } or
+// { slide = {x,y,z}, min =, max = }. The vector is the axis in the node's own space. A turn's limits are DEGREES
+// and may be left out (a wheel turns without end); a slide's are metres and must be given. The node as placed is
+// value 0, so the limits must have 0 between them. Raises a Lua error for anything else; `who` names the node.
+ProcMotion readMotion(lua_State* L, int idx, const char* who) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    idx = lua_absindex(L, idx);
+    ProcMotion motion;
+    lua_getfield(L, idx, "turn");
+    const bool turn = lua_istable(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "slide");
+    const bool slide = lua_istable(L, -1);
+    lua_pop(L, 1);
+    if (turn == slide) { luaL_error(L, "node '%s': a motion is { turn = {x,y,z} } or { slide = {x,y,z} }, one of them", who); return motion; }
+    const Vec3 axis = optVec3Field(L, idx, turn ? "turn" : "slide", Vec3(0, 1, 0));
+    if (axis.length() < 1e-9) { luaL_error(L, "node '%s': the motion's axis has no length", who); return motion; }
+    lua_getfield(L, idx, "min");
+    lua_getfield(L, idx, "max");
+    const bool hasMin = !lua_isnil(L, -2), hasMax = !lua_isnil(L, -1);
+    lua_pop(L, 2);
+    if (hasMin != hasMax) { luaL_error(L, "node '%s': give both min and max, or neither", who); return motion; }
+    if (slide && !hasMin) { luaL_error(L, "node '%s': a slide needs min and max", who); return motion; }
+    const double unit = turn ? DEG_TO_RAD : 1.0;
+    const double lo = optField(L, idx, "min", 0.0) * unit, hi = optField(L, idx, "max", 0.0) * unit;
+    if (hasMin && !(lo <= 0.0 && 0.0 <= hi)) {
+        luaL_error(L, "node '%s': the node as placed is value 0, so min..max must have 0 between them", who);
+        return motion;
     }
-    if (lua_istable(L, 4)) {
-        g.roughness = static_cast<float>(optField(L, 4, "roughness", g.roughness));
-        g.metallic = static_cast<float>(optField(L, 4, "metallic", g.metallic));
-        g.alphaFoliage = optBoolField(L, 4, "alpha_foliage", g.alphaFoliage);
-        // opts.collide: solidify every instance. "mesh" stamps the proto's
-        // triangles at each transform; a { shape="capsule", radius=, height= }
-        // (or box/sphere) table places one primitive collider per instance —
-        // the right shape for a lamp post (a thin capsule), exactly.
-        lua_getfield(L, 4, "collide");
-        if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "mesh") {
-            g.collision = InstanceCollision::Mesh;
-        } else if (lua_istable(L, -1)) {
-            int ct = lua_absindex(L, -1);
-            std::string shape = optStrField(L, ct, "shape", "capsule");
-            g.colliderFriction =
-                static_cast<Real>(optField(L, ct, "friction", g.colliderFriction));
-            if (shape == "box") {
-                g.collision = InstanceCollision::Box;
-                g.colliderHalfExtent = optVec3Field(L, ct, "size", Vec3(1, 1, 1)) * 0.5;
-            } else if (shape == "sphere") {
-                g.collision = InstanceCollision::Sphere;
-                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
-            } else {
-                g.collision = InstanceCollision::Capsule;
-                g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
-                g.colliderHalfHeight =
-                    static_cast<Real>(optField(L, ct, "height", g.colliderHalfHeight * 2.0) * 0.5);
-            }
+    motion.kind = turn ? ProcMotion::Kind::Turn : ProcMotion::Kind::Slide;
+    motion.axis = normalize(axis);
+    motion.limited = hasMin;
+    motion.min = lo;
+    motion.max = hi;
+    return motion;
+}
+
+// The shared body of m:node and n:node: (name [, { parent = "name", pos = {x,y,z}, turn = {x,y,z}, motion = {...} }]) from stack
+// slot 2, under `parent` unless the table names another. `turn` is in DEGREES (Glenn's call: degrees in Lua, radians
+// in the engine), about x, then y, then z. A name already used, or a parent the model lacks, is an error in the
+// recipe, raised here and not found later in the game.
+// (No C++ object that owns memory is alive where an error is raised: a Lua error leaves the function by a long jump.)
+int addNodeFromLua(lua_State* L, const ModelPtr& model, int parent) {
+    const char* name = luaL_checkstring(L, 2);
+    ProcFrame frame;
+    if (!lua_isnoneornil(L, 3)) {
+        luaL_checktype(L, 3, LUA_TTABLE);
+        lua_getfield(L, 3, "parent");
+        if (!lua_isnil(L, -1)) {
+            const char* parentName = luaL_checkstring(L, -1);
+            parent = model->findNode(parentName);
+            if (parent < 0) return luaL_error(L, "node '%s': the model has no node named '%s' to be its parent", name, parentName);
         }
         lua_pop(L, 1);
+        frame.position = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+        frame.rotation = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
     }
-    m.instances.push_back(std::move(g));
+    if (name[0] == '\0') return luaL_error(L, "a node needs a name");
+    if (model->findNode(name) >= 0) return luaL_error(L, "the model already has a node named '%s'", name);
+    ProcMotion motion;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "motion");
+        if (!lua_isnil(L, -1)) motion = readMotion(L, -1, name);
+        lua_pop(L, 1);
+    }
+    const int index = model->addNode(name, parent, frame);
+    if (index >= 0) model->nodes[static_cast<std::size_t>(index)].line = recipeLine(L);
+    model->nodes[static_cast<std::size_t>(index)].motion = motion;
+    pushNode(L, model, index);
+    return 1;
+}
+
+// m:node(name [, opts]) -> node : a new node under the root (or under opts.parent).
+int l_model_node(lua_State* L) {
+    refuseFrozen(L, checkModel(L, 1));
+    return addNodeFromLua(L, *static_cast<ModelPtr*>(luaL_checkudata(L, 1, kModelMt)), 0);
+}
+
+// m:find(name) -> node | nil : the node with this name; "root" is the model itself as a node.
+int l_model_find(lua_State* L) {
+    const ModelPtr& model = *static_cast<ModelPtr*>(luaL_checkudata(L, 1, kModelMt));
+    const int index = model->findNode(luaL_checkstring(L, 2));
+    if (index < 0) lua_pushnil(L);
+    else pushNode(L, model, index);
+    return 1;
+}
+
+// m:material(name, material) -> m : give one of the model's materials a name, so a part can say m:add(mesh, "paint")
+// and anything later can find "paint" on the model. One name, one material: naming a different one is an error.
+int l_model_material(lua_State* L) {
+    ProcModel& m = openModel(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    const MaterialPtr& mat = *static_cast<MaterialPtr*>(luaL_checkudata(L, 3, kMaterialMt));
+    if (name[0] == '\0') return luaL_error(L, "a material needs a name");
+    if (m.addMaterial(name, mat) < 0) return luaL_error(L, "the model already has a different material named '%s'", name);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:has_material(name) -> boolean.
+int l_model_has_material(lua_State* L) {
+    lua_pushboolean(L, checkModel(L, 1).findMaterial(luaL_checkstring(L, 2)) >= 0);
+    return 1;
+}
+
+// m:material_count() -> how many materials the model holds, the plain one included.
+int l_model_material_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).materials.size()));
+    return 1;
+}
+
+// m:marker(name [, opts]) -> m : a marker on the root. Chainable.
+int l_model_marker(lua_State* L) {
+    addMarkerFromLua(L, openModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:marker_at(name) -> {x,y,z}, {x,y,z} | nil : where a marker is in the model and the way it faces (its +z), through
+// every node above it.
+int l_model_marker_at(lua_State* L) {
+    ProcFrame at;
+    if (!checkModel(L, 1).markerFrame(luaL_checkstring(L, 2), at)) { lua_pushnil(L); return 1; }
+    pushVec3(L, at.position);
+    pushVec3(L, at.rotation.rotate(Vec3(0, 0, 1)));
+    return 2;
+}
+
+int l_model_marker_count(lua_State* L) {
+    lua_pushinteger(L, checkModel(L, 1).markerCount());
+    return 1;
+}
+
+void addUseFromLua(lua_State* L, ProcModel& m, int node);   // below, with the uses
+
+// The shared body of m:shape and n:shape: (name, spec) from stack slot 2, on `node`. A COLLISION SHAPE: a simple solid
+// that stands in for the model when things bump into it, in the node's own space so it goes with the node.
+//   { box = {w, h, d} } | { sphere = radius } | { capsule = { radius =, height = } }   (height: the straight part)
+//   | { hull = mesh } (the convex shape round the mesh's points) | { mesh = mesh } (its triangles; static things only)
+// with pos = {x,y,z}, turn = {x,y,z} in degrees (a capsule's length runs along its own y), friction =.
+void addShapeFromLua(lua_State* L, ProcModel& m, int node) {
+    const char* name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    if (name[0] == '\0') { luaL_error(L, "a collision shape needs a name"); return; }
+    if (m.findShape(name) != nullptr) { luaL_error(L, "the model already has a collision shape named '%s'", name); return; }
+    int kinds = 0;
+    for (const char* key : {"box", "sphere", "capsule", "hull", "mesh"}) {
+        lua_getfield(L, 3, key);
+        kinds += lua_isnil(L, -1) ? 0 : 1;
+        lua_pop(L, 1);
+    }
+    if (kinds != 1) { luaL_error(L, "collision shape '%s': give one of box, sphere, capsule, hull, mesh", name); return; }
+    // every value is read before the shape (which owns memory) is made, so an error leaves nothing half built
+    const Vec3 pos = optVec3Field(L, 3, "pos", Vec3(0, 0, 0));
+    const Quat turn = Quat::fromEuler(optVec3Field(L, 3, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+    const Real friction = static_cast<Real>(optField(L, 3, "friction", ProcCollider{}.friction));
+    ProcCollider::Kind kind = ProcCollider::Kind::Box;
+    Vec3 half(0.5, 0.5, 0.5);
+    Real radius = 0.5, halfHeight = 0.5;
+    const RenderMesh* mesh = nullptr;
+    lua_getfield(L, 3, "box");
+    if (!lua_isnil(L, -1)) half = checkVec3(L, -1) * 0.5;
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "sphere");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Sphere; radius = static_cast<Real>(luaL_checknumber(L, -1)); }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "capsule");
+    if (!lua_isnil(L, -1)) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        kind = ProcCollider::Kind::Capsule;
+        const int ct = lua_absindex(L, -1);
+        radius = static_cast<Real>(optField(L, ct, "radius", 0.5));
+        halfHeight = static_cast<Real>(optField(L, ct, "height", 1.0) * 0.5);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "hull");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Hull; mesh = &checkMesh(L, -1); }
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "mesh");
+    if (!lua_isnil(L, -1)) { kind = ProcCollider::Kind::Mesh; mesh = &checkMesh(L, -1); }
+    lua_pop(L, 1);
+    if (kind == ProcCollider::Kind::Hull && MeshBuilder::hullMesh([&] {
+            std::vector<Vec3> pts;
+            for (const Vertex& v : mesh->vertices) pts.push_back(v.position);
+            return pts;
+        }()).indices.empty()) {
+        luaL_error(L, "collision shape '%s': the hull's points are too few or all in one plane", name);
+        return;
+    }
+    ProcCollider c;
+    c.kind = kind;
+    c.name = name;
+    c.node = node;
+    if (mesh != nullptr) c.mesh = *mesh;
+    c.center = pos;
+    c.rotation = turn;
+    c.halfExtent = half;
+    c.radius = radius;
+    c.halfHeight = halfHeight;
+    c.friction = friction;
+    c.line = recipeLine(L);
+    m.addShape(c);
+}
+
+// m:shape(name, spec) -> m : a collision shape on the root (see addShapeFromLua). Chainable.
+int l_model_shape(lua_State* L) {
+    addShapeFromLua(L, openModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// n:shape(name, spec) -> n : a collision shape on this node, in the node's own space. Chainable.
+int l_node_shape(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    addShapeFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// n:use(piece [, placements] [, opts]) -> n : place another model (or a mesh) on this node: once at the node, or at
+// each placement given in the node's space. What is inside the piece is reached through this node's name,
+// "wheel_fl/valve". Chainable.
+int l_node_use(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    addUseFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// n:marker(name [, opts]) -> n : a marker on this node, placed in the node's own space. Chainable.
+int l_node_marker(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    addMarkerFromLua(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_model_node_count(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(checkModel(L, 1).nodes.size()));
+    return 1;
+}
+
+// n:node(name [, opts]) -> node : a new node under this one.
+int l_node_node(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    return addNodeFromLua(L, n.model, n.index);
+}
+
+// n:add(mesh [, material]) -> n : a part hung on this node, its mesh in the node's own space. Chainable.
+int l_node_add(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    addPart(L, *n.model, n.index);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+int l_node_name(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    lua_pushstring(L, n.model->nodes[static_cast<std::size_t>(n.index)].name.c_str());
+    return 1;
+}
+
+// n:parent() -> node | nil : the node this one hangs under; nil for the root.
+int l_node_parent(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    const int parent = n.model->nodes[static_cast<std::size_t>(n.index)].parent;
+    if (parent < 0) lua_pushnil(L);
+    else pushNode(L, n.model, parent);
+    return 1;
+}
+
+// n:motion{ turn = {x,y,z} [, min =, max =] } | n:motion{ slide = {x,y,z}, min =, max = } -> n : how this node may
+// move (see readMotion). The root does not move. Chainable.
+int l_node_motion(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    refuseFrozen(L, *n.model);
+    if (n.index == 0) return luaL_error(L, "the root does not move: put what moves on a node");
+    // The name is copied to Lua's stack, so no C++ string is alive if readMotion raises.
+    lua_pushstring(L, n.model->nodes[static_cast<std::size_t>(n.index)].name.c_str());
+    const ProcMotion motion = readMotion(L, 2, lua_tostring(L, -1));
+    lua_pop(L, 1);
+    n.model->nodes[static_cast<std::size_t>(n.index)].motion = motion;
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// n:point({x,y,z}) -> {x,y,z} : a point given in this node's space, in the model's space. Where a child's corner
+// really is, for a recipe that has to line something up with it.
+int l_node_point(lua_State* L) {
+    const NodeRef& n = checkNode(L, 1);
+    pushVec3(L, n.model->nodeFrame(n.index).point(checkVec3(L, 2)));
+    return 1;
+}
+
+// --- uses: another model placed in this one, stored once (#191, model step 3) --------------------------------------
+// The piece of a use, from the argument at `idx`: a Model (shared: used from four nodes it is still one piece) or a
+// bare Mesh, which becomes a piece of that one mesh. `opts` (when a table) may give a bare mesh its look:
+// { roughness =, metallic =, alpha_foliage = }. A piece that reaches back to the model using it is an error.
+std::shared_ptr<const ProcModel> pieceArg(lua_State* L, int idx, int opts, const ProcModel& user) {
+    if (ModelPtr* mdl = static_cast<ModelPtr*>(luaL_testudata(L, idx, kModelMt))) {
+        if ((*mdl)->reaches(&user)) { luaL_error(L, "a model cannot use itself, or a piece that uses it"); return nullptr; }
+        return *mdl;
+    }
+    const RenderMesh& mesh = checkMesh(L, idx);
+    std::shared_ptr<ProcMaterial> look;
+    if (opts != 0 && lua_istable(L, opts)) {   // 0: the caller was given no options
+        const ProcMaterial plain;
+        const float roughness = static_cast<float>(optField(L, opts, "roughness", plain.roughness));
+        const float metallic = static_cast<float>(optField(L, opts, "metallic", plain.metallic));
+        const bool leaf = optBoolField(L, opts, "alpha_foliage", false);
+        if (roughness != plain.roughness || metallic != plain.metallic || leaf) {
+            look = std::make_shared<ProcMaterial>();
+            look->roughness = roughness;
+            look->metallic = metallic;
+            look->alphaFoliage = leaf;
+        }
+    }
+    return ProcModel::ofMesh(mesh, look);
+}
+
+// opts.collide on a use: solidify every copy. "mesh" stamps the piece's triangles at each copy; a
+// { shape="capsule", radius=, height= } (or box/sphere) table places one primitive collider per copy -- the right
+// shape for a lamp post (a thin capsule), exactly.
+void readUseCollision(lua_State* L, int opts, ProcUse& g) {
+    if (opts == 0 || !lua_istable(L, opts)) return;   // 0: the caller was given no options
+    lua_getfield(L, opts, "collide");
+    if (lua_isstring(L, -1) && std::strcmp(lua_tostring(L, -1), "mesh") == 0) {
+        g.collision = InstanceCollision::Mesh;
+    } else if (lua_istable(L, -1)) {
+        int ct = lua_absindex(L, -1);
+        std::string shape = optStrField(L, ct, "shape", "capsule");
+        g.colliderFriction =
+            static_cast<Real>(optField(L, ct, "friction", g.colliderFriction));
+        if (shape == "box") {
+            g.collision = InstanceCollision::Box;
+            g.colliderHalfExtent = optVec3Field(L, ct, "size", Vec3(1, 1, 1)) * 0.5;
+        } else if (shape == "sphere") {
+            g.collision = InstanceCollision::Sphere;
+            g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+        } else {
+            g.collision = InstanceCollision::Capsule;
+            g.colliderRadius = static_cast<Real>(optField(L, ct, "radius", g.colliderRadius));
+            g.colliderHalfHeight =
+                static_cast<Real>(optField(L, ct, "height", g.colliderHalfHeight * 2.0) * 0.5);
+        }
+    }
+    lua_pop(L, 1);
+}
+
+// The placements of a use, from the array at `idx`: each { pos = {x,y,z}, scale = number } and a rotation. The
+// model's words give the rotation as `turn = {x,y,z}` in DEGREES, like a node's, or as `up = {x,y,z}` (and `spin`); m:add_instances, the older word,
+// gives `yaw` in radians about the vertical, and its recipes keep working.
+void readPlacements(lua_State* L, int idx, bool yawRadians, std::vector<ProcPlacement>& out) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    const lua_Integer n = luaL_len(L, idx);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        ProcPlacement p;
+        p.position = optVec3Field(L, -1, "pos", Vec3(0, 0, 0));
+        if (yawRadians) p.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(optField(L, -1, "yaw", 0.0)));
+        else p.rotation = Quat::fromEuler(optVec3Field(L, -1, "turn", Vec3(0, 0, 0)) * DEG_TO_RAD);
+        // `up = {x,y,z}`: stand the piece's own +y along this direction (a bolt on a sloping plate), by the shortest
+        // turn; `spin` (degrees) then turns it about that direction. Given in place of `turn`.
+        if (!yawRadians) {
+            lua_getfield(L, -1, "up");
+            const bool hasUp = lua_istable(L, -1);
+            lua_pop(L, 1);
+            if (hasUp) {
+                const Vec3 up = optVec3Field(L, -1, "up", Vec3(0, 1, 0));
+                if (up.lengthSquared() < 1e-20) luaL_error(L, "a placement's `up` has no length");
+                const Vec3 to = normalize(up), from(0, 1, 0);
+                const Vec3 axis = cross(from, to);
+                const Real c = dot(from, to);
+                Quat stand;                                                    // +y already
+                if (axis.lengthSquared() > 1e-20) stand = Quat::fromAxisAngle(normalize(axis), std::acos(std::clamp(c, Real(-1), Real(1))));
+                else if (c < 0) stand = Quat::fromAxisAngle(Vec3(1, 0, 0), 3.14159265358979323846);   // straight down
+                p.rotation = Quat::fromAxisAngle(to, static_cast<Real>(optField(L, -1, "spin", 0.0)) * DEG_TO_RAD) * stand;
+            }
+        }
+        p.scale = static_cast<Real>(optField(L, -1, "scale", 1.0));
+        out.push_back(p);
+        lua_pop(L, 1);
+    }
+}
+
+// The shared body of m:use and n:use: (piece [, placements] [, opts]) from stack slot 2, on `node`. Without
+// placements the piece is placed once, at the node itself. opts: { collide = ... } and, for a bare mesh, its look.
+void addUseFromLua(lua_State* L, ProcModel& m, int node) {
+    // placements are an array; opts are a table with named fields. One table after the piece is told apart by that.
+    int placements = 0, opts = 0;
+    if (lua_istable(L, 3) && (luaL_len(L, 3) > 0 || lua_istable(L, 4))) { placements = 3; opts = 4; }
+    else if (lua_istable(L, 3)) opts = 3;
+    else if (lua_isnoneornil(L, 3) && lua_istable(L, 4)) opts = 4;   // use(piece, nil, opts): no placements, opts kept
+    const int level = levelOpt(L, opts, m);
+    ProcUse use;
+    use.piece = pieceArg(L, 2, opts, m);
+    use.node = node;
+    use.level = level;
+    use.line = recipeLine(L);
+    if (placements != 0) readPlacements(L, placements, false, use.placements);
+    else use.placements.push_back(ProcPlacement{});
+    readUseCollision(L, opts, use);
+    m.uses.push_back(std::move(use));
+}
+
+// m:level(distance [, { simplify = ratio, max_error = metres }]) -> n : add a level of detail, drawn from `distance`
+// metres away, and return its number (the full model is level 1, so the first one added is 2). Put things in it with
+// { level = n } on m:add, n:add and m:use / n:use. With `simplify` the level is made from the full one: each part a
+// simpler copy keeping `ratio` of its triangles (MeshBuilder::simplifiedSurface, what mesh.simplify calls), on the
+// same node in the same material. Each new level must be farther than the last.
+int l_model_level(lua_State* L) {
+    ProcModel& m = openModel(L, 1);
+    const double distance = luaL_checknumber(L, 2);
+    if (!(distance > m.levelFrom.back()))
+        return luaL_error(L, "a level must be farther than the last one (%f m)", static_cast<double>(m.levelFrom.back()));
+    int level = -1;
+    if (lua_istable(L, 3) && optNumField(L, 3, "simplify", -1.0) >= 0.0) {
+        const double ratio = optNumField(L, 3, "simplify", 0.5);
+        if (ratio > 1.0) return luaL_error(L, "simplify is the share of triangles kept, 0 to 1");
+        level = addSimplifiedLevel(m, distance, ratio, optNumField(L, 3, "max_error", -1.0));
+    } else {
+        level = m.addLevel(distance);
+    }
+    lua_pushinteger(L, level + 1);
+    return 1;
+}
+
+// m:levels() -> { 0, 40, 150 } : the distance each level of detail is drawn from, the full model first.
+int l_model_levels(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < m.levelFrom.size(); ++i) {
+        lua_pushnumber(L, m.levelFrom[i]);
+        lua_seti(L, -2, static_cast<lua_Integer>(i) + 1);
+    }
+    return 1;
+}
+
+// m:posed{ name = value, ... } -> model : the model held in a pose, as a new model; `m` is not changed. A value is
+// DEGREES for a node that turns and metres for one that slides, and stops at the node's limits. A moving node inside
+// a used piece is named through the node that uses it: m:posed{ ["door_fl/window"] = -0.2 }.
+int l_model_posed(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    ModelPtr held;
+    {
+        ProcPose pose;
+        std::string why;
+        lua_pushnil(L);
+        while (why.empty() && lua_next(L, 2) != 0) {
+            if (lua_type(L, -2) != LUA_TSTRING || !lua_isnumber(L, -1)) {
+                why = "a pose is { name = number, ... }";
+            } else {
+                const std::string name = lua_tostring(L, -2);
+                const ProcNode* joint = m.jointAt(name);
+                if (joint == nullptr) why = "the model has no moving node named '" + name + "'";
+                else pose.values[name] = lua_tonumber(L, -1) * (joint->motion.kind == ProcMotion::Kind::Turn ? DEG_TO_RAD : 1.0);
+            }
+            lua_pop(L, 1);
+        }
+        if (why.empty()) held = posedModel(m, pose, &why);
+        if (held == nullptr) { lua_settop(L, 2); lua_pushstring(L, why.c_str()); }   // the reason outlives these strings
+    }
+    if (held == nullptr) return luaL_error(L, "posed: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(held));
+    return 1;
+}
+
+// m:joints() -> { { name =, kind = "turn" | "slide", axis = {x,y,z}, min =, max = }, ... } : the model's own moving
+// nodes, in the order they were made. min and max are degrees for a turn, metres for a slide, and absent for a turn
+// with no end.
+int l_model_joints(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    lua_newtable(L);
+    lua_Integer count = 0;
+    for (const ProcNode& n : m.nodes) {
+        if (n.motion.kind == ProcMotion::Kind::None) continue;
+        const bool turn = n.motion.kind == ProcMotion::Kind::Turn;
+        lua_newtable(L);
+        lua_pushstring(L, n.name.c_str()); lua_setfield(L, -2, "name");
+        lua_pushstring(L, turn ? "turn" : "slide"); lua_setfield(L, -2, "kind");
+        pushVec3(L, n.motion.axis); lua_setfield(L, -2, "axis");
+        if (n.motion.limited) {
+            const double unit = turn ? RAD_TO_DEG : 1.0;
+            lua_pushnumber(L, n.motion.min * unit); lua_setfield(L, -2, "min");
+            lua_pushnumber(L, n.motion.max * unit); lua_setfield(L, -2, "max");
+        }
+        lua_seti(L, -2, ++count);
+    }
+    return 1;
+}
+
+// m:mirrored() -> model : the model's mirrored twin, left to right (across x = 0 through its origin). A right door
+// from the left door. A new model; `m` is not changed. For another plane, hang the twin on a turned node.
+int l_model_mirrored(lua_State* L) {
+    const ProcModel& m = checkModel(L, 1);
+    ModelPtr twin;
+    {
+        std::string why;
+        twin = mirroredModel(m, &why);
+        if (twin == nullptr) lua_pushstring(L, why.c_str());   // the reason goes to Lua's stack; the string ends here
+    }
+    if (twin == nullptr) return luaL_error(L, "mirrored: %s", lua_tostring(L, -1));
+    pushModel(L, std::move(twin));
+    return 1;
+}
+
+// m:use(piece [, placements] [, opts]) -> m : place another model (or a mesh) in this one, on the root. Chainable.
+int l_model_use(lua_State* L) {
+    addUseFromLua(L, openModel(L, 1), 0);
+    lua_pushvalue(L, 1);
+    return 1;
+}
+
+// m:add_instances(mesh, placements [, opts]) -> m : place a prototype many times. The older word for m:use, kept
+// for its recipes: placements is an array of { pos = {x,y,z}, yaw = radians, scale = number }; opts may set
+// { roughness=, metallic=, alpha_foliage=, collide= }. Chainable.
+int l_model_add_instances(lua_State* L) {
+    ProcModel& m = openModel(L, 1);
+    const int level = levelOpt(L, 4, m);
+    ProcUse use;
+    use.piece = pieceArg(L, 2, 4, m);
+    use.level = level;
+    readPlacements(L, 3, true, use.placements);
+    readUseCollision(L, 4, use);
+    m.uses.push_back(std::move(use));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -3466,7 +4570,7 @@ int l_model_add_instances(lua_State* L) {
 // from `mesh` (world space). The faithful collider for terrain, roads, and any
 // solid shell — collision is the actual surface, not an approximation. Chainable.
 int l_model_collide(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     ProcCollider c;
     c.kind = ProcCollider::Kind::Mesh;
     c.mesh = checkMesh(L, 2);
@@ -3481,12 +4585,12 @@ int l_model_collide(lua_State* L) {
 // same triangles. The default for built world geometry (a building shell, a
 // foundation): what you see is exactly what you hit. Chainable.
 int l_model_add_solid(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
+    const int material = materialArg(L, 3, m);
     RenderMesh mesh = checkMesh(L, 2);
     ProcPart part;
     part.mesh = mesh;
-    if (auto* mat = static_cast<MaterialPtr*>(luaL_testudata(L, 3, kMaterialMt)))
-        part.material = **mat;
+    part.material = material;
     m.parts.push_back(std::move(part));
     ProcCollider c;
     c.kind = ProcCollider::Kind::Mesh;
@@ -3501,12 +4605,12 @@ int l_model_add_solid(lua_State* L) {
 // (size={w,h,d}, yaw), "sphere" (radius), or "capsule" (radius, height); with
 // center={x,y,z}, friction, motion ("static"|"dynamic"). Chainable.
 int l_model_add_collider(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
     ProcCollider c;
     std::string shape = optStrField(L, 2, "shape", "box");
     c.center = optVec3Field(L, 2, "center", c.center);
-    c.yaw = static_cast<Real>(optField(L, 2, "yaw", 0.0));
+    c.rotation = Quat::fromAxisAngle(Vec3(0, 1, 0), static_cast<Real>(optField(L, 2, "yaw", 0.0)));
     c.friction = static_cast<Real>(optField(L, 2, "friction", c.friction));
     c.dynamic = optStrField(L, 2, "motion", "static") == std::string("dynamic");
     if (shape == "sphere") {
@@ -3530,10 +4634,19 @@ int l_model_collider_count(lua_State* L) {
     return 1;
 }
 
-// m:merge(other) -> m : fold another Model's parts + instances into this one.
+// m:merge(other) -> m : fold another Model's parts + instances into this one. The other model's nodes come across
+// under this model's root; two nodes of one name is an error.
 int l_model_merge(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
-    m.merge(checkModel(L, 2));
+    ProcModel& m = openModel(L, 1);
+    const ProcModel& other = checkModel(L, 2);
+    if (&m == &other) return luaL_error(L, "a model cannot be merged into itself");
+    bool merged = false;
+    {
+        std::string clash;
+        merged = m.merge(other, &clash);
+        if (!merged) lua_pushstring(L, clash.c_str());   // the name goes to Lua's stack; the string ends here
+    }
+    if (!merged) return luaL_error(L, "merge: the two models disagree on %s (both have one, and they are not the same)", lua_tostring(L, -1));
     lua_pushvalue(L, 1);
     return 1;
 }
@@ -3547,17 +4660,6 @@ int l_model_instance_count(lua_State* L) {
     return 1;
 }
 
-// Flatten a model to a single mesh: every part, plus each instance group's proto
-// stamped at each transform. Bridges a Model to single-mesh consumers/preview.
-RenderMesh flattenModel(const ProcModel& m) {
-    RenderMesh out;
-    for (const ProcPart& p : m.parts) MeshBuilder::append(out, p.mesh);
-    for (const ProcInstanceGroup& g : m.instances)
-        for (const Mat4& xf : g.transforms)
-            MeshBuilder::appendTransformed(out, g.proto, xf);
-    return out;
-}
-
 // m:flatten() -> mesh.
 int l_model_flatten(lua_State* L) {
     pushMesh(L, std::make_shared<RenderMesh>(flattenModel(checkModel(L, 1))));
@@ -3569,7 +4671,7 @@ int l_model_flatten(lua_State* L) {
 // and pads. The recipe still builds its road/block meshes on the conformed field;
 // this makes the walkable CDLOD ground agree. No-op if the level owns no terrain.
 int l_model_conform(lua_State* L) {
-    ProcModel& m = checkModel(L, 1);
+    ProcModel& m = openModel(L, 1);
     RegionsVec& r = checkRegions(L, 2);
     m.flatten.insert(m.flatten.end(), r.begin(), r.end());
     lua_pushvalue(L, 1);
@@ -4077,6 +5179,66 @@ int l_poly_crease_corners(lua_State* L) {
     creaseCorners(m, sel, luaL_optnumber(L, 3, 40.0), static_cast<float>(luaL_optnumber(L, 4, PolyMesh::kInfCrease)));
     return 0;
 }
+// P:bevel(width [, angle = 30 [, sel [, rounds = 1]]]) -> sel (rounds 2 or more: a rounded edge, 3 or 7 facets ...): cut every edge whose faces turn more than `angle` degrees back to a
+// flat strip `width` metres from the edge on each face (procgen/polymesh.h bevel). `sel` limits it to the edges of
+// those faces. Returns the strips and corner faces, which are also the group "bevel".
+int l_poly_bevel(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const double width = luaL_checknumber(L, 2);
+    if (!(width > 0)) return luaL_error(L, "bevel: width is more than 0");
+    std::vector<int> sel;
+    if (!lua_isnoneornil(L, 4)) {
+        sel = checkSel(L, 4);
+        checkSelRange(L, m, sel);
+    }
+    const int rounds = static_cast<int>(luaL_optinteger(L, 5, 1));
+    if (rounds < 1 || rounds > 5) return luaL_error(L, "bevel: rounds is 1 to 5");
+    pushSel(L, bevel(m, width, luaL_optnumber(L, 3, 30.0), sel, rounds));
+    return 1;
+}
+// P:loop_cut(at_a, at_b [, t = 0.5]) -> count: a new ring of edges through the quads, starting across the edge whose
+// ends are the points nearest the positions at_a and at_b, `t` of the way from a's side (procgen/polymesh.h loopCut).
+// Returns how many points the ring has; errors when those two points are not the ends of one edge.
+int l_poly_loop_cut(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const int a = nearestPoint(m, checkVec3(L, 2)), b = nearestPoint(m, checkVec3(L, 3));
+    const std::vector<int> ring = loopCut(m, a, b, luaL_optnumber(L, 4, 0.5));
+    if (ring.empty()) return luaL_error(L, "loop_cut: the points nearest those two places are not the two ends of an edge");
+    lua_pushinteger(L, static_cast<lua_Integer>(ring.size()));
+    return 1;
+}
+// P:slice(point, normal) -> count: cut every face the plane passes through, along the plane; nothing moves
+// (procgen/polymesh.h slice). Returns how many points lie on the cut.
+int l_poly_slice(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const Vec3 normal = checkVec3(L, 3);
+    if (normal.lengthSquared() < 1e-20) return luaL_error(L, "slice: the plane's normal has no length");
+    lua_pushinteger(L, static_cast<lua_Integer>(slice(m, checkVec3(L, 2), normal).size()));
+    return 1;
+}
+// P:bridge(sel_a, sel_b) -> sel: take the two regions' faces away and join their rims with quads: two solids
+// become one, or a block gets a hole through it (procgen/polymesh.h bridge). Faces are renumbered: select again
+// afterwards. Errors when the regions do not each have one rim, or the rims differ in their number of points.
+int l_poly_bridge(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const std::vector<int> a = checkSel(L, 2), b = checkSel(L, 3);
+    checkSelRange(L, m, a);
+    checkSelRange(L, m, b);
+    if (a.empty() || b.empty()) return luaL_error(L, "bridge: both selections need faces");
+    const std::vector<int> made = bridge(m, a, b);
+    if (made.empty()) return luaL_error(L, "bridge: each region needs one rim, and the two rims the same number of points");
+    pushSel(L, made);
+    return 1;
+}
+// P:unsubdivide([near]) -> true | false: take one level of subdivision back out, in place: every second loop stays,
+// a quarter of the faces (procgen/polymesh.h unsubdivide). `near` is a place whose nearest point must stay. False,
+// and nothing changed, when the mesh does not have a subdivided mesh's pattern.
+int l_poly_unsubdivide(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const int keep = lua_isnoneornil(L, 2) ? 0 : nearestPoint(m, checkVec3(L, 2));
+    lua_pushboolean(L, unsubdivide(m, keep));
+    return 1;
+}
 int l_poly_crease_faces(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
@@ -4193,12 +5355,21 @@ int l_poly_panels(lua_State* L) {
         if (used[i]) { lua_pushstring(L, m.panels[i].c_str()); lua_rawseti(L, -2, ++k); }
     return 1;
 }
-// P:solidify(sel, thickness, mat) -> Poly: the region's back and its edge walls (append it to give the skin depth)
+// P:solidify(sel, thickness, mat [, against]) -> Poly: the region's back and its edge walls (append it to give the
+// skin depth). `against` (a selection): walls only where the region's outline runs along one of those faces.
 int l_poly_solidify(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
     checkSelRange(L, m, sel);
-    pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, luaL_checknumber(L, 3), luaL_optstring(L, 4, "trim"))));
+    const double thickness = luaL_checknumber(L, 3);
+    const char* mat = luaL_optstring(L, 4, "trim");
+    if (lua_isnoneornil(L, 5)) {
+        pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, thickness, mat)));
+    } else {
+        const auto against = checkSel(L, 5);
+        checkSelRange(L, m, against);
+        pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, thickness, mat, &against)));
+    }
     return 1;
 }
 // P:ring(sel) -> sel: the faces round the region (sharing a corner with it)
@@ -4264,7 +5435,7 @@ void registerPolyMetatable(lua_State* L) {
             {"extract", l_poly_extract},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
-            {"crease_corners", l_poly_crease_corners},
+            {"crease_corners", l_poly_crease_corners}, {"bevel", l_poly_bevel}, {"unsubdivide", l_poly_unsubdivide}, {"loop_cut", l_poly_loop_cut}, {"slice", l_poly_slice}, {"bridge", l_poly_bridge},
             {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
@@ -4284,6 +5455,178 @@ std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
     void* ud = luaL_testudata(L, idx, kMeshMt);
     if (ud == nullptr) return nullptr;
     return *static_cast<MeshPtr*>(ud);
+}
+
+// --- params: what a recipe takes (#191, the model studio) ---------------------------------------------------
+// A recipe says what arguments it takes, each with its default, and gets back the values to use:
+//
+//     local a = params{
+//       kind  = { "furniture", "lamp", "tree" },     -- a choice: one of these names; the first unless `default = "tree"`
+//       seed  = 1,                                   -- a number (a whole one stays whole)
+//       tall  = { 8, min = 2, max = 30 },            -- a number held between limits
+//       name  = "office_chair",                      -- a text
+//       solid = true,                                -- yes or no
+//     }
+//
+// `a.kind`, `a.seed` ... are the recipe's `args` where given and the defaults where not. An argument the recipe
+// does not take, a choice that is not on the list, a number where a text was wanted: each is an error that names
+// what the recipe does take, so a mistyped argument is never quietly ignored. The declaration is also kept for the
+// host (declaredParams below): the model studio turns it into a form.
+constexpr const char* kParamsKey = "engine.procgen.params";
+
+int l_params(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    // the names, sorted, so the form and the error text come out the same every run
+    std::vector<std::string> names;
+    lua_pushnil(L);
+    while (lua_next(L, 1) != 0) {
+        if (lua_type(L, -2) != LUA_TSTRING) return luaL_error(L, "params: each argument has a name: { seed = 1, kind = { \"a\", \"b\" } }");
+        names.push_back(lua_tostring(L, -2));
+        lua_pop(L, 1);
+    }
+    std::sort(names.begin(), names.end());
+    std::string takes;
+    for (const std::string& n : names) takes += (takes.empty() ? "" : ", ") + n;
+
+    // What is wrong with the arguments given, if anything: said only AFTER the whole declaration has been read and
+    // kept, so a host can still show what the recipe takes (and so offer what would mend it).
+    std::string wrong;
+    lua_getglobal(L, "args");
+    const int args = lua_gettop(L);
+    const bool given = lua_istable(L, args);
+    // an argument the recipe does not take
+    if (given) {
+        lua_pushnil(L);
+        while (lua_next(L, args) != 0) {
+            lua_pop(L, 1);
+            if (lua_type(L, -1) != LUA_TSTRING) continue;
+            const std::string name = lua_tostring(L, -1);
+            if (std::find(names.begin(), names.end(), name) == names.end() && wrong.empty())
+                wrong = "there is no argument '" + name + "' (this recipe takes: " + (takes.empty() ? "none" : takes) + ")";
+        }
+    }
+
+    nlohmann::json declared = nlohmann::json::array();
+    lua_newtable(L);
+    const int out = lua_gettop(L);
+    for (const std::string& name : names) {
+        lua_getfield(L, 1, name.c_str());
+        const int decl = lua_gettop(L);
+        nlohmann::json d;
+        d["name"] = name;
+        // what kind of argument, and its default
+        int kind = lua_type(L, decl);     // LUA_TNUMBER, LUA_TSTRING, LUA_TBOOLEAN, or (for a choice) LUA_TTABLE
+        bool whole = false;
+        std::vector<std::string> choices;
+        double lo = 0, hi = 0;
+        bool limited = false;
+        if (kind == LUA_TTABLE) {
+            lua_rawgeti(L, decl, 1);
+            const int first = lua_type(L, -1);
+            if (first == LUA_TSTRING) {
+                lua_pop(L, 1);
+                for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, decl)); i <= n; ++i) {
+                    lua_rawgeti(L, decl, i);
+                    if (lua_type(L, -1) != LUA_TSTRING) return luaL_error(L, "params: '%s' is a choice: a list of names", name.c_str());
+                    choices.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+                std::string def = choices.front();
+                lua_getfield(L, decl, "default");
+                if (lua_type(L, -1) == LUA_TSTRING) def = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                if (std::find(choices.begin(), choices.end(), def) == choices.end()) return luaL_error(L, "params: '%s' has a default that is not one of its choices", name.c_str());
+                d["type"] = "choice";
+                d["choices"] = choices;
+                d["default"] = def;
+                lua_pushstring(L, def.c_str());
+            } else if (first == LUA_TNUMBER) {
+                whole = lua_isinteger(L, -1) != 0;
+                const double def = lua_tonumber(L, -1);
+                lua_pop(L, 1);
+                lua_getfield(L, decl, "min");
+                lua_getfield(L, decl, "max");
+                if (lua_isnumber(L, -2) && lua_isnumber(L, -1)) { lo = lua_tonumber(L, -2); hi = lua_tonumber(L, -1); limited = hi > lo; }
+                lua_pop(L, 2);
+                d["type"] = "number";
+                d["whole"] = whole;
+                d["default"] = def;
+                if (limited) { d["min"] = lo; d["max"] = hi; }
+                kind = LUA_TNUMBER;
+                if (whole) lua_pushinteger(L, static_cast<lua_Integer>(def)); else lua_pushnumber(L, def);
+            } else {
+                return luaL_error(L, "params: '%s' is a number, a text, true or false, a list of names (a choice), or { number, min =, max = }", name.c_str());
+            }
+        } else if (kind == LUA_TNUMBER) {
+            whole = lua_isinteger(L, decl) != 0;
+            d["type"] = "number";
+            d["whole"] = whole;
+            d["default"] = lua_tonumber(L, decl);
+            lua_pushvalue(L, decl);
+        } else if (kind == LUA_TSTRING) {
+            d["type"] = "text";
+            d["default"] = lua_tostring(L, decl);
+            lua_pushvalue(L, decl);
+        } else if (kind == LUA_TBOOLEAN) {
+            d["type"] = "bool";
+            d["default"] = lua_toboolean(L, decl) != 0;
+            lua_pushvalue(L, decl);
+        } else {
+            return luaL_error(L, "params: '%s' is a number, a text, true or false, a list of names (a choice), or { number, min =, max = }", name.c_str());
+        }
+        declared.push_back(d);
+        // (the default is on the stack) the value given, checked, in its place
+        if (given) {
+            lua_getfield(L, args, name.c_str());
+            if (!lua_isnil(L, -1)) {
+                const int got = lua_gettop(L);
+                if (!choices.empty()) {
+                    const std::string v = lua_type(L, got) == LUA_TSTRING ? lua_tostring(L, got) : "";
+                    if (std::find(choices.begin(), choices.end(), v) == choices.end()) {
+                        std::string list;
+                        for (const std::string& c : choices) list += (list.empty() ? "" : ", ") + c;
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is one of: " + list;
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);   // (the default stands in)
+                    }
+                } else if (kind == LUA_TNUMBER) {
+                    if (lua_type(L, got) != LUA_TNUMBER) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is a number";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    } else {
+                        double v = lua_tonumber(L, got);
+                        if (limited) v = std::clamp(v, lo, hi);
+                        // (a level carries every number as a fraction: a whole argument is made whole again)
+                        lua_pop(L, 1);
+                        if (whole && v == std::floor(v)) lua_pushinteger(L, static_cast<lua_Integer>(v)); else lua_pushnumber(L, v);
+                    }
+                } else if (kind == LUA_TSTRING) {
+                    if (lua_type(L, got) != LUA_TSTRING) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is a text";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    }
+                } else if (kind == LUA_TBOOLEAN) {
+                    if (lua_type(L, got) != LUA_TBOOLEAN) {
+                        if (wrong.empty()) wrong = "the argument '" + name + "' is true or false";
+                        lua_pop(L, 1);
+                        lua_pushvalue(L, -1);
+                    }
+                }
+                lua_remove(L, -2);       // the default goes; the given value stays
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+        lua_setfield(L, out, name.c_str());
+        lua_settop(L, out);
+    }
+    lua_pushstring(L, declared.dump().c_str());
+    lua_setfield(L, LUA_REGISTRYINDEX, kParamsKey);
+    if (!wrong.empty()) return luaL_error(L, "%s", wrong.c_str());
+    lua_pushvalue(L, out);
+    return 1;
 }
 
 void openProcgenLibrary(ScriptVM& vm) {
@@ -4397,6 +5740,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_add);            lua_setfield(L, -2, "add");
         lua_pushcfunction(L, l_model_add_solid);      lua_setfield(L, -2, "add_solid");
         lua_pushcfunction(L, l_model_add_instances);  lua_setfield(L, -2, "add_instances");
+        lua_pushcfunction(L, l_model_use);            lua_setfield(L, -2, "use");
+        lua_pushcfunction(L, l_model_shape);          lua_setfield(L, -2, "shape");
+        lua_pushcfunction(L, l_model_mirrored);       lua_setfield(L, -2, "mirrored");
+        lua_pushcfunction(L, l_model_posed);          lua_setfield(L, -2, "posed");
+        lua_pushcfunction(L, l_model_name);           lua_setfield(L, -2, "name");
+        lua_pushcfunction(L, l_model_level);          lua_setfield(L, -2, "level");
+        lua_pushcfunction(L, l_model_levels);         lua_setfield(L, -2, "levels");
+        lua_pushcfunction(L, l_model_joints);         lua_setfield(L, -2, "joints");
         lua_pushcfunction(L, l_model_collide);        lua_setfield(L, -2, "collide");
         lua_pushcfunction(L, l_model_add_collider);   lua_setfield(L, -2, "add_collider");
         lua_pushcfunction(L, l_model_merge);          lua_setfield(L, -2, "merge");
@@ -4405,6 +5756,33 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_model_collider_count); lua_setfield(L, -2, "collider_count");
         lua_pushcfunction(L, l_model_flatten);        lua_setfield(L, -2, "flatten");
         lua_pushcfunction(L, l_model_conform);        lua_setfield(L, -2, "conform");
+        lua_pushcfunction(L, l_model_node);           lua_setfield(L, -2, "node");
+        lua_pushcfunction(L, l_model_find);           lua_setfield(L, -2, "find");
+        lua_pushcfunction(L, l_model_node_count);     lua_setfield(L, -2, "node_count");
+        lua_pushcfunction(L, l_model_material);       lua_setfield(L, -2, "material");
+        lua_pushcfunction(L, l_model_has_material);   lua_setfield(L, -2, "has_material");
+        lua_pushcfunction(L, l_model_material_count); lua_setfield(L, -2, "material_count");
+        lua_pushcfunction(L, l_model_marker);         lua_setfield(L, -2, "marker");
+        lua_pushcfunction(L, l_model_marker_at);      lua_setfield(L, -2, "marker_at");
+        lua_pushcfunction(L, l_model_marker_count);   lua_setfield(L, -2, "marker_count");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+
+    // A node of a model (#191, model step 1): what m:node returns.
+    if (luaL_newmetatable(L, kNodeMt)) {
+        lua_pushcfunction(L, nodeGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_node_add);    lua_setfield(L, -2, "add");
+        lua_pushcfunction(L, l_node_node);   lua_setfield(L, -2, "node");
+        lua_pushcfunction(L, l_node_name);   lua_setfield(L, -2, "name");
+        lua_pushcfunction(L, l_node_parent); lua_setfield(L, -2, "parent");
+        lua_pushcfunction(L, l_node_point);  lua_setfield(L, -2, "point");
+        lua_pushcfunction(L, l_node_marker); lua_setfield(L, -2, "marker");
+        lua_pushcfunction(L, l_node_use);    lua_setfield(L, -2, "use");
+        lua_pushcfunction(L, l_node_motion); lua_setfield(L, -2, "motion");
+        lua_pushcfunction(L, l_node_shape);  lua_setfield(L, -2, "shape");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
@@ -4497,6 +5875,25 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"mirror", l_mesh_mirror},
         {"array", l_mesh_array},
         {"array_along", l_mesh_array_along},
+        {"weld", l_mesh_weld},
+        {"simplify", l_mesh_simplify},
+        {"split_non_manifold", l_mesh_split_non_manifold},
+        {"fill_holes", l_mesh_fill_holes},
+        {"remesh", l_mesh_remesh},
+        {"hull", l_mesh_hull},
+        {"tri", l_mesh_tri},
+        {"wedge", l_mesh_wedge},
+        {"cube_sphere", l_mesh_cube_sphere},
+        {"cross_cards", l_mesh_cross_cards},
+        {"ribbon", l_mesh_ribbon},
+        {"project_uv", l_mesh_project_uv},
+        {"planar_uv", l_mesh_planar_uv},
+        {"union", l_mesh_union},
+        {"subtract", l_mesh_subtract},
+        {"intersect", l_mesh_intersect},
+        {"sheet", l_mesh_sheet}, {"bspline_surface", l_mesh_bspline_surface},
+        {"ruled", l_mesh_ruled},
+        {"patch", l_mesh_patch},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
@@ -4511,7 +5908,7 @@ void openProcgenLibrary(ScriptVM& vm) {
     lua_setfield(L, -2, "profile");
     static const luaL_Reg kPathFns[] = {
         {"line", l_path_line}, {"arc", l_path_arc}, {"circle", l_path_circle}, {"helix", l_path_helix},
-        {"spline", l_path_spline}, {"bezier", l_path_bezier}, {"resample", l_path_resample}, {"length", l_path_length},
+        {"spline", l_path_spline}, {"bspline", l_path_bspline}, {"bezier", l_path_bezier}, {"resample", l_path_resample}, {"length", l_path_length},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kPathFns);
@@ -4606,6 +6003,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     static const luaL_Reg kInteriorFurnitureFns[] = {
         {"piece", l_furniture_piece},
         {"pieces", l_furniture_pieces},
+        {"uses", l_furniture_uses},
+        {"anchors", l_furniture_anchors},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kInteriorFurnitureFns);
@@ -4613,10 +6012,15 @@ void openProcgenLibrary(ScriptVM& vm) {
 
     static const luaL_Reg kModelFns[] = {
         {"new", l_model_new},
+        {"get", l_model_get_closed},                  // openModelStore replaces this
+        {"from_file", l_model_from_files_closed},     // openModelFiles replaces these two
+        {"from_files", l_model_from_files_closed},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kModelFns);
     lua_setglobal(L, "model");
+    lua_pushcfunction(L, l_params);
+    lua_setglobal(L, "params");
 
     // Retired with the old meshers (roads-v2 cleanup): `union`, `weld` and
     // `roadbed` wrapped the ribbon-union / SDF roadbed the engine path had already
@@ -4736,6 +6140,50 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
+
+void openModelStore(ScriptVM& vm, ModelGetter get) {
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "model");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }   // openProcgenLibrary first
+    void* mem = lua_newuserdatauv(L, sizeof(ModelGetter), 0);
+    new (mem) ModelGetter(std::move(get));
+    if (luaL_newmetatable(L, kModelGetterMt)) {
+        lua_pushcfunction(L, modelGetterGc);
+        lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    lua_pushcclosure(L, l_model_get, 1);
+    lua_setfield(L, -2, "get");
+    lua_pop(L, 1);
+}
+
+void openModelFiles(ScriptVM& vm, ModelFileSource source) {
+    lua_State* L = luaState(vm);
+    lua_getglobal(L, "model");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }   // openProcgenLibrary first
+    // The host's resolver lives in a userdata the two closures share and Lua frees with the state.
+    void* mem = lua_newuserdatauv(L, sizeof(ModelFileSource), 0);
+    new (mem) ModelFileSource(std::move(source));
+    if (luaL_newmetatable(L, kModelFilesMt)) {
+        lua_pushcfunction(L, modelFilesGc);
+        lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    lua_pushcclosure(L, l_model_from_file, 1);
+    lua_setfield(L, -3, "from_file");
+    lua_pushcclosure(L, l_model_from_files, 1);
+    lua_setfield(L, -2, "from_files");
+    lua_pop(L, 1);
+}
+
+std::string declaredParams(ScriptVM& vm) {
+    lua_State* L = luaState(vm);
+    lua_getfield(L, LUA_REGISTRYINDEX, kParamsKey);
+    const std::string out = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return out;
+}
 
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
     nlohmann::json opts = nlohmann::json::parse(optsJson, nullptr, false);
