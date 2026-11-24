@@ -741,12 +741,14 @@ private:
         engine::PathId into;
         Real shift = 0;
         bool towardKerb = false;
+        bool merging = false;   // waiting to merge where its lane joins another (no side to signal: the road's shape shows it)
     };
     std::map<CarId, Indicating> indicating_;
     // LETTING IN: a driver -> the indicating car it keeps behind (as if already ahead in its lane), until that one is across.
     std::map<CarId, CarId> lettingIn_;
     // Where car `who` would be in lane `into` if it is indicating into it: its front's and rear's distance along it.
     bool indicatedInto(CarId who, engine::PathId into, Real* front, Real* rear) const;
+    Indicating mergeWait(const Car& c) const;
     LaneChangeCounts laneChangeCounts_;
     KerbMoveCounts kerbMoveCounts_;
     // the cars moving across into the lane beside, or out of or into a kerb space, and each one's move

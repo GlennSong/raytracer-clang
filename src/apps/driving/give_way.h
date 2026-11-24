@@ -100,6 +100,7 @@
 #include "apps/driving/traffic_state.h"
 
 #include <array>
+#include <map>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -232,6 +233,10 @@ struct GiveWayInputs {
     // My way ahead, its first path the one my front is on: the lanes on it whose crossing points I judge (issue #284).
     // Null: no lanes are judged.
     const WayAhead* way = nullptr;
+    // WHO IS LETTING WHOM IN (lane changes, sitting 5: the driver, and the car it keeps behind), as the cars stood at the
+    // start of the tick. A driver on the other lane of a join holding back to let me in is not coming: I do not give
+    // way to it there (#323, the zipper at a merge). Null: nobody lets anybody in.
+    const std::map<CarId, CarId>* lettingIn = nullptr;
 };
 
 // WHAT ONE DRIVER JUDGED.

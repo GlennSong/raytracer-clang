@@ -98,6 +98,8 @@ constexpr Real kMoveDoneWithin = 0.01;
 // Dropping back for a gap: while the car closing it is level with me or behind, I keep this much (m/s) below its speed,
 // so it draws ahead and the gap behind it comes level with me [~].
 constexpr Real kDropBackBelow = 1.0;
+// Waiting to merge: a car held to give way this near (m) to where its lane joins another shows it wants in [~].
+constexpr Real kMergeWaitWithin = 5.0;
 inline Real laneMoveShortest(Real across, Real tightestRadius) {
     return kMoveMargin * std::sqrt(6 * std::fabs(across) * std::max(tightestRadius, Real(1)));
 }

@@ -668,6 +668,7 @@ void Driving::plan() {
                              cls.length, cls.brake,  static_cast<Real>(every) * step_, t->person,
                              clockSeconds_, p.junctions, {}, lightsRun_ ? &lightTiming_ : nullptr, cls.hardestBrake};
             in.way = &p.way;   // the lanes on it judge their crossing points too (issue #284)
+            if (changingLanes()) in.lettingIn = &lettingIn_;   // (a driver holding back to let me in is not coming)
             for (std::size_t k = 0; k < kMaxJunctionPlans; ++k) {
                 in.lineIn[k] = kNever;
                 if (k >= p.junctions.count) continue;
@@ -799,7 +800,9 @@ void Driving::plan() {
             if (lane.need.onRoute && lane.need.lanes > 0 && lane.gap.target.valid() && !lane.gap.safe &&
                 (lane.mustWait || lane.last.needed))
                 indicating_[c.id] = Indicating{lane.gap.target, lane.gap.targetAlong - c.along,
-                                               lane.need.toward == Across::TowardKerb};
+                                               lane.need.toward == Across::TowardKerb, false};
+            else if (const Indicating merge = mergeWait(c); merge.into.valid())
+                indicating_[c.id] = merge;
             else
                 indicating_.erase(c.id);
             // A CAR WANTING INTO MINE, ahead of my front: the one I let in already while it still indicates (zipper),
@@ -807,13 +810,15 @@ void Driving::plan() {
             const Real reach = cls.length + std::max(c.speed, Real(5)) * static_cast<Real>(personalValue(gapKept_, gapKeptHash_, t->person)) * 2;
             Real front = 0, rear = 0;
             const std::map<CarId, CarId>::const_iterator had = lettingIn_.find(c.id);
-            if (had != lettingIn_.end() && indicatedInto(had->second, c.path, &front, &rear) && front > c.along) {
+            // (only a car whose rear would be ahead of my front: one already level with me I cannot drop behind -- held
+            // to it, I stood on the join's stretch while it gave way to me, both for good: #323)
+            if (had != lettingIn_.end() && indicatedInto(had->second, c.path, &front, &rear) && rear > c.along) {
                 lane.wantingIn = had->second;
                 lane.wantingInGap = rear - c.along;
             } else {
                 for (const std::pair<const CarId, Indicating>& ind : indicating_) {
                     if (ind.first == c.id || ind.second.into != c.path) continue;
-                    if (!indicatedInto(ind.first, c.path, &front, &rear) || front <= c.along || rear - c.along > reach) continue;
+                    if (!indicatedInto(ind.first, c.path, &front, &rear) || rear <= c.along || rear - c.along > reach) continue;
                     if (!lane.wantingIn.valid() || rear - c.along < lane.wantingInGap) {
                         lane.wantingIn = ind.first;
                         lane.wantingInGap = rear - c.along;
@@ -1446,12 +1451,41 @@ Real Driving::followAcceleration(const Car& who, Real gap, Real speedAhead) cons
 // change course or speed). Read off this tick's board, by the comfortable gap a driver decides to go into a meeting by.
 // (The 20-minute lab: a car moved across into a lane 30 m from where a ramp joined it, 0.4 s ahead of the ramp's car,
 // which could no longer stop; they overlapped by 1.8 m.)
+// WAITING TO MERGE (sitting 5, the zipper at a merge, #323): a car held to give way within kMergeWaitWithin of where its
+// lane joins another out on the road (a ramp's lane into its host's) shows the drivers there that it wants in, as a car
+// wanting the lane beside does: its front projected onto their lane along the join's matched stretch. A driver there
+// may let it in (the rule "let in"): it keeps behind that projected rear, and the waiting car, seeing it hold back for
+// it, does not give way to it (GiveWayInputs::lettingIn). Without it a queue crawling along the host lane never left a
+// gap and the ramp's car waited for good (the 20-minute lab: 836 s).
+Driving::Indicating Driving::mergeWait(const Car& c) const {
+    Indicating none;
+    if (!c.held.hasStop || !givesWay(c.held.stopFor) || !c.path.valid() || c.path.index >= roads_->paths.size()) return none;
+    if (static_cast<Real>(c.held.stopAt - c.odometer) > kMergeWaitWithin) return none;
+    const engine::Path& p = roads_->paths[c.path.index];
+    for (uint32_t x = p.crossings.first; x < p.crossings.end() && x < roads_->pathCrossings.size(); ++x) {
+        const engine::CrossingPoint& rec = roads_->crossings[roads_->pathCrossings[x].index];
+        if (rec.otherSide != engine::OtherSide::Path || rec.meeting != engine::Meeting::Join || rec.junction.valid()) continue;
+        const bool mineIsA = rec.a == c.path;
+        const Real myFrom = mineIsA ? rec.aFrom : rec.otherFrom, myTo = mineIsA ? rec.aTo : rec.otherTo;
+        const Real theirFrom = mineIsA ? rec.otherFrom : rec.aFrom, theirTo = mineIsA ? rec.otherTo : rec.aTo;
+        if (c.along > myTo || myFrom - c.along > kMergeWaitWithin) continue;   // (past it, or not near it)
+        const Real scale = myTo > myFrom ? (theirTo - theirFrom) / (myTo - myFrom) : Real(1);
+        Indicating in;
+        in.into = mineIsA ? rec.otherPath() : rec.a;
+        in.shift = theirFrom + (c.along - myFrom) * scale - c.along;
+        in.merging = true;
+        return in;
+    }
+    return none;
+}
+
 int Driving::signalSide(CarId car) const {
     bool towardKerb = false;
     if (const std::map<CarId, LaneMove>::const_iterator m = laneMoves_.find(car);
         m != laneMoves_.end() && !m->second.frontDone && m->second.from != m->second.to)
         towardKerb = m->second.to > m->second.from;   // (offsets from the new lane's line, + toward the kerb)
-    else if (const std::map<CarId, Indicating>::const_iterator i = indicating_.find(car); i != indicating_.end())
+    else if (const std::map<CarId, Indicating>::const_iterator i = indicating_.find(car);
+             i != indicating_.end() && !i->second.merging)
         towardKerb = i->second.towardKerb;
     else
         return 0;

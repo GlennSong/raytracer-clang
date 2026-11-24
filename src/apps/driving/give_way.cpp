@@ -130,8 +130,20 @@ bool judgeLanes(const GiveWayInputs& in, Real hard, Real patience, GiveWayJudgem
                                              in.numbers.atLineWithin;
                 const Real need = stoppedHere ? comfortableGap(in.numbers, 0, patience, hard) : hard;
                 bool tightest = false;
+                // A DRIVER ON THE OTHER LANE HOLDING BACK TO LET ME IN is not coming, nor is anybody queued behind it
+                // in its lane (arriving no sooner): they cannot pass it (#323, the zipper at a merge).
+                Real heldBackFrom = kNever;
+                if (in.lettingIn)
+                    for (const Announcement& e : in.board.on(cid)) {
+                        if (e.onPath != otherPath) continue;
+                        const std::map<CarId, CarId>::const_iterator li = in.lettingIn->find(CarId(e.who));
+                        // (one already on the stretch is not holding back: it is there)
+                        if (li != in.lettingIn->end() && li->second == in.me.id && e.arriveIn > 0)
+                            heldBackFrom = std::min(heldBackFrom, e.arriveIn);
+                    }
                 for (const Announcement& e : in.board.on(cid)) {
                     if (e.onPath != otherPath || e.who == in.me.id.index || e.notGoing) continue;
+                    if (e.arriveIn >= heldBackFrom) continue;
                     Question by = Question::None;
                     if (in.resolver.goesFirst(in.roads, cid, in.me.id.index, e.who, &by)) continue;
                     if (judgeOne(e, cid, otherPath, by, gapTo(*mine, e, by), need, tightest, j)) {
