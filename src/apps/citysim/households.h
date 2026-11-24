@@ -91,14 +91,12 @@ struct CrossingTuning {
     double jaywalkShare = 0.03;
 };
 
-// WHAT THE AGENT BRAIN'S PEOPLE OWN AND DO (people.lua `people.brain`; ADR-0490): read only where the brain runs the
-// city's own households (brain_people.h). `day`: FOR NOW, until the brain plans from the roles' day tables.
+// WHAT THE AGENT BRAIN'S PEOPLE OWN (people.lua `people.brain`; ADR-0490): read only where the brain runs the city's own
+// households (brain_people.h). Their day is their role's (ADR-0491).
 struct BrainPeopleRules {
     std::vector<std::pair<int, double>> cars;           // (cars a household owns, share)
     std::vector<std::pair<std::string, double>> traits;  // (travel.lua trait, share of people), by name
     std::string intent;                                  // brain.lua's `intents` row
-    double workLo = 0, workHi = 0;                       // minutes at work
-    double homeLo = 0, homeHi = 0;                       // minutes at home before setting out
     bool given = false;                                  // people.lua has the table
 };
 

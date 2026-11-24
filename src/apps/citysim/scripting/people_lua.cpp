@@ -271,18 +271,9 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
             std::sort(k.traits.begin(), k.traits.end());
         }
         lua_pop(L, 1);
-        lua_getfield(L, b, "day");
-        if (lua_istable(L, -1)) {
-            const int dt = lua_gettop(L);
-            int lo = 0, hi = 0;
-            if (range(L, dt, "work_minutes", lo, hi)) { k.workLo = lo; k.workHi = hi; }
-            if (range(L, dt, "home_minutes", lo, hi)) { k.homeLo = lo; k.homeHi = hi; }
-        }
-        lua_pop(L, 1);
         for (const std::pair<int, double>& row : k.cars)
             if (row.first < 0 || row.second < 0) return bail("brain.cars: a row with fewer than 0 cars or a share under 0");
         if (k.intent.empty()) return bail("brain: no `intent`");
-        if (k.workHi < k.workLo || k.homeHi < k.homeLo) return bail("brain.day: a band whose top is under its bottom");
     }
     lua_pop(L, 1);
     lua_settop(L, base);

@@ -24481,3 +24481,44 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - **One new failure:** a motorcycle at junction 62's far turn stands from minute 6 with a bus behind it (1308 s). The sim's own walkers stand at rest in the carriageway across the turn (#333).
 - The hash moved from `0x982f4b5f055d37a8` to `0x0c184c57be58cc6a`.
 - brain_crowd still uses the crowd generator until step 3.
+
+## ADR-0491 — The agent brain's people keep their role's day, on the sim's clock (one-brain plan, step 2a; 2026-11-24)
+
+**Why:** after ADR-0490 the brain's people were the city's own, but their day was a stand-in: people.lua's round of a few minutes at work and a few at home, with no clock. The old sim's day (roles.lua's tables: shifts, opening hours, lunch, the errand, a day out, a night out) ran only for the people the brain did not own. There must be one day, and it must be the real one.
+
+**Words:**
+- A *role's day* is the goal table `buildDayTable` makes from a role (`city_roles.h`): states such as AtHome, ToWork, AtWork, GoBreak, ReturnHome. A *GoTo* state is a trip to its target; a *Rest* state waits for an event.
+- The *events* are fixed: the work window opening or closing (DepartWork, DepartHome), the evening, the stay at a stop being over (DwellDone), arriving (Arrived), no way there (NoRoute).
+- A *picked* target is one the sim chooses when the trip begins (lunch, an outing, a campus break, an activity, the errand menu), not a fixed one (home, work).
+
+**What happens** (`src/apps/citysim/city_brain.cpp` `tickRoleDay`, `setOut`, `fireDay`):
+- A brain person from the city's households (`CityResident::roleDay`, set by `brainPeopleFromHouseholds`) runs their own role's table, held on their sim agent (`Agent::goal`, `goalHours`), the one place the day's state lives. They start at the table's entry, at home.
+- **One reading of the clock:** a resting person's events are `CitySim::restEvents`, the sim's own order (the work window, then the evening, then the stay, then Idle), now one function that the old sim's `goalThink` also calls.
+- **One chooser:** a GoTo's picked target is `CitySim::choosePickedNode`, taken out of `startGoalTrip` and used by both. Its venue, if any, is the place it goes to.
+- **Where a trip goes, as a marker:**
+  - home is their home's marker;
+  - work is their job's place;
+  - a pick is its venue's place, or the frontage nearest its point (`node_<n>`).
+  - A place's marker is made the first time someone goes there (`placeMarkerSpec`, now the one way a place becomes a marker, shared with `brain_people`).
+- **Arriving** at the marker is the state's Arrived; the stay is the sim's own (`CitySim::visitHours`). The brain finding no way, or no marker, is NoRoute.
+- **Two limits:**
+  - After a NoRoute the day tries again no sooner than a quarter of an hour of the sim's clock later (`kDayRetryHours`). One person whose job has no street beside it went ToWork → AtHome → ToWork every tick.
+  - At most 8 trips begin in one tick (`kDaySetOutsPerTick`), as the old sim spends its departures. At river_town's start, 288 people set out at once and the brain's tick took 129 ms; now the worst is 5.6 ms.
+- **The stand-in day is deleted:** `people.brain.day`, `BrainPeopleRules::work*/home*`, and the job markers and their "jobs that cannot be reached" count in `brain_people`.
+- **Not done:** a pick that is a seat or a group activity is let go; the person stands at the nearest frontage (#334).
+
+**Why only 2a:** the plan's step 2 also deletes the old goal layer (`goalThink`, the goal trips, the control flags). The old layer still runs every person the brain does not (on the island, 100k+), and the brain cannot run them until tiering (step 4). Deleting it now would stop the rest of the city, so that deletion is step 2b, after step 4.
+
+**Checked** (river_town, 10:31 to 11:00 on the sim clock):
+- 436 trips begun, 392 arrived, 218 at work, every one inside their shift. Nobody arrived at a shut place.
+- Nowhere to go 2 (that one job), no way 0; 0 errors, 0 refused, 0 rings, 0 touching spells.
+- New checks for each of these. brain_crowd (its hash), brain_lab (the same 14 old failures) and the near tier are unchanged.
+
+**Regressions, re-pinned** (`tests/test_river_town_crowd.cpp`, old → new with the reason there):
+- The stand-in's draws are gone, so the seeded households are others: 343 → 337 households, cars 180 → 204.
+- Markers at the start 284 → 115: only homes, since jobs and venues are made when first used.
+- Arrivals 1282 → 392: the stand-in sent workers back and forth every few minutes.
+- Car trips 92 → 72; the most on the road 37 at minute 21 → 63 at minute 5 (everyone late, at once).
+- **Bus riders 11 → 0.** Nobody's trip in this half hour is long enough for the bus to win. river_town was the only rider test, so its rider check now fails, marked with #335.
+- #333 (the sim's own walkers standing in junction 62's turn) catches bus 4 now (1257 s); its check stays failing.
+- The hash moved from `0x0c184c57be58cc6a` to `0x4d453ad8fdb637d9`.

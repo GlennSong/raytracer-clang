@@ -14,18 +14,19 @@
 // Words: a PLACE'S MARKER is the brain's point beside a street for one of the city's places (its door's frontage,
 // as the lot pass recorded it, else the frontage nearest its entrance); named place_<id> after the place.
 //
-// What people own and the day they keep are people.lua's `people.brain` (BrainPeopleRules): how many cars a household
-// owns (never more than its members who may drive), the travel traits, and, FOR NOW, a day of home -> work -> home for
-// anyone with a job (everyone else stays home) until the brain plans from the roles' day tables (step 2).
+// What people own is people.lua's `people.brain` (BrainPeopleRules): how many cars a household owns (never more than its
+// members who may drive) and the travel traits. Their day is their role's (CityResident::roleDay): the brain runs the
+// sim's role table for each of them on the sim's clock (city_brain.h, ADR-0491).
 //
 // LEFT OUT, and counted: a household whose home's door people cannot walk to and from (or, with cars, has too few kerb
-// spaces near), or whose home marker is full (city_brain.h kMarkerSpots); a job whose door people cannot walk to, or
-// whose marker is full (the worker stays home); a car with no free kerb space near home (the household has fewer).
+// spaces near), or whose home marker is full (city_brain.h kMarkerSpots); a car with no free kerb space near home (the
+// household has fewer).
 //
 // Same result for the same city and seed: one ProcRng stream, drawn in a fixed order.
 
 #include "../../engine/components.h"   // CityMarker, CityResident, CityHousehold
 #include "../../rt_math.h"
+#include "places.h"   // PlaceId
 
 #include <cstdint>
 #include <functional>
@@ -50,11 +51,10 @@ struct BrainPeople {
     std::vector<engine::CityHousehold> households;
     std::vector<int> agents;   // resident r is the sim's agent agents[r]
     int cars = 0;
-    int workers = 0;           // residents with a job to go to
+    int workers = 0;           // residents with a job away from home
     // left out
     int homesUnusable = 0;     // households whose home cannot be walked to (or, with cars, has too few kerb spaces)
     int homesFull = 0;         // households whose home marker has no spots left
-    int jobsUnusable = 0;      // workers whose job cannot be walked to, or its marker is full
     int carsNoSpace = 0;       // cars with no free kerb space near home
     std::string describe() const;
 };
@@ -67,6 +67,12 @@ using BrainPlaceUsable = std::function<bool(engine::Vec2 stand, const engine::Ro
 // own list, city_brain.h kerbSpacesOffered). A household's cars hold as many of them as they are, unheld by an earlier
 // household, so the brain, putting each car in the first free space of its list in the same order, always finds one.
 using BrainCarSpaces = std::function<std::vector<engine::KerbSpace>(const engine::RoadFrontage& f)>;
+
+// A PLACE'S MARKER, as a level would state it: named placeMarkerName(id); by street, station and kerb when the place's
+// door names a street of `model` (Place::frontage, as the lot pass recorded it), else at its entrance. The one way a
+// place becomes a marker: here for homes, and in the brain for wherever a day goes (CityBrain, ADR-0491).
+engine::CityMarker placeMarkerSpec(const Place& p, PlaceId id, const engine::RoadModel& model);
+std::string placeMarkerName(PlaceId id);
 
 // MAKE THE BRAIN'S PEOPLE from `sim`'s households (its plan and agents, after assignPlaces) in `places`, on `model`,
 // at most `most` people, seeded by `seed`. False, with the reason in `why`, when people.lua has no `people.brain`.

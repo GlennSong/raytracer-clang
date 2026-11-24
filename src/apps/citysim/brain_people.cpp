@@ -46,11 +46,32 @@ struct PlaceMarker {
 std::string BrainPeople::describe() const {
     return std::to_string(residents.size()) + " people in " + std::to_string(households.size()) + " households, " +
            std::to_string(cars) + " cars, " + std::to_string(workers) + " with a job to go to, " +
-           std::to_string(markers.size()) + " places; left out: " + std::to_string(homesUnusable) +
+           std::to_string(markers.size()) + " homes; left out: " + std::to_string(homesUnusable) +
            " households whose home cannot be reached, " + std::to_string(homesFull) + " whose home is full, " +
-           std::to_string(jobsUnusable) + " jobs that cannot be reached, " + std::to_string(carsNoSpace) +
-           " cars with no kerb space";
+           std::to_string(carsNoSpace) + " cars with no kerb space";
 }
+
+engine::CityMarker placeMarkerSpec(const Place& p, PlaceId id, const engine::RoadModel& model) {
+    engine::CityMarker m;
+    m.name = placeMarkerName(id);
+    // (a home or a job is the person's own: no other place of a kind is the same to them, CityMarker::kind)
+    bool known = false;
+    if (p.frontage.onStreet())
+        for (const engine::ModelStreet& s : model.streets)
+            if (s.id == p.frontage.street) { known = true; break; }
+    if (known) {
+        m.stated = true;
+        m.street = p.frontage.street;
+        m.station = p.frontage.station;
+        m.dir = p.frontage.dir;
+    } else {
+        m.x = p.entrance.x;
+        m.z = p.entrance.y;
+    }
+    return m;
+}
+
+std::string placeMarkerName(PlaceId id) { return "place_" + std::to_string(id); }
 
 bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const engine::RoadModel& model, int most,
                                const BrainPlaceUsable& usable, const BrainCarSpaces& spaces, uint32_t seed,
@@ -83,20 +104,12 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
         pm.tried = true;
         const Place& p = places[id];
         engine::CityMarker& m = pm.marker;
-        m.name = "place_" + std::to_string(id);
-        // (a home or a job is the person's own: no other place of a kind is the same to them, CityMarker::kind)
-        const std::unordered_map<std::string, uint32_t>::const_iterator s =
-            p.frontage.onStreet() ? streetOf.find(p.frontage.street) : streetOf.end();
-        if (s != streetOf.end()) {
-            m.stated = true;
-            m.street = p.frontage.street;
-            m.station = p.frontage.station;
-            m.dir = p.frontage.dir;
+        m = placeMarkerSpec(p, id, model);
+        if (m.stated) {
+            const std::unordered_map<std::string, uint32_t>::const_iterator s = streetOf.find(m.street);
             pm.frontage = model.frontageOn(engine::ModelStreetId(s->second), m.station, m.dir);
         } else {
-            m.x = p.entrance.x;
-            m.z = p.entrance.y;
-            pm.frontage = model.frontageAt(p.entrance);
+            pm.frontage = model.frontageAt(Vec2(m.x, m.z));
         }
         engine::Vec2 stand;
         if (!pm.frontage.valid() || !pm.frontage.street.valid() || !model.sidewalkBeside(pm.frontage, stand)) return pm;
@@ -163,20 +176,9 @@ bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const
             r.drives = agent.stage < 0 || !people.stages[static_cast<std::size_t>(agent.stage)].walks;
             for (const std::pair<std::string, double>& t : rules.traits)
                 if (rng.next() < t.second) r.traits.push_back(t.first);
-            const double atWork = rng.in(rules.workLo, rules.workHi);
-            const double atHome = rng.in(rules.homeLo, rules.homeHi);
-            // THEIR DAY, for now: to work and home again, or home all day
-            if (agent.workPlace != kNoPlace && agent.workPlace != hh.place) {
-                PlaceMarker& job = markerOf(agent.workPlace);
-                if (job.usable && job.users < kMarkerSpots) {
-                    use(job, 1);
-                    r.day.push_back(engine::CityResident::Stop{job.marker.name, atWork});
-                    r.day.push_back(engine::CityResident::Stop{home.marker.name, atHome});
-                    ++out.workers;
-                } else {
-                    ++out.jobsUnusable;
-                }
-            }
+            // THEIR DAY is their role's, run by the brain on the sim's clock (ADR-0491)
+            r.roleDay = true;
+            if (agent.workPlace != kNoPlace && agent.workPlace != hh.place) ++out.workers;
             made.members.push_back(r.name);
             out.residents.push_back(r);
             out.agents.push_back(a);

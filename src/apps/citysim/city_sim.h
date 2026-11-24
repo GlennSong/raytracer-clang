@@ -915,7 +915,7 @@ public:
     bool startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                     const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
                     const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
-                    bool drivableSpacesOnly = false);
+                    bool drivableSpacesOnly = false, const PlaceMap* places = nullptr);
     CityBrain* brain() const { return brain_.get(); }
     // A DIRECTOR TAKES ONE OF THE BRAIN'S PEOPLE OVER, OR LETS THEM GO (ADR-0443; the possession channel,
     // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until
@@ -1260,6 +1260,17 @@ private:
     // False when no trip launched (then a NoRoute row, if any, has been taken).
     bool startGoalTrip(Agent& a, int origin, bool fromRest);
     int departNode(const Agent& a) const;   // where a rest departure starts from
+    // The node a picked GoTo goes to (an outing, lunch, a campus break, an activity, the errand menu), its venue, seat
+    // or session held; -1: the state's target is fixed, or nothing was found. Shared with the brain's day (ADR-0491).
+    int choosePickedNode(Agent& a, int origin, const GoalState& s);
+    // A resting agent's events this tick in the order they are tried; how many (shared with the brain's day).
+    static constexpr int kRestEvents = 4;
+    // Is the clock inside the agent's work window [the hour it leaves for work, departHome)?
+    bool inWorkWindow(const Agent& a) const;
+    int restEvents(const Agent& a, const GoalState& s, GoalEvent (&out)[kRestEvents]) const;
+    // How long a visit lasts (hours): the activity's minutes, else its kind of site's; drawn from the agent's stream.
+    Real visitHours(Agent& a);
+    Real jitterHours(Agent& a, Real lo, Real hi);
     // The node a GoTo state aims at, or -1 when it has no fixed one (Random
     // picks inside startWanderTrip; Fare/Drop come from the Dispatch).
     int goalNodeFor(const Agent& a, GoalTarget target) const;

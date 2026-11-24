@@ -39,6 +39,12 @@
 // THE RESIDENT IS THE BRAIN'S (ADR-0442): their sim agent is marked `brainOwned`, and the sim's day table never places
 // them (CitySim::placeFromSchedule). Nothing here repairs where they are.
 //
+// THEIR DAY (ADR-0491). A resident of the city's own households keeps their ROLE's day (CityResident::roleDay): the
+// sim's table for their role, held on their agent (Agent::goal), run here on the sim's clock with the sim's own reading
+// of it (CitySim::restEvents) and the sim's own choosers (CitySim::choosePickedNode). A trip is a marker they want to be
+// at: their home's, their job's place's, a pick's venue's, or the frontage nearest a picked point; a place's marker is
+// made the first time anyone goes there. A level's hand-written resident goes round the markers its day states.
+//
 // SEVERAL RESIDENTS, HOUSEHOLDS AND CARS (ADR-0443; design sections 7 and 12). The level states a list of residents
 // (each: a name, a home marker, traits, a day) and a list of households (each: its members and the cars they share).
 // Nobody is assigned a car: a plan prices a car of the household only if it is free at that moment, from where it
@@ -89,6 +95,7 @@ struct CityHousehold;
 namespace citysim {
 
 class CitySim;
+class PlaceMap;
 using engine::Real;
 using engine::Vec2;
 
@@ -178,6 +185,14 @@ struct CityBrainCounts {
     uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
     uint32_t busWaits = 0;         // times someone near began waiting at a bus stop (ADR-0484)
     uint32_t busRides = 0;         // ...and got off a bus at their stop
+    // ADR-0491: their role's day
+    uint32_t daySetOut = 0;        // trips the day began (a GoTo state given a marker)
+    uint32_t dayArrivals = 0;      // ...that arrived
+    uint32_t dayNowhere = 0;       // GoTo states with nowhere to go: no place picked, or no street beside it (NoRoute)
+    uint32_t dayNoWay = 0;         // trips the brain found no way for (NoRoute)
+    uint32_t dayArrivedShut = 0;   // arrivals at a venue not open at that hour
+    uint32_t dayToWork = 0;        // arrivals at their job's place
+    uint32_t dayToWorkOffShift = 0;   // ...outside their work window (late, or after it)
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
@@ -215,6 +230,8 @@ public:
     // and back to (the kerb lane beside them in the largest part of the road its class drives).
     // `agentOf` (ADR-0490): resident r is the sim's agent agentOf[r] (the city's own households, brain_people.h);
     // empty, each is the next of the sim's walkers in order (a level's hand-written residents, test data).
+    // THE CITY'S PLACES (places.h), for a role's day to go to (ADR-0491): given before start, kept by the caller.
+    void setPlaces(const PlaceMap* places);
     bool start(engine::World& world, const std::vector<engine::CityMarker>& markers,
                const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
                const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,

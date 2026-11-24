@@ -1,5 +1,8 @@
 #include "city_brain.h"
 
+#include "brain_people.h"   // placeMarkerSpec: a place's marker (ADR-0491)
+#include "places.h"
+
 #include "city_car.h"
 #include "city_driving.h"   // busService: a stop's wait, for the timetable (ADR-0484)
 #include "city_sim.h"
@@ -21,6 +24,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <map>
+#include <unordered_map>
 
 namespace citysim {
 
@@ -55,6 +59,13 @@ constexpr uint32_t kTestCar = brain::kMaxHandle;
 // WHO HAS A CAR when it is nobody the brain owns: the player, or a walker a director took over (an OUTSIDER).
 constexpr AgentId kOutsider = brain::kNoAgent - 1;
 constexpr Real kMillis = 1000.0;
+// A ROLE'S DAY WITH NOWHERE TO GO, OR NO WAY THERE, tries again after this many hours of the sim's clock (ADR-0491):
+// the person stays in the state the table falls back to (home, work) for a quarter of an hour, not a tick.
+constexpr double kDayRetryHours = 0.25;
+// ...and no more than this many trips are begun in one tick (each is planned on the next): when a clock window opens
+// for hundreds at once (river_town's start, 288 people: a 129 ms tick), the rest set out over the next ticks, as the
+// sim's own day spends its departures (CitySim::kDeparturesPerStep).
+constexpr int kDaySetOutsPerTick = 8;
 constexpr Real kSecondsPerMinute = 60.0;
 // A car an outsider left at a point is put into the kerb lane beside it when the lane is empty from this far behind
 // its rear to this far ahead of its front (a body's own room; nobody is waited for: it either fits or it does not).
@@ -166,6 +177,13 @@ struct CityBrain::Impl {
         std::vector<Stop> day;
         bool dayOn = false;
         int dayAt = -1;   // the stop they are at or going to (-1: not set out yet)
+        // ...or THEIR ROLE'S DAY (ADR-0491): their agent's goal state on the sim's clock, the marker its trip goes to
+        // (-1: not set out), and the venue it is for (-1: none)
+        bool roleDay = false;
+        int homeMarker = -1;
+        int dayMarker = -1;
+        int dayVenue = -1;
+        double dayRetryAt = 0;   // (the sim's total hours) after a NoRoute, nothing fires before this
         // the places (marker indices) they have found no way to, with every way they had to try ruled out (tickChoice)
         std::vector<uint32_t> noWayTo;
         brain::IntentKind intentKind = 0;
@@ -297,6 +315,14 @@ struct CityBrain::Impl {
     // the street from their marker.)
     std::map<std::pair<int, AgentId>, uint32_t> spotOf;
     std::vector<std::vector<uint8_t>> spotsTaken;   // per marker, per spot number
+    // THE MARKERS BY NAME, and the city's places (a role's day makes a place's marker the first time it goes there)
+    std::unordered_map<std::string, int> markerByName;
+    const PlaceMap* places = nullptr;
+    // A MARKER from a level's statement, resolved against the road model: its index (the one there already by that
+    // name), or -1 when no street or no sidewalk is beside it.
+    int addMarker(const engine::CityMarker& spec);
+    int markerForPlace(PlaceId id);
+    int markerForNode(int node);
     // Their spot there: the one given, or (none given yet) the one they would be given now.
     uint32_t spotFor(int index, AgentId who) const {
         const std::map<std::pair<int, AgentId>, uint32_t>::const_iterator it = spotOf.find({index, who});
@@ -489,6 +515,10 @@ struct CityBrain::Impl {
     void tickWalks(Real dt);
     void tickCars();
     void tickDay(AgentId who);
+    void tickRoleDay(AgentId who, Real dtHours);
+    int daySetOutsThisTick = 0;
+    void setOut(AgentId who, const GoalState& s);
+    bool fireDay(AgentId who, GoalEvent e);
     void tickChoice(AgentId who);
     void parkInSpace(Car c, PlaceRef space);
     void towAway(Car c);
@@ -1118,6 +1148,162 @@ void CityBrain::Impl::tickDay(AgentId who) {
     machine->setIntent(who, p.intentKind, p.day[static_cast<std::size_t>(p.dayAt)].place);
 }
 
+// A MARKER, resolved against the road model (a level's, or one a role's day makes for a place).
+int CityBrain::Impl::addMarker(const engine::CityMarker& spec) {
+    const std::unordered_map<std::string, int>::const_iterator known = markerByName.find(spec.name);
+    if (known != markerByName.end()) return known->second;
+    if (markers.size() > kMarkerIndexMask) return -1;
+    BrainMarker m;
+    m.name = spec.name;
+    m.kind = spec.kind;
+    m.stated = spec.stated;
+    if (spec.stated) {
+        for (std::size_t st = 0; st < model->streets.size(); ++st)
+            if (model->streets[st].id == spec.street)
+                m.frontage = model->frontageOn(engine::ModelStreetId(static_cast<uint32_t>(st)), spec.station, spec.dir);
+    } else {
+        m.frontage = model->frontageAt(Vec2(spec.x, spec.z));
+    }
+    if (!m.frontage.valid() || !m.frontage.street.valid() || !model->sidewalkBeside(m.frontage, m.stand)) return -1;
+    // the post: beside the ring, half-way between away from the road and along the street (city_brain.h)
+    const Vec2 away = unit(m.stand - m.frontage.on, Vec2(1, 0));
+    m.post = m.stand + unit(away + engine::perp(away), away) * kMarkerPostOffset;
+    markers.push_back(m);
+    markerByName.emplace(m.name, static_cast<int>(markers.size() - 1));
+    return static_cast<int>(markers.size() - 1);
+}
+
+int CityBrain::Impl::markerForPlace(PlaceId id) {
+    if (!places || id == kNoPlace || static_cast<std::size_t>(id) >= places->places().size()) return -1;
+    return addMarker(placeMarkerSpec((*places)[id], id, *model));
+}
+
+// A point of the sim's walking network (a corner, a path in a park): the frontage nearest it.
+int CityBrain::Impl::markerForNode(int node) {
+    if (node < 0 || node >= sim.walkPoints_.nodeCount()) return -1;
+    engine::CityMarker m;
+    m.name = "node_" + std::to_string(node);
+    const Vec2 at = sim.walkPoints_.nodes[static_cast<std::size_t>(node)];
+    m.x = at.x;
+    m.z = at.y;
+    return addMarker(m);
+}
+
+// THEIR ROLE'S DAY (ADR-0491): the sim's own table for their role (roles.lua, buildDayTable), run here on the sim's
+// clock with the sim's own reading of it (CitySim::restEvents: the work window, the evening, the stop's length) and the
+// sim's own choosers (choosePickedNode: lunch, an outing, a campus break, an activity, the errand). A GoTo state is a
+// marker they want to be at: Home is their home's, Work their job's place, a pick its venue's place or the frontage
+// nearest its point. Arriving there is the state's Arrived; the brain finding no way there is its NoRoute.
+// They do not take a pick's seat or join its group (#334): the pick's hold is let go and they stand at the marker.
+void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
+    Person& p = people[who];
+    if (!p.roleDay || !p.dayOn || p.heldByDirector) return;
+    Agent& a = agentOf(who);
+    const GoalTable& t = sim.tableFor(a);
+    if (a.goal < 0 || a.goal >= t.stateCount()) return;
+    const GoalState& s = t.state(a.goal);
+    const brain::AgentBrain& b = machine->agent(who);
+    if (s.action == GoalAction::GoTo) {
+        if (p.dayMarker < 0) {
+            if (daySetOutsThisTick >= kDaySetOutsPerTick) return;
+            ++daySetOutsThisTick;
+            setOut(who, s);
+            return;
+        }
+        const PlaceRef wanted = markerPlace(p.dayMarker, who);
+        if (!b.travelling() && b.state == table.intents[b.intentKind].arrive && b.intentTarget == wanted.id) {
+            ++counts.dayArrivals;
+            if (p.dayVenue >= 0 && p.dayVenue < static_cast<int>(sim.venues_.size()) &&
+                !sim.venues_[static_cast<std::size_t>(p.dayVenue)].openAt(sim.clockHours_))
+                ++counts.dayArrivedShut;
+            if (s.target == GoalTarget::Work && a.workPlace != kNoPlace) {
+                ++counts.dayToWork;
+                if (!sim.inWorkWindow(a)) ++counts.dayToWorkOffShift;
+            }
+            // HOW LONG THEY STAY: a visit's own length (CitySim::visitHours), a pause on a walk round the block, else
+            // the state's
+            a.restDwell = p.dayVenue >= 0 || a.tripActivity >= 0 ? static_cast<float>(sim.visitHours(a))
+                          : s.target == GoalTarget::Outing    ? static_cast<float>(sim.jitterHours(a, 0.01, 0.04))
+                                                              : 0.0f;
+            a.atActivity = a.tripActivity;
+            a.tripActivity = -1;
+            a.outingTo = -1;
+            fireDay(who, GoalEvent::Arrived);
+        } else if (b.state == table.noPlan) {
+            ++counts.dayNoWay;
+            a.outingTo = -1;
+            a.tripVenue = -1;
+            fireDay(who, GoalEvent::NoRoute);
+        }
+        return;
+    }
+    a.goalHours += dtHours;
+    if (sim.clockTotalHours_ < p.dayRetryAt) return;
+    GoalEvent events[CitySim::kRestEvents];
+    const int n = sim.restEvents(a, s, events);
+    for (int e = 0; e < n; ++e)
+        if (fireDay(who, events[e])) return;
+}
+
+// A GoTo STATE BEGINS: where it goes, as a marker, and they want to be there.
+void CityBrain::Impl::setOut(AgentId who, const GoalState& s) {
+    Person& p = people[who];
+    Agent& a = agentOf(who);
+    int marker = -1;
+    p.dayVenue = -1;
+    const int origin = sim.walkPoints_.empty() ? -1 : sim.walkPoints_.nearestNode(a.pos);
+    const int picked = origin >= 0 ? sim.choosePickedNode(a, origin, s) : -1;
+    if (picked >= 0) {
+        sim.releaseSeat(a);   // (they stand at the marker: no seat or group of the pick's is theirs)
+        const int v = a.tripVenue;
+        if (v >= 0 && v < static_cast<int>(sim.venues_.size()) && sim.venues_[static_cast<std::size_t>(v)].place != kNoPlace) {
+            marker = markerForPlace(sim.venues_[static_cast<std::size_t>(v)].place);
+            p.dayVenue = v;
+        }
+        if (marker < 0) marker = markerForNode(picked);
+    } else if (s.target == GoalTarget::Home) {
+        marker = p.homeMarker;
+    } else if (s.target == GoalTarget::Work) {
+        marker = a.workPlace != kNoPlace ? markerForPlace(a.workPlace) : markerForNode(a.work);   // (a day out's park)
+    } else if (s.target == GoalTarget::Shop) {
+        marker = a.shopPlace != kNoPlace ? markerForPlace(a.shopPlace) : markerForNode(a.shop);
+    }
+    if (marker < 0) {
+        ++counts.dayNowhere;
+        a.outingTo = -1;
+        a.tripVenue = -1;
+        sim.releaseSeat(a);
+        fireDay(who, GoalEvent::NoRoute);
+        return;
+    }
+    takeSpot(marker, who);
+    const PlaceRef to = markerPlace(marker, who);
+    if (!to.valid()) {   // (more people use it than it has spots)
+        ++counts.dayNowhere;
+        fireDay(who, GoalEvent::NoRoute);
+        return;
+    }
+    ++counts.daySetOut;
+    p.dayMarker = marker;
+    a.activity = s.activity;
+    machine->setIntent(who, p.intentKind, to);
+}
+
+// The event moves their goal state, when their table has a row for it.
+bool CityBrain::Impl::fireDay(AgentId who, GoalEvent e) {
+    Agent& a = agentOf(who);
+    const GoalTable& t = sim.tableFor(a);
+    const int next = t.onEvent(a.goal, e);
+    if (next < 0) return false;
+    a.goal = next;
+    a.goalHours = 0;
+    a.activity = t.state(next).activity;
+    people[who].dayMarker = -1;
+    // nowhere to go, or no way there: the day tries again no sooner than kDayRetryHours from now
+    if (e == GoalEvent::NoRoute) people[who].dayRetryAt = sim.clockTotalHours_ + kDayRetryHours;
+    return true;
+}
+
 // ANOTHER PLACE OF THE SAME KIND (ADR-0446). A person who has no way to the place they want after a way of getting there
 // was found not to work (a leg of it could not be done, so it is ruled out: the brain's `ruledOut`) judges that place
 // out of reach: they remember it, and choose the nearest place of the same kind (engine::CityMarker::kind, a data
@@ -1260,6 +1446,8 @@ std::string CityBrain::Impl::carLine(Car c) const {
 CityBrain::CityBrain(CitySim& sim) : impl_(std::make_unique<Impl>(sim)) {}
 CityBrain::~CityBrain() = default;
 
+void CityBrain::setPlaces(const PlaceMap* places) { impl_->places = places; }
+
 bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker>& markerSpecs,
                       const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& householdSpecs,
                       const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
@@ -1325,29 +1513,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
 
     // THE MARKERS, each resolved against the road model
     std::string left;
-    for (const engine::CityMarker& spec : markerSpecs) {
-        BrainMarker m;
-        m.name = spec.name;
-        m.kind = spec.kind;
-        m.stated = spec.stated;
-        if (spec.stated) {
-            for (std::size_t s = 0; s < im.model->streets.size(); ++s)
-                if (im.model->streets[s].id == spec.street)
-                    m.frontage = im.model->frontageOn(engine::ModelStreetId(static_cast<uint32_t>(s)), spec.station, spec.dir);
-        } else {
-            m.frontage = im.model->frontageAt(Vec2(spec.x, spec.z));
-        }
-        if (!m.frontage.valid() || !m.frontage.street.valid() || !im.model->sidewalkBeside(m.frontage, m.stand)) {
-            left += (left.empty() ? "" : ", ") + spec.name;
-            continue;
-        }
-        {
-            // the post: beside the ring, half-way between away from the road and along the street (city_brain.h)
-            const Vec2 away = unit(m.stand - m.frontage.on, Vec2(1, 0));
-            m.post = m.stand + unit(away + engine::perp(away), away) * kMarkerPostOffset;
-        }
-        im.markers.push_back(m);
-    }
+    for (const engine::CityMarker& spec : markerSpecs)
+        if (im.addMarker(spec) < 0) left += (left.empty() ? "" : ", ") + spec.name;
     if (!left.empty())
         LOG_WARN << "[brain] markers left out (no such street, or no sidewalk beside it): " << left;
     im.spaces = std::make_unique<brain::RoadPlaces>(*im.model, kSpaceTag);
@@ -1417,6 +1584,8 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         person.agent = agents[r];
         person.name = resident.name;
         person.drives = resident.drives;
+        person.roleDay = resident.roleDay;
+        person.homeMarker = m.home;
         person.intentKind = m.intent;
         im.people.push_back(person);
     }
@@ -1550,11 +1719,25 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             s.dwell = static_cast<BrainTime>(std::llround(stop.minutes * kSecondsPerMinute * kMillis));
             person.day.push_back(s);
         }
-        person.dayOn = !person.day.empty();
+        person.dayOn = !person.day.empty() || person.roleDay;
+        if (person.roleDay) {
+            // THEIR ROLE'S DAY from the start of it, at home (whatever the sim's day placed them at, ADR-0491); the
+            // sim's goal layer never runs it (they are directed), the brain does (tickRoleDay)
+            Agent& a = sim.agents_[static_cast<std::size_t>(person.agent)];
+            sim.releaseSeat(a);
+            a.goal = sim.tableFor(a).entry();
+            a.goalHours = 0;
+            a.restDwell = 0;
+            a.outingTo = -1;
+            a.tripVenue = -1;
+            a.tripActivity = -1;
+            a.activity = Agent::Activity::AtHome;
+        }
         line += "; " + resident.name + " is the sim's agent " + std::to_string(person.agent) + ", at home at \"" + resident.home + "\"" +
                 (person.household >= 0 ? " in household " + im.households[static_cast<std::size_t>(person.household)].name
                                        : std::string(" in no household")) +
-                (person.day.empty() ? std::string(", no day table") : ", a day of " + std::to_string(person.day.size()) + " stops");
+                (person.roleDay ? std::string(", their role's day")
+                 : person.day.empty() ? std::string(", no day table") : ", a day of " + std::to_string(person.day.size()) + " stops");
     }
     if (report) *report = line;
     return true;
@@ -1581,9 +1764,12 @@ void CityBrain::tick(Real dt) {
     im.machine->tick();
     im.tickCars();
     im.followCars();   // (...and the cars sliding between a space and the lane)
+    const Real dtHours = dt * im.sim.hoursPerSecond();
+    im.daySetOutsThisTick = 0;
     for (AgentId who = 0; who < im.people.size(); ++who) {
         im.tickChoice(who);
         im.tickDay(who);
+        im.tickRoleDay(who, dtHours);
     }
     im.shareOutTrace();
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -1595,9 +1781,8 @@ void CityBrain::tick(Real dt) {
 const std::vector<BrainMarker>& CityBrain::markers() const { return impl_->markers; }
 
 int CityBrain::markerNamed(const std::string& name) const {
-    for (std::size_t i = 0; i < impl_->markers.size(); ++i)
-        if (impl_->markers[i].name == name) return static_cast<int>(i);
-    return -1;
+    const std::unordered_map<std::string, int>::const_iterator it = impl_->markerByName.find(name);
+    return it == impl_->markerByName.end() ? -1 : it->second;
 }
 
 int CityBrain::residentCount() const { return impl_->machine ? static_cast<int>(impl_->people.size()) : 0; }
@@ -1701,7 +1886,7 @@ void CityBrain::setDay(bool on) {
 void CityBrain::setDay(int who, bool on) {
     if (!impl_->isPerson(who)) return;
     Impl::Person& p = impl_->people[static_cast<std::size_t>(who)];
-    p.dayOn = on && !p.day.empty();
+    p.dayOn = on && (p.roleDay || !p.day.empty());
 }
 
 std::string CityBrain::stateName(int who) const {
@@ -1809,7 +1994,15 @@ std::string CityBrain::describe(int who) const {
         p.id = h->second;
         s += " | held for them: " + im.placeName(p);
     }
-    s += std::string(" | day table ") + (person.day.empty() ? "none" : person.dayOn ? "on" : "off (brain day on)");
+    if (person.roleDay) {
+        // their role's day: the goal state they are in (ADR-0491)
+        const Agent& agent = impl_->sim.agents_[static_cast<std::size_t>(person.agent)];
+        const GoalTable& t = impl_->sim.tableFor(agent);
+        s += std::string(" | role day ") + (person.dayOn ? "on" : "off (brain day on)") + ", " +
+             (agent.goal >= 0 && agent.goal < t.stateCount() ? t.state(agent.goal).name : std::string("?"));
+    } else {
+        s += std::string(" | day table ") + (person.day.empty() ? "none" : person.dayOn ? "on" : "off (brain day on)");
+    }
     uint8_t bit = 0;
     std::string has;
     for (const std::string& name : im.travel.traits) {
@@ -2057,8 +2250,9 @@ bool CityBrain::directorHolds(int agent, bool on) {
 bool CitySim::startBrain(engine::World& world, const std::vector<engine::CityMarker>& markers,
                          const std::vector<engine::CityResident>& residents, const std::vector<engine::CityHousehold>& households,
                          const std::vector<int>& agentOf, const std::vector<int>& classOfSlot, std::string* report,
-                         bool drivableSpacesOnly) {
+                         bool drivableSpacesOnly, const PlaceMap* places) {
     std::shared_ptr<CityBrain> made = std::make_shared<CityBrain>(*this);
+    made->setPlaces(places);
     if (!made->start(world, markers, residents, households, agentOf, classOfSlot, report, drivableSpacesOnly)) return false;
     brain_ = std::move(made);
     return true;

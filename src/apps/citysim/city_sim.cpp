@@ -2231,6 +2231,29 @@ int CitySim::departNode(const Agent& a) const {
                                                                        : a.home;
 }
 
+// WHERE A GoTo STATE GOES WHEN IT IS PICKED, not fixed (an outing, lunch, a campus break, an activity, the errand menu):
+// chosen once per trip and kept in outingTo (a trip resumed after a bus leg keeps it), the pick's venue, seat or
+// session held as the pickers hold them. -1: nothing to pick for this state (its target is fixed, or none was found).
+// The one chooser: the sim's own trips (startGoalTrip) and the brain's day (CityBrain, ADR-0491).
+int CitySim::choosePickedNode(Agent& a, int origin, const GoalState& s) {
+    const bool errandMenu = s.target == GoalTarget::Shop && catalog_.menu("errand");
+    if (!(s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus ||
+          s.target == GoalTarget::Activity || errandMenu)) {
+        a.tripVenue = -1;
+        a.outingTo = -1;
+        return -1;
+    }
+    if (a.outingTo >= 0) return a.outingTo;
+    const int chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
+                       : errandMenu ? pickFromMenu(a, origin, *catalog_.menu("errand"))
+                       : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
+                       : s.target == GoalTarget::Campus ? pickCampusBreak(a, origin)
+                       : !s.menu.empty() && catalog_.menu(s.menu) ? pickFromMenu(a, origin, *catalog_.menu(s.menu))
+                                                                  : pickActivity(a, origin, s);
+    a.outingTo = chosen;
+    return chosen;
+}
+
 // Execute the agent's current (GoTo) goal state: start the trip toward its
 // target. On failure the table's NoRoute row (if any) decides the fallback
 // state — the historical "no path: fall back to the origin's resting state".
@@ -2240,25 +2263,8 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     // OUTING / LUNCH destinations are chosen HERE, before the bus check, so a
     // trip across town can take the bus like any other. A trip resumed after a
     // bus leg keeps the destination it chose (outingTo).
-    int chosen = -1;
     const bool errandMenu = s.target == GoalTarget::Shop && catalog_.menu("errand");
-    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus ||
-        s.target == GoalTarget::Activity || errandMenu) {
-        if (a.outingTo >= 0) {
-            chosen = a.outingTo;
-        } else {
-            chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
-                     : errandMenu ? pickFromMenu(a, origin, *catalog_.menu("errand"))
-                     : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
-                     : s.target == GoalTarget::Campus ? pickCampusBreak(a, origin)
-                     : !s.menu.empty() && catalog_.menu(s.menu) ? pickFromMenu(a, origin, *catalog_.menu(s.menu))
-                                                       : pickActivity(a, origin, s);
-            a.outingTo = chosen;
-        }
-    } else {
-        a.tripVenue = -1;
-        a.outingTo = -1;
-    }
+    const int chosen = choosePickedNode(a, origin, s);
 
     // BY TRAIN (city_rail_riders.h): a trip into another town -- no street joins them -- goes by train when both
     // have a station. The trip is the journey's; what is launched here is only its street leg on foot to the
@@ -2384,6 +2390,30 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
 // trip isn't running retries the departure each tick; a Rest state emits this
 // tick's events in a fixed order — DwellDone, the clock-window depart, Idle —
 // and the first row that fires (or blocks on launch clearance) wins.
+// A RESTING AGENT'S EVENTS THIS TICK, in the order they are tried (the first with a row in its table wins). The one
+// reading of the day's clock: the sim's own day (goalThink) and the brain's (CityBrain, ADR-0491).
+//
+// The commute clock: inside the [departWork, departHome) window the day says "be at work", outside it "be at home".
+// Only meaningful for agents with a real commute -- a stranded pair (work == home, no route at build) never departs.
+// Checked BEFORE the dwell: a state that has both (an outing's pause, the morning at work before lunch) ends the day
+// when the window closes instead of starting another stop -- else a stroller whose pauses kept finishing never went
+// home. THE NIGHT OUT: also before the dwell, so a bar-hop ends when the evening does. Then the stop's own length
+// when it set one (a coffee, a browse), else the state's; then Idle.
+bool CitySim::inWorkWindow(const Agent& a) const { return inWindow(clockHours_, departWorkHour(a), a.departHome); }
+
+int CitySim::restEvents(const Agent& a, const GoalState& s, GoalEvent (&out)[kRestEvents]) const {
+    int n = 0;
+    if (a.home != a.work)
+        out[n++] = inWorkWindow(a) ? GoalEvent::DepartWork : GoalEvent::DepartHome;
+    Real eveStart = 0, eveEnd = 0;
+    const bool outTonight = eveningPlan(a, eveStart, eveEnd);
+    out[n++] = outTonight && inWindow(clockHours_, eveStart, eveEnd) ? GoalEvent::Evening : GoalEvent::EveningOver;
+    const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
+    if (dwell > 0 && a.goalHours >= dwell) out[n++] = GoalEvent::DwellDone;
+    out[n++] = GoalEvent::Idle;
+    return n;
+}
+
 void CitySim::goalThink(Agent& a, Real dtHours) {
     // WAKING. While asleep the agent was skipped entirely, so its dwell clock
     // stopped with it — catch it up before anything reads it.
@@ -2414,33 +2444,13 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         if (a.goalHours >= sitFor) a.seatPhase = 3;
         return;
     }
-    // The stop's own length when it set one (a coffee, a browse), else the
-    // state's.
     const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
-    // The commute clock: inside the [departWork, departHome) window the day
-    // says "be at work", outside it "be at home". Only meaningful for agents
-    // with a real commute — a stranded pair (work == home, no route at build)
-    // never departs, exactly as before.
-    //
-    // Checked BEFORE the dwell: a state that has both (an outing's pause, the
-    // morning at work before lunch) ends the day when the window closes
-    // instead of starting another stop -- else a stroller whose pauses kept
-    // finishing never went home.
-    if (a.home != a.work) {
-        const bool atWorkNow = inWindow(clockHours_, departWorkHour(a), a.departHome);
-        if (tryGoalEvent(a, atWorkNow ? GoalEvent::DepartWork
-                                      : GoalEvent::DepartHome) != GoalFire::NoRow)
-            return;
-    }
-    // THE NIGHT OUT: also before the dwell, so a bar-hop ends when the evening does.
+    GoalEvent events[kRestEvents];
+    const int n = restEvents(a, s, events);
+    for (int e = 0; e < n; ++e)
+        if (tryGoalEvent(a, events[e]) != GoalFire::NoRow) return;
     Real eveStart = 0, eveEnd = 0;
     const bool outTonight = eveningPlan(a, eveStart, eveEnd);
-    if (tryGoalEvent(a, outTonight && inWindow(clockHours_, eveStart, eveEnd) ? GoalEvent::Evening
-                                                                               : GoalEvent::EveningOver) != GoalFire::NoRow)
-        return;
-    if (dwell > 0 && a.goalHours >= dwell)
-        if (tryGoalEvent(a, GoalEvent::DwellDone) != GoalFire::NoRow) return;
-    if (tryGoalEvent(a, GoalEvent::Idle) != GoalFire::NoRow) return;
 
     // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME. An agent resting at
     // home or at work is waiting for its own day, not reacting to the world, so
@@ -3315,20 +3325,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         // Where the agent is now: INSIDE at a door (not drawn), or outside
         // (drawn, standing somewhere of its own).
         bool inside = false;
-        auto jitter = [&](Real lo, Real hi) {
-            return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
-        };
+        auto jitter = [&](Real lo, Real hi) { return jitterHours(a, lo, hi); };
         bool seated = false;
-        // HOW LONG (the activity catalog): the activity's own minutes, else what its kind of site keeps a visitor
-        auto stay = [&]() {
-            double lo = 0, hi = 0;
-            if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(catalog_.defs.size())) {
-                const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
-                lo = d.minutesLo; hi = d.minutesHi;
-            }
-            if (hi <= 0) siteKindMinutes(siteKindOf(a), lo, hi);
-            return jitter(lo / 60.0, hi / 60.0);
-        };
+        auto stay = [&]() { return visitHours(a); };
         if (a.session >= 0 && a.session < static_cast<int>(sessions_.size()) &&
             areas_[static_cast<std::size_t>(sessions_[static_cast<std::size_t>(a.session)].area)].node == node) {
             // A GROUP'S PLAYER at its area's path: onto it, to its first point (the session runs it from here)
@@ -3404,6 +3403,22 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     a.tickFromHeading = a.heading;
 }
 
+
+// A trip decision's draw between lo and hi (hours), from the agent's own stream.
+Real CitySim::jitterHours(Agent& a, Real lo, Real hi) {
+    return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
+}
+
+// HOW LONG A VISIT LASTS (the activity catalog): the activity's own minutes, else what its kind of site keeps a visitor.
+Real CitySim::visitHours(Agent& a) {
+    double lo = 0, hi = 0;
+    if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(catalog_.defs.size())) {
+        const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
+        lo = d.minutesLo; hi = d.minutesHi;
+    }
+    if (hi <= 0) siteKindMinutes(siteKindOf(a), lo, hi);
+    return jitterHours(a, lo / 60.0, hi / 60.0);
+}
 
 void CitySim::computeGaps() {
     const Real INF = std::numeric_limits<Real>::infinity();

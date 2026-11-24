@@ -1060,6 +1060,9 @@ struct CityResident {
     std::vector<std::string> traits;
     // false: they never drive (a child, a student; ADR-0490): their household's cars are not theirs to take ("drives")
     bool drives = true;
+    // true: their day is their ROLE's (the city's own households, ADR-0491): the brain runs the sim's role table for
+    // their agent on the sim's clock, going where it says, and `day` is not used. Made by code, never stated.
+    bool roleDay = false;
     struct Stop {
         std::string at;
         double minutes = 0;

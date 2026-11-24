@@ -1740,7 +1740,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if ((!markers.empty() || !residents.empty()) && sim_.drivingV2() && sim_.drivingHost().active()) {
         std::string brainReport;
         if (sim_.startBrain(world, markers, residents, households, residentAgents, drivingClassOfSlot, &brainReport,
-                            params_.drivableSpacesOnly))
+                            params_.drivableSpacesOnly, &places_))
             LOG_INFO << "[citysim] agent brain: " << brainReport;
         else
             LOG_WARN << "[citysim] agent brain: no markers and no resident on this level: " << brainReport;
