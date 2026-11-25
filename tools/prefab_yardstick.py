@@ -2,7 +2,7 @@
 """THE YARDSTICK for #315 (prefabs in the real city): one number for "is the frame time and the GPU memory worse?".
 
 It starts a viewer on a level with present sync off and no sound, leaves the player at the level's own start, puts
-the camera at a fixed place and noon, lets the world settle, then takes the frame ledger's summary over 30 seconds
+the camera at a fixed place, leaves the clock at the level's own hour, lets the world settle, then takes the frame ledger's summary over 30 seconds
 and the GPU memory's first line. Run it before and after a change, on the same machine with nothing else running.
 
     python3 tools/prefab_yardstick.py                       # the island, from the player's start in Saltwood
@@ -37,7 +37,8 @@ try:
     if a.teleport:
         rtctl.send(sock, "teleport " + a.teleport, timeout=120)
         time.sleep(3)
-    rtctl.send(sock, "daynight 12", timeout=30)
+    # (the clock is left to run from the level's own hour: `daynight <hour>` jumps the sim's clock, which wakes every
+    # resting person it jumps past, and the burst of trips that follows was two thirds of the island's frame)
     cam = a.camera
     if not cam:
         m = re.search(r"pos (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)", rtctl.send(sock, "move?", timeout=30))
