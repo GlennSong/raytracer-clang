@@ -47,7 +47,7 @@ std::string BrainPeople::describe() const {
     return std::to_string(residents.size()) + " people in " + std::to_string(households.size()) + " households, " +
            std::to_string(cars) + " cars, " + std::to_string(workers) + " with a job to go to, " +
            std::to_string(markers.size()) + " homes (" + std::to_string(homesCutOff) +
-           " households in a home cut off on foot); left out: " + std::to_string(homesUnusable) +
+           " households in a home off the town's largest walks: another town, or cut off); left out: " + std::to_string(homesUnusable) +
            " households whose home has no street beside it, " + std::to_string(carsNoSpace) + " cars with no kerb space";
 }
 

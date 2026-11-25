@@ -196,12 +196,20 @@ struct CityBrainCounts {
     // ADR-0493: the attention they get
     uint32_t lowered = 0, raised = 0;   // times a person went far, and came near again
     uint64_t farVisits = 0;             // far people visited because their clock was due
+    uint32_t staleWalks = 0;            // walks that finished after their walker had stopped walking (logged, not reported)
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
 struct CityBrainCost {
     uint64_t ticks = 0;
     double ms = 0, worstMs = 0;
+    // ...by part (ms in all): the walks stepped, the machine (events answered, people stepped), the days (each person's
+    // role day and stated day), the rest (cars, rides, trace)
+    double walksMs = 0, machineMs = 0, daysMs = 0;
+    // ...and inside them: trips planned (the machine's) and set out by a day (the days'; the place chosen), in all
+    double planMs = 0, setOutMs = 0;
+    uint64_t plans = 0;
+    std::string describe() const;
 };
 
 // WHO HAS A HOUSEHOLD'S CAR, for a test and for the screen.

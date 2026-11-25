@@ -54,7 +54,8 @@ struct BrainPeople {
     int cars = 0;
     int workers = 0;           // residents with a job away from home
     // left out
-    int homesCutOff = 0;       // households taken whose home's door joins no walk to the rest of the town (no trip goes)
+    int homesCutOff = 0;       // households taken whose home's door joins walks outside the largest part of them: another
+                               // town of an island (its own walks), or a sliver cut off (its people's trips find no way)
     // left out
     int homesUnusable = 0;     // households whose home has no street and sidewalk beside its door
     int carsNoSpace = 0;       // cars with no free kerb space near home

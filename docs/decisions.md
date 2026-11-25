@@ -24631,3 +24631,32 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - Headless runs (river_town's 30 minutes, the no-driving case) are untouched: no far person, no crowd record.
 
 **Not done:** a far person riding a bus is still not drawn (the crowd's records are walks). Nor is a far driver, who is near until the far car tier is built.
+
+## ADR-0496 — The brain runs the whole island: resting days sleep, the scans are cheap (one-brain plan, step 4; 2026-11-24)
+
+**Why:** island_8_nature is the one level with a city sim that the driving does not drive. For the brain to replace the old sim there, it must run all of its people. The first run did: 115,377 people in 57,713 households. But the brain took 22–28 ms a tick (a 60 Hz frame is 16.7 ms), and the machine reported 49 errors.
+
+**What happens:**
+- **A resting day sleeps** until its next event, as the old sim's resting agents do. The one reckoning of when is `CitySim::hoursUntilRestEvent`, now shared by `goalThink` and the brain: the stop's dwell, the next flip of the work window, tonight's start or end, and noon. Its time in the state is caught up on waking.
+  - Fixed in the old reckoning: before work, a sleeper woke at `departWork` (the arrival) instead of `departWorkHour` (when the window opens: the arrival less the trip), so it left late by its whole trip. The unit suite passes on it (1,606 of 1,606).
+- **A near person with nothing to do this tick is not stepped**: their state has no work of its own each tick, and its clock is not due (`Machine::step` would only run that clock). Their body is shown or hidden after each event answered for them, since an arrival indoors comes by an event, with no step after it.
+- **The scans read compact arrays** (`farOf`, `dueOf`, `dayGateOf`). The attention pass is two passes: one share of the people has its distance looked at, then far people due are visited.
+  - A person's day is not read before its gate: asleep, their wake; far and on their way, never until the brain visits them.
+- **Trips due at once wait their turn**, first come first served (`setOutQueue`), with their day not read meanwhile. A day that has just set out is not read again in that tick: its new intent is answered at the next one, so it would seem to have arrived already.
+- **Who is who is indexed** (`personByName`, `personByAgent`). The brain's start had searched every person per question, about 10^10 steps on the island.
+- **A walk left running** after its walker stopped walking is halted without reporting, counted and logged (#338). That was the island's 49 errors; the cause is not found.
+- The brain's cost is reported by part (`CityBrainCost::describe`: walks, machine with planning, days with setting out).
+
+**Checked:**
+- **The island, 5 minutes** (new heavy case `level_island_brain_runs_every_household`; the player in Saltwood):
+  - 115,377 people of the sim's 122,526; 0 cars; about 108,000 far.
+  - 56,819 set out, 11,267 arrived, 5,846 at work inside their shift; nobody at a shut place; 0 errors.
+  - The brain 11.4 ms a tick: planning 2.3, setting out 2.1, walks 1.1, the rest the two scans and answering. In a 2-minute run alone it was 9.7 ms; it was 28 ms before this ADR.
+- **river_town:** the brain 0.87 → 0.46 ms a tick (the whole town, headless), 1.05 → 0.54 with a player.
+
+**Found, not done:**
+- **The island's whole step was 47.7 ms**, so the old sim takes about 36 ms of it. The brain pins every agent it owns at the old sim's K tier, so the old sim steps all 115,000 at full detail each tick for nothing. Deleting the old tiers (step 2b) removes that; until then it is the island's biggest cost.
+- The run starts at 10:31 on the sim clock, so the whole island is overdue for work at once. Setting out (8 a tick) takes about four minutes to drain.
+- Trips to another town find no way (1,674 no plans in 5 minutes): the brain has no trains yet.
+- A crowded marker's standing spots run into the road (#339).
+- The lots bake for the island needs 37.6 GB and 57 minutes after a tag bump (#317, next).

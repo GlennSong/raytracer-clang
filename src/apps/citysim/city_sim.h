@@ -494,6 +494,8 @@ public:
     // of the population onto the road at load.
     void setHoursPerSecond(Real h) { hoursPerSecond_ = h; }
     Real hoursPerSecond() const { return hoursPerSecond_; }
+    // A resting agent with nothing ahead of it in its day (hoursUntilRestEvent): never wakes by the clock.
+    static constexpr Real kNoRestEvent = 1e9;
 
     // Place the whole population where `clock` says it should be, and set the
     // sim clock to it. Replaces stepping the city up to its start hour: opening
@@ -1271,6 +1273,8 @@ private:
     static constexpr int kRestEvents = 4;
     // Is the clock inside the agent's work window [the hour it leaves for work, departHome)?
     bool inWorkWindow(const Agent& a) const;
+    // How long until a resting agent has something to decide (hours; kNoRestEvent: never). Shared with the brain.
+    Real hoursUntilRestEvent(const Agent& a, const GoalState& s) const;
     int restEvents(const Agent& a, const GoalState& s, GoalEvent (&out)[kRestEvents]) const;
     // How long a visit lasts (hours): the activity's minutes, else its kind of site's; drawn from the agent's stream.
     Real visitHours(Agent& a);

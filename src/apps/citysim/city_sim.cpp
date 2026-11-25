@@ -33,7 +33,7 @@ constexpr int kTrainSeatsPerCar = 72;   // a coach's seats (train_mesh's coach r
 // (kWalkSpeed, a walker's speed, is in city_sim.h: the agent brain's walk skill sets a pace against it, ADR-0441)
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
-constexpr Real kNeverWakes = 1e9;
+constexpr Real kNeverWakes = CitySim::kNoRestEvent;
 constexpr Real kPedAccel = 1.0;
 constexpr Real kNoLeaderMinGap = 5.0;   // a walker's follow gap with nobody ahead (computeGaps; unread then)
 constexpr Real kPedMinGap = 0.8, kPedSlowZone = 2.5;
@@ -2444,13 +2444,10 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         if (a.goalHours >= sitFor) a.seatPhase = 3;
         return;
     }
-    const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
     GoalEvent events[kRestEvents];
     const int n = restEvents(a, s, events);
     for (int e = 0; e < n; ++e)
         if (tryGoalEvent(a, events[e]) != GoalFire::NoRow) return;
-    Real eveStart = 0, eveEnd = 0;
-    const bool outTonight = eveningPlan(a, eveStart, eveEnd);
 
     // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME. An agent resting at
     // home or at work is waiting for its own day, not reacting to the world, so
@@ -2464,29 +2461,33 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // in advance. (A wander table always has an Idle row, so wanderers never
     // sleep — which is right: they are supposed to keep moving.)
     if (hoursPerSecond_ <= 0) return;   // clock stopped: nothing to wait for
-    Real hoursUntil = kNeverWakes;
-    if (dwell > 0)
-        hoursUntil = std::max(Real(0), dwell - a.goalHours);
-    if (a.home != a.work) {
-        // The commute fires when the window predicate FLIPS, so the next
-        // boundary is whichever end of the window is ahead of us.
-        const bool atWorkNow = inWindow(clockHours_, departWorkHour(a), a.departHome);
-        const Real boundary = atWorkNow ? a.departHome : a.departWork;
-        Real delta = std::fmod(boundary - clockHours_, Real(24));
-        if (delta < 0) delta += 24.0;
-        hoursUntil = std::min(hoursUntil, delta);
-    }
-    // ...and its evening: tonight's start or end if it goes out, and noon either way (the next night's plan).
-    {
-        auto ahead = [&](Real h) { Real d = std::fmod(h - clockHours_, Real(24)); if (d < 0) d += 24.0; return d; };
-        if (outTonight) hoursUntil = std::min(hoursUntil, ahead(inWindow(clockHours_, eveStart, eveEnd) ? eveEnd : eveStart));
-        const Real noon = ahead(12.0);
-        if (noon > 1e-6) hoursUntil = std::min(hoursUntil, noon);
-    }
+    const Real hoursUntil = hoursUntilRestEvent(a, s);
     // A stranded agent (work == home) with no dwell waits forever — and that is
     // the cheapest agent in the city, which is exactly right.
     a.sleptAt = clockTotalHours_;
     a.wakeAt = simSeconds_ + hoursUntil / hoursPerSecond_;
+}
+
+// HOW LONG UNTIL A RESTING AGENT HAS SOMETHING TO DECIDE (hours; kNeverWakes: never, unless the world tells it): the
+// end of its stop's dwell, the next flip of its work window, tonight's start or end if it goes out, and noon (the next
+// night's plan). The one reckoning of when a rest ends: the sim's own sleepers (goalThink) and the brain's (ADR-0496).
+// (The work window opens at departWorkHour -- the arrival less the trip -- and closes at departHome; before ADR-0496 a
+// sleeper at home woke at departWork, the arrival itself, and so left late by its whole trip.)
+Real CitySim::hoursUntilRestEvent(const Agent& a, const GoalState& s) const {
+    const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
+    Real hoursUntil = kNeverWakes;
+    if (dwell > 0) hoursUntil = std::max(Real(0), dwell - a.goalHours);
+    auto ahead = [&](Real h) { Real d = std::fmod(h - clockHours_, Real(24)); if (d < 0) d += 24.0; return d; };
+    if (a.home != a.work) {
+        // the commute fires when the window predicate FLIPS: the next boundary is whichever end of it is ahead
+        const Real opens = departWorkHour(a);
+        hoursUntil = std::min(hoursUntil, ahead(inWindow(clockHours_, opens, a.departHome) ? a.departHome : opens));
+    }
+    Real eveStart = 0, eveEnd = 0;
+    if (eveningPlan(a, eveStart, eveEnd)) hoursUntil = std::min(hoursUntil, ahead(inWindow(clockHours_, eveStart, eveEnd) ? eveEnd : eveStart));
+    const Real noon = ahead(12.0);
+    if (noon > 1e-6) hoursUntil = std::min(hoursUntil, noon);
+    return hoursUntil;
 }
 
 // THE CLOCK'S RATE CHANGED UNDER SLEEPING AGENTS (lockstep with the sky: the

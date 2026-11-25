@@ -1217,12 +1217,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // And again when far walkers are drawn along their routes (ADR-0495: raised where the crowd had them, so the
     // walkers near the route stand elsewhere): 14 at minute 7 -> 13 at minute 12, in 27, out 15 the same,
     // 0xc67ebf2c5dd82500 -> 0xe1ebb1c928285069; contacts 68 -> 232, still all car 3 on car 194 at -192, 874 (#336).
-    CHECK(mostNear == 13);
+    // And again when resting days sleep and far people are visited from compact arrays (ADR-0496): 13 -> 14 at minute
+    // 12, in 27 -> 28, out 15 the same, 0xe1ebb1c928285069 -> 0xc8ce00bf216e0269; contacts 232 -> 5 (the grinding pair
+    // of #336 met only briefly this time: which trajectories meet is chance, the fault is not fixed).
+    CHECK(mostNear == 14);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 27u);
+    CHECK(c.intoPhysics == 28u);
     CHECK(c.intoLane == 15u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xe1ebb1c928285069ull);
+    CHECK(hash == 0xc8ce00bf216e0269ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at
