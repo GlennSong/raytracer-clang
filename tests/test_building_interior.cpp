@@ -11,6 +11,9 @@
 #include "../src/engine/systems/building_interior_system.h"
 #include "../src/engine/systems/door_system.h"
 #include "../src/engine/world.h"
+#include "../src/engine/interior_occupants.h"   // planOccupants
+#include "../src/engine/prefab_batch.h"         // a building's prefab copies and the places on them
+#include "../src/engine/procgen/furniture_library.h"
 
 #include <cmath>
 #include <utility>
@@ -774,3 +777,66 @@ TEST_CASE(character_climbs_the_lecture_hall_aisle_to_the_back_row) {
     CHECK(feet > topTier * 0.18 - 0.12);
     world.shutdown();
 }
+
+// PEOPLE ON A HOME'S PREFAB COPIES (#315, ADR-0522), through the real path: a block of flats is streamed in round an
+// upper storey, its children's rooms stand their small beds and bunk beds as prefab copies of the building's holder,
+// and the indoor planner, asked to put a night's sleepers in, lies some of them on those copies.
+TEST_CASE(a_streamed_homes_sleepers_lie_on_its_prefab_beds) {
+    int withChildBeds = 0, onCopies = 0;
+    for (uint32_t seed : {33u, 34u, 35u}) {
+        World world;
+        PhysicsWorld phys;
+        phys.initialize();
+        StubUploader uploader;
+        AssetManager assets(uploader);
+        const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
+        BuildingParams p;
+        p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = seed;
+        p.residential = true;
+        CityBuildings cb;
+        BuildingRecord r;
+        r.plan = plan;
+        r.baseY = 0;
+        r.groundY = -0.45;
+        r.height = p.groundHeight + p.floors * p.floorHeight;
+        r.params = p;
+        r.doors.push_back({Vec2(22, 32), Vec2(0, 1), 2.0, 2.7});
+        r.enterable = true;
+        r.recipe = "apartment_tower";
+        r.type = "home";
+        r.district = "test";
+        cb.records.push_back(r);
+        cb.buildIndex();
+        world.add<CityBuildings>(world.create(), std::move(cb));
+        BuildingInteriorSystem sys(nullptr);
+        // inside, on the sixth storey (the window is round the storey the player stands in)
+        const Real y = p.groundHeight + 5 * p.floorHeight + 1.0;
+        sys.step(world, &phys, assets, nullptr, Vec3(22, y, 16));
+        CHECK(sys.residentCount() == 1);
+        Entity holder;
+        world.each<PrefabBatches>([&](Entity e, PrefabBatches& b) { if (b.building == 0) holder = e; });
+        CHECK(holder.valid());
+        if (!holder.valid()) { phys.shutdown(); continue; }
+        std::vector<BatchSpot> spots;
+        batchSpots(world, holder, spots);
+        int lie = 0;
+        for (const BatchSpot& sp : spots) lie += sp.pose == 1;
+        Interactables none;
+        const Interactables* set = &none;
+        world.each<Interactables>([&](Entity, Interactables& in) { set = &in; });
+        OccupantPlan night;
+        night.people = 400;   // (more than the beds: every bed is taken)
+        night.night = true;
+        night.seed = 0;
+        const std::vector<Occupant> asleep = planOccupants(*set, FurnitureLibrary::global(), night, &spots);
+        int here = 0;
+        for (const Occupant& o : asleep) here += o.batchSpot >= 0 && o.pose == Occupant::Pose::Lie;
+        std::printf("    [home] seed %u: %zu prefab copies, %d places to lie on them; %zu asleep, %d on prefab copies\n", seed,
+                    world.get<PrefabBatches>(holder)->copies.size(), lie, asleep.size(), here);
+        if (lie > 0) { ++withChildBeds; CHECK(here == lie); }
+        onCopies += here;
+        phys.shutdown();
+    }
+    CHECK(withChildBeds > 0 && onCopies > 0);   // a tower of family flats has children's rooms
+}
+
