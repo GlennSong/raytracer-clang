@@ -95,35 +95,33 @@ std::vector<PrefabUse> expanded(const ProcModel& model, const PrefabUse& use) {
 
 }  // namespace
 
-void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vector<std::string>* skipped) {
-    const ModelInstance* mi = world.get<ModelInstance>(instance);
-    if (mi == nullptr || mi->model == nullptr) return;
-    PrefabUses mine;
+std::vector<PrefabUse> prefabUsesFor(const ProcModel& model, const Prefab& prefab, std::vector<std::string>* skipped) {
+    std::vector<PrefabUse> mine;
     std::vector<PrefabUse> all;
     for (const PrefabUse& written : prefab.uses) {
-        const std::vector<PrefabUse> those = expanded(*mi->model, written);
+        const std::vector<PrefabUse> those = expanded(model, written);
         if (those.empty() && skipped != nullptr) skipped->push_back("'" + written.say + "' at '" + written.at + "': the model has no marker that fits");
         all.insert(all.end(), those.begin(), those.end());
     }
     for (const PrefabUse& use : all) {
         std::string why;
-        if (mi->model->findMarker(use.at) == nullptr) why = "no marker '" + use.at + "'";
+        if (model.findMarker(use.at) == nullptr) why = "no marker '" + use.at + "'";
         if (why.empty() && use.move.empty() && use.run.empty() && use.sway.empty() && use.kick.empty() && use.light.empty() && use.sound.empty() &&
             !use.sit && !use.lie)
             why = "none of the parts it names";
-        if (why.empty() && !use.lightAt.empty() && mi->model->findMarker(use.lightAt) == nullptr) why = "no marker '" + use.lightAt + "'";
+        if (why.empty() && !use.lightAt.empty() && model.findMarker(use.lightAt) == nullptr) why = "no marker '" + use.lightAt + "'";
         for (const std::vector<std::pair<std::string, Real>>* list : {&use.move, &use.run, &use.sway, &use.kick})
             for (const std::pair<std::string, Real>& n : *list)
-                if (why.empty() && mi->model->jointAt(n.first) == nullptr) why = "no moving node '" + n.first + "'";
+                if (why.empty() && model.jointAt(n.first) == nullptr) why = "no moving node '" + n.first + "'";
         if (!why.empty()) {
             if (skipped != nullptr) skipped->push_back("'" + use.say + "' at '" + use.at + "': the model has " + why);
             continue;
         }
-        mine.uses.push_back(PrefabUses::Use{use});
+        mine.push_back(use);
     }
     // A SEAT IS A SEAT: every marker whose role is "seat" or "lie" offers it, unless the line's own uses already
     // name that marker.
-    for (const ProcNode& node : mi->model->nodes)
+    for (const ProcNode& node : model.nodes)
         for (const ProcMarker& mk : node.markers) {
             if (mk.role != "seat" && mk.role != "lie") continue;
             bool named = false;
@@ -134,8 +132,16 @@ void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vec
             use.lie = mk.role == "lie";
             use.sit = !use.lie;
             use.say = use.lie ? "lie down" : "sit";
-            mine.uses.push_back(PrefabUses::Use{use});
+            mine.push_back(use);
         }
+    return mine;
+}
+
+void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vector<std::string>* skipped) {
+    const ModelInstance* mi = world.get<ModelInstance>(instance);
+    if (mi == nullptr || mi->model == nullptr) return;
+    PrefabUses mine;
+    for (const PrefabUse& use : prefabUsesFor(*mi->model, prefab, skipped)) mine.uses.push_back(PrefabUses::Use{use});
     if (!mine.uses.empty()) world.add<PrefabUses>(instance, std::move(mine));
 }
 

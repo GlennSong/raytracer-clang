@@ -571,6 +571,95 @@ TEST_CASE(copies_drawn_in_batches_share_groups_and_stand_where_stamped_copies_do
     CHECK(!world.has<PrefabBatches>(holder));
 }
 
+// A BATCH COPY IS READY, WAKES AND SLEEPS (#315 step 10, parts b and c). At rest it is solid from its model's shapes
+// and its markers are found without an entity; used, it is stamped in full where and as the batch drew it; put
+// back, the batch draws it in the pose it was left in with the uses that were on still on.
+TEST_CASE(a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_left) {
+    World world;
+    ModelStore store;
+    Prefab fridge;
+    CHECK(findPrefab("fridge", fridge));
+    const Entity holder = world.create();
+    Transform at;
+    at.position = Vec3(10, 0.05, 3);
+    at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), 1.1);
+    const uint32_t a = batchPrefab(world, holder, nullptr, fridge, at, std::string(), nullptr, &store);
+    Transform beside = at;
+    beside.position.x += 2;
+    const uint32_t other = batchPrefab(world, holder, nullptr, fridge, beside, std::string(), nullptr, &store);
+    CHECK(a == 0 && other == 1);
+    const PrefabBatches* b = world.get<PrefabBatches>(holder);
+    // its uses are the ones a stamped copy has, in the same order
+    const Entity full = stampPrefab(world, nullptr, fridge, at, std::string(), nullptr, &store);
+    const PrefabUses* fullUses = world.get<PrefabUses>(full);
+    CHECK(fullUses != nullptr && fullUses->uses.size() == b->copies[a].uses.size() && !b->copies[a].uses.empty());
+    for (std::size_t i = 0; fullUses != nullptr && i < fullUses->uses.size() && i < b->copies[a].uses.size(); ++i)
+        CHECK(fullUses->uses[i].use.at == b->copies[a].uses[i].at && fullUses->uses[i].use.say == b->copies[a].uses[i].say);
+    // a marker is where the stamped copy's is
+    Vec3 mine, theirs;
+    Quat q1, q2;
+    CHECK(batchCopyMarker(b->copies[a], "fridge_door_handle", mine, q1));
+    CHECK(modelMarkerWorld(world, full, "fridge_door_handle", theirs, q2));
+    CHECK((mine - theirs).length() < 1e-9);
+    unstampPrefab(world, full);
+
+    // SOLID: the shapes that never move, and the shapes on parts that can, as triangles (both windings)
+    std::vector<Vec3> fixedV, movingV;
+    std::vector<uint32_t> fixedI, movingI;
+    batchCollisionTriangles(*b, false, fixedV, fixedI);
+    batchCollisionTriangles(*b, true, movingV, movingI);
+    std::printf("    [batch] two fridges at rest: %zu fixed triangles, %zu on parts that move\n", fixedI.size() / 6, movingI.size() / 6);
+    CHECK(fixedI.size() >= 2 * 5 * 12 * 6 && movingI.size() >= 2 * 2 * 12 * 6);   // five walls and two doors each, at least
+    Real lo = 1e9, hi = -1e9;
+    for (const Vec3& v : fixedV) { lo = std::min(lo, v.y); hi = std::max(hi, v.y); }
+    CHECK(lo > -0.01 && lo < 0.2 && hi > 1.7 && hi < 2.0);                     // a fridge's height, on its floor
+
+    // WAKE: stamped where it was drawn; the batch stops drawing it; its moving shapes leave the resting triangles
+    const std::size_t entitiesAsleep = world.entityCount();
+    const Entity woken = wakeBatchCopy(world, holder, a);
+    CHECK(woken.valid() && world.has<BatchAwake>(woken) && world.has<PrefabUses>(woken));
+    CHECK(wakeBatchCopy(world, holder, a) == woken);                           // (awake already: the same copy)
+    CHECK(world.entityCount() > entitiesAsleep);
+    b = world.get<PrefabBatches>(holder);
+    CHECK(!b->copies[a].shown && b->copies[a].awake == woken && b->restingStale);
+    CHECK((world.get<Transform>(woken)->position - at.position).length() < 1e-9);
+    std::vector<Vec3> v2;
+    std::vector<uint32_t> i2;
+    batchCollisionTriangles(*b, true, v2, i2);
+    CHECK(i2.size() * 2 == movingI.size());                                     // only the sleeping fridge's doors now
+    // use it: open the fridge door, and let it arrive
+    std::size_t door = 99;
+    const PrefabUses* uses = world.get<PrefabUses>(woken);
+    for (std::size_t i = 0; i < uses->uses.size(); ++i) if (uses->uses[i].use.at == "fridge_door_handle") door = i;
+    CHECK(door != 99);
+    if (door == 99) return;
+    CHECK(doPrefabUse(world, woken, door));
+    CHECK(!batchCopySettled(world, woken));                                     // its door is on its way
+    for (int i = 0; i < 240; ++i) { stepPrefabUses(world, 1.0 / 60.0); advanceModelMotion(world, woken, 1.0 / 60.0); }
+    CHECK(batchCopySettled(world, woken));
+    const Real open = modelValue(world, woken, "fridge_door");
+    CHECK(open > 100 * kDeg);
+
+    // SLEEP: back in the batch with its door open and that use still on; the stamped copy gone
+    sleepBatchCopy(world, woken);
+    CHECK(!world.alive(woken));
+    CHECK(world.entityCount() == entitiesAsleep);
+    b = world.get<PrefabBatches>(holder);
+    CHECK(b->copies[a].shown && !b->copies[a].awake.valid() && b->copies[a].on[door] != 0);
+    CHECK_APPROX(b->copies[a].pose.values.at("fridge_door"), open, 1e-9);
+    Vec3 handleOpen;
+    CHECK(batchCopyMarker(b->copies[a], "fridge_door_handle", handleOpen, q1));
+    CHECK((handleOpen - mine).length() > 0.4);                                  // the handle is where the open door has it
+    // ...and woken again it is as it was left: the door open, the use on (so it offers "close")
+    const Entity again = wakeBatchCopy(world, holder, a);
+    CHECK(again.valid() && world.get<PrefabUses>(again)->uses[door].on);
+    CHECK_APPROX(modelValue(world, again, "fridge_door"), open, 1e-9);
+    CHECK(prefabUseWord(world.get<PrefabUses>(again)->uses[door]) == "close");
+    // letting the holder go takes the awake copy with it
+    releaseBatches(world, holder);
+    CHECK(!world.alive(again));
+}
+
 TEST_CASE(a_prefab_is_a_piece_the_floor_planner_can_place) {
     // The furniture library names some prefabs as pieces (furniture_library.lua, "PREFAB PIECES"): to the planner a
     // piece like any other, with a footprint, a family and tags; nothing of the kit's to draw.

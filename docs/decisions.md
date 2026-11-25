@@ -25111,3 +25111,32 @@ They are single polygon operations over the whole island. An index cannot speed 
 - run_tests: the batch case, the prefab cases 9 of 9, the furniture cases 12 of 12.
 
 **What is left (parts b and c, then the ports):** a batch copy cannot be used or walked into. Part b gives a copy at rest its offers and its collision from the model and the copy's place, without entities. Part c wakes a copy into a stamped prefab when someone uses it and puts it back when it has been still. A level of detail is chosen for each transform by its own distance, so the parts of one copy may change level a metre apart; a stamped copy changes all at once.
+
+## ADR-0521 — The prefabs in a building are batch copies: solid and usable at rest, stamped in full only while one is in use (#315, step 10 parts b and c; 2026-11-25)
+
+**Why:** ADR-0520 could draw a prefab copy without an entity, but such a copy could not be walked into or used, so nothing placed one. A building's interior stood every prefab in full: the courthouse on `prefab_street` came to 666 stamped prefabs with the player inside it.
+
+**Words:** a copy is *ready* when it is drawn in its batch, is solid, and offers its uses. It is *awake* when it is a stamped prefab with its own moving parts and bodies. A *lively* prefab does something by itself: it has a script, a part that turns freely, a use that happens as someone comes near, or it is a door that swings out of the way.
+
+**What happens:**
+- **Ready, with no entity.** A copy's collision is its model's shapes as triangles (`batchCollisionTriangles`), merged for the whole holder into two bodies: one for shapes that never move, and one for shapes on parts that can move, where each sleeping copy's pose has them. The second is made again when a copy wakes or goes back. A copy's uses are the list a stamped copy would have, in the same order (`prefabUsesFor`, now shared), and each is offered at its marker, found from the model and the copy's place (`batchCopyMarker`).
+- **Using one wakes it.** The offer names the holder and packs the copy and the use into its key. Taking it stamps the prefab where and as the batch drew it (`wakeBatchCopy`), takes the copy out of the picture, and does the use on the stamped copy.
+- **Still for three seconds, it goes back** (`sleepBatchCopy`): the batch draws it in the pose it was left in, and the uses that were on stay on, so a lamp switched on is still lit and still offers "switch off". A copy someone is sitting on, one that is moving or running, and one riding another stay awake.
+- **A lively copy is awake whenever the player is within 28 m** and goes back past 34 m. Glenn's rule for this: nothing is drawn moving or scripted until the player is close.
+- **What stands on a copy goes with it when it wakes.** A kit piece in the furniture's own groups (a monitor) is tied to the stamped copy's marker; a copy of the same holder (a desk lamp on a desk) wakes with it and goes back with it.
+- **A sleeping copy's lamps are still lit:** a lamp post's own, and the light of any use left on.
+- **The interiors place batch copies** for kit pieces stood as prefabs, prefab pieces a room program placed, and doors. Each resident has one holder; letting the resident go lets every copy, group, awake copy and body go. The old path (a stamped prefab for each) is gone from the interiors.
+- `PrefabUseSystem` does the waking, the sleeping and the two bodies, and is given the physics for it.
+
+**Measured** (`prefab_street`, the player inside the courthouse at 55, 30):
+- Stamped prefabs: 666 before, 228 after. The 228 are the 195 the level places outdoors and the 33 doors near the player, awake.
+- Switching a desk lamp on woke one copy (218 to 219 stamped where I stood); seven seconds later it was back (218), still lit and offering "switch off".
+- Frame time is NOT measured yet: another session was profiling on this machine. Before: avg 7.73 ms, p95 11.33 ms at that spot (two runs, 7.76 the second). The after number, and the island's, go in here when the machine is free.
+- Tests: `a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_left`, the batch case of ADR-0520, prefab 9 of 9, furniture 12 of 12, interior 6 of 6, door 22 of 22; physics crane 2 of 2, arrived 1 of 1.
+
+**What is left:**
+- Not looked at by eye: a desk that rises carrying what is on it. The tie is made at waking and is covered only by reading the code.
+- The level's own prefabs (the 195 outdoors on `prefab_street`) are still stamped in full. They move to batches with the ports, a tile as the holder.
+- A woken copy's fixed shapes are both in the merged body and its own bodies while it is awake. Harmless, and a little waste.
+- A sphere or a capsule at rest is solid as the box round it.
+- Only the player wakes a copy. People using things through the agent brain is the next step.

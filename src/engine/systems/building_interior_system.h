@@ -73,7 +73,9 @@ public:
 private:
     struct Resident {
         std::vector<Entity> entities;
-        std::vector<Entity> prefabs;     // kit pieces stood as prefabs (a level's prefabSwaps): unstamped on release
+        // THE PREFABS IN IT (kit pieces stood as prefabs, prefab pieces, doors): copies drawn in batches, held by this
+        // entity (prefab_batch.h PrefabBatches) and let go with the resident
+        Entity holder;
         std::vector<MeshHandle> meshes;
         PhysicsBodyId body = INVALID_PHYSICS_BODY;
         int k0 = 0, k1 = -1;   // the storey window grown
@@ -114,7 +116,7 @@ private:
     const std::vector<std::string>& doorsFor(const struct BuildingRecord& r, std::vector<std::string> DoorChoice::* which) const;
     // One copy of door prefab `name`, its recipe run to fill an opening `width` x `height` (the recipe's fill_width
     // and fill_height), its sill's middle at `at`, opening toward `out`.
-    Entity standDoor(World& world, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height);
+    bool standDoor(World& world, Entity holder, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height);
     std::string doorsFile_;
     DoorChoice doorDefault_;
     std::map<std::string, DoorChoice> doorByType_, doorByRecipe_;

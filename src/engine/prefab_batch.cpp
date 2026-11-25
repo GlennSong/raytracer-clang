@@ -2,7 +2,9 @@
 
 #include "../log.h"
 #include "model_spawn.h"
-#include "prefab_stamp.h"   // drawClassNamed
+#include "model_motion.h"
+#include "prefab_stamp.h"   // drawClassNamed, stampPrefab: a copy awake
+#include "prefab_use.h"
 #include "scripting/model_recipes.h"
 
 #include <algorithm>
@@ -115,7 +117,14 @@ uint32_t batchPrefab(World& world, Entity holder, ModelDresser* dresser, const P
         b->groups[gi].copy.push_back(index);
         copy.draws.emplace_back(gi, ti);
     }
-    world.get<PrefabBatches>(holder)->copies.push_back(std::move(copy));
+    copy.line = prefab;
+    copy.uses = prefabUsesFor(*model, prefab);
+    copy.on.assign(copy.uses.size(), 0);
+    copy.lively = !prefab.script.empty() || !prefab.free.empty();
+    for (const PrefabUse& u : copy.uses) copy.lively = copy.lively || u.near > 0;
+    PrefabBatches* b = world.get<PrefabBatches>(holder);
+    b->copies.push_back(std::move(copy));
+    b->fixedStale = b->restingStale = true;
     return index;
 }
 
@@ -133,12 +142,148 @@ void showBatchCopy(World& world, Entity holder, uint32_t copy, bool shown) {
     place(world, *b, b->copies[copy]);
 }
 
-void releaseBatches(World& world, Entity holder) {
+void releaseBatches(World& world, Entity holder, const std::function<void(PhysicsBodyId)>& removeBody) {
     PrefabBatches* b = world.get<PrefabBatches>(holder);
     if (b == nullptr) return;
+    for (const PrefabBatches::Copy& c : std::vector<PrefabBatches::Copy>(b->copies))
+        if (c.awake.valid() && world.alive(c.awake)) unstampPrefab(world, c.awake, removeBody);
+    b = world.get<PrefabBatches>(holder);
+    if (removeBody) {
+        if (b->fixedBody != INVALID_PHYSICS_BODY) removeBody(b->fixedBody);
+        if (b->restingBody != INVALID_PHYSICS_BODY) removeBody(b->restingBody);
+    }
     for (const PrefabBatches::Group& g : b->groups)
         if (world.alive(g.entity)) world.destroy(g.entity);
     world.remove<PrefabBatches>(holder);
+}
+
+bool batchCopyMarker(const PrefabBatches::Copy& copy, const std::string& marker, Vec3& position, Quat& rotation) {
+    if (copy.model == nullptr) return false;
+    int node = 0;
+    const ProcMarker* mk = copy.model->findMarker(marker, &node);
+    if (mk == nullptr) return false;
+    const ProcFrame placed = ProcFrame{copy.at.position, copy.at.orientation} * copy.model->nodeFrame(node, copy.pose) * mk->frame;
+    position = placed.position;
+    rotation = placed.rotation;
+    return true;
+}
+
+void batchCollisionTriangles(const PrefabBatches& batches, bool moving, std::vector<Vec3>& vertices, std::vector<uint32_t>& indices) {
+    auto triangle = [&](uint32_t a, uint32_t b, uint32_t c) {
+        indices.push_back(a); indices.push_back(b); indices.push_back(c);
+        indices.push_back(a); indices.push_back(c); indices.push_back(b);
+    };
+    for (const PrefabBatches::Copy& c : batches.copies) {
+        if (c.model == nullptr || c.line.body != Prefab::Body::Static) continue;
+        if (moving && c.awake.valid()) continue;   // (its moving shapes are its own bodies while it is awake)
+        const ProcFrame at{c.at.position, c.at.orientation};
+        for (const ProcCollider& pc : c.model->colliders) {
+            if (pc.dynamic || c.model->nodeMoves(pc.node) != moving) continue;
+            const ProcFrame frame = at * (pc.node == 0 ? pc.frame() : c.model->nodeFrame(pc.node, c.pose) * pc.frame());
+            const uint32_t first = static_cast<uint32_t>(vertices.size());
+            if (pc.kind == ProcCollider::Kind::Mesh || pc.kind == ProcCollider::Kind::Hull) {
+                // (a mesh's points are in its node's own space; a hull's are about its centre)
+                const ProcFrame of = pc.kind == ProcCollider::Kind::Mesh ? at * (pc.node == 0 ? ProcFrame{} : c.model->nodeFrame(pc.node, c.pose)) : frame;
+                for (const Vertex& v : pc.mesh.vertices) vertices.push_back(of.position + of.rotation.rotate(v.position));
+                for (std::size_t k = 0; k + 2 < pc.mesh.indices.size(); k += 3)
+                    triangle(first + pc.mesh.indices[k], first + pc.mesh.indices[k + 1], first + pc.mesh.indices[k + 2]);
+                continue;
+            }
+            // a box; a sphere or a capsule as the box round it (a thing at rest: nobody rolls off its corners)
+            Vec3 h = pc.halfExtent;
+            if (pc.kind == ProcCollider::Kind::Sphere) h = Vec3(pc.radius, pc.radius, pc.radius);
+            if (pc.kind == ProcCollider::Kind::Capsule) h = Vec3(pc.radius, pc.halfHeight + pc.radius, pc.radius);
+            for (int k = 0; k < 8; ++k)
+                vertices.push_back(frame.position + frame.rotation.rotate(Vec3((k & 1) ? h.x : -h.x, (k & 2) ? h.y : -h.y, (k & 4) ? h.z : -h.z)));
+            static const int kFaces[6][4] = {{0, 1, 3, 2}, {4, 6, 7, 5}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 5, 7, 3}};
+            for (const int* f : kFaces) {
+                triangle(first + f[0], first + f[1], first + f[2]);
+                triangle(first + f[0], first + f[2], first + f[3]);
+            }
+        }
+    }
+}
+
+Entity wakeBatchCopy(World& world, Entity holder, uint32_t copy) {
+    PrefabBatches* b = world.get<PrefabBatches>(holder);
+    if (b == nullptr || copy >= b->copies.size()) return Entity();
+    if (b->copies[copy].awake.valid() && world.alive(b->copies[copy].awake)) return b->copies[copy].awake;
+    const PrefabBatches::Copy c = b->copies[copy];   // (a copy: stamping makes entities, and the list may move)
+    std::string why;
+    const Entity e = stampPrefab(world, b->dresser.get(), c.line, c.at, std::string(), &why);
+    if (!e.valid()) {
+        LOG_WARN << "batch copy of '" << c.prefab << "' could not wake: " << why;
+        return Entity();
+    }
+    // in the pose it was drawn in, with the uses that were on still on (nothing is done afresh: no sound, no motion)
+    if (ModelInstance* mi = world.get<ModelInstance>(e)) {
+        mi->pose = c.pose;
+        mi->target = c.pose;
+    }
+    poseModelPieces(world, e);
+    for (Entity pe : world.get<ModelInstance>(e)->pieces)
+        if (PrevTransform* prev = world.get<PrevTransform>(pe))
+            if (const Transform* t = world.get<Transform>(pe)) prev->value = *t;
+    if (PrefabUses* uses = world.get<PrefabUses>(e))
+        for (std::size_t i = 0; i < uses->uses.size() && i < c.on.size(); ++i) uses->uses[i].on = c.on[i] != 0;
+    if (c.swings) world.add<SwingDoor>(e, SwingDoor{c.swingFoot, c.swingNormal, c.at.position.y});
+    world.add<BatchAwake>(e, BatchAwake{holder, copy, 0});
+    for (const PrefabBatches::Copy::GroupRider& r : c.groupRiders)
+        if (world.alive(r.group)) rideMarkerInBatch(world, e, r.marker, r.group, r.index);
+    b = world.get<PrefabBatches>(holder);
+    b->copies[copy].awake = e;
+    b->restingStale = true;
+    showBatchCopy(world, holder, copy, false);
+    // what stands on it as a copy of its own wakes with it, and goes where it goes
+    for (const std::pair<uint32_t, std::string>& r : c.riders) {
+        const Entity rider = wakeBatchCopy(world, holder, r.first);
+        if (rider.valid()) rideMarker(world, rider, e, r.second);
+    }
+    return e;
+}
+
+bool batchCopySettled(World& world, Entity awake) {
+    const ModelInstance* mi = world.get<ModelInstance>(awake);
+    if (mi == nullptr) return true;
+    for (const std::pair<const std::string, Real>& sp : mi->speed)
+        if (sp.second > 0) {
+            const std::map<std::string, Real>::const_iterator want = mi->target.values.find(sp.first), is = mi->pose.values.find(sp.first);
+            const Real to = want != mi->target.values.end() ? want->second : 0, at = is != mi->pose.values.end() ? is->second : 0;
+            if (std::fabs(to - at) > Real(1e-6)) return false;
+        }
+    if (const PrefabUses* uses = world.get<PrefabUses>(awake))
+        for (const PrefabUses::Use& u : uses->uses)
+            if (u.moving || u.coasting > 0 || u.left > 0 || (u.on && (!u.use.run.empty() || !u.use.sway.empty() || u.use.sit || u.use.lie))) return false;
+    if (const FreeTurns* turns = world.get<FreeTurns>(awake))
+        for (const FreeTurns::Part& part : turns->parts)
+            if (part.speed != 0) return false;
+    return true;
+}
+
+void sleepBatchCopy(World& world, Entity awake, const std::function<void(PhysicsBodyId)>& removeBody) {
+    const BatchAwake* from = world.get<BatchAwake>(awake);
+    if (from == nullptr) return;
+    const Entity holder = from->holder;
+    const uint32_t copy = from->copy;
+    PrefabBatches* b = world.alive(holder) ? world.get<PrefabBatches>(holder) : nullptr;
+    if (b != nullptr && copy < b->copies.size()) {
+        // what stood on it as a copy of its own goes back first, where it now is
+        for (const std::pair<uint32_t, std::string>& r : std::vector<std::pair<uint32_t, std::string>>(b->copies[copy].riders)) {
+            const Entity rider = world.get<PrefabBatches>(holder)->copies[r.first].awake;
+            if (rider.valid() && world.alive(rider)) sleepBatchCopy(world, rider, removeBody);
+        }
+        b = world.get<PrefabBatches>(holder);
+        PrefabBatches::Copy& c = b->copies[copy];
+        if (const ModelInstance* mi = world.get<ModelInstance>(awake)) c.pose = mi->pose;
+        if (const Transform* t = world.get<Transform>(awake)) c.at = *t;
+        if (const PrefabUses* uses = world.get<PrefabUses>(awake))
+            for (std::size_t i = 0; i < uses->uses.size() && i < c.on.size(); ++i) c.on[i] = uses->uses[i].on ? 1 : 0;
+        c.awake = Entity();
+        c.shown = false;   // (so showing it writes its transforms afresh, in the pose it was left in)
+        b->restingStale = true;
+    }
+    unstampPrefab(world, awake, removeBody);
+    if (world.alive(holder) && world.has<PrefabBatches>(holder)) showBatchCopy(world, holder, copy, true);
 }
 
 BatchCount countBatches(World& world, Entity holder) {

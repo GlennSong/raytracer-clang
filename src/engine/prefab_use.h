@@ -9,6 +9,7 @@
 // Nothing here needs physics or a renderer, so a test can stamp a prefab and use it.
 
 #include "procgen/prefab.h"
+#include "procgen/proc_model.h"
 #include "world.h"
 
 #include <cstddef>
@@ -55,6 +56,11 @@ struct PrefabUses {
 // Give a stamped copy its prefab's uses. One whose marker, or any of whose nodes, the copy's model does not have is
 // left out (and `skipped` says which and why): one line serves a model built with more or fewer of a thing.
 void addPrefabUses(World& world, Entity instance, const Prefab& prefab, std::vector<std::string>* skipped = nullptr);
+// The uses a copy of `prefab` has on `model`, in the order a stamped copy numbers them: the line's uses its model
+// has the markers and nodes for (a `*` made into one use for each part that fits), then a seat for every seat or
+// lie marker no use names. The same list for a stamped copy and for one drawn in a batch (prefab_batch.h), so a
+// use has the same number whichever way the copy is served.
+std::vector<PrefabUse> prefabUsesFor(const ProcModel& model, const Prefab& prefab, std::vector<std::string>* skipped = nullptr);
 
 // The word a use offers now: its `say`, or its `back` once it is on; "stop" while a use that can be stopped is moving.
 const std::string& prefabUseWord(const PrefabUses::Use& use);

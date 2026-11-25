@@ -14,13 +14,22 @@
 // from, in the same order, so a copy that is later stamped in full (part c: it wakes) stands exactly where the
 // batch drew it.
 //
-// This part draws. A batch copy cannot yet be used or walked into (parts b and c).
+// READY (part b): a copy at rest is solid and offers its uses with no entity. Its collision is its model's shapes as
+// triangles, merged with every other copy's in the holder (batchCollisionTriangles: whoever has the physics makes
+// the two bodies, one for shapes that never move and one for shapes on parts that can, which is made again when
+// a copy wakes or sleeps). Its offers are found from its model's markers and its place (batchCopyMarker).
+//
+// AWAKE (part c): a copy someone uses, or a lively one (a script, a part that turns freely, a use that happens as
+// someone comes near, a door that swings) with the player close, is STAMPED in full at the pose the batch drew it
+// in and taken out of the picture; when it has been still a while it is put back in the pose it was left in, with
+// the uses that were on still on. Nothing is remembered once the holder lets go: a floor comes back as placed.
 
 #include "components.h"
 #include "procgen/model_store.h"
 #include "procgen/prefab.h"
 #include "world.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -44,7 +53,26 @@ struct PrefabBatches {
         // where each thing it draws is: a group and one of that group's transforms, in the model's draw order
         std::vector<std::pair<uint32_t, uint32_t>> draws;
         bool shown = true;                       // false: taken out of the picture (it has woken, part c)
+        Prefab line;                             // the prefab as it was placed (a door's has its opening's size in it)
+        std::vector<PrefabUse> uses;             // prefabUsesFor: the uses a stamped copy would have, in its order
+        std::vector<uint8_t> on;                 // which of them are on (kept while it sleeps)
+        Entity awake;                            // the stamped copy while it is awake
+        bool lively = false;                     // it does something by itself: awake whenever the player is close
+        // A DOOR THAT SWINGS (components.h SwingDoor): given to the stamped copy when it wakes
+        bool swings = false;
+        Vec2 swingFoot, swingNormal;
+        // WHAT STANDS ON IT, tied to one of its markers when it wakes (model_motion.h): copies in other batches (a
+        // monitor in the furniture kit's groups), and other copies of this holder (a desk lamp), which wake with it
+        struct GroupRider { Entity group; uint32_t index = 0; std::string marker; };
+        std::vector<GroupRider> groupRiders;
+        std::vector<std::pair<uint32_t, std::string>> riders;
     };
+    // What dresses a copy that wakes (shared with whoever made the copies).
+    std::shared_ptr<ModelDresser> dresser;
+    // THE COLLISION of the copies at rest: two bodies the holder's owner makes from batchCollisionTriangles and
+    // lets go with the holder. `restingStale`: a copy has woken or gone back to sleep since the second was made.
+    PhysicsBodyId fixedBody = INVALID_PHYSICS_BODY, restingBody = INVALID_PHYSICS_BODY;
+    bool fixedStale = true, restingStale = true;
     std::vector<Group> groups;
     std::map<std::string, uint32_t> groupOf;     // by mesh key, level band and draw class
     std::vector<Copy> copies;
@@ -66,8 +94,35 @@ void poseBatchCopy(World& world, Entity holder, uint32_t copy, const ProcPose& p
 // Take a copy out of the picture, or put it back (where its pose has it). It stays in the list either way.
 void showBatchCopy(World& world, Entity holder, uint32_t copy, bool shown);
 
-// Let every copy and group of a holder go. (The holder entity itself is the caller's.)
-void releaseBatches(World& world, Entity holder);
+// Let every copy and group of a holder go, its awake copies and its two collision bodies with them: `removeBody` is
+// called with each body for the caller to hand to its PhysicsWorld. (The holder entity itself is the caller's.)
+void releaseBatches(World& world, Entity holder, const std::function<void(PhysicsBodyId)>& removeBody = {});
+
+// On a stamped copy that is a batch copy awake: where it came from, and how long it has been still.
+struct BatchAwake {
+    Entity holder;
+    uint32_t copy = 0;
+    Real still = 0;
+};
+
+// Where one of a copy's markers is in the world, in the pose it is drawn in. False: the model has no such marker.
+bool batchCopyMarker(const PrefabBatches::Copy& copy, const std::string& marker, Vec3& position, Quat& rotation);
+
+// The collision shapes of a holder's copies at rest, as triangles in the world (both windings, so a thin shape
+// holds from either side). `moving` false: the shapes that never move, of every copy. `moving` true: the shapes on
+// parts that can move, where each sleeping copy's pose has them (an awake copy has its own bodies for those).
+void batchCollisionTriangles(const PrefabBatches& batches, bool moving, std::vector<Vec3>& vertices, std::vector<uint32_t>& indices);
+
+// Wake a copy: stamp it in full where and as the batch drew it, its uses that were on still on, and take it out of
+// the picture. Returns the stamped copy (the one already awake, if it is). What stands on it is tied to it.
+Entity wakeBatchCopy(World& world, Entity holder, uint32_t copy);
+
+// Put an awake copy back: the batch draws it in the pose it was left in, and the stamped copy goes. `removeBody`
+// as for unstampPrefab.
+void sleepBatchCopy(World& world, Entity awake, const std::function<void(PhysicsBodyId)>& removeBody = {});
+
+// Whether an awake copy is doing nothing: no part on its way, nothing running, no use counting down.
+bool batchCopySettled(World& world, Entity awake);
 
 // How many entities and transforms a holder's batches come to, for a measurement.
 struct BatchCount { std::size_t copies = 0, groups = 0, transforms = 0; };

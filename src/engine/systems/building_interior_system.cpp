@@ -17,6 +17,7 @@
 #include "../interaction.h"
 #include "../furniture_draw.h"   // the furniture kit, instanced (buildings M4b)
 #include "../model_spawn.h"      // ModelDresser
+#include "../prefab_batch.h"     // the prefabs in an interior: copies drawn in batches
 #include "../prefab_stamp.h"     // a kit piece stood as a prefab (CityBuildings::prefabSwaps)
 #include "../model_motion.h"     // rideMarker: what stood on a swapped piece rides the prefab
 #ifdef RT_ENABLE_SCRIPTING
@@ -386,13 +387,13 @@ const std::vector<std::string>& BuildingInteriorSystem::doorsFor(const BuildingR
     return (byType != doorByType_.end() ? byType->second : doorDefault_).*which;
 }
 
-Entity BuildingInteriorSystem::standDoor(World& world, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height) {
+bool BuildingInteriorSystem::standDoor(World& world, Entity holder, const std::string& name, const Vec3& at, const Vec2& out, Real width, Real height) {
 #ifdef RT_ENABLE_SCRIPTING
     Prefab prefab;
     std::string why;
     if (!findPrefab(name, prefab, std::string(), &why)) {
         LOG_WARN << "[interior] door '" << name << "': " << why;
-        return Entity();
+        return false;
     }
     // the prefab's own model, run again with the opening to fill (sizes to the centimetre, so like openings share
     // one model)
@@ -412,13 +413,21 @@ Entity BuildingInteriorSystem::standDoor(World& world, const std::string& name, 
     // a walker's way, as it did the box leaf this replaces -- ADR-0080's rule that a door can never trap anyone)
     prefab.body = Prefab::Body::None;
     prefab.uses.clear();
-    const Entity e = stampPrefab(world, dresser_.get(), prefab, t, std::string(), &why);
-    if (!e.valid()) LOG_WARN << "[interior] door '" << name << "': " << why;
-    else world.add<SwingDoor>(e, SwingDoor{Vec2(at.x, at.z), out, at.y});
-    return e;
+    // (a copy in the building's batches; it wakes into a door that swings while the player is near: prefab_batch.h)
+    const uint32_t copy = batchPrefab(world, holder, dresser_.get(), prefab, t, std::string(), &why);
+    if (copy == kNoBatchCopy) {
+        LOG_WARN << "[interior] door '" << name << "': " << why;
+        return false;
+    }
+    PrefabBatches::Copy& c = world.get<PrefabBatches>(holder)->copies[copy];
+    c.lively = true;
+    c.swings = true;
+    c.swingFoot = Vec2(at.x, at.z);
+    c.swingNormal = out;
+    return true;
 #else
-    (void)world; (void)name; (void)at; (void)out; (void)width; (void)height;
-    return Entity();
+    (void)world; (void)holder; (void)name; (void)at; (void)out; (void)width; (void)height;
+    return false;
 #endif
 }
 
@@ -547,9 +556,12 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     // a kit piece; where the level's list names a prefab for that piece, one copy of the prefab is stood there
     // and the kit piece is left out of everything below (its instance group, its seat). The prefab stands with its
     // back where the kit piece's was. One entity a copy, until many copies are drawn as a group (step 10).
+    // (the copies are drawn in batches the resident holds: one entity for the lot, and a group for each thing drawn)
+    res.holder = world.create();
+    world.add<PrefabBatches>(res.holder, PrefabBatches{});
     struct OnTop {
         std::size_t piece;     // an index into bm.furniture as it is after the swap
-        Entity owner;
+        uint32_t owner;        // the copy it stands on
         std::string surface;
         Real drop = 0;         // how far it is lowered to rest on that surface
     };
@@ -558,6 +570,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     for (const PlacedPiece& pp : bm.furniture) prefabPieces = prefabPieces || pieceIsPrefab(static_cast<Piece>(pp.piece));
     if ((!swaps_.empty() || prefabPieces) && !bm.furniture.empty()) {
         if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
+        world.get<PrefabBatches>(res.holder)->dresser = dresser_;   // (what dresses a copy that wakes)
         // where a kit piece's prefab stands: its back where the piece's was, turned as the piece was
         // ...and at the height the kit piece's own shape begins: a wall cupboard hangs at 1.45 m in its piece's space,
         // and its prefab, which stands on y = 0, goes there, not on the floor.
@@ -573,7 +586,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             return at;
         };
         struct Stood {
-            Entity e;
+            uint32_t copy;
             Mat4 toPiece;        // world -> the kit piece's own space
             Vec3 size;           // the kit piece's
             std::string surface;
@@ -584,9 +597,10 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         auto dropOnto = [&](const Stood& o) {
             Vec3 at;
             Quat turn;
-            return modelMarkerWorld(world, o.e, o.surface, at, turn) ? o.topY - at.y : Real(0);
+            return batchCopyMarker(world.get<PrefabBatches>(res.holder)->copies[o.copy], o.surface, at, turn) ? o.topY - at.y : Real(0);
         };
         std::vector<Stood> owners;
+        std::vector<uint32_t> stoodCopies;
         std::vector<PlacedPiece> kept, rest;
         std::size_t stood = 0, riding = 0;
         for (const PlacedPiece& pp : bm.furniture) {
@@ -601,14 +615,18 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             }
             const Vec3 size = furniturePiece(static_cast<Piece>(pp.piece), pp.variant).size;
             std::string why;
-            const Entity e = stampPrefab(world, dresser_.get(), what.prefab, placeOf(pp, what.back >= 0 ? what.back : size.z * Real(0.5), what.turn),
-                                         std::string(), &why);
-            if (!e.valid()) {
+            Prefab line;
+            uint32_t e = kNoBatchCopy;
+#ifdef RT_ENABLE_SCRIPTING
+            if (findPrefab(what.prefab, line, std::string(), &why))
+                e = batchPrefab(world, res.holder, dresser_.get(), line, placeOf(pp, what.back >= 0 ? what.back : size.z * Real(0.5), what.turn), std::string(), &why);
+#endif
+            if (e == kNoBatchCopy) {
                 LOG_WARN << "[interior] the prefab for '" << kitName << "': " << why << (pieceIsPrefab(static_cast<Piece>(pp.piece)) ? " (nothing stands there)" : " (the kit piece stays)");
                 if (!pieceIsPrefab(static_cast<Piece>(pp.piece))) rest.push_back(pp);
                 continue;
             }
-            res.prefabs.push_back(e);
+            stoodCopies.push_back(e);
             ++stood;
             if (!what.surface.empty()) {
                 Real top = 0;
@@ -629,17 +647,20 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             }
             return nullptr;
         };
-        for (const Entity e : std::vector<Entity>(res.prefabs)) {
-            Transform* t = world.get<Transform>(e);
-            const Stood* under = t != nullptr ? ownerUnder(t->position) : nullptr;
-            if (under == nullptr || under->e == e) continue;
-            t->position.y -= dropOnto(*under);
-            if (rideMarker(world, e, under->e, under->surface)) ++riding;
+        for (const uint32_t e : stoodCopies) {
+            const Stood* under = ownerUnder(world.get<PrefabBatches>(res.holder)->copies[e].at.position);
+            if (under == nullptr || under->copy == e) continue;
+            const Real drop = dropOnto(*under);
+            PrefabBatches* held = world.get<PrefabBatches>(res.holder);
+            held->copies[e].at.position.y -= drop;
+            poseBatchCopy(world, res.holder, e, held->copies[e].pose);   // (drawn where it now rests)
+            held->copies[under->copy].riders.emplace_back(e, under->surface);   // (it wakes and moves with what it stands on)
+            ++riding;
         }
         kept = rest;
         for (std::size_t i = 0; i < kept.size(); ++i)
             if (const Stood* under = owners.empty() ? nullptr : ownerUnder(kept[i].xform.transformPoint(Vec3(0, 0, 0))))
-                onTop.push_back(OnTop{i, under->e, under->surface, dropOnto(*under)});
+                onTop.push_back(OnTop{i, under->copy, under->surface, dropOnto(*under)});
         if (stood > 0) LOG_INFO << "[interior] " << stood << " kit pieces stand as prefabs (" << riding << " of them on another), "
                                 << onTop.size() << " kit pieces stand on one, " << kept.size() << " stay the kit's";
         bm.furniture.swap(kept);
@@ -650,6 +671,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     // by the building's recipe and kind; one building's doors of a sort are all the same one.
     if (!doorsFile_.empty()) {
         if (dresser_ == nullptr && renderer != nullptr) dresser_ = std::make_shared<ModelDresser>(*renderer, assets);
+        world.get<PrefabBatches>(res.holder)->dresser = dresser_;   // (what dresses a copy that wakes)
         const std::size_t pick = static_cast<std::size_t>(r.params.seed);   // (the building's own roll)
         auto one = [&](std::vector<std::string> DoorChoice::* which) {
             const std::vector<std::string>& names = doorsFor(r, which);
@@ -662,14 +684,12 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             const std::string name = one(d.back ? &DoorChoice::back : &DoorChoice::front);
             if (name.empty()) continue;
             const Vec2 foot = d.foot - d.normal * (inset * Real(0.5));   // in the middle of the wall's depth
-            const Entity e = standDoor(world, name, Vec3(foot.x, r.baseY + 0.05, foot.y), d.normal, d.width, d.height - Real(0.05));
-            if (e.valid()) { res.prefabs.push_back(e); ++hung; }
+            if (standDoor(world, res.holder, name, Vec3(foot.x, r.baseY + 0.05, foot.y), d.normal, d.width, d.height - Real(0.05))) ++hung;
         }
         for (const Doorway& w : bm.doorways) {
             const std::string name = one(w.glass ? &DoorChoice::insideGlass : &DoorChoice::inside);
             if (name.empty()) continue;
-            const Entity e = standDoor(world, name, w.at, Vec2(w.along.y, -w.along.x), w.width, w.height);
-            if (e.valid()) { res.prefabs.push_back(e); ++hung; }
+            if (standDoor(world, res.holder, name, w.at, Vec2(w.along.y, -w.along.x), w.width, w.height)) ++hung;
         }
         if (hung > 0) LOG_INFO << "[interior] " << hung << " doors hung in a " << r.recipe << " (" << r.type << "): street door '" << one(&DoorChoice::front)
                                << "', between rooms '" << one(&DoorChoice::inside) << "' in " << bm.doorways.size() << " doorways";
@@ -686,7 +706,8 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
             for (const FurnitureDrawn& d : where[t.piece]) {
                 if (InstanceGroup* g = world.get<InstanceGroup>(d.group))
                     if (d.index < g->transforms.size()) g->transforms[d.index].m[1][3] -= t.drop;
-                rideMarkerInBatch(world, t.owner, t.surface, d.group, d.index);
+                // (tied to the copy it stands on when that copy wakes, so a desk that rises carries it)
+                world.get<PrefabBatches>(res.holder)->copies[t.owner].groupRiders.push_back(PrefabBatches::Copy::GroupRider{d.group, d.index, t.surface});
             }
     }
 
@@ -747,8 +768,10 @@ void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
         phys->removeBody(it->second.body);
     for (Entity e : it->second.entities)
         if (world.alive(e)) world.destroy(e);
-    for (Entity e : it->second.prefabs)
-        if (world.alive(e)) unstampPrefab(world, e, [&](PhysicsBodyId id) { if (phys) phys->removeBody(id); });
+    if (it->second.holder.valid() && world.alive(it->second.holder)) {
+        releaseBatches(world, it->second.holder, [&](PhysicsBodyId id) { if (phys) phys->removeBody(id); });
+        world.destroy(it->second.holder);
+    }
     for (MeshHandle mh : it->second.meshes) freeQueue_.push_back(mh);
     resident_.erase(it);
     LOG_INFO << "[interior] released record " << key

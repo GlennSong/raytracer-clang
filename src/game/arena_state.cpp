@@ -269,7 +269,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<LadderSystem>(&physSys);  // roof ladders + vehicles' ladders: climb; fire escapes' colliders (engine/ladder.h)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
     addSystem<ModelMotionSystem>(&physSys);  // stamped prefabs' moving nodes: pieces and kinematic bodies follow (#191 step 8)
-    addSystem<PrefabUseSystem>();         // open, switch on, sit: what a stamped prefab offers (#191 step 9)
+    addSystem<PrefabUseSystem>(&physSys);         // open, switch on, sit: what a stamped prefab offers (#191 step 9)
     addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
     // all in when it picks the focus (engine/interact_broker.h).

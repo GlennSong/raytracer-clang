@@ -21,14 +21,22 @@
 
 namespace engine {
 
+class PhysicsSystem;
+
 class PrefabUseSystem : public System {
 public:
+    // `physics`: for the copies drawn in batches (prefab_batch.h) -- the collision of the ones at rest, and the bodies
+    // of one that goes back to sleep. Null: batch copies are not solid and their bodies are not handed back (a test).
+    explicit PrefabUseSystem(PhysicsSystem* physics = nullptr) : physics_(physics) {}
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void fixedUpdate(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;   // the lamps that are on, to the light board (lights/light_board.h)
 
     static constexpr double REACH = 1.8;
+    // A LIVELY batch copy (one that does something by itself) is awake while the player is within WAKE_M of it and
+    // goes back once they are past SLEEP_M; any awake copy that has been still for STILL_S goes back.
+    static constexpr double WAKE_M = 28.0, SLEEP_M = 34.0, STILL_S = 3.0;
 
 private:
     // WHAT A USE SOUNDS LIKE (assets/scripts/prefab_sounds.lua): a clip for each thing that can happen to it. A
@@ -40,6 +48,8 @@ private:
         Real range = 12.0;
     };
     void sounds(FrameContext& ctx);
+    void batches(FrameContext& ctx, Entity player, const Vec3& pos);   // wake, sleep, and the collision of those at rest
+    PhysicsSystem* physics_ = nullptr;
     AudioClipHandle clip(FrameContext& ctx, const std::string& name);
     std::map<std::string, Sound> sounds_;
     std::map<std::string, AudioClipHandle> clips_;

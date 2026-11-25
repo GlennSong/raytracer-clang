@@ -1,5 +1,8 @@
 #include "prefab_use_system.h"
 
+#include "physics_system.h"
+#include "../prefab_batch.h"
+
 #include "../components.h"
 #include "../interact_broker.h"
 #include "../interaction.h"   // Seated
@@ -254,6 +257,25 @@ void PrefabUseSystem::render(FrameContext& ctx) {
             lamps.push_back(c);
         }
     });
+    // ...and of the copies drawn in batches while they sleep: a lamp post's lamp, a fridge left open
+    ctx.world.each<PrefabBatches>([&](Entity, PrefabBatches& b) {
+        for (const PrefabBatches::Copy& copy : b.copies) {
+            if (copy.awake.valid()) continue;
+            auto lamp = [&](const std::string& marker, const std::string& kind) {
+                Vec3 at;
+                Quat turn;
+                LightCandidate c;
+                c.kind = lightKindId(kind.c_str());
+                if (c.kind < 0 || !batchCopyMarker(copy, marker, at, turn)) return;
+                c.position = at;
+                c.direction = turn.rotate(Vec3(0, 0, 1));
+                lamps.push_back(c);
+            };
+            for (const PrefabLamp& l : copy.line.lights) lamp(l.at, l.kind);
+            for (std::size_t i = 0; i < copy.uses.size() && i < copy.on.size(); ++i)
+                if (copy.on[i] != 0 && !copy.uses[i].light.empty()) lamp(copy.uses[i].lightAt.empty() ? copy.uses[i].at : copy.uses[i].lightAt, copy.uses[i].light);
+        }
+    });
     ctx.world.each<PrefabUses>([&](Entity e, PrefabUses& uses) {
         for (const PrefabUses::Use& u : uses.uses) {
             if (!u.on || u.use.light.empty()) continue;
@@ -266,6 +288,50 @@ void PrefabUseSystem::render(FrameContext& ctx) {
             c.position = at;
             c.direction = turn.rotate(Vec3(0, 0, 1));
             lamps.push_back(c);
+        }
+    });
+}
+
+// THE COPIES DRAWN IN BATCHES (prefab_batch.h): the lively ones near the player wake, the awake ones that have been
+// still go back, and the collision of the ones at rest is made (again, when one has woken or gone back).
+void PrefabUseSystem::batches(FrameContext& ctx, Entity player, const Vec3& pos) {
+    World& world = ctx.world;
+    auto removeBody = [&](PhysicsBodyId id) { if (physics_ != nullptr) physics_->physicsWorld().removeBody(id); };
+    std::vector<std::pair<Entity, uint32_t>> wake;
+    world.each<PrefabBatches>([&](Entity holder, PrefabBatches& b) {
+        for (std::size_t i = 0; i < b.copies.size(); ++i)
+            if (b.copies[i].lively && !b.copies[i].awake.valid() && (b.copies[i].at.position - pos).length() < WAKE_M)
+                wake.emplace_back(holder, static_cast<uint32_t>(i));
+    });
+    for (const std::pair<Entity, uint32_t>& w : wake) wakeBatchCopy(world, w.first, w.second);
+
+    const Seated* seated = player.valid() ? world.get<Seated>(player) : nullptr;
+    std::vector<Entity> sleep;
+    world.each<BatchAwake, Transform>([&](Entity e, BatchAwake& a, Transform& t) {
+        const PrefabBatches* b = world.alive(a.holder) ? world.get<PrefabBatches>(a.holder) : nullptr;
+        if (b == nullptr || a.copy >= b->copies.size()) { sleep.push_back(e); return; }   // (its holder has gone: so does it)
+        const bool lively = b->copies[a.copy].lively && (t.position - pos).length() < SLEEP_M;
+        const bool held = (seated != nullptr && seated->set == e) || world.has<RidesMarker>(e) || lively || !batchCopySettled(world, e);
+        if (held) { a.still = 0; return; }
+        a.still += ctx.frameDelta;
+        if (a.still > STILL_S) sleep.push_back(e);
+    });
+    for (Entity e : sleep)
+        if (world.alive(e)) sleepBatchCopy(world, e, removeBody);
+
+    if (physics_ == nullptr) return;
+    world.each<PrefabBatches>([&](Entity, PrefabBatches& b) {
+        for (int moving = 0; moving < 2; ++moving) {
+            bool& stale = moving ? b.restingStale : b.fixedStale;
+            PhysicsBodyId& body = moving ? b.restingBody : b.fixedBody;
+            if (!stale) continue;
+            stale = false;
+            if (body != INVALID_PHYSICS_BODY) physics_->physicsWorld().removeBody(body);
+            body = INVALID_PHYSICS_BODY;
+            std::vector<Vec3> vertices;
+            std::vector<uint32_t> indices;
+            batchCollisionTriangles(b, moving != 0, vertices, indices);
+            if (!indices.empty()) body = physics_->physicsWorld().addMesh(vertices, indices, Vec3(0, 0, 0), 0.6);
         }
     });
 }
@@ -283,6 +349,8 @@ void PrefabUseSystem::update(FrameContext& ctx) {
     });
     if (!player.valid() || ctx.world.has<InVehicle>(player) || ctx.world.has<Passenger>(player)) return;
     const Vec3 feet = pos - Vec3(0, feetDrop, 0);
+
+    batches(ctx, player, pos);
 
     // WHAT DOES ITSELF AS SOMEONE COMES NEAR (a use's `near`): an automatic door opens, a revolving door turns. Done
     // while the player is within reach of the use's marker and on its level; kept done while they stay.
@@ -312,6 +380,14 @@ void PrefabUseSystem::update(FrameContext& ctx) {
 
     InteractCommand cmd;
     const bool commanded = takeInteractCommand(ctx.world, player, "prefab", cmd);
+
+    // A COMMAND FOR A COPY DRAWN IN A BATCH: it wakes, and the command is then the stamped copy's (its uses have the
+    // same numbers: prefabUsesFor).
+    if (commanded && cmd.entity.valid() && ctx.world.alive(cmd.entity) && ctx.world.has<PrefabBatches>(cmd.entity)) {
+        const Entity woken = wakeBatchCopy(ctx.world, cmd.entity, static_cast<uint32_t>(cmd.key >> 16));
+        cmd.key &= 0xffff;
+        cmd.entity = woken;
+    }
 
     // SEATED ON A PREFAB: stand up on the command, on any move key, or when the copy has gone.
     if (Seated* s = ctx.world.get<Seated>(player)) {
@@ -375,6 +451,50 @@ void PrefabUseSystem::update(FrameContext& ctx) {
             near.push_back(Near{e, i, at});
         }
     });
+    // ...and the uses of the copies drawn in batches, found from each copy's model and place. The offer names the
+    // holder and packs the copy and the use into its key; taking it wakes the copy (above).
+    struct BatchNear {
+        Entity holder;
+        uint32_t copy;
+        std::size_t use;
+        Vec3 at;
+        std::string tap, name;
+        bool seat;
+    };
+    std::vector<BatchNear> batchNear;
+    ctx.world.each<PrefabBatches>([&](Entity holder, PrefabBatches& b) {
+        for (std::size_t ci = 0; ci < b.copies.size(); ++ci) {
+            const PrefabBatches::Copy& c = b.copies[ci];
+            if (c.awake.valid() || c.uses.empty()) continue;
+            if (std::fabs(c.at.position.x - feet.x) > 12 || std::fabs(c.at.position.z - feet.z) > 12 || std::fabs(c.at.position.y - feet.y) > 6) continue;
+            PrefabUses as;
+            for (std::size_t i = 0; i < c.uses.size(); ++i) {
+                PrefabUses::Use u{c.uses[i]};
+                u.on = i < c.on.size() && c.on[i] != 0;
+                as.uses.push_back(u);
+            }
+            for (std::size_t i = 0; i < as.uses.size(); ++i) {
+                Vec3 at;
+                Quat turn;
+                if (!prefabUseOffered(as, i) || !batchCopyMarker(c, as.uses[i].use.at, at, turn)) continue;
+                if (std::hypot(at.x - feet.x, at.z - feet.z) > REACH || at.y < feet.y - 0.5 || at.y > feet.y + 2.6) continue;
+                batchNear.push_back(BatchNear{holder, static_cast<uint32_t>(ci), i, at, prefabUseWord(as.uses[i]), c.prefab,
+                                              as.uses[i].use.sit || as.uses[i].use.lie});
+            }
+        }
+    });
+    for (const BatchNear& n : batchNear) {
+        InteractOffer o;
+        o.provider = "prefab";
+        o.entity = n.holder;
+        o.key = (static_cast<uint64_t>(n.copy) << 16) | static_cast<uint64_t>(n.use);
+        o.anchor = n.at;
+        o.tap = n.tap;
+        o.name = n.name;
+        o.reach = REACH;
+        o.needsSight = !n.seat;
+        offerInteraction(ctx.world, player, o);
+    }
     for (const Near& n : near) {
         const PrefabUses* uses = ctx.world.get<PrefabUses>(n.e);
         const ModelInstance* mi = ctx.world.get<ModelInstance>(n.e);
