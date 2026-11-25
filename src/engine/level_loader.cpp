@@ -8861,14 +8861,17 @@ bool LevelLoader::load(const std::string& path,
                 }
                 std::string census;
                 for (std::size_t k = 0; k < nKinds; ++k) census += ", " + std::to_string(nProp[k]) + " " + kindName[k];
-                for (const engine::KerbProp& kp : fplan.props)   // (where to find the first of a data kind)
-                    if (kp.kind == engine::KerbProp::kFirstDataKind) {
+                {   // (where to find the first of each kind, to go and look at one)
+                    std::vector<char> said(nKinds, 0);
+                    for (const engine::KerbProp& kp : fplan.props) {
+                        if (kp.kind >= nKinds || said[kp.kind]) continue;
+                        said[kp.kind] = 1;
                         char at[160];
                         std::snprintf(at, sizeof at, " (the first %s at %.1f %.1f %.1f, the pavement toward %.2f %.2f)", kindName[kp.kind].c_str(),
                               kp.base.x, kp.base.y, kp.base.z, kp.toPavement.x, kp.toPavement.y);
                         census += at;
-                        break;
                     }
+                }
                 census += "; " + std::to_string(nBodies) + " bodies, " + std::to_string(nPieces) + " breakable";
                 LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees" << census;
             }

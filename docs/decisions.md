@@ -25225,7 +25225,7 @@ No worse: the two overlap. (The baseline of 23.18 ms in ADR-0521 was one run; th
 
 **What is left:**
 - **Nobody can use a kerb prop yet.** The copies offer their uses to the player (a bin's flap), but the player is never the reason one wakes unless they use it, and no person in the city uses them. `findBatchUse`, for a brain state that uses a bench or a bin, comes with the outdoor port.
-- **Seen in the game: the hydrant only** (river_town, standing on the pavement the right way up). The bin, bike rack, news box and bus stop were not looked at, so which way each faces is unchecked.
+- **Seen in the game** (river_town, from the pavement side): the hydrant, the bin (its flap to the pavement), the news box (its window to the pavement), the bike rack (along the kerb) and the bus stop (its post and bench at the kerb, the same mesh as before). The `[furniture] kerb life` log line gives where the first of each kind stands.
 - A knocked-off piece is one colour of material (its paint is on its vertices); a bin's flap flies off with the bin as one piece.
 - Park, playground and garden pieces are placed in the lot pass and baked. Porting them changes a baked format and so needs a lots tag bump, which waits for Glenn's word.
 
