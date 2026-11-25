@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_POLYGON_H
 
 #include "../../../rt_math.h"   // Real
+#include <cstdint>
 #include <vector>
 
 namespace engine {
@@ -64,6 +65,14 @@ Real signedArea(const Poly2& poly);
 inline Real area(const Poly2& poly) { return std::abs(signedArea(poly)); }
 inline bool isCCW(const Poly2& poly) { return signedArea(poly) > 0; }
 void ensureCCW(Poly2& poly);           // reverse in place if wound CW
+// AN OUTLINE'S OWN NUMBER (#317 step 6, ADR-0503): a hash of the ring itself, its corners rounded to the centimetre, read
+// counter-clockwise from its lowest corner (least x, then least y). The same ring gives the same number wherever it sits
+// in a list, whichever corner it starts at and whichever way it is wound; move any corner a centimetre and it changes.
+// It is what a block's and a lot's dice are seeded from, so an edit elsewhere leaves them alone.
+uint32_t outlineKey(const Poly2& poly);
+// ...and the ring turned (not reversed) to start at that same lowest corner, so whatever walks it from its first corner
+// (the parcel walk) walks every copy of it the same way.
+void startAtLowestCorner(Poly2& poly);
 
 Vec2 centroid(const Poly2& poly);      // area centroid (falls back to vertex mean)
 Real perimeter(const Poly2& poly);

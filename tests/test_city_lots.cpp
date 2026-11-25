@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <algorithm>
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/polyline.h"   // distToSegment
@@ -106,6 +108,37 @@ TEST_CASE(lot_buildings_are_deterministic) {
     LotParams q = p; q.seed = 99;
     std::vector<LotBuilding> d = growLotBuildings(squareBlocks(), q);
     CHECK(!d.empty());
+}
+
+// A BLOCK'S LOTS ARE ITS OWN (ADR-0503): its dice come from its outline, not its place in the list, so the same blocks
+// handed over in another order, each ring starting at another corner, grow the same lots -- and a block added far off
+// leaves the others' lots as they were.
+TEST_CASE(a_blocks_lots_do_not_depend_on_where_it_stands_in_the_list) {
+    LotParams p;
+    p.seed = 7;
+    auto key = [](const LotBuilding& b) {
+        char k[160];
+        std::snprintf(k, sizeof k, "%.6f %.6f %s %s %.6f %.6f", b.site.x, b.site.y, b.type.c_str(), b.recipe.c_str(), b.height, b.yaw);
+        return std::string(k);
+    };
+    auto keys = [&](const std::vector<LotBuilding>& v, Real maxX) {
+        std::vector<std::string> out;
+        for (const LotBuilding& b : v) if (b.site.x < maxX) out.push_back(key(b));
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const std::vector<LotBuilding> a = growLotBuildings(squareBlocks(), p);
+    std::vector<Poly2> turned = squareBlocks();
+    std::reverse(turned.begin(), turned.end());
+    for (Poly2& r : turned) std::rotate(r.begin(), r.begin() + 1, r.end());
+    const std::vector<LotBuilding> b = growLotBuildings(turned, p);
+    CHECK(!a.empty());
+    CHECK(keys(a, 1e9) == keys(b, 1e9));
+    std::vector<Poly2> more = squareBlocks();
+    const Real h = 45.0, cx = 1500.0, cz = 0.0;   // one block more, far off, at the front of the list
+    more.insert(more.begin(), Poly2{{cx - h, cz - h}, {cx + h, cz - h}, {cx + h, cz + h}, {cx - h, cz + h}});
+    const std::vector<LotBuilding> c = growLotBuildings(more, p);
+    CHECK(keys(a, 1e9) == keys(c, 1000.0));
 }
 
 // PARTY WALLS STOP AT THE NEIGHBOUR'S ROOF (Glenn's grey glass towers, 2026-10-23): an attached building taller
@@ -1358,8 +1391,14 @@ TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
                 CHECK(lb.recipe == "glass_tower");
                 CHECK(area(o.poly) >= 10.0 * 26.0 * 0.9);
                 // The plaza lies between the lot's frontage and the tower: no
-                // tower corner inside it.
-                for (const Vec2& v : lb.plan) CHECK(!pointInPolygon(o.poly, v));
+                // tower corner inside it. (The tower's front corners stand ON the plaza's back edge, by design: a corner
+                // on that edge is not inside, whichever way the point test rounds it -- ADR-0503's dice put the first
+                // plaza on a lot whose frame makes the test call them inside, 0.000000 m from the edge.)
+                for (const Vec2& v : lb.plan) {
+                    Real edge = 1e30;
+                    for (std::size_t k = 0; k < o.poly.size(); ++k) edge = std::min(edge, distToSegment(v, o.poly[k], o.poly[(k + 1) % o.poly.size()]));
+                    CHECK(!pointInPolygon(o.poly, v) || edge < 1e-3);
+                }
                 CHECK(!lb.pavedLot.empty());
                 CHECK(!lb.treeSpots.empty());   // the planters' trees
             }

@@ -2,6 +2,7 @@
 #include "polyline.h"   // distToSegment
 #include "implicit.h"   // simplifyLoop: a curved lot's outline for its open frame
 #include "../../../proc_rng.h"
+#include "../../../hash.h"   // hashPair: blocks and lots told apart
 #include "trades.h"
 
 #include <unordered_map>
@@ -24,6 +25,7 @@
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include "../../../job_system.h"   // sharedJobs: PASS C grows the lots on the shared pool (#317 step 5)
 #include <algorithm>
+#include <tuple>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -2157,15 +2159,23 @@ static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoa
     LotPathCounts n;
     struct Ref { std::size_t lot, path; };
     std::vector<Ref> all;
+    // A PATH'S ID IS ITS LOT'S OWN (ADR-0503): "lot" and eight hex digits of the lot's site to the centimetre (told apart
+    // from an earlier lot on the same spot by how many came before, as blocks are), then ".p" and the path's place among
+    // its lot's. It was the lot's place in the whole list, so a lot added or lost anywhere renamed every path after it.
+    std::map<uint32_t, uint32_t> siteSeen;
     for (std::size_t li = 0; li < out.size(); ++li) {
         std::vector<ModelWalkway>& ws = out[li].walkways;
+        uint32_t site = hashPair(static_cast<uint32_t>(std::llround(out[li].site.x * 100.0)), static_cast<uint32_t>(std::llround(out[li].site.y * 100.0)));
+        if (!ws.empty()) { const uint32_t before = siteSeen[site]++; if (before > 0) site = hashPair(site, before); }
+        char lotId[16];
+        std::snprintf(lotId, sizeof lotId, "lot%08x", site);
         std::vector<ModelWalkway> kept;
         for (ModelWalkway& w : ws) {
             if (w.line.size() < 2 || !strictlyPast((w.line.back() - w.line.front()).length(), kShortestPath, kSamePoint)) {
                 ++n.dropped;
                 continue;
             }
-            w.id = "lot" + std::to_string(li) + ".p" + std::to_string(kept.size());
+            w.id = std::string(lotId) + ".p" + std::to_string(kept.size());
             w.heights.clear();
             for (const Vec2& q : w.line) w.heights.push_back(ground ? ground(q.x, q.y) : out[li].groundY);
             kept.push_back(std::move(w));
@@ -3931,7 +3941,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         Poly2 foot;   // the parcelled interior (the alley pass clips to it)
     };
     struct LotCand {
-        std::size_t li;      // lot index within its block (the rng stream id)
+        std::size_t li;      // lot index within its block
+        uint32_t key;        // the lot's own number (its outline's: the rng stream id, ADR-0503)
         int block;           // index into binfos
         Lot lot;
         int landmark = -1;   // LandmarkKind once the planner assigns one
@@ -3978,8 +3989,40 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if (!nearFreeway) nearFreeway = [lr](const Vec2& q) { return lr->besideFreeway(q, kFreewayClear); };
         isFrontage = [lr](const Vec2& a, const Vec2& b) { return lr->edgeBesideStreet(a, b); };
     }
-    for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
-        const Poly2& block = blocks[bi];
+    // EACH BLOCK'S OWN NUMBER, from its outline (polygon.h outlineKey; #317 step 6, ADR-0503): its dice. A block's
+    // position in the list the pavement's holes come in was its dice and its place in the order, so a
+    // block added or lost anywhere reseeded every block after it, and the order-dependent choices (big boxes 700 m apart,
+    // the first block a campus fits) moved with them. Two blocks with the same outline (none on a real city) are told
+    // apart by how many came before in the list: the second is hashPair(key, 1), and so on.
+    std::vector<uint32_t> blockKey(blocks.size());
+    {
+        std::map<uint32_t, uint32_t> seen;
+        for (std::size_t i = 0; i < blocks.size(); ++i) {
+            const uint32_t k = outlineKey(blocks[i]);
+            const uint32_t before = seen[k]++;
+            blockKey[i] = before == 0 ? k : hashPair(k, before);
+        }
+    }
+    // THE ORDER THE BLOCKS ARE TAKEN IN is where they stand: by the kLotTile square holding the block's centre (row, then
+    // column), then by the centre itself to the metre (row, then column), then by its number. An edited block keeps its
+    // place unless it moves past a neighbour's centre, and a tile's blocks come one after another (lots are added, and a
+    // cell's parts laid, in this order).
+    struct BlockPlace { int64_t tz, tx, cz, cx; uint32_t key; std::size_t i; };
+    std::vector<BlockPlace> places(blocks.size());
+    for (std::size_t i = 0; i < blocks.size(); ++i) {
+        const Vec2 c = blocks[i].size() >= 3 ? centroid(blocks[i]) : Vec2(0, 0);
+        places[i] = {static_cast<int64_t>(std::floor(c.y / kLotTile)), static_cast<int64_t>(std::floor(c.x / kLotTile)),
+                     std::llround(c.y), std::llround(c.x), blockKey[i], i};
+    }
+    std::sort(places.begin(), places.end(), [](const BlockPlace& a, const BlockPlace& b) {
+        return std::tie(a.tz, a.tx, a.cz, a.cx, a.key, a.i) < std::tie(b.tz, b.tx, b.cz, b.cx, b.key, b.i);
+    });
+    std::vector<std::size_t> blockOrder(blocks.size());
+    for (std::size_t k = 0; k < places.size(); ++k) blockOrder[k] = places[k].i;
+    for (std::size_t bo = 0; bo < blockOrder.size(); ++bo) {
+        const std::size_t bi = blockOrder[bo];
+        Poly2 block = blocks[bi];
+        startAtLowestCorner(block);   // (the parcel walk starts at the first corner: the same one for every copy of it)
         if (block.size() < 3) continue;
         // Pull in from the road edge to the buildable interior (road + sidewalk).
         Poly2 foot = inset(block, p.roadMargin);
@@ -4006,7 +4049,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         blockFoots.push_back(foot);
 
         BlockInfo bf;
-        bf.pp.seed = mix(static_cast<uint32_t>(bi), p.seed);
+        bf.pp.seed = mix(blockKey[bi], p.seed);
         bf.pp.isFrontage = isFrontage;
         bf.pp.targetArea = 480;
         bf.pp.minArea = ppMinArea;
@@ -4733,6 +4776,17 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         bf.foot = foot;
         binfos.push_back(bf);
+        // each lot's own number: its outline's, told apart from an identical one earlier in the block as blocks are
+        // (its dice are mix(block seed, number): the block's seed and the lot's own outline)
+        std::vector<uint32_t> lotKey(lots.size());
+        {
+            std::map<uint32_t, uint32_t> seen;
+            for (std::size_t i = 0; i < lots.size(); ++i) {
+                const uint32_t k = outlineKey(lots[i].footprint);
+                const uint32_t before = seen[k]++;
+                lotKey[i] = before == 0 ? k : hashPair(k, before);
+            }
+        }
         for (std::size_t li = 0; li < lots.size(); ++li) {
             // A block-interior COURT (frontage parceler, v2 step 10) is open
             // space, never a building lot — nothing landlocked gets built.
@@ -4759,11 +4813,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 out.push_back(std::move(g));
                 deferredParks.push_back(
                     {out.size() - 1,
-                     mix(bf.pp.seed, 0xC0947u + static_cast<uint32_t>(li))});
+                     mix(bf.pp.seed, 0xC0947u + lotKey[li])});
                 continue;
             }
             if (area(lots[li].footprint) < bf.pp.minArea) continue;
-            cands.push_back({li, static_cast<int>(binfos.size()) - 1,
+            cands.push_back({li, lotKey[li], static_cast<int>(binfos.size()) - 1,
                              lots[li], -1});
         }
     }
@@ -5143,7 +5197,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const DistrictTag blockTag = bf.tag;
             const Real lotSetback = bf.lotSetback;
             const Real buildChance = bf.buildChance;
-            const std::size_t li = cand.li;
+            const uint32_t li = cand.key;   // (the lot's own number, not its place in the block: ADR-0503)
             const Lot& lot = cand.lot;
             ProcRng rng(mix(pp.seed, static_cast<uint32_t>(li) + 1));
             // An unbuilt lot is reported as a GREEN (device: "empty lots had

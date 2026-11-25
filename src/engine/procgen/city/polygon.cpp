@@ -1,6 +1,8 @@
 #include "polygon.h"
+#include "../../../hash.h"   // hashPair: outlineKey
 
 #include <algorithm>
+#include <cmath>
 
 namespace engine {
 
@@ -18,6 +20,35 @@ Real signedArea(const Poly2& poly) {
 
 void ensureCCW(Poly2& poly) {
     if (signedArea(poly) < 0) std::reverse(poly.begin(), poly.end());
+}
+
+namespace {
+std::pair<int64_t, int64_t> centimetres(const Vec2& v) { return {std::llround(v.x * 100.0), std::llround(v.y * 100.0)}; }
+}  // namespace
+
+void startAtLowestCorner(Poly2& poly) {
+    if (poly.size() < 2) return;
+    std::size_t lo = 0;
+    for (std::size_t i = 1; i < poly.size(); ++i) if (centimetres(poly[i]) < centimetres(poly[lo])) lo = i;
+    std::rotate(poly.begin(), poly.begin() + static_cast<std::ptrdiff_t>(lo), poly.end());
+}
+
+uint32_t outlineKey(const Poly2& poly) {
+    const std::size_t n = poly.size();
+    if (n == 0) return hashPair(0u, 0x071e5u);
+    std::vector<std::pair<int64_t, int64_t>> q(n);
+    for (std::size_t i = 0; i < n; ++i) q[i] = centimetres(poly[i]);
+    if (signedArea(poly) < 0) std::reverse(q.begin(), q.end());   // read counter-clockwise
+    const std::size_t start = static_cast<std::size_t>(std::min_element(q.begin(), q.end()) - q.begin());
+    uint32_t h = hashPair(static_cast<uint32_t>(n), 0x071e5u);
+    for (std::size_t k = 0; k < n; ++k) {
+        const std::pair<int64_t, int64_t>& c = q[(start + k) % n];
+        h = hashPair(h, static_cast<uint32_t>(static_cast<uint64_t>(c.first)));
+        h = hashPair(h, static_cast<uint32_t>(static_cast<uint64_t>(c.first) >> 32));
+        h = hashPair(h, static_cast<uint32_t>(static_cast<uint64_t>(c.second)));
+        h = hashPair(h, static_cast<uint32_t>(static_cast<uint64_t>(c.second) >> 32));
+    }
+    return h;
 }
 
 Vec2 centroid(const Poly2& poly) {

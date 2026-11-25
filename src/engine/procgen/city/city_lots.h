@@ -358,6 +358,10 @@ struct LotParams {
 // The intermediate planning geometry, exposed for debug visualization: the block
 // interiors the parcel pass actually subdivided (post road-margin inset) and every
 // lot it produced (built or not) — so "blocks → lots → buildings" can be SEEN.
+// THE LOT PASS'S TILE (#317 step 6, ADR-0503): a square this many metres on a side. A block belongs, whole, to the tile
+// holding its centre; the blocks are taken tile by tile (row, then column), and within a tile by their centres.
+constexpr Real kLotTile = 1000.0;
+
 struct LotPlanDebug {
     int wholeBlocks = 0;         // blocks the parcel walk could not fill, given to ONE landmark
     std::vector<Poly2> blocks;   // buildable block interiors (inset from the roads)

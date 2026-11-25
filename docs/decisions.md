@@ -24920,3 +24920,46 @@ They are single polygon operations over the whole island. An index cannot speed 
 - What is left on one core: parcelling and grading (PASS A, about 15 s), the party-wall pass (about 10 s), making each material's cell chunks (the encoding is on the pool), and the mall, paseo and quad lots grown again.
 - Checked again outside the helper that did the work: river_town by the pre-step-5 binary, by this one, and by this one with `--threads 1`: 1,571 sections, every one identical but `city/e0/report` (its timings).
 - Not tiles, as the investigation's step 5 had it: lots are handed out and added in lot order instead, which keeps the fewest finished lots waiting. Tiles pay off once a tile can be skipped (step 6, which needs Glenn's decision on block ids). The peak memory did not come down (29.3 -> 30.0 GB): every part stays in one island-wide mesh per material until the party walls are cut and the cells written; lowering it means rewriting those around tiles.
+
+## ADR-0503 — A block's and a lot's dice come from their own outlines, and the blocks are taken in the order they stand (#317, step 6a; 2026-11-25)
+
+**Why:** a block's dice (the seed every choice on it is rolled from) were its position in the list of the pavement's holes, and a lot's were its position in its block. The holes come in whatever order the polygon library hands them over. A block added, removed or moved anywhere could shift every block after it in that list, and every one of those blocks then rolled new buildings. The order the blocks were taken in shifted the same way, and so did the choices made in that order: big boxes kept 700 m apart, the first block a campus fits. So editing one junction could change lots across the whole map. A bake that rebuilds only what an edit touched (step 6b) needs a block's lots to depend on the block alone. Glenn approved changing every lot once for it.
+
+**Words:**
+- a block's or lot's *outline* is its ring of corners.
+- its *own number* (`outlineKey`, polygon.h) is a hash of that ring. The corners are rounded to the centimetre and read counter-clockwise from the lowest corner (least x, then least y). The same ring gives the same number wherever it sits in a list, whichever corner it starts at and whichever way it is wound. Move any corner a centimetre and the number changes.
+- a *tile* (`kLotTile`, 1 km) is a square of the map. A block belongs, whole, to the tile holding its centre.
+
+**What happens:**
+- **A block's seed is `mix(its own number, the level's seed)`**, not `mix(its index, the level's seed)`.
+- **A lot's dice are `mix(block seed, the lot's own number × k + c)`** wherever they were `mix(block seed, the lot's index × k + c)`. This applies to all thirty-odd rolls of the lot pass: the recipe, the shops, the open-lot use, the paving, the parks and the courts.
+- **Two identical outlines** (none on a real city) are told apart by how many came before in the list: the second gets `hashPair(number, 1)`, the third `hashPair(number, 2)`. Only identical twins depend on list order.
+- **The blocks are taken in the order they stand:** by tile (row, then column), then by the block's centre to the metre (row, then column), then by its number. An edited block keeps its place unless its centre moves past a neighbour's. A tile's blocks come one after another, which is the order step 6b will assemble cells in.
+- **Each block's ring is turned to start at its lowest corner** before it is parcelled (`startAtLowestCorner`). The parcel walk starts at the first corner, so a block handed over starting at another corner was cut into other lots.
+- **A lot's paths are named after the lot's own site**, not its place in the list of every lot. The name is "lot", eight hex digits of the site to the centimetre, then ".p" and the path's place among its lot's paths (`lot01fce552.p0`). A lot added anywhere renamed every path after it, and doors and other paths name paths.
+- **Lots tag `2026-11-25.1`.** Every lot changes once.
+
+**Checked:**
+- A new unit case grows the same four blocks three ways and gets the same lots each time:
+  - in the original order;
+  - in reverse order, every ring starting at another corner;
+  - with a fifth block added far away at the front of the list.
+
+  Before this change the reordered set grew other lots.
+- river_town, two edits on a scratch copy of the level (the level and its road file copied, not Glenn's):
+  - **a street removed (s102), which merges two blocks into one** (142 → 141 pavement holes). Before: 10 of the 29 lot cells changed, 336 of 1,255 lot sections, 5 of the changed cells more than one cell away from the edit. After: 6 cells and 138 sections.
+  - **a street bent 3 m along its middle third (s145).** Before: 4 cells and 60 sections changed. After: 4 cells and 90 sections. The bent street's blocks regrow with new dice, and their place in the order moves with them.
+- **In both edits every changed lot cell lies where the city's own ground changed.** The road design refits the streets' heights, and the city's terrain mesh changes in those cells. The two far cells changed only in material 8 (concrete): the foundations that reach down to that ground. No lot cell changed where the city did not.
+- Lots byte-identical across thread counts, as in ADR-0502 (`rt_bake --threads 1` and full).
+- Re-pinned (old → new, each "seeds now from outlines, ADR-0503"):
+  - `a_tower_in_a_plaza_stands_back_from_the_avenue`: its first plaza is now on a lot whose tower front corners lie exactly on the plaza's back edge (0.000000 m), and the point test calls them inside. The check now allows a corner within 1 mm of the edge, which is the design: the tower stands at the back of its plaza.
+  - `road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_states`: the path ids `lot0.p0..p2` → `lot01fce552.p0..p2`, the new naming.
+  - `level_river_town_crowd_drives_on_the_new_driving`: every lot regrown, so other dwellings and jobs.
+    - Residents 5115 → 5134, households 2686 → 2699, cars 824 → 787, residents with a car 1212 → 1159, home markers 278 → 291.
+    - The most on the road 120 → 127 (still minute 6).
+    - Trips by car 170 → 165, parked 153 → 155, arrivals 3259 → 3357.
+    - Set out 3600 → 3667, arrived 3224 → 3317, at work 1766 → 1782, nowhere 8 → 4, no way 63 → 50, plans with no way 318 → 178.
+    - Bus calls 180 → 184; state hash `0x5ab02c088a376691` → `0xf535cd1ac2925c02`.
+- run_tests: 1,570 of 1,571 pass. The one failing, `control_site_command_list_matches_the_table` (web/engine/commands.json out of date), is not the lot pass's. lanes_tests: 158 of 158.
+
+**Not done:** the city stage is still global. One edit refits the heights of the streets it joins and moves the ground under the blocks beside them, so their lots follow. That is the city's step 7 (city tiles), not this.

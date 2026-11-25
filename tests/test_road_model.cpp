@@ -5196,7 +5196,9 @@ TEST_CASE(road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_
     CHECK(lot.walkways.size() == 3u);
     if (lot.walkways.size() != 3u) return;
     const ModelWalkway &up = lot.walkways[0], &across = lot.walkways[1], &down = lot.walkways[2];
-    CHECK(up.id == "lot0.p0" && across.id == "lot0.p1" && down.id == "lot0.p2" && up.heights.size() == 2u);
+    // (a path's id is its lot's own -- the lot's site to the centimetre, here (0, 0) -- and its place among the lot's
+    // paths: "lot0.p0" -> "lot01fce552.p0" when ids stopped being the lot's place in the list, ADR-0503)
+    CHECK(up.id == "lot01fce552.p0" && across.id == "lot01fce552.p1" && down.id == "lot01fce552.p2" && up.heights.size() == 2u);
     // the two street ends: each street's id, the station level with the end, its own kerb (frontageOnLine's answer)
     const WalkwayEnd &east = up.ends[0], &west = down.ends[1];
     CHECK(east.meets.street == m.streets[eastN.street.index].id && approxEqual(east.meets.station, eastN.station, kWrittenStation) &&
@@ -5204,12 +5206,12 @@ TEST_CASE(road_model_45_a_lots_paths_become_walkways_landing_where_the_lot_pass_
     CHECK(west.meets.street == m.streets[westN.street.index].id && approxEqual(west.meets.station, westN.station, kWrittenStation) &&
           west.meets.dir == westN.dir && !west.deadEnd);
     // the corners: each piece's end on the next piece's start (or its end), by id and metres along
-    CHECK(up.ends[1].meets.walkway == "lot0.p1" && approxEqual(up.ends[1].meets.along, 0.0, kWrittenStation));
-    CHECK(down.ends[0].meets.walkway == "lot0.p1" && approxEqual(down.ends[0].meets.along, distance(ne, nw), kWrittenStation));
+    CHECK(up.ends[1].meets.walkway == "lot01fce552.p1" && approxEqual(up.ends[1].meets.along, 0.0, kWrittenStation));
+    CHECK(down.ends[0].meets.walkway == "lot01fce552.p1" && approxEqual(down.ends[0].meets.along, distance(ne, nw), kWrittenStation));
     CHECK(across.ends[0].meets.onWalkway() && across.ends[1].meets.onWalkway());
     // the door states the path and where along it, not a street
     const StatedFrontage& onPath = lot.units[0].doors[0].frontage;
-    CHECK(onPath.walkway == "lot0.p1" && !onPath.onStreet() && approxEqual(onPath.along, ne.x, kWrittenStation));
+    CHECK(onPath.walkway == "lot01fce552.p1" && !onPath.onStreet() && approxEqual(onPath.along, ne.x, kWrittenStation));
 
     // HANDED TO THE MODEL: every end lands, no fault
     const std::vector<WalkwayProblem> problems = stateLotWalkways(m, lots);
