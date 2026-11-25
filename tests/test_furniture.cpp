@@ -1380,6 +1380,19 @@ TEST_CASE(shop_staff_stand_behind_their_own_counter_and_nobody_sits_in_a_closed_
     OccupantPlan shut;
     shut.people = 0; shut.units = &sushi;
     CHECK(planOccupants(set, lib, shut).empty());
+    // AN OFFICE (ADR-0510): no counter to stand behind, so its staff are its workers at their desks, not out the back
+    Interactables office;
+    for (int k = 0; k < 3; ++k) {
+        const Mat4 xf = Mat4::translate(2.0 * k, 0, 0);
+        office.pieces.push_back({static_cast<uint8_t>(Piece::OfficeChair), interactXform(lib.find(Piece::OfficeChair), xf, 0), 0, 0});
+    }
+    std::vector<uint8_t> desks{0, 1};
+    OccupantPlan work;
+    work.people = 3; work.staff = 3; work.units = &desks; work.seed = 5;
+    const std::vector<Occupant> workers = planOccupants(office, lib, work);
+    std::printf("    [office] 3 at work, %zu at their desks\n", workers.size());
+    CHECK(workers.size() == 3);
+    for (const Occupant& o : workers) CHECK(o.pose == Occupant::Pose::Sit);
 }
 
 // THE OUTSIDE DOORS AND WINDOWS (Glenn, 2026-10-13: "a tv sitting in front of the front doorway or a shelf in a store

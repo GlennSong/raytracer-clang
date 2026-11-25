@@ -25229,3 +25229,11 @@ No worse: the two overlap. (The baseline of 23.18 ms in ADR-0521 was one run; th
 - A knocked-off piece is one colour of material (its paint is on its vertices); a bin's flap flies off with the bin as one piece.
 - Park, playground and garden pieces are placed in the lot pass and baked. Porting them changes a baked format and so needs a lots tag bump, which waits for Glenn's word.
 
+
+## ADR-0510 — Staff with no counter to stand behind take the seats: office workers at their desks (#342; 2026-11-25)
+
+**Why:** once the interiors were given their people again (ADR-0508), an office with its workers in drew nobody: river_town's office at (-253, 616) had 4 inside, 4 staff, 0 drawn. `planOccupants` puts staff only at a piece tagged `staff` (a shop's counter, its till) and treats any staff beyond those places as "out the back", not drawn. That is right for a café with three staff and a counter for two. An office has no such piece: its workers' places are its desks.
+
+**What happens:** when the unit has no place to work behind, its staff are drawn like anyone in and take its seats (an office chair at a desk). A unit with a counter is unchanged: staff behind it, any more out the back, customers on the chairs.
+
+**Checked:** a new office check in `shop_staff_stand_behind_their_own_counter_and_nobody_sits_in_a_closed_shop` (three at work, three at their desks, all seated). Unchanged: furniture 12/12, people 8/8, inside 23/23, indoor 2/2, a_buildings_prefab 1/1, physics `a_streamed` 1/1.

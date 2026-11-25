@@ -80,18 +80,22 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
     };
     // THE STAFF, behind their counters
     int staffPlaced = 0;
+    bool staffPosts = false;   // a place to work behind (a counter, a till) in the unit
     if (plan.staff > 0)
         for (uint32_t pi = 0; pi < set.pieces.size() && staffPlaced < plan.staff; ++pi) {
             if (!inUnit(pi)) continue;
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[pi].piece));
             if (!a || !hasTag(*a, "staff")) continue;
+            staffPosts = true;
             for (int vi = 0; vi < static_cast<int>(a->verbs.size()) && staffPlaced < plan.staff; ++vi)
                 if (a->verbs[static_cast<std::size_t>(vi)].verb == Verb::Stand && freeNow(pi, a->verbs[static_cast<std::size_t>(vi)])) {
                     take(pi, vi, Occupant::Pose::Stand);
                     ++staffPlaced;
                 }
         }
-    const int people = plan.people - std::min(plan.people, plan.staff) + staffPlaced;   // staff out the back aren't drawn
+    // Staff out the back aren't drawn: a shop's beyond its counter's places. Where the unit has no place to work behind
+    // (an office: its workers' places are its desks), the staff take the seats like anyone in (ADR-0510).
+    const int people = staffPosts || plan.staff <= 0 ? plan.people - std::min(plan.people, plan.staff) + staffPlaced : plan.people;
     // THE LECTURER, while anyone is in.
     if (plan.lecturer) {
         for (uint32_t pi = 0; pi < set.pieces.size() && static_cast<int>(out.size()) < people; ++pi) {
