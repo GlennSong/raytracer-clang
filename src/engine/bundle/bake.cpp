@@ -145,7 +145,8 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
     const uint64_t key = keyOf(aps); rep.keyHex = hex16(key); rep.dir = bundleDirFor(root, key);
 
     // Already there and current?
-    if (!req.force && !req.toMemory) {
+    const auto rebuilt = [&](const std::string& name) { return std::find(req.rebuild.begin(), req.rebuild.end(), name) != req.rebuild.end(); };
+    if (!req.force && !req.toMemory && req.rebuild.empty()) {
         const nlohmann::json m = readManifest(rep.dir);
         bool all = !m.is_null() && fs::exists(rep.dir + "/" + kBundleFile);
         for (const Applicable& a : aps) { if (!all) break; const nlohmann::json p = manifestProducer(m, a.p->name()); all = !p.is_null() && p.value("key", std::string()) == hex16(a.id.key); }
@@ -172,7 +173,7 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
     double doneWeight = 0; nlohmann::json producersJson = nlohmann::json::array();
     for (const Applicable& a : aps) {
         const std::string name = a.p->name(); const double wgt = std::max(1e-6, a.p->weight());
-        std::string donor = req.force || req.toMemory ? std::string() : findDonor(root, name, a.id.key, rep.dir);
+        std::string donor = req.force || req.toMemory || rebuilt(name) ? std::string() : findDonor(root, name, a.id.key, rep.dir);
         nlohmann::json entry = {{"name", name}, {"key", hex16(a.id.key)}, {"tag", a.id.tag}, {"inputs", inputsJson(a.id.inputs)}};
         if (!donor.empty()) {
             std::string err; std::unique_ptr<Bundle> from = Bundle::open(donor + "/" + kBundleFile, &err);

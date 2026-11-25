@@ -328,6 +328,10 @@ struct MeshBuilder {
     // both use it, so a bundle cell IS a render cell.
     struct CellChunk { int cx = 0, cz = 0; RenderMesh mesh; };
     static std::vector<CellChunk> chunkByCell(const RenderMesh& m, double cell);
+    // The same chunks, in the same order and the same bytes, handed to `take` ONE AT A TIME and freed after it: a
+    // writer holds one chunk, not a second copy of the whole mesh (#317: the island's biggest lots mesh is 6.6 GiB).
+    // Its working space is two 32-bit words per triangle and one per vertex, not a hash map per chunk.
+    static void forEachCellChunk(const RenderMesh& m, double cell, const std::function<void(CellChunk&)>& take);
 
     // --- Winding-aware face emission -------------------------------------
     // The engine winds front faces CLOCKWISE: for a triangle (a,b,c) the

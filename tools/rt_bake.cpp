@@ -41,7 +41,7 @@ using namespace engine::bundle;
 namespace {
 int usage() {
     std::fprintf(stderr,
-        "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]\n"
+        "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--rebuild a,b] [--threads N] [--require]\n"
         "       rt_bake --inspect <bundle-dir>\n"
         "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
         "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
@@ -55,6 +55,7 @@ int usage() {
         "  --glb        also write city.glb (one object per material) into the bundle dir\n"
         "  --glb-split cell   also write cells/<cx>_<cz>.glb + index.json (one file per render cell)\n"
         "  --force      rebuild even when the keys match\n"
+        "  --rebuild    rebuild these producers only; the others are copied forward from the bundle there when current\n"
         "  --threads N  worker threads for the builders (default: every hardware thread)\n"
         "  --require    exit 1 instead of building when the bundle is missing or stale\n"
         "  --check      also run the city's invariant sweep into the report (minutes on metro)\n");
@@ -341,6 +342,7 @@ int main(int argc, char** argv) {
         else if (a == "--glb") glb = true;
         else if (a == "--glb-split" && i + 1 < argc) { if (std::string(argv[++i]) != "cell") return usage(); split = true; }
         else if (a == "--force") req.force = true;
+        else if (a == "--rebuild" && i + 1 < argc) { std::string list = argv[++i]; size_t p; while ((p = list.find(',')) != std::string::npos) { req.rebuild.push_back(list.substr(0, p)); list.erase(0, p + 1); } if (!list.empty()) req.rebuild.push_back(list); }
         else if (a == "--threads" && i + 1 < argc) req.threads = static_cast<unsigned>(std::max(0, std::atoi(argv[++i])));
         else if (a == "--require") require = true;
         else if (a == "--check") setenv("RT_CITY_CHECK", "1", 1);   // run the lab's invariant sweep into the report (slow on metro)

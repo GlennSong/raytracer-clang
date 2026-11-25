@@ -7073,34 +7073,36 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             ++topped;
         }
         // cut the first growths out: the runs are whole appends, so an index outside a run moves down by the
-        // vertices cut below it
+        // vertices cut below it. IN PLACE (#317): what is kept only ever moves down, so the mesh is compacted where it
+        // lies -- a new copy beside the old held the island's biggest part mesh (6.6 GiB) twice at the lots peak.
         auto cut = [](RenderMesh& m, std::vector<PartRun>& runs) {
             if (runs.empty()) return;
             std::sort(runs.begin(), runs.end(), [](const PartRun& a, const PartRun& b) { return a.v0 < b.v0; });
             std::vector<std::size_t> below(runs.size() + 1, 0);   // vertices cut before run r
             for (std::size_t r = 0; r < runs.size(); ++r) below[r + 1] = below[r] + (runs[r].v1 - runs[r].v0);
-            std::vector<Vertex> vs;
-            vs.reserve(m.vertices.size() - below.back());
-            std::size_t v = 0;
-            for (const PartRun& r : runs) { vs.insert(vs.end(), m.vertices.begin() + v, m.vertices.begin() + r.v0); v = r.v1; }
-            vs.insert(vs.end(), m.vertices.begin() + v, m.vertices.end());
-            std::vector<uint32_t> is;
-            is.reserve(m.indices.size());
-            std::size_t i = 0;
+            std::size_t v = 0, vw = 0;
+            auto keepVertices = [&](std::size_t from, std::size_t to) {
+                if (vw != from) std::copy(m.vertices.begin() + static_cast<std::ptrdiff_t>(from), m.vertices.begin() + static_cast<std::ptrdiff_t>(to),
+                                          m.vertices.begin() + static_cast<std::ptrdiff_t>(vw));
+                vw += to - from;
+            };
+            for (const PartRun& r : runs) { keepVertices(v, r.v0); v = r.v1; }
+            keepVertices(v, m.vertices.size());
+            m.vertices.resize(vw);
+            std::size_t i = 0, iw = 0;
             auto keep = [&](std::size_t from, std::size_t to) {
                 for (std::size_t j = from; j < to; ++j) {
                     const std::size_t x = m.indices[j];
                     const std::size_t r = static_cast<std::size_t>(
                         std::upper_bound(runs.begin(), runs.end(), x, [](std::size_t q, const PartRun& pr) { return q < pr.v0; }) - runs.begin());
-                    is.push_back(static_cast<uint32_t>(x - below[r]));
+                    m.indices[iw++] = static_cast<uint32_t>(x - below[r]);   // (iw <= j: the write never passes the read)
                 }
             };
             std::vector<PartRun> byI = runs;
             std::sort(byI.begin(), byI.end(), [](const PartRun& a, const PartRun& b) { return a.i0 < b.i0; });
             for (const PartRun& r : byI) { keep(i, r.i0); i = r.i1; }
             keep(i, m.indices.size());
-            m.vertices = std::move(vs);
-            m.indices = std::move(is);
+            m.indices.resize(iw);
         };
         for (std::size_t mi = 0; mi < drop.size(); ++mi) cut((*outParts)[mi], drop[mi]);
         for (std::size_t mi = 0; mi < dropFlat.size(); ++mi) cut((*outFlatParts)[mi], dropFlat[mi]);

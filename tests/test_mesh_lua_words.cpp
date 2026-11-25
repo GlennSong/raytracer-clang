@@ -51,6 +51,7 @@ const std::map<std::string, std::string> kReach = {
     {"capsule", "mesh.capsule"},
     {"centred", "c++ only: a frame; a script states one with mesh.box_frame or a scope"},
     {"chunkByCell", "c++ only: the loader's split of a world mesh into render cells"},
+    {"forEachCellChunk", "c++ only: chunkByCell one chunk at a time, for a bake's writer"},
     {"colorBy", "mesh.color_by"},
     {"computeTangents", "mesh.tangents"},
     {"cone", "mesh.cone"},

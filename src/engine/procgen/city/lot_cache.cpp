@@ -263,11 +263,12 @@ void writeLotResult(bundle::BundleWriter& w, const std::string& prefix, const Ne
         auto writeParts = [&](const std::vector<RenderMesh>& parts, const char* kind) {
             for (size_t i = 0; i < parts.size(); ++i) {
                 if (parts[i].vertices.empty()) continue;
-                for (MeshBuilder::CellChunk& c : MeshBuilder::chunkByCell(parts[i], cell)) {
-                    if (c.mesh.vertices.empty()) continue;
+                // (one chunk at a time, #317: all of a material's chunks at once were a second copy of it)
+                MeshBuilder::forEachCellChunk(parts[i], cell, [&](MeshBuilder::CellChunk& c) {
+                    if (c.mesh.vertices.empty()) return;
                     c.mesh.materialIndex = parts[i].materialIndex; cells.insert({c.cx, c.cz});
                     BinWriter b; putPart(b, c.mesh); w.add(cellPrefix(prefix, c.cx, c.cz) + kind + "/" + std::to_string(i), b.bytes);
-                }
+                });
             }
         };
         writeParts(res.parts, "parts"); writeParts(res.flatParts, "flat");

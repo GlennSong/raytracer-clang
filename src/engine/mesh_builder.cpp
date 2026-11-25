@@ -856,27 +856,72 @@ namespace engine {
 
 std::vector<MeshBuilder::CellChunk> MeshBuilder::chunkByCell(const RenderMesh& m, double cell) {
     std::vector<CellChunk> out;
-    if (cell <= 0.0 || m.indices.size() < 3) { CellChunk c; c.mesh = m; out.push_back(std::move(c)); return out; }
-    std::map<std::pair<int, int>, std::size_t> slot;
-    std::vector<std::unordered_map<uint32_t, uint32_t>> remap;
-    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-        const uint32_t i0 = m.indices[t], i1 = m.indices[t + 1], i2 = m.indices[t + 2];
-        const Vec3& a = m.vertices[i0].position; const Vec3& b = m.vertices[i1].position; const Vec3& c = m.vertices[i2].position;
+    forEachCellChunk(m, cell, [&](CellChunk& c) { out.push_back(std::move(c)); });
+    return out;
+}
+
+void MeshBuilder::forEachCellChunk(const RenderMesh& m, double cell, const std::function<void(CellChunk&)>& take) {
+    if (cell <= 0.0 || m.indices.size() < 3) {
+        CellChunk c;
+        c.mesh = m;
+        take(c);
+        return;
+    }
+    // EACH TRIANGLE'S CELL (by its centroid), the cells numbered in first-seen order
+    const std::size_t tris = m.indices.size() / 3;
+    std::map<std::pair<int, int>, uint32_t> slot;
+    std::vector<std::pair<int, int>> keys;
+    std::vector<uint32_t> triSlot(tris);
+    std::vector<uint32_t> count;
+    for (std::size_t t = 0; t < tris; ++t) {
+        const Vec3& a = m.vertices[m.indices[t * 3]].position;
+        const Vec3& b = m.vertices[m.indices[t * 3 + 1]].position;
+        const Vec3& c = m.vertices[m.indices[t * 3 + 2]].position;
         const double cx = (a.x + b.x + c.x) / 3.0, cz = (a.z + b.z + c.z) / 3.0;
         const std::pair<int, int> key{static_cast<int>(std::floor(cx / cell)), static_cast<int>(std::floor(cz / cell))};
         auto it = slot.find(key);
         if (it == slot.end()) {
-            it = slot.emplace(key, out.size()).first;
-            CellChunk cc; cc.cx = key.first; cc.cz = key.second; cc.mesh.materialIndex = m.materialIndex; out.push_back(std::move(cc)); remap.emplace_back();
+            it = slot.emplace(key, static_cast<uint32_t>(keys.size())).first;
+            keys.push_back(key);
+            count.push_back(0);
         }
-        RenderMesh& dst = out[it->second].mesh; auto& rm = remap[it->second];
-        for (uint32_t src : {i0, i1, i2}) {
-            auto ri = rm.find(src);
-            if (ri == rm.end()) { ri = rm.emplace(src, static_cast<uint32_t>(dst.vertices.size())).first; dst.vertices.push_back(m.vertices[src]); }
-            dst.indices.push_back(ri->second);
-        }
+        triSlot[t] = it->second;
+        ++count[it->second];
     }
-    return out;
+    // ...each cell's triangles, in the mesh's order (a counting sort)
+    std::vector<uint32_t> first(keys.size() + 1, 0);
+    for (std::size_t s = 0; s < keys.size(); ++s) first[s + 1] = first[s] + count[s];
+    std::vector<uint32_t> order(tris);
+    {
+        std::vector<uint32_t> at(first.begin(), first.end() - 1);
+        for (std::size_t t = 0; t < tris; ++t) order[at[triSlot[t]]++] = static_cast<uint32_t>(t);
+    }
+    std::vector<uint32_t>().swap(triSlot);
+    // ONE CELL AT A TIME: its vertices in the order its triangles first use them (as chunkByCell always laid them)
+    constexpr uint32_t kUnset = 0xFFFFFFFFu;
+    std::vector<uint32_t> local(m.vertices.size(), kUnset);
+    std::vector<uint32_t> used;
+    for (std::size_t s = 0; s < keys.size(); ++s) {
+        CellChunk c;
+        c.cx = keys[s].first;
+        c.cz = keys[s].second;
+        c.mesh.materialIndex = m.materialIndex;
+        for (uint32_t k = first[s]; k < first[s + 1]; ++k) {
+            const std::size_t t = order[k];
+            for (int corner = 0; corner < 3; ++corner) {
+                const uint32_t src = m.indices[t * 3 + static_cast<std::size_t>(corner)];
+                if (local[src] == kUnset) {
+                    local[src] = static_cast<uint32_t>(c.mesh.vertices.size());
+                    c.mesh.vertices.push_back(m.vertices[src]);
+                    used.push_back(src);
+                }
+                c.mesh.indices.push_back(local[src]);
+            }
+        }
+        for (const uint32_t v : used) local[v] = kUnset;
+        used.clear();
+        take(c);
+    }
 }
 
 RenderMesh MeshBuilder::hullMesh(const std::vector<Vec3>& points, const Vec3& color) {

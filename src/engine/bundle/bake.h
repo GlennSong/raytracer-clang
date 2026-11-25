@@ -75,6 +75,11 @@ struct BakeRequest {
     std::string outRoot;              // empty = bundleRoot()
     std::vector<std::string> only;    // producer names; empty = every producer that applies
     bool force = false;               // rebuild even when keys match
+    // REBUILD THESE PRODUCERS ONLY (`rt_bake --rebuild lots`): every other producer's sections are copied forward from
+    // the bundle there already when its key matches, as an ordinary bake would; these are built again whatever their key
+    // says. A code change to one stage that keeps its output the same is measured, and checked byte for byte (`rt_bake
+    // --sections`), without rebuilding the stages before it (the island's lots: 17 min, not 57).
+    std::vector<std::string> rebuild;
     bool toMemory = false;            // never touch the disk (RT_NOCACHE); the report carries the bytes
     unsigned threads = 0;
 };

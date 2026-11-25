@@ -24660,3 +24660,28 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - Trips to another town find no way (1,674 no plans in 5 minutes): the brain has no trains yet.
 - A crowded marker's standing spots run into the road (#339).
 - The lots bake for the island needs 37.6 GB and 57 minutes after a tag bump (#317, next).
+
+## ADR-0497 — The lots bake holds less: chunks written one at a time, party walls cut in place, `rt_bake --rebuild` (#317, step 3; 2026-11-24)
+
+**Why:** after the mesh-tools merge's tag bump, island_8_nature's bake took 57 minutes and peaked at 37.6 GB, more than the box can spare beside anything else. Glenn asked for the bake's memory and time to come down next. The investigation of 2026-11-21 (docs/bake-performance-investigation.md) laid out the order. This is its step 3, the lots stage's memory, with nothing in the output changed.
+
+**Words:** a *section* is one named piece of a level bundle; `rt_bake --sections` lists each with its size and hash. *Byte-identical* means every section's hash matches the bundle baked before the change.
+
+**What happens:**
+- **`rt_bake --rebuild <producer>`** builds that producer again and copies every other producer's sections forward from the bundle already there (`BakeRequest::rebuild`). The island's lots stage is measured in about 3 minutes instead of a 57-minute full bake.
+- **The lots stage logs its memory**: resident and peak so far (`VmRSS`, `VmHWM`) when growing ends and when writing ends. They are also in the manifest's timings (`grownRssGb`, `grownPeakGb`, `writtenPeakGb`).
+- **The writer streams cells** (`MeshBuilder::forEachCellChunk`). A material's cell chunks are made one at a time, written and freed, in the same order and the same bytes as `chunkByCell`, which is now a collector over it. It works with two 32-bit words per triangle and one per vertex, not a hash map per chunk. Before, all of a material's chunks were made at once: a second copy of the material's island-wide mesh.
+- **The party-wall pass cuts in place.** It removes a regrown building's first growth from the island-wide part meshes by compacting them where they lie (what is kept only moves down). Before, it built new arrays beside the old: the biggest mesh (6.6 GiB) twice.
+
+**Measured** (island_8_nature, lots only, `--rebuild lots`):
+
+| | Before | After |
+|---|---|---|
+| Process peak | 35.4 GB | 29.3 GB |
+| Lots peak (`VmHWM`) | 33.5 GiB | 27.9 GiB |
+| Time | 4:00 | 2:46 |
+
+- Every one of the 28,041 sections is byte-identical to the bundle baked before the change, and to a rebuild of it (the bake repeats).
+- The peak is in growing, not writing. Once grown, the stage holds 26.7 GiB, and its peak is 1.2 GiB over that.
+
+**Not done, and why:** what is left is the parts themselves. 203 million vertices of 104 bytes are held as 70 island-wide meshes until every lot is grown, because a render cell's chunk takes from many lots. Holding less needs growing and writing a tile at a time, which is the report's step 5: medium–high risk, with Lua and model caches made safe across threads and every order-dependent choice moved into the plan. That is for Glenn to decide. The city stage's time (about 39 of the island's 57 minutes, nearly all on one core) is the report's steps 1 and 2: indexing the slow questions, then the thread pool.

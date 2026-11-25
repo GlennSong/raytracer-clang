@@ -29,6 +29,21 @@ const char* const kLotsBuildTag = "2026-11-22.1";   // two new trades, the barbe
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
+
+// THE PROCESS'S MEMORY NOW AND AT ITS PEAK SO FAR (GB; Linux /proc, 0 elsewhere): logged at the lots stage's
+// boundaries so a bake's report says which part of the stage holds the most (#317: the island's lots, 37.6 GB).
+void memoryNow(double& rssGb, double& peakGb) {
+    rssGb = peakGb = 0;
+    std::ifstream f("/proc/self/status");
+    std::string key;
+    while (f >> key) {
+        double kb = 0;
+        if (key == "VmRSS:" && f >> kb) rssGb = kb / (1024.0 * 1024.0);
+        else if (key == "VmHWM:" && f >> kb) peakGb = kb / (1024.0 * 1024.0);
+        std::getline(f, key);
+    }
+}
+
 using bundle::BinReader;
 
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
@@ -160,10 +175,18 @@ public:
         nlohmann::json counts;
         NetLotResult r = growLotsForLevel(in, city, &counts);
         rep.timings["grow"] = secondsSince(tg);
+        double rss = 0, peak = 0;
+        memoryNow(rss, peak);
+        rep.timings["grownRssGb"] = rss;
+        rep.timings["grownPeakGb"] = peak;
+        LOG_INFO << "[lots] grown: memory " << rss << " GB, the peak so far " << peak << " GB";
         if (!report(0.95, "write", std::to_string(r.lots.size()) + " buildings")) return fail("cancelled");
         const auto tw = std::chrono::steady_clock::now();
         lotcache::writeLotResult(out, kLotsSectionPrefix, r, cityRenderCell(in.level));   // parts per render cell: the loader never chunks at load
         rep.timings["write"] = secondsSince(tw);
+        memoryNow(rss, peak);
+        rep.timings["writtenPeakGb"] = peak;
+        LOG_INFO << "[lots] written: memory " << rss << " GB, the peak so far " << peak << " GB";
         counts["cell"] = cityRenderCell(in.level); rep.report = counts; rep.seconds = secondsSince(t0);
         LOG_INFO << "[lots] " << counts.value("summary", std::string()) << " in " << rep.seconds << " s";
         return rep;
