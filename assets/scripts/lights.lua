@@ -12,7 +12,7 @@
 --   offset     { x, y, z } metres from the emitter's point (a lamp's bulb hangs under its head)
 --   dusk       true: rides the dusk ramp (dark by day, warming up through twilight)
 --   pool       which budget it is picked from (below); none: every one published is lit
---   candela    its real luminous intensity (cd), what the physical sky's world lights it at (ADR-0369; RT_SKY=physical);
+--   candela    its real luminous intensity (cd), what the physical sky's world lights it at (ADR-0369; the default sky since ADR-0505);
 --              `intensity` is the old night exposure's value, until the physical sky is the default
 --
 -- pools.<name>

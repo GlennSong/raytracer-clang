@@ -1119,6 +1119,9 @@ public:
 
     bool ssaoEnabled = true;
     bool ssrEnabled = true;
+    // the ray-traced reflections near the camera (ADR-0376): also need ray queries on the GPU (supportsRayQuery) and
+    // the physical sky; the Debug window's SSR header switches it (ADR-0505)
+    bool rayTracedReflectionsEnabled = true;
     bool reflectionProbesEnabled = true;
 
     // Cinematic sky runtime gates (AND-ed with the level's opt-in params, so a

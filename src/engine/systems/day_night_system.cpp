@@ -378,6 +378,7 @@ void DayNightSystem::applyRequests(FrameContext&) {
             enabled = true;
         }
         if (r.terrain >= 0) terrainShadows_ = r.terrain > 0;
+        if (r.physicalSky >= 0) physicalSky_ = r.physicalSky > 0;
         if (r.hud >= 0) skyHud_ = r.hud > 0;
         if (!r.chart.empty()) writeSkyChart(r.chart);
         if (r.moon >= 0.0 || r.moonAuto) {
@@ -672,9 +673,13 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
     nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
 
-    static const bool physical = [] { const char* e = std::getenv("RT_SKY"); return e && std::string(e) == "physical"; }();
-    if (physical) applyPhysicalSky(ctx, st);
-    else lit.physicalSky.enabled = false;
+    if (physicalSky_) {
+        applyPhysicalSky(ctx, st);
+    } else {
+        lit.physicalSky.enabled = false;
+        glowPerNit_ = 0.0;      // (the glows back to their old values)
+        autoExposure_ = -1.0f;  // (and the eye snaps, not adapts, when the physical sky comes back)
+    }
 }
 
 // THE PHYSICAL SKY (ADR-0367): the sun and the moon through the atmosphere model -- their colour and strength at the
@@ -1098,6 +1103,9 @@ void DayNightSystem::render(FrameContext& ctx) {
             cycle.dayOfYear = doy;
             if (enabled) applyLighting(ctx);
         }
+        // THE PHYSICAL SKY (ADR-0367; on by default since ADR-0505): off draws the old analytic day model, and the
+        // ray-traced reflections (which need it) stop.
+        if (ImGui::Checkbox("Physical sky##physsky", &physicalSky_)) { if (enabled) applyLighting(ctx); }
         // The stars.
         if (ImGui::Checkbox("Stars##stars", &stars_)) { if (enabled) applyLighting(ctx); }
         ImGui::SameLine();

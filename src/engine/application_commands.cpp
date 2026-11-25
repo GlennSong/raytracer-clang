@@ -306,8 +306,8 @@ void Application::registerSkyVerbs() {
         return "err unknown sim action";
     });
 
-    commandTable.add("daynight", "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | hud on|off | chart <path.svg>",
-                     "Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the sky HUD, or write the sky chart.",
+    commandTable.add("daynight", "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | sky physical|classic | hud on|off | chart <path.svg>",
+                     "Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the physical or classic sky, the sky HUD, or write the sky chart.",
                      [this](const ControlCommand& cmd) -> std::string {
         // A DayNightRequest for DayNightSystem — it works while the sim clock
         // is paused (update still runs), which is exactly the "freeze golden
@@ -322,6 +322,13 @@ void Application::registerSkyVerbs() {
                 return "err usage: daynight terrain on|off";
             r.terrain = cmd.args[1] == "on" ? 1 : 0;
             return send("ok terrain shadows staged");
+        }
+        if (cmd.args[0] == "sky") {
+            // The physical sky (the default, ADR-0505) or the old analytic day model.
+            if (cmd.args.size() < 2 || (cmd.args[1] != "physical" && cmd.args[1] != "classic"))
+                return "err usage: daynight sky physical|classic";
+            r.physicalSky = cmd.args[1] == "physical" ? 1 : 0;
+            return send("ok sky staged");
         }
         if (cmd.args[0] == "hud") {
             // The sky HUD (compass strip + polar chart), debug overlay only.

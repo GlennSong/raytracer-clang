@@ -718,6 +718,7 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout ssrPipelineLayout = VK_NULL_HANDLE;
     VkPipeline ssrPipeline = VK_NULL_HANDLE;
     bool  ssrEnabledFrame = true;
+    bool  rtReflectFrame = true;   // (rayTracedReflectionsEnabled this frame)
     float ssrMaxRayDist = 20.0f;
     float ssrThickness = 0.3f;
     float ssrMaxRoughness = 0.6f;
@@ -9066,7 +9067,7 @@ void VulkanRenderer::setRayInstances(const std::vector<RayInstance>& nearestFirs
 
 void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
     // (the rays reflect only under the physical sky -- raysThisFrame -- so without it the structures are not built)
-    if (!rayQuery || !rt.ready() || cpuGlobals.counts[2] != 2) return;
+    if (!rayQuery || !rtReflectFrame || !rt.ready() || cpuGlobals.counts[2] != 2) return;
     // (a mesh removed since the engine handed the list over has left it: removeMesh)
     rt.record(cmd, currentFrame, frameCounter, rtInstances);
     static const bool log = std::getenv("RT_DUMP_STATS") != nullptr;
@@ -9155,13 +9156,13 @@ bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
 }
 // THE ONE ANSWER to "do the rays run this frame" (ADR-0376), read by both sides: the scene pass drops the probe's
 // reflection only where the rays will put theirs. Off -- and the probes and sky cube stand, as before -- when the GPU
-// has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0, the near scene is empty, the screen-space target is
-// off in the composite (the rays write into it), or the ray pipeline could not be built.
+// has no ray queries (or Vulkan 1.0: RT_VK_1_0), RT_RT_REFLECT=0 or the Debug window's switch is off, the near scene
+// is empty, the screen-space target is off in the composite (the rays write into it), or the ray pipeline could not be built.
 bool VulkanRenderer::Impl::raysThisFrame() {
     static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
     // (the physical sky's branch of mesh.frag is the one that takes the probe's reflection out where the rays put
     // theirs: under the old sky the rays would reflect twice)
-    if (off || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
+    if (off || !rtReflectFrame || !rayQuery || !ssrEnabledFrame || !ssrImage || !rtRawImage || cpuGlobals.counts[2] != 2 || !rt.hasTopLevel() ||
         rtRows.empty() || rtInstances.empty())
         return false;
     if (ensureRtReflectPipeline()) return true;
@@ -10304,6 +10305,7 @@ void VulkanRenderer::endFrame() {
     impl->ssaoBias = ssaoParams.bias;
     impl->ssaoFloor = ssaoParams.aoFloor;
     impl->ssrEnabledFrame = ssrEnabled;
+    impl->rtReflectFrame = rayTracedReflectionsEnabled;
     impl->ssrMaxRayDist = ssrParams.maxRayDist;
     impl->ssrThickness = ssrParams.thickness;
     impl->ssrMaxRoughness = ssrParams.maxRoughness;

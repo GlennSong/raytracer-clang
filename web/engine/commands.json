@@ -110,8 +110,8 @@
  {
   "name": "daynight",
   "owner": "engine",
-  "summary": "Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the sky HUD, or write the sky chart.",
-  "usage": "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | hud on|off | chart <path.svg>"
+  "summary": "Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the physical or classic sky, the sky HUD, or write the sky chart.",
+  "usage": "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | sky physical|classic | hud on|off | chart <path.svg>"
  },
  {
   "name": "daynight?",

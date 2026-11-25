@@ -25026,3 +25026,18 @@ They are single polygon operations over the whole island. An index cannot speed 
 - The city stage is still the whole island. A street edit refits its road's heights and moves the city's ground under the blocks beside it, so those tiles regrow. The city stage itself (5–6 minutes) reruns on any road edit: the investigation's step 7.
 - A tile is kept or grown whole. A one-street edit regrows every tile whose reach (plus 200 m) the city changed in: 11 of 64 here, since the road design refits a street's heights along its whole length.
 - The lots stage builds the level's whole road model on a road edit (about 5 minutes on the island), only to report paths that do not land. It could read the model the city stage builds, or skip the check in a bake.
+
+## ADR-0505 — The physical sky is the default, and it and the ray-traced reflections have switches in the Debug window (2026-11-25)
+
+**Why:** Glenn saw no ray-traced reflections in the skyscraper glass. They were working, but only under the physical sky (ADR-0367), which was opt-in by `RT_SKY=physical`. He asked for the physical sky on by default unless that was a problem, for switches for it and for the ray tracing in the debug menu, and for ray tracing to be used only where the GPU can do it.
+
+**What happens:**
+- **The physical sky is on by default.** `RT_SKY=classic` starts with the old analytic day model instead; `RT_SKY=physical` is no longer needed. It is a runtime switch now (`DayNightSystem::physicalSky_`), not a value read once: the Debug window's Day / Night header has a "Physical sky" box, and the control verb `daynight sky physical|classic` sets it. Switching to classic puts the glows back to their old values and drops the adapted exposure, so the eye snaps rather than drifts when the physical sky comes back.
+- **The ray-traced reflections have a switch:** `Renderer::rayTracedReflectionsEnabled`, the "Ray-traced reflections" box under the Debug window's SSR header, kept in settings.json as `ssr.raytraced` (so `render_params {"ssr.raytraced": false}` sets it too). Off, the rays are not traced and the ray scene is not built; the probes and the sky cube reflect, as before ADR-0376.
+- **Ray tracing is used only where the GPU can do it.** This was already so: at start-up the renderer asks the device for ray queries, acceleration structures and buffer addresses and turns the rays on only with all three (`[rt] ray queries on` in the log). The box is now greyed out, and says so, on a GPU without them.
+- The rays still need the physical sky and SSR on (they write into SSR's target), as before.
+
+**Checked (river_town, the downtown towers at 15:00):** under the physical sky the glass tower reflects the building across the street; with the rays' box off it shows only the sky and the probes; under classic it shows the old flat reflection. The switches work live. Unit suite (see the commit).
+
+**Found, not done (the night under the physical sky):** at 22:00 the facades and the sky are black (no stars: ADR-0369's owed list), the lit windows are much brighter than under the classic sky, and for a few seconds after a jump in the hour the frame is nearly black and the glass still reflects the day (the eye adapts and the probes relight over several frames). The classic sky's night is the better picture today.
+

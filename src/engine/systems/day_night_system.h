@@ -11,6 +11,7 @@
 #include "../properties.h"
 #include "../control/control_commands.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,7 @@ struct DayNightRequest {
     Real moon = -1;        // the moon's age in days, held
     bool moonAuto = false; // the moon follows the calendar again
     int terrain = -1;      // terrain horizon shadows
+    int physicalSky = -1;  // the physical sky (1) or the classic day model (0)
     int hud = -1;          // the sky HUD
     std::string chart;     // write the day's sky chart (SVG) here
 };
@@ -223,10 +225,12 @@ private:
     void applyBeaconBlink(FrameContext& ctx);
     double blinkSeconds_ = 0.0;
     float nightAdapt_ = 1.0f;   // exposure / authored exposure this frame (1 by day, kNightAdapt at midnight)
-    // THE PHYSICAL SKY (ADR-0367; RT_SKY=physical): the atmosphere's tables (built from the level's scattering
+    // THE PHYSICAL SKY (ADR-0367; the default since ADR-0505): the atmosphere's tables (built from the level's scattering
     // parameters, handed to the renderer once), and the last reading of the sky for the sun and the moon (taken again
     // when either has moved or the camera has climbed)
     void applyPhysicalSky(FrameContext& ctx, const DayNightState& st);
+    // on unless RT_SKY=classic; the Debug window's Day / Night header switches it (ADR-0505)
+    bool physicalSky_ = [] { const char* e = std::getenv("RT_SKY"); return !(e && std::string(e) == "classic"); }();
     AtmosphereTables skyTables_;
     bool skyTablesBuilt_ = false;
     SkyReading sunReading_, moonReading_;

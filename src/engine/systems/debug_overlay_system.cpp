@@ -52,6 +52,7 @@ void DebugOverlaySystem::loadSettings(Settings& s, Renderer& r) {
     // just no longer outlives the session.
     r.ssaoEnabled  = s.getBool("ssao.enabled", r.ssaoEnabled);
     r.ssrEnabled   = s.getBool("ssr.enabled", r.ssrEnabled);
+    r.rayTracedReflectionsEnabled = s.getBool("ssr.raytraced", r.rayTracedReflectionsEnabled);
 
     r.tonemapOperator =
         static_cast<int>(s.getDouble("tonemap.op", r.tonemapOperator));
@@ -102,6 +103,7 @@ void DebugOverlaySystem::saveSettings(Settings& s, Renderer& r) {
 
     s.setBool("ssao.enabled", r.ssaoEnabled);
     s.setBool("ssr.enabled", r.ssrEnabled);
+    s.setBool("ssr.raytraced", r.rayTracedReflectionsEnabled);
 
     s.setDouble("tonemap.op", r.tonemapOperator);
     s.setDouble("grade.contrast", r.gradeParams.contrast);
@@ -410,6 +412,15 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
 
     if (ImGui::CollapsingHeader("SSR")) {
         ImGui::Checkbox("Enabled##ssr", &ctx.renderer.ssrEnabled);
+        // THE RAY-TRACED REFLECTIONS (ADR-0376, ADR-0505): greyed out where the GPU has no ray queries; they also
+        // need the physical sky (Day / Night) and SSR on (they write into its target)
+        const bool canTrace = ctx.renderer.supportsRayQuery();
+        if (!canTrace) ImGui::BeginDisabled();
+        bool traced = canTrace && ctx.renderer.rayTracedReflectionsEnabled;
+        if (ImGui::Checkbox(canTrace ? "Ray-traced reflections##rt" : "Ray-traced reflections (no ray queries on this GPU)##rt",
+                            &traced))
+            ctx.renderer.rayTracedReflectionsEnabled = traced;
+        if (!canTrace) ImGui::EndDisabled();
         auto& ssr = ctx.renderer.ssrParams;
         ImGui::SliderFloat("Max Ray Dist", &ssr.maxRayDist, 1.0f, 100.0f);
         ImGui::SliderFloat("Thickness Near", &ssr.thickness, 0.01f, 2.0f);

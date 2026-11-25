@@ -29,7 +29,6 @@ namespace citysim {
 using engine::Vec2;
 
 namespace {
-constexpr int kTrainSeatsPerCar = 72;   // a coach's seats (train_mesh's coach reports 72)
 // (kWalkSpeed, a walker's speed, is in city_sim.h: the agent brain's walk skill sets a pace against it, ADR-0441)
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.

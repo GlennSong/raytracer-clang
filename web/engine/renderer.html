@@ -154,8 +154,9 @@
   </div>
 
   <div class="note"><p><b>Two switches decide what you see.</b> Clustered lights are Vulkan's default
-    (<code>RT_CLUSTERED=0</code> is the forward A/B). The physical sky is <i>not</i> the default yet:
-    <code>DayNightSystem</code> turns it on only with <code>RT_SKY=physical</code>, and without it the frame keeps the
+    (<code>RT_CLUSTERED=0</code> is the forward A/B). The physical sky is the default since ADR-0505
+    (2026-11-25; before, <code>RT_SKY=physical</code> turned it on). <code>RT_SKY=classic</code>, the Debug window's
+    Day / Night box or <code>daynight sky classic</code> turn it off, and then the frame keeps the
     hand-made day/night palette, the old night exposure (×6) and the analytic sky light. The sky view, aerial volume and
     sky cube then do not run, <code>mesh.frag</code> never reads a probe, and the rays stay off, because only the
     physical branch takes the probe's share out where the rays put theirs (ADR-0376). ADR-0369 lists what is left
@@ -660,7 +661,7 @@
   </div>
   <p class="cap">The Vulkan frame at commit e55dfaaa, from <code>recordCommandBuffer</code> and the descriptor
     writes that feed each pass. The sky tables, the probes and the rays are only <i>read</i> under the physical sky
-    (<code>RT_SKY=physical</code>); the sky tables are also only <i>made</i> then. The probes are still captured and
+    (the default; <code>RT_SKY=classic</code> is the old sky); the sky tables are also only <i>made</i> then. The probes are still captured and
     relit, and the ray scene still built, under the old sky. The composite reads the DOF image instead of the HDR one
     when depth of field is on, and reads depth and normals for the underwater view and the debug views. The clouds'
     own half-resolution targets and history are left out.</p>
@@ -1643,7 +1644,8 @@ RenderMesh buildDebugLineMesh(const std::vector&lt;DebugDraw::Line&gt;&amp; line
   <h3>Test beds and switches</h3>
   <table>
     <tr><th>Switch or tool</th><th>What it does</th></tr>
-    <tr><td><code>RT_SKY=physical</code></td><td>the physical sky, auto exposure, the aerial perspective, the sky cube, and with them the probes' and the rays' reflections (off by default)</td></tr>
+    <tr><td><code>RT_SKY=classic</code></td><td>the old analytic sky instead of the physical sky (the default since ADR-0505), and with it no auto exposure, aerial perspective, sky cube, probes' or rays' reflections</td></tr>
+    <tr><td><code>RT_RT_REFLECT=0</code></td><td>the ray-traced reflections off (also the Debug window's SSR box, <code>ssr.raytraced</code>; greyed out on a GPU without ray queries)</td></tr>
     <tr><td><code>RT_CLUSTERED=0</code></td><td>the forward 32-light path instead of clustered lights (the A/B); <code>RT_GPU_CLUSTERS=0</code> bins on the CPU; <code>RT_CLUSTER_CHECK=1</code> compares the GPU's lists with the CPU's every 120 frames</td></tr>
     <tr><td><code>RT_LIGHT_FILL=N</code>, <code>RT_LIGHT_CAP=N</code></td><td>pad or cut the light list, to time the cost per light</td></tr>
     <tr><td><code>RT_PREEXPOSE=0</code>, <code>RT_EXPOSURE=meter</code>, <code>RT_AERIAL=x</code>, <code>RT_SKYCUBE=0/1/2</code></td><td>the A/Bs for pre-exposure, the auto exposure, the air's strength, and the sky cube and harmonics</td></tr>

@@ -776,8 +776,8 @@ vec3 roomBounce(Light light, vec3 worldPos) {
     multiplied by <code>g.cameraPosition.w</code> as it is stored.</p>
 
   <h3>Physical lights and glows (ADR-0369)</h3>
-  <p>With the units fixed, the lights could be given real values. Under the physical sky (<code>RT_SKY=physical</code>,
-    still opt-in at this commit) LightSystem builds a second <code>LightBook</code> once, with each kind's intensity
+  <p>With the units fixed, the lights could be given real values. Under the physical sky (opt-in by <code>RT_SKY=physical</code>
+    at this commit; the default since ADR-0505) LightSystem builds a second <code>LightBook</code> once, with each kind's intensity
     replaced by <code>candela / kLuxPerUnit</code>. A point light's intensity is its illuminance at 1 m, and a source of
     <i>I</i> candela gives <i>I</i> lux at 1 m, so the conversion is exact. The <code>LightSystem</code> excerpt above
     shows it. A street lamp is 1,600 cd, a headlight 15,000, an office ceiling panel 1,300, a tail lamp 15.</p>
@@ -869,7 +869,7 @@ Vec3 glowEmission(const NightGlow&amp; glow, double perNit) {
     color of the outside", office floors that speckle, tower windows "bright white and too harsh", the view out of a bus
     "almost all white", a bus saloon dark at night. Four ADRs that day answered it. Their lighting parts are below.
     Most of the shader work is in the physical-sky branch of <code>mesh.frag</code>, so it applies under
-    <code>RT_SKY=physical</code>.</p>
+    the physical sky (the default since ADR-0505).</p>
 
   <h3>Indoors (ADR-0377)</h3>
   <p><code>RenderMaterial::FLAG_INDOOR</code> (bit 28) is set at load on drywall, every interior floor finish and all
@@ -1087,7 +1087,7 @@ Vec3 glowEmission(const NightGlow&amp; glow, double perNit) {
     <tr><td><code>RT_GPU_CLUSTERS=0</code></td><td>bin the froxels on the CPU (<code>buildClusters</code>)</td></tr>
     <tr><td><code>RT_CLUSTER_CHECK=1</code></td><td>every 120 frames, compare the GPU's lists with the CPU's; logs a <code>[clusters] check</code> line</td></tr>
     <tr><td><code>RT_LIGHT_FILL=N</code>, <code>RT_LIGHT_CAP=N</code></td><td>pad the list with faint lights round the camera, or cut it to N: for timing the cost per light</td></tr>
-    <tr><td><code>RT_SKY=physical</code></td><td>the physical sky, and with it the candela, glow classes, indoor light and own-window terms</td></tr>
+    <tr><td><code>RT_SKY=classic</code></td><td>the old sky instead of the physical sky (the default since ADR-0505), and without the candela, glow classes, indoor light and own-window terms</td></tr>
     <tr><td><code>RT_PREEXPOSE=0</code></td><td>expose in the composite, as before ADR-0366</td></tr>
     <tr><td><code>RT_EXPOSURE=meter</code></td><td>the incident-light meter alone, no adapting eye</td></tr>
     <tr><td><code>RT_GLASS=none</code> / <code>old</code></td><td>panes drawn as nothing (the reference a pane is measured against) / the old glass</td></tr>

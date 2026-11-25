@@ -10,7 +10,7 @@
 <div class="wrap">
   <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
   <h1>Sky, atmosphere and exposure</h1>
-  <p class="lede">Behind <code>RT_SKY=physical</code>, the Vulkan renderer draws the sky from a model of real air:
+  <p class="lede">By default (since ADR-0505; <code>RT_SKY=classic</code> or the Debug window's Day / Night switch turns it off), the Vulkan renderer draws the sky from a model of real air:
     Rayleigh, Mie and ozone over a round planet, solved once on the CPU into two small tables and marched again on the
     GPU every frame. Everything is in one set of physical light units. A camera that measures each frame and adapts
     its exposure carries those units from a 100,000 lux noon to a moonlit street. The one idea is that the sky, the
@@ -52,10 +52,11 @@
       the local reflection probes (ADR-0372 onward, <a href="reflections.html">reflections</a>)</td></tr>
   </table>
   <p>All six landed on 2026-11-07, in four commits (<code>57ee888b</code>, <code>2d006311</code>,
-    <code>8a8693a4</code>, <code>7459752b</code>). The physical sky is still <b>off by default</b> at the pinned
-    commit: <code>DayNightSystem</code> turns it on only when the environment variable <code>RT_SKY</code> is
-    <code>physical</code>. ADR-0369's "still owed" list says why: the lit windows still clip at night and the stars are
-    not in real units yet. Once they are, physical becomes the default and the palette goes.</p>
+    <code>8a8693a4</code>, <code>7459752b</code>). The physical sky was <b>off by default</b> at the pinned
+    commit (<code>RT_SKY=physical</code> turned it on). Since ADR-0505 (2026-11-25) it is <b>on by default</b>:
+    <code>RT_SKY=classic</code>, the Debug window's Day / Night "Physical sky" box or <code>daynight sky classic</code>
+    turn it off. ADR-0369's "still owed" list still stands: the lit windows clip at night and the stars are not in
+    real units yet.</p>
 
   <h2>One unit of light</h2>
   <p>A physical sky needs physical numbers, but the engine already had a lighting scale that worked by day. ADR-0366
@@ -1101,7 +1102,7 @@ vec3 skyLightDisc(vec3 dir) {
   <p><b>Test bed:</b> <code>river_town</code>, the towers and the street, at noon, 17:00, sunset and 22:00 (every
     screenshot on this page). Set the hour with the <code>daynight</code> command (<code>hour</code>,
     <code>hold</code>, <code>day</code>, <code>moon</code>; see <a href="commands.html">commands</a>).</p>
-  <p><b>Switches:</b> <code>RT_SKY=physical</code> (on; off by default), <code>RT_EXPOSURE=meter</code> (the incident
+  <p><b>Switches:</b> <code>RT_SKY=classic</code> (off; on by default since ADR-0505), <code>RT_EXPOSURE=meter</code> (the incident
     meter, not the eye), <code>RT_PREEXPOSE=0</code> (exposure in the composite, the old order),
     <code>RT_AERIAL=&lt;x&gt;</code> (scale the air of the aerial volume), <code>RT_SKYCUBE=0|1|2</code> (old path,
     harmonics only, cube only), <code>RT_SKY_DEBUG=1</code> (log the first coefficients, the exposure and the light every
