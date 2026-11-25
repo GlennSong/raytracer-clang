@@ -356,8 +356,8 @@
  {
   "name": "overlay",
   "owner": "engine",
-  "summary": "Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer.",
-  "usage": "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan> <on|off>"
+  "summary": "Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer (brain: the agent brain's markers, plan line, panel and names; the / key).",
+  "usage": "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan|brain> <on|off>"
  },
  {
   "name": "panels",
