@@ -777,16 +777,16 @@ public:
                    ? minGaps_[static_cast<std::size_t>(i)] : Real(-1);
     }
 
-    // ON A TRAIN JOURNEY PAST THE STREET: in a station, on a platform, aboard, on the way out. The goal pass leaves
-    // them alone (it would relaunch their trip on foot every tick).
-    bool onTrainJourney(int i) const {
-        const RailTrip* rt = rail_.tripOf(i);
-        return rt && rt->phase != RailTrip::Phase::ToStation;
-    }
-    // TRAINS (city_rail_riders.h): the host's running RailSim, read each tick. Between two towns with a station
-    // each, walkers go by train. Kept across a rebuild (the stations are re-pinned to the new streets).
-    void setRail(const RailSim* rail);
-    const RailRiders& railRiders() const { return rail_; }
+    // THE TRAINS (rail_sim.h; the one-brain plan step 4f): the level's service on its tracks, run by the city -- headless
+    // and far from the player as well as near -- and drawn by the train system. Set by the host before build; kept across
+    // a rebuild (the stations are re-pinned to the new streets).
+    void setRail(const std::vector<engine::RailTrack>& tracks);
+    const RailSim& rail() const { return rail_; }
+    // WHO RIDES THEM (city_rail_riders.h): the brain's people, carried between two stations' ways in
+    const TrainRiders& trainRiders() const { return trainRiders_; }
+    // THE TRANSIT TIMETABLE the brain plans rides by: the bus lines (city_buses.h), then the rail lines. A line's
+    // `source` is its index in its own network.
+    const TransitTimetable& transit() const { return transit_; }
     // Is this pedestrian ON THE STREET to be drawn (and given a body)? A
     // walker, someone pausing outside -- not someone indoors, in a car, or far. The walker system and the renderer both ask.
     bool pedVisible(int i) const;
@@ -1204,8 +1204,8 @@ private:
     std::vector<int> pedGridIds_;
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
-    RailRiders rail_;
-    const RailSim* railSrc_ = nullptr;
+    RailSim rail_;
+    TrainRiders trainRiders_;
     std::string populationCacheDir_;      // setPopulationCacheDir
     PopulationCacheReport popCache_;
                                               // never nest across a live iteration)
@@ -1276,7 +1276,9 @@ private:
     // THE PEOPLE ON THE BUSES (ADR-0484), made with the buses in startDrivingV2; the brain's residents' rides are reported
     // to it (brainRideEvents_)
     BusRiders buses_;
-    std::vector<BusRiders::Event> brainRideEvents_;
+    std::vector<RideEvent> brainRideEvents_;   // ...and the trains' riders' (trainRiders_), in the order they happened
+    TransitTimetable transit_;
+    void rebuildTransit();   // transit_ from the buses' and the trains' (after either is made)
     CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this

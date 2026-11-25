@@ -12,7 +12,7 @@
 //     is, out of sight.
 // Same result every run: riders are kept in the order they began, buses are walked in the order of their numbers.
 
-#include "trip_plan.h"   // BusTimetable
+#include "trip_plan.h"   // TransitTimetable
 #include "../../engine/world.h"
 
 #include <cstdint>
@@ -29,6 +29,13 @@ namespace citysim {
 
 struct Agent;
 
+// A RIDER'S REPORT (buses, ADR-0484; trains, TrainRiders): `agent` got on (boarded) or off (not boarded)
+struct RideEvent {
+    int agent = -1;
+    bool boarded = false;
+    bool train = false;   // carried by the train riders (else a bus's)
+};
+
 class BusRiders {
 public:
     // THE TIMETABLE from the road model's lines, for the fleet's "bus" class (none: no timetable, nobody rides), and the
@@ -36,7 +43,8 @@ public:
     void build(const engine::RoadModel& model, const driving::Driving& d, const std::vector<uint8_t>& openWalks,
                engine::World& world);
     void reset();
-    const BusTimetable& timetable() const { return timetable_; }
+    // (its lines are network "bus", numbered as the road model's bus lines: CitySim::transit joins them to the trains')
+    const TransitTimetable& timetable() const { return timetable_; }
     bool any() const { return !timetable_.lines.empty(); }
 
     // `agent` waits at stop `board` of `line` for its bus, to get off at `alight`. False: no such stops.
@@ -50,12 +58,8 @@ public:
     // How many are aboard bus `bus` (ADR-0485: one drawn on each of its seats, in order)
     int aboardOn(engine::Entity bus) const;
 
-    // WHAT A TICK DID: an agent got on (boarded) or off (not boarded), in the order it happened.
-    struct Event {
-        int agent = -1;
-        bool boarded = false;
-    };
-    std::vector<Event> tick(std::vector<Agent>& agents);
+    // WHAT A TICK DID: who got on and off, in the order it happened
+    std::vector<RideEvent> tick(std::vector<Agent>& agents);
 
     struct Counts {
         uint64_t waits = 0, boardings = 0, alightings = 0, leftFull = 0;   // leftFull: times a full bus left someone
@@ -70,7 +74,7 @@ private:
         engine::Entity bus;   // aboard: theirs (none: raised from far aboard "a bus of the line")
     };
     std::vector<Rider> riders_;
-    BusTimetable timetable_;
+    TransitTimetable timetable_;
     engine::World* world_ = nullptr;
     Counts counts_;
 };

@@ -362,12 +362,21 @@ const citytest::ModelScene& longStreet() {
     return citytest::graphScene("brain_long_street", g);
 }
 
-TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get(), &buses}; }
+TripNetwork StreetNet::net() const { return TripNetwork{longStreet().model.get(), &walker, driving.get(), &transit}; }
 
 PlaceRef FakeWorld::addStop(uint32_t line, uint32_t stop, Vec2 at) {
     const PlaceRef p = addDoor(at);
     stops.push_back({{line, stop}, p.id});
     return p;
+}
+BrainTime FakeWorld::rideWait(uint32_t line, PlaceRef board) const {
+    for (const auto& s : stops)
+        if (s.second == board.id && s.first.first == line && transit && line < transit->lines.size() &&
+            s.first.second < transit->lines[line].stops.size()) {
+            const TransitTimetable::Line& tl = transit->lines[line];
+            return static_cast<BrainTime>(std::llround((0.5 * tl.headwaySeconds + tl.stops[s.first.second].accessSeconds) * 1000.0));
+        }
+    return 0;
 }
 bool FakeWorld::stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const {
     for (const auto& s : stops)
@@ -474,6 +483,7 @@ bool shippedBrainSpec(BrainSpec& out) {
 
 Lab::Lab(bool skills, const BrainSpec* given, const TravelCatalog* ways) {
     street = longStreetNet();
+    world.transit = &street.transit;
     travel = ways ? *ways : testTravel();
     registerBehaviours(behaviours);
     BrainSpec spec;

@@ -474,6 +474,7 @@ bool CitySim::startDrivingV2(engine::World& world, const std::string& rulesFile,
     buses_.reset();
     brainRideEvents_.clear();
     if (buses && model) buses_.build(*model, *drivingV2_, walker_.open, world);
+    rebuildTransit();
     const std::string line = drivingHost_.begin(*drivingV2_, world, seed_);
     if (report) *report = line;
     return true;
@@ -573,6 +574,7 @@ void CitySim::build(int pedCount, uint32_t seed) {
     drivingHost_.reset();
     buses_.reset();
     brainRideEvents_.clear();
+    rebuildTransit();
     brain_.reset();   // the resident with the agent brain names the old agents too (startBrain makes it again)
     agents_.clear();
     sensed_.clear();
@@ -693,7 +695,8 @@ void CitySim::build(int pedCount, uint32_t seed) {
     // authored places never calls that, and scheduleSnapshot (and the host's
     // clock-scale warning) both need a travel time to be meaningful.
     measureCommute();
-    if (railSrc_) rail_.build(railSrc_, walkPoints_); else rail_.clear();   // the stations' ways in: their nearest spots
+    if (!rail_.lines().empty()) trainRiders_.build(&rail_, walkPoints_); else trainRiders_.clear();   // the stations' ways in
+    rebuildTransit();
 }
 
 
@@ -820,32 +823,32 @@ void CitySim::assignPlaces(const PlaceMap& places) {
     };
     for (PlaceId id = 0; id < static_cast<PlaceId>(places.places().size()); ++id) nodeOf(id);
     placePoint_ = placeNode;   // (assignStudents, and the trips: each place's spot)
-    if (railSrc_) rail_.build(railSrc_, walkPoints_);   // (the rail planner's networks, the places' spots now among them)
+    if (!rail_.lines().empty()) trainRiders_.build(&rail_, walkPoints_);   // (the places' spots now among the street points)
+    rebuildTransit();
     // THERE AND BACK: two walk points are commutable exactly when they sit in the same part of the walks. (The
     // old sim's cars went, ADR-0461: a commute is walked, or ridden by train between towns.)
     auto sameComp = [&](int u, int v) { return walkPoints_.samePart(u, v); };
     // ...and ON FOOT (the people census, 2026-11-02: walkers given a job in another town -- joined to home by road but
     // by no footway -- never had a commute measured, and could only have got there by luck): a walker's job is in its
-    // home's part of the walks, or in one a train line joins it to -- in the rail planner's own networks (RailRiders::
-    // networkOf), so what passes here is what RailRiders::plan will route; each pair of stations' networks asked once.
+    // home's part of the walks, or in one a train line joins it to -- in the train riders' own towns (TrainRiders::
+    // networkOf), so what passes here is what TrainRiders::doorToDoor will price; each pair of stations' towns asked once.
     std::set<std::pair<int, int>> railJoined;
-    if (rail_.active()) {
-        const std::vector<RailStation>& st = rail_.stations();
+    if (trainRiders_.active()) {
+        const std::vector<RailStation>& st = trainRiders_.stations();
         for (const RailStation& s1 : st)
             for (const RailStation& s2 : st) {
                 const int n1 = s1.accessNode, n2 = s2.accessNode;
                 if (n1 < 0 || n2 < 0 || n1 == n2) continue;
-                const int c1 = rail_.networkOf(n1), c2 = rail_.networkOf(n2);
+                const int c1 = trainRiders_.networkOf(n1), c2 = trainRiders_.networkOf(n2);
                 if (c1 < 0 || c2 < 0 || c1 == c2 || railJoined.count({c1, c2})) continue;
-                RailTrip t;
-                if (rail_.plan(n1, walkPoints_.nodes[static_cast<std::size_t>(n1)], n2, walkPoints_.nodes[static_cast<std::size_t>(n2)], t))
+                if (trainRiders_.doorToDoor(n1, walkPoints_.nodes[static_cast<std::size_t>(n1)], n2, walkPoints_.nodes[static_cast<std::size_t>(n2)]))
                     railJoined.insert({c1, c2});
             }
     }
     auto walkable = [&](int h, int w) {
         if (h < 0 || w < 0 || h == w) return false;
         if (walkPoints_.samePart(h, w)) return true;
-        const int rh = rail_.networkOf(h), rw = rail_.networkOf(w);
+        const int rh = trainRiders_.networkOf(h), rw = trainRiders_.networkOf(w);
         return rh >= 0 && rw >= 0 && rh != rw && railJoined.count({rh, rw}) > 0;
     };
     // THE JOB SEARCH's test: there and back by car for a driver, on foot (or by train) for a walker
@@ -1243,11 +1246,10 @@ void CitySim::assignPlaces(const PlaceMap& places) {
                     // (on foot: the one router's walk, point to point)
                     const engine::roads::WalkRoute rt = sameComp(hn, a.work) ? pointRoute(hn, a.work) : engine::roads::WalkRoute{};
                     Real secs = rt.found ? rt.metres / std::max(Real(0.1), kWalkSpeed * a.speedFactor) : 0;
-                    if (!rt.found && rail_.active()) {   // another town's job: by train, door to door
-                        RailTrip t;
+                    if (!rt.found && trainRiders_.active()) {   // another town's job: by train, door to door
                         Real railSecs = 0;
-                        if (rail_.plan(hn, walkPoints_.nodes[static_cast<std::size_t>(hn)], a.work,
-                                       walkPoints_.nodes[static_cast<std::size_t>(a.work)], t, &railSecs))
+                        if (trainRiders_.doorToDoor(hn, walkPoints_.nodes[static_cast<std::size_t>(hn)], a.work,
+                                                    walkPoints_.nodes[static_cast<std::size_t>(a.work)], &railSecs))
                             secs = railSecs;
                     }
                     a.commuteSeconds = secs;
@@ -1845,10 +1847,17 @@ bool CitySim::setRoleTable(const std::string& role, GoalTable t) {
 }
 
 // TRAINS (city_rail_riders.h) ------------------------------------------------------------------------------------
-void CitySim::setRail(const RailSim* rail) {
-    railSrc_ = rail;
-    if (rail && !walkPoints_.empty()) rail_.build(rail, walkPoints_);
-    else rail_.clear();
+void CitySim::setRail(const std::vector<engine::RailTrack>& tracks) {
+    trainRiders_.clear();
+    rail_ = RailSim();
+    if (!tracks.empty()) rail_.buildService(tracks);
+    if (!rail_.lines().empty() && !walkPoints_.empty()) trainRiders_.build(&rail_, walkPoints_);
+    rebuildTransit();
+}
+
+void CitySim::rebuildTransit() {
+    transit_ = buses_.timetable();     // (the bus lines first: a line's index is its bus line's)
+    trainRiders_.addTimetable(transit_);
 }
 
 bool CitySim::pedVisible(int i) const {
@@ -2489,6 +2498,8 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // by a bigger dt costs precision, not correctness. Bank the time and tick
     // when the period is due; everything downstream (including the far tier's
     // own schedule) then measures in SIM SECONDS rather than in calls.
+    // THE TRAINS run every step (the train system draws them between steps), whatever the people's cadence
+    if (!rail_.trains().empty()) rail_.step(dt);
     tickAccum_ += dt;
     sinceTick_ += dt;
     if (tickPeriodSeconds_ > 0.0 && tickAccum_ + 1e-9 < tickPeriodSeconds_) return;
@@ -2516,7 +2527,10 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     // THE PEOPLE ON THE BUSES (ADR-0484), after the buses moved: on and off at the stops the buses stand at, reported to
     // the brain
     if (buses_.any())
-        for (const BusRiders::Event& e : buses_.tick(agents_)) brainRideEvents_.push_back(e);
+        for (const RideEvent& e : buses_.tick(agents_)) brainRideEvents_.push_back(e);
+    // ...and ON THE TRAINS (step 4f): in at the stations, on and off at the platforms, out to the street
+    if (trainRiders_.count() > 0)
+        for (const RideEvent& e : trainRiders_.tick(simDt, agents_)) brainRideEvents_.push_back(e);
     // THE RESIDENT WITH THE AGENT BRAIN (ADR-0441), after the driving: its reports are answered and its skills stepped.
     if (brain_) tickBrain(simDt);
     // RT_TRACE_AGENT=<id>: that agent's plan, every tick (with the speed watchdog: what a flickering one is doing)
@@ -2642,7 +2656,7 @@ CitySim::Census CitySim::census(engine::World* world) const {
         ++c.byRole[r];
         if (!a.moving && a.activity == Activity::AtWork) ++c.atWorkByRole[r];
         if (a.activity == Activity::Outing) ++c.outing;   // out: a day's stop, a night's (inside or not)
-        if (onTrainJourney(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }
+        if (trainRiders_.riding(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }
         ++c.walkers;
         const bool out = a.moving || !a.indoors;
         if (out) { ++c.walkersOutside; ++c.outsideByRole[r]; }

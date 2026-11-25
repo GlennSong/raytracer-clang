@@ -150,17 +150,14 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     if (!read) std::printf("    %s\n", err.c_str());
     CHECK(read);
     // (and the bus since ADR-0484: on the bus lines, beginning by waiting at a stop)
-    CHECK(travel.modes.size() == 5u && travel.find("skateboard") == 2 && travel.find("scooter") == 3 && travel.find("bus") == 4);
-    if (travel.modes.size() != 5u) return;
-    CHECK(travel.modes[4].bus && !travel.modes[4].roads && travel.modes[4].beginsIn == "waiting" && travel.modes[4].speed == 0);
-    // ...its start minutes the mean wait: half the bus service's headway (assets/data/bus_service.json), the two files
-    // held together
-    {
-        const nlohmann::json service = nlohmann::json::parse(fileText("assets/data/bus_service.json"), nullptr, false);
-        CHECK(!service.is_discarded() && service.contains("headway_minutes"));
-        if (!service.is_discarded() && service.contains("headway_minutes"))
-            CHECK(std::fabs(travel.modes[4].startMinutes - service["headway_minutes"].get<double>() * 0.5) < 1e-9);
-    }
+    // (and the train since step 4f: on the rail lines, beginning by waiting too -- the way in, then the platform)
+    CHECK(travel.modes.size() == 6u && travel.find("skateboard") == 2 && travel.find("scooter") == 3 && travel.find("bus") == 4 &&
+          travel.find("train") == 5);
+    if (travel.modes.size() != 6u) return;
+    CHECK(travel.modes[4].transit == "bus" && !travel.modes[4].roads && travel.modes[4].beginsIn == "waiting" && travel.modes[4].speed == 0);
+    CHECK(travel.modes[5].transit == "rail" && travel.modes[5].beginsIn == "waiting" && travel.modes[5].stopReach == 2000.0);
+    // ...no start minutes of their own: the mean wait is the line's (half its headway, TransitTimetable::Line)
+    CHECK(travel.modes[4].startMinutes == 0.0 && travel.modes[5].startMinutes == 0.0 && travel.modes[4].stopReach == 800.0);
     CHECK(travel.traits.size() == 2u && travel.trait("has_board") == 0 && travel.trait("has_scooter") == 1);
     CHECK(travel.modes[2].needsTrait == 0 && travel.modes[3].needsTrait == 1 && travel.modes[0].needsTrait == -1);
     CHECK(!travel.modes[2].roads && !travel.modes[2].ownVehicle && !travel.modes[3].roads && !travel.modes[3].ownVehicle);
@@ -171,9 +168,10 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     const bool bound = bindWays(travel, table, &err);
     if (!bound) std::printf("    %s\n", err.c_str());
     CHECK(bound);
-    CHECK(table.ways.size() == 5u);
-    if (table.ways.size() != 5u) return;
+    CHECK(table.ways.size() == 6u);
+    if (table.ways.size() != 6u) return;
     CHECK(table.states[table.ways[4].begins].name == "waiting");   // (the bus, ADR-0484)
+    CHECK(table.states[table.ways[5].begins].name == "waiting");   // (the train, step 4f)
     CHECK(table.states[table.ways[0].begins].name == "walking");
     CHECK(table.states[table.ways[1].begins].name == "pulling_out");
     CHECK(table.states[table.ways[2].begins].name == "on_small_wheels");

@@ -210,7 +210,7 @@ TEST_CASE(trip_plan_travel_lua_reads_and_refuses_what_it_cannot_plan_with) {
     const bool ok = loadTravelCatalog(vm, cat, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
-    CHECK(cat.modes.size() == 5 && cat.find("walk") == 0 && cat.find("car") == 1);
+    CHECK(cat.modes.size() == 6 && cat.find("walk") == 0 && cat.find("car") == 1);
     CHECK(cat.find("skateboard") == 2 && cat.find("scooter") == 3 && cat.find("bus") == 4);   // (the bus: ADR-0484)
     if (cat.modes.size() != 5) return;
     CHECK(!cat.modes[0].roads && !cat.modes[0].ownVehicle && cat.modes[0].access == -1);

@@ -41,6 +41,9 @@ constexpr Real kNameHeight = 2.1;        // a resident's name is drawn this far 
 // car's roof line).
 constexpr Real kLookWithin = 1.5;
 constexpr Real kLookRange = 80.0;
+// THE MARKERS DRAWN: those within this of the camera, in plan (the island has 7,698; ringing every one each frame, three
+// ground lookups apiece and the debug line mesh rebuilt from them, held its viewer at half a frame a second)
+constexpr Real kMarkerDrawRange = 250.0;
 constexpr Real kLookNear = 6.0;
 constexpr Real kLookHeight = 1.0;
 const Vec3 kMarkerColour(1.00, 0.78, 0.16);   // the waypoint's gold (the trip lab's destination post)
@@ -246,7 +249,9 @@ void CityBrainSystem::draw(engine::FrameContext& ctx) {
     // THE MARKERS: a ring round the spot where a person at the marker stands, and the post beside the ring (city_brain.h
     // says where and why: a post at the spot itself was drawn through the person)
     const int wanted = b.hasResident() ? b.wantedMarker(followed_) : -1;
+    const Vec2 eye(ctx.view.camera.position.x, ctx.view.camera.position.z);
     for (std::size_t i = 0; i < b.markers().size(); ++i) {
+        if ((b.markers()[i].post - eye).lengthSquared() > kMarkerDrawRange * kMarkerDrawRange && static_cast<int>(i) != wanted) continue;
         const Vec3 colour = static_cast<int>(i) == wanted ? kWantedColour : kMarkerColour;
         const Vec3 foot = on(b.markers()[i].post);
         ctx.debug.circle(on(b.markers()[i].stand), Vec3(0, 1, 0), kMarkerRingRadius, colour);
@@ -328,8 +333,12 @@ void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain&
     const Real reach = toward.length();
     if (!(reach > 0)) return;
     const Vec3 way = toward * (1.0 / reach);
-    // how far `p` is from the line through the middle of the view (past kLookRange, or behind the camera: not on it)
+    // how far `p` is from the line through the middle of the view (past kLookRange, or behind the camera: not on it).
+    // Further than that in plan is never on it: asked first, so the ground is looked up only for the few near (the
+    // island's 115,000 people, each its ground height a frame, were most of a frame)
+    const Vec2 eye(cam.position.x, cam.position.z);
     const auto offLine = [&](Vec2 p, Real& out) {
+        if ((p - eye).lengthSquared() > kLookRange * kLookRange) return false;
         const Vec3 at(p.x, city_.surfaceY(p) + kLookHeight, p.y);
         const Real along = engine::dot(at - cam.position, way);
         if (along < 0 || along > kLookRange) return false;
@@ -360,6 +369,7 @@ void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain&
     Real nearest = kLookNear;
     for (int r = 0; r < b.residentCount(); ++r) {
         const Agent& a = sim.agents()[static_cast<std::size_t>(b.residentAgent(r))];
+        if ((a.pos - eye).lengthSquared() > kLookNear * kLookNear) continue;   // (in plan: never nearer in 3D)
         const Real away = (Vec3(a.pos.x, city_.surfaceY(a.pos) + kLookHeight, a.pos.y) - cam.position).length();
         if (b.inCar(r) || away > nearest) continue;
         nearest = away;
@@ -381,8 +391,9 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
     const Mat4 vp = Mat4::perspective(cam.fovDegrees * engine::DEG_TO_RAD, cam.aspectRatio, cam.nearPlane, cam.farPlane) *
                     Mat4::lookAt(cam.position, cam.target, cam.up);
     for (const BrainMarker& m : b->markers()) {
+        if (!labels_ || (m.post - Vec2(cam.position.x, cam.position.z)).lengthSquared() > kLabelRange * kLabelRange) continue;   // (plan first)
         const Vec3 top(m.post.x, city_.surfaceY(m.post) + kPostHeight, m.post.y);
-        if (!labels_ || (top - cam.position).length() > kLabelRange) continue;
+        if ((top - cam.position).length() > kLabelRange) continue;
         Vec2 px;
         if (!worldToScreen(vp, top, W, H, px)) continue;
         ui_.label(ctx.renderer, q, static_cast<float>(px.x), static_cast<float>(px.y) - 30.0f * k, m.name, 16.0f * k, gold, back, 5.0f * k);
@@ -392,6 +403,7 @@ void CityBrainSystem::render(engine::FrameContext& ctx) {
         const Agent& body = city_.sim().agents()[static_cast<std::size_t>(b->residentAgent(who))];
         if (body.indoors && body.inCar < 0) continue;   // (out of sight: indoors, or far on a leg, ADR-0493)
         const Vec2 at = body.pos;   // (at the wheel: the car's)
+        if ((at - Vec2(cam.position.x, cam.position.z)).lengthSquared() > kNameRange * kNameRange) continue;   // (plan first)
         const Vec3 head(at.x, city_.surfaceY(at) + kNameHeight, at.y);
         if ((head - cam.position).length() > kNameRange) continue;
         Vec2 px;

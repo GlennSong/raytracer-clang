@@ -1,5 +1,7 @@
 #include "rail_sim.h"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -187,6 +189,23 @@ double RailSim::gapAhead(int ti) const {
         if (d >= 0) best = std::min(best, d);
     }
     return best;
+}
+
+void RailSim::buildService(const std::vector<engine::RailTrack>& tracks) {
+    // THE STOCK, per line by its track's class. "metro" -> subway is a hook for a graph that authors a metro track
+    // class; no built-in class is called that (road_graph_spec.cpp: rail, light_rail).
+    auto kindOf = [](const std::string& cls) {
+        std::string name = cls == "metro" ? "subway" : cls == "light_rail" ? "light_rail" : "intercity";
+        if (const char* k = std::getenv("RT_TRAIN_KIND")) name = k;
+        return trainKindNamed(name);
+    };
+    // THE TIMETABLE: the island's 37 km loop ran two each way, a train every ~14 minutes, and its platforms filled with
+    // people waiting (46 at 21 min)
+    auto countOf = [](double length, const TrainKind& k) {
+        if (const char* n = std::getenv("RT_TRAINS_PER_LINE")) return std::max(1, std::atoi(n));
+        return std::max(2, static_cast<int>(std::lround(length / (k.name == "intercity" ? 9000.0 : 1500.0))));
+    };
+    build(tracks, kindOf, countOf);
 }
 
 void RailSim::step(double dt) {

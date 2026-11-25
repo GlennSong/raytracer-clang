@@ -89,7 +89,7 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
     const WalkPointMap& nav = host.walkPoints();
     RailSim rail;
     rail.build(ovalWithWaysIn(nav), trainKindNamed("intercity"), 2);
-    RailRiders rr;
+    TrainRiders rr;
     rr.build(&rail, nav);
     CHECK(rr.active());
     CHECK(rr.stations().size() == 2);
@@ -106,15 +106,12 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
         if (nav.nodes[static_cast<std::size_t>(i)].y < -900 && a < 0 && rr.networkOf(i) == c.network) a = i;
         if (nav.nodes[static_cast<std::size_t>(i)].y > 900 && b < 0 && rr.networkOf(i) == h.network) b = i;
     }
-    RailTrip t;
     Real secs = 0;
     CHECK(a >= 0 && b >= 0);
-    CHECK(rr.plan(a, nav.nodes[static_cast<std::size_t>(a)], b, nav.nodes[static_cast<std::size_t>(b)], t, &secs));
-    CHECK(rr.stations()[static_cast<std::size_t>(t.from)].name == "Central");
-    CHECK(rr.stations()[static_cast<std::size_t>(t.to)].name == "Harbour");
+    CHECK(rr.doorToDoor(a, nav.nodes[static_cast<std::size_t>(a)], b, nav.nodes[static_cast<std::size_t>(b)], &secs));
     CHECK(secs > 0 && secs < 1800);   // door to door: the walks at both ends, the ways in and out, the wait, the ride
     // within one town: no train
-    CHECK(!rr.plan(a, nav.nodes[static_cast<std::size_t>(a)], c.accessNode, c.access, t));
+    CHECK(!rr.doorToDoor(a, nav.nodes[static_cast<std::size_t>(a)], c.accessNode, c.access));
     // a platform spot stands on the platform: beside the track, at its height
     Vec2 pos, face;
     Real top = 0;
@@ -123,6 +120,58 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
     for (const Vec3& q : rail.lines()[0].pts) off = std::min<Real>(off, std::hypot(q.x - pos.x, q.z - pos.y));
     CHECK(off > kPlatformGap + 0.7 && off < kPlatformGap + 2.4);   // in the band, clear of the edge and the stair
     CHECK(std::fabs(top - 1.05) < 1e-9);
+}
+
+// A RIDE, CARRIED (the one-brain plan step 4f): the rail lines priced in the transit timetable -- each stop waited for at
+// its station's way in, the way in its access, a headway from the line's trains -- and one person carried from the
+// Central way in to the Harbour one: in along the footway (not drawn), standing on the platform at its height, aboard the
+// first train of the line to stand there with its doors open, off at Harbour and out on the street at its way in. The
+// two reports come in order: boarded, then got off.
+TEST_CASE(train_riders_carry_a_rider_between_two_ways_in) {
+    CitySim host;
+    twoTowns().build(host, 1, 1);
+    const WalkPointMap& nav = host.walkPoints();
+    RailSim rail;
+    rail.build(ovalWithWaysIn(nav), trainKindNamed("intercity"), 2);
+    TrainRiders rr;
+    rr.build(&rail, nav);
+    CHECK(rr.active());
+    if (!rr.active()) return;
+    TransitTimetable tt;
+    rr.addTimetable(tt);
+    CHECK(tt.lines.size() == 2u);   // one each way round the oval
+    if (tt.lines.size() != 2u) return;
+    for (const TransitTimetable::Line& l : tt.lines) {
+        CHECK(l.network == "rail" && l.loop && l.stops.size() == 2u && l.headwaySeconds > 60);
+        for (const TransitTimetable::Stop& st : l.stops) CHECK(st.accessSeconds >= 20 && st.toNextSeconds > 30);
+    }
+    // the line and its stops: Central (way in at the south town) to Harbour
+    const int line = tt.lines[0].source;
+    int board = -1, alight = -1;
+    const std::vector<RailStop>& stops = rail.lines()[static_cast<std::size_t>(line)].stops;
+    for (std::size_t k = 0; k < stops.size(); ++k) (stops[k].name == "Central" ? board : alight) = static_cast<int>(k);
+    CHECK(board >= 0 && alight >= 0);
+    std::vector<Agent> agents(3);
+    const int who = 2;
+    CHECK(rr.wait(who, line, board, alight));
+    CHECK(rr.riding(who) && rr.rideOf(who)->phase == TrainRide::Phase::Entering);
+    std::vector<RideEvent> events;
+    bool sawPlatform = false, hidden = false;
+    Real platformTop = -1;
+    for (int t = 0; t < 60 * 60 * 10 && rr.riding(who); ++t) {   // 10 minutes at 60 Hz at most
+        rail.step(1.0 / 60.0);
+        for (const RideEvent& e : rr.tick(1.0 / 60.0, agents)) events.push_back(e);
+        const TrainRide* r = rr.rideOf(who);
+        if (r && r->phase == TrainRide::Phase::Entering) hidden = hidden || agents[who].indoors;
+        if (r && r->phase == TrainRide::Phase::Waiting) { sawPlatform = !agents[who].indoors; platformTop = r->top; }
+    }
+    CHECK(hidden && sawPlatform && std::fabs(platformTop - 1.05) < 1e-9);
+    CHECK(!rr.riding(who));
+    CHECK(events.size() == 2u);
+    if (events.size() == 2u) CHECK(events[0].agent == who && events[0].boarded && events[0].train && !events[1].boarded);
+    const RailStation& harbour = rr.stations()[0].name == "Harbour" ? rr.stations()[0] : rr.stations()[1];
+    CHECK((agents[who].pos - harbour.access).length() < 1e-9 && !agents[who].indoors);
+    CHECK(rr.counts().waits == 1u && rr.counts().boardings == 1u && rr.counts().alightings == 1u);
 }
 
 // THE STATION ENTRANCE (Glenn, 2026-10-13: station buildings). A pavilion over a station's way in: the roof 3.6 m

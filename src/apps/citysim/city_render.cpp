@@ -556,6 +556,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!drives && carCount > 0)
         LOG_INFO << "[citysim] " << carCount << " cars asked for, but the level names no rule set (citysim.drivingRules): no traffic";
     { const auto tT0 = std::chrono::steady_clock::now();
+    {   // THE TRAINS on the level's tracks: the city runs them (its people ride them; the train system draws them)
+        std::vector<engine::RailTrack> tracks;
+        world.each<engine::RailTracks>([&](Entity, engine::RailTracks& rt) { tracks.insert(tracks.end(), rt.tracks.begin(), rt.tracks.end()); });
+        sim_.setRail(tracks);
+    }
     sim_.build(pedCount, params_.seed);
     // THE DRIVING (#234): the driving library runs on a level that names a rule set (given its road below)
     if (drives) {

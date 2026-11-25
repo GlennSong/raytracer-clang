@@ -45,7 +45,7 @@ public:
     void fixedUpdate(engine::FrameContext& ctx) override;
     void render(engine::FrameContext& ctx) override;
 
-    const RailSim& sim() const { return sim_; }
+    const RailSim& sim() const { return *rail_; }
     int ridingTrain() const { return train_; }
 
 private:
@@ -69,7 +69,11 @@ private:
     engine::FlyCameraController& fly_;
     CityRenderSystem* city_ = nullptr;
     bool tried_ = false;
-    RailSim sim_;
+    // the trains drawn: the city's (CitySim::rail) or, on a level with no city, this system's own
+    RailSim own_;
+    const RailSim* rail_ = &own_;
+    const RailSim& rail() const { return *rail_; }
+    bool cityRuns() const;   // the level's city is built and runs the trains
     // one per kind of train running (intercity on the main line, light rail in the cities): its models and instance
     // groups -- locomotive body + glass, carriage body + glass, door leaves
     struct Stock {

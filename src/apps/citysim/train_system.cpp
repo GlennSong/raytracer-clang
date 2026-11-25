@@ -60,6 +60,8 @@ Entity makeGroup(engine::FrameContext& ctx, const engine::RenderMesh& mesh, cons
 
 }  // namespace
 
+bool TrainSystem::cityRuns() const { return city_ && city_->built() && !city_->sim().rail().trains().empty(); }
+
 void TrainSystem::build(engine::FrameContext& ctx) {
     tried_ = true;
     std::vector<engine::RailTrack> tracks;
@@ -67,25 +69,18 @@ void TrainSystem::build(engine::FrameContext& ctx) {
         tracks.insert(tracks.end(), rt.tracks.begin(), rt.tracks.end());
     });
     if (tracks.empty()) return;
-    // THE STOCK, per line by its track's class: a city line's light rail, else intercity. "metro" -> subway is a hook for
-    // a graph that authors a metro track class; no built-in class is called that (road_graph_spec.cpp: rail, light_rail).
-    // RT_TRAIN_KIND puts one kind on every line, for a look at the others on the same rails.
-    auto kindOf = [](const std::string& cls) {
-        std::string name = cls == "metro" ? "subway" : cls == "light_rail" ? "light_rail" : "intercity";
-        if (const char* k = std::getenv("RT_TRAIN_KIND")) name = k;
-        return trainKindNamed(name);
-    };
-    // THE TIMETABLE: an intercity train per ~9 km of line, a city train per ~1.5 km, two at least -- the island's 37 km
-    // loop ran two each way, a train every ~14 minutes, and its platforms filled with people waiting (46 at 21 min)
-    auto countOf = [](double length, const TrainKind& k) {
-        if (const char* n = std::getenv("RT_TRAINS_PER_LINE")) return std::max(1, std::atoi(n));
-        return std::max(2, static_cast<int>(std::lround(length / (k.name == "intercity" ? 9000.0 : 1500.0))));
-    };
-    sim_.build(tracks, kindOf, countOf);
-    if (city_) city_->simMutable().setRail(&sim_);   // the city's people take these trains
+    // THE TRAINS: the city's, once it is built and runs them (its people ride them: CitySim runs them, step 4f), else
+    // this system's own on the level's same service (RailSim::buildService) -- a level whose city never builds (its
+    // roads have no lane level) still has its trains. A city built later takes over (fixedUpdate).
+    if (cityRuns()) {
+        rail_ = &city_->sim().rail();
+    } else {
+        own_.buildService(tracks);
+        rail_ = &own_;
+    }
     // one model set per kind running
     stockOf_.clear();
-    for (const Train& T : sim_.trains()) {
+    for (const Train& T : rail().trains()) {
         int k = -1;
         for (std::size_t i = 0; i < stock_.size(); ++i) if (stock_[i].name == T.kind.name) k = static_cast<int>(i);
         if (k < 0) {
@@ -119,7 +114,7 @@ void TrainSystem::build(engine::FrameContext& ctx) {
     if (city_) {
         auto ground = [&](double x, double z) { return static_cast<double>(city_->groundHeightAt(x, z)); };
         int built = 0;
-        for (const StationEntrance& se : stationEntrances(sim_, ground)) {
+        for (const StationEntrance& se : stationEntrances(rail(), ground)) {
             const EntranceMeshes em = stationEntranceMeshes(se, ground);
             const Entity body = makeGroup(ctx, em.body, "station:entrance:" + se.name, false);
             const Entity glass = makeGroup(ctx, em.glass, "station:entranceglass:" + se.name, true);
@@ -149,7 +144,7 @@ void TrainSystem::build(engine::FrameContext& ctx) {
     }
     // THE STATIONS' NAMES on their platforms (station_boards.h): one frame group, one lettered group per name
     if (const engine::Font* font = engine::signFont()) {
-        std::vector<StationBoard> boards = stationBoards(sim_);
+        std::vector<StationBoard> boards = stationBoards(rail());
         boards.insert(boards.end(), entranceBoards.begin(), entranceBoards.end());
         auto place = [&](Entity e, const std::vector<const StationBoard*>& on) {
             InstanceGroup* g = e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr;
@@ -212,7 +207,7 @@ void TrainSystem::build(engine::FrameContext& ctx) {
             }
         }
     }
-    LOG_INFO << "[trains] " << sim_.describe();
+    LOG_INFO << "[trains] " << rail().describe();
 }
 
 // Can a body stand at `local` in car `car`? The aisle; full width in a vestibule or a doorway; the gangway's width at
@@ -245,7 +240,7 @@ bool TrainSystem::walkableAt(int train, int car, const Vec3& local, int doorSide
 // under it a rolling rumble on the nearest car; the horn coming up to a platform; a chime as the doors open and three
 // beeps before they shut. Aboard, the same sounds are simply near: the ear is in the car.
 void TrainSystem::sounds(engine::FrameContext& ctx) {
-    if (sim_.trains().empty() || !ctx.audio.ready()) return;
+    if (rail().trains().empty() || !ctx.audio.ready()) return;
     if (!audioTried_) {
         audioTried_ = true;
         const uint32_t rate = ctx.audio.sampleRate();
@@ -262,21 +257,21 @@ void TrainSystem::sounds(engine::FrameContext& ctx) {
     // ABOARD, the line is heard through the car's body (the horn up on the cab roof too); the rumble under
     // the floor is in here with us.
     if (train_ >= 0 && car_ >= 0) {
-        const CarPose P = sim_.carPose(train_, car_, 1.0);
+        const CarPose P = rail().carPose(train_, car_, 1.0);
         const engine::Vec3 half(1.5, 2.0, P.length * 0.5);
         ctx.audio.setListenerCabin(engine::AudioSystem::cabinEnclosureId((uint64_t(2) << 32) | uint64_t(train_)),
                                    P.m.transformPoint(engine::Vec3(0, half.y, 0)), engine::Quat::fromRotationMatrix(P.m),
                                    half, engine::AudioSystem::kCabin);
     }
-    const auto& trains = sim_.trains();
+    const auto& trains = rail().trains();
     if (ears_.size() != trains.size()) ears_.assign(trains.size(), TrainEar{});
     engine::AudioPlayParams pp;
     pp.bus = engine::AudioBus::Sfx;
     for (std::size_t ti = 0; ti < trains.size(); ++ti) {
         const Train& T = trains[ti];
         TrainEar& E = ears_[ti];
-        const RailLine& L = sim_.lines()[static_cast<std::size_t>(T.line)];
-        const std::vector<CarPose> cars = sim_.carPoses(static_cast<int>(ti), 1.0);
+        const RailLine& L = rail().lines()[static_cast<std::size_t>(T.line)];
+        const std::vector<CarPose> cars = rail().carPoses(static_cast<int>(ti), 1.0);
         // the nearest car to the ear
         double nearD = 1e30;
         Vec3 nearC(0, 0, 0);
@@ -363,7 +358,7 @@ void TrainSystem::update(engine::FrameContext& ctx) {
     engine::InteractOffer o;
     o.provider = "train";
     o.needsSight = false;
-    const CarPose P = sim_.carPose(train_, car_, 1.0);
+    const CarPose P = rail().carPose(train_, car_, 1.0);
     if (seat_ >= 0) {
         o.tap = "stand up";
         o.name = "seat";
@@ -398,17 +393,22 @@ void TrainSystem::onStart(engine::FrameContext& ctx) {
 
 void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!tried_) build(ctx);
-    if (sim_.trains().empty()) return;
+    if (rail().trains().empty()) return;
     const Real dt = ctx.clock.fixedStep();
-    sim_.step(dt);
+    if (rail_ == &own_ && cityRuns()) {   // the city is built now and runs the same service: draw its trains
+        rail_ = &city_->sim().rail();
+        own_ = RailSim();
+        train_ = -1;   // (aboard one of ours: put off, as the trains start again in the city's places)
+    }
+    if (rail_ == &own_) own_.step(dt);   // (the city's trains are stepped by the city)
     // A TrainBoardRequest (`train_board <train> <car>`): put the player aboard (a probe's way in; on foot you walk
     // in through a door)
     if (boardPending_) {
         boardPending_ = false;
         const int t = board_.train, c = board_.car;
-        if (t >= 0 && t < static_cast<int>(sim_.trains().size())) {
+        if (t >= 0 && t < static_cast<int>(rail().trains().size())) {
             train_ = t;
-            car_ = std::clamp(c, 1, sim_.carCount(t) - 1);
+            car_ = std::clamp(c, 1, rail().carCount(t) - 1);
             local_ = Vec3(0, static_cast<Real>(coachOf(train_).floor), 0);
             LOG_INFO << "[trains] aboard train " << train_ << " car " << car_ << " (by request)";
         }
@@ -419,37 +419,25 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
         if (train_ >= 0) {
             char b[160];
             std::snprintf(b, sizeof(b), "aboard train %d car %d at %.2f %.2f (speed %.1f)", train_, car_, local_.x, local_.z,
-                          sim_.trains()[static_cast<std::size_t>(train_)].v);
+                          rail().trains()[static_cast<std::size_t>(train_)].v);
             aboard = b;
         }
         std::string riders;
         if (city_) {   // the city's people on the line: how many chose it, where they are now
-            const RailRiders& rr = city_->sim().railRiders();
-            int phase[5] = {0, 0, 0, 0, 0};
-            int walking = 0, still = 0;
-            std::vector<double> left;   // metres to the station's way in, of those still on the street
-            const CitySim& cs = city_->sim();
-            for (int p : rr.passengers()) {
-                const RailTrip* t = rr.tripOf(p);
-                if (!t) continue;
-                ++phase[static_cast<int>(t->phase)];
-                if (t->phase != RailTrip::Phase::ToStation || p >= static_cast<int>(cs.agents().size())) continue;
-                const Agent& a = cs.agents()[static_cast<std::size_t>(p)];
-                if (a.moving) ++walking; else ++still;
-                const Vec2 acc = rr.stations()[static_cast<std::size_t>(t->from)].access;
-                left.push_back(std::hypot(a.pos.x - acc.x, a.pos.y - acc.y));
-            }
-            std::sort(left.begin(), left.end());
-            char lb[160];
-            std::snprintf(lb, sizeof(lb), " (walking %d, standing %d; to go: nearest %.0f m, median %.0f m)", walking, still, left.empty() ? 0.0 : left.front(), left.empty() ? 0.0 : left[left.size() / 2]);
-            char b[600];
-            std::snprintf(b, sizeof(b), "; riders: %zu stations pinned, planned %ld entered %ld boarded %ld set down %ld gave up %ld | "
-                          "now to station %d%s, in the way in %d, on platforms %d, aboard %d, on the way out %d",
-                          rr.stations().size(), rr.stats.planned, rr.stats.entered, rr.stats.boarded, rr.stats.setDown,
-                          rr.stats.gaveUp, phase[0], lb, phase[1], phase[2], phase[3], phase[4]);
+            const TrainRiders& rr = city_->sim().trainRiders();
+            int phase[4] = {0, 0, 0, 0};
+            for (int p : rr.passengers())
+                if (const TrainRide* t = rr.rideOf(p)) ++phase[static_cast<int>(t->phase)];
+            const TrainRiders::Counts& c = rr.counts();
+            char b[400];
+            std::snprintf(b, sizeof(b), "; riders: %zu stations pinned, went in %llu boarded %llu got off %llu, a full train "
+                          "left someone %llu times | now in the way in %d, on platforms %d, aboard %d, on the way out %d",
+                          rr.stations().size(), static_cast<unsigned long long>(c.waits),
+                          static_cast<unsigned long long>(c.boardings), static_cast<unsigned long long>(c.alightings),
+                          static_cast<unsigned long long>(c.leftFull), phase[0], phase[1], phase[2], phase[3]);
             riders = b;
         }
-        answers_.set("trains?", sim_.describe() + "; " + aboard + riders);
+        answers_.set("trains?", rail().describe() + "; " + aboard + riders);
     }
 }
 
@@ -487,11 +475,11 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         // ON FOOT: walking into an open doorway from the platform is boarding
         // (the capsule's own centre-to-feet: it was the 0.7 eye offset, right only while the player was 1.4 m tall)
         const Vec3 feet = pt->position - Vec3(0, cc ? cc->halfHeight + cc->radius : Real(0.9), 0);
-        for (int ti = 0; ti < static_cast<int>(sim_.trains().size()) && train_ < 0; ++ti) {
-            const Train& T = sim_.trains()[static_cast<std::size_t>(ti)];
+        for (int ti = 0; ti < static_cast<int>(rail().trains().size()) && train_ < 0; ++ti) {
+            const Train& T = rail().trains()[static_cast<std::size_t>(ti)];
             if (T.doorSide == 0) continue;
-            for (int c = 1; c < sim_.carCount(ti); ++c) {
-                const CarPose P = sim_.carPose(ti, c, 1.0);
+            for (int c = 1; c < rail().carCount(ti); ++c) {
+                const CarPose P = rail().carPose(ti, c, 1.0);
                 const Vec3 l = toLocal(P.m, feet);
                 if (std::fabs(l.z) > P.length / 2 + 1 || l.x * T.doorSide < 0) continue;
                 if (std::fabs(l.y - coachOf(ti).floor) > 0.6) continue;   // at platform height, not down on the ballast
@@ -512,8 +500,8 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
     }
     if (!ctx.world.has<engine::Passenger>(player)) ctx.world.add<engine::Passenger>(player);
 
-    const Train& T = sim_.trains()[static_cast<std::size_t>(train_)];
-    CarPose P = sim_.carPose(train_, car_, 1.0);
+    const Train& T = rail().trains()[static_cast<std::size_t>(train_)];
+    CarPose P = rail().carPose(train_, car_, 1.0);
     if (sitRequest_ != -2) {
         if (sitRequest_ == -1 && seat_ >= 0) {   // stand up in the aisle beside the seat
             const Vec3& s = coachOf(train_).seats[static_cast<std::size_t>(seat_)];
@@ -561,9 +549,9 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
     const Real hl = static_cast<Real>(coachOf(train_).length) / 2, half = static_cast<Real>(T.kind.gap) / 2;
     if (local_.z > hl + half - 0.05 || local_.z < -hl - half + 0.05) {
         const int to = local_.z > 0 ? car_ - 1 : car_ + 1;
-        if (to >= 1 && to < sim_.carCount(train_)) {
+        if (to >= 1 && to < rail().carCount(train_)) {
             const Vec3 w = P.m.transformPoint(local_);
-            const CarPose Q = sim_.carPose(train_, to, 1.0);
+            const CarPose Q = rail().carPose(train_, to, 1.0);
             Vec3 l = toLocal(Q.m, w);
             l.y = static_cast<Real>(coachOf(train_).floor);
             l.x = std::clamp(l.x, Real(-(coachOf(train_).gangwayHalf - 0.2)), Real(coachOf(train_).gangwayHalf - 0.2));
@@ -588,19 +576,19 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
 }
 
 void TrainSystem::render(engine::FrameContext& ctx) {
-    if (sim_.trains().empty()) return;
+    if (rail().trains().empty()) return;
     const double alpha = std::clamp(ctx.interpolation, 0.0, 1.0);
     auto group = [&](Entity e) { return e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr; };
     for (const Stock& k : stock_)
         for (Entity e : {k.locoBody, k.locoGlass, k.coachBody, k.coachGlass, k.leaves})
             if (InstanceGroup* g = group(e)) g->transforms.clear();
     Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
-    for (int ti = 0; ti < static_cast<int>(sim_.trains().size()); ++ti) {
-        const Train& T = sim_.trains()[static_cast<std::size_t>(ti)];
+    for (int ti = 0; ti < static_cast<int>(rail().trains().size()); ++ti) {
+        const Train& T = rail().trains()[static_cast<std::size_t>(ti)];
         const Stock& k = stock_[static_cast<std::size_t>(stockOf_[static_cast<std::size_t>(ti)])];
         InstanceGroup *lb = group(k.locoBody), *lg = group(k.locoGlass), *cb = group(k.coachBody), *cg = group(k.coachGlass), *dl = group(k.leaves);
         const Real hw = static_cast<Real>(k.coach.width / 2), dh = static_cast<Real>(k.coach.doorHalf);
-        for (const CarPose& P : sim_.carPoses(ti, alpha)) {
+        for (const CarPose& P : rail().carPoses(ti, alpha)) {
             const Vec3 c = col(P.m, 3);
             lo = Vec3(std::min(lo.x, c.x), std::min(lo.y, c.y), std::min(lo.z, c.z));
             hi = Vec3(std::max(hi.x, c.x), std::max(hi.y, c.y), std::max(hi.z, c.z));
@@ -630,14 +618,14 @@ void TrainSystem::render(engine::FrameContext& ctx) {
         if (rg[k]) rg[k]->transforms.clear();
     }
     if (city_ && rg[0]) {
-        const RailRiders& rr = city_->sim().railRiders();
+        const TrainRiders& rr = city_->sim().trainRiders();
         std::vector<int> filled;   // per (train, car)
         const int maxCars = 16;
-        filled.assign(sim_.trains().size() * maxCars, 0);
+        filled.assign(rail().trains().size() * maxCars, 0);
         for (int p : rr.passengers()) {
-            const RailTrip* t = rr.tripOf(p);
-            if (!t || t->phase != RailTrip::Phase::Aboard || t->train < 0 || t->train >= static_cast<int>(sim_.trains().size())) continue;
-            const int cars = sim_.carCount(t->train) - 1;
+            const TrainRide* t = rr.rideOf(p);
+            if (!t || t->phase != TrainRide::Phase::Aboard || t->train < 0 || t->train >= static_cast<int>(rail().trains().size())) continue;
+            const int cars = rail().carCount(t->train) - 1;
             const engine::TrainBodyMesh& coach = coachOf(t->train);
             const int nSeats = static_cast<int>(coach.seats.size());
             if (cars < 1 || nSeats == 0 || coach.seatYaw.size() != coach.seats.size()) continue;
@@ -648,7 +636,7 @@ void TrainSystem::render(engine::FrameContext& ctx) {
             int seat = (n * 37 + t->train * 11) % nSeats;   // 37: coprime with the seat count, every seat once
             ++n;
             if (t->train == train_ && car == car_ && seat == seat_) continue;   // the player's
-            const CarPose P = sim_.carPose(t->train, car, alpha);
+            const CarPose P = rail().carPose(t->train, car, alpha);
             const Vec3& sp = coach.seats[static_cast<std::size_t>(seat)];
             if (InstanceGroup* g = rg[(h >> 20) % 3])
                 g->transforms.push_back(P.m * Mat4::translate(sp.x, sp.y, sp.z) *
@@ -669,7 +657,7 @@ void TrainSystem::render(engine::FrameContext& ctx) {
     if (player.valid() && !(train_ >= 0 && car_ >= 1) && ctx.world.has<engine::InteractCarrier>(player))
         ctx.world.remove<engine::InteractCarrier>(player);
     if (train_ >= 0 && car_ >= 1) {
-        const CarPose P = sim_.carPose(train_, car_, alpha);
+        const CarPose P = rail().carPose(train_, car_, alpha);
         // ...and the seat markers on it (the broker draws after this: InteractOffer::carried)
         if (player.valid()) {
             if (!ctx.world.has<engine::InteractCarrier>(player)) ctx.world.add<engine::InteractCarrier>(player);

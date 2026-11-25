@@ -45,7 +45,13 @@ constexpr int kMaxTraits = 8;
 struct TravelMode {
     std::string name;            // "walk", "car"
     bool roads = false;          // its network: the roads (a vehicle's routing) or the footpaths (a walker's)...
-    bool bus = false;            // ...or the bus lines (ADR-0484): walked to a stop, waited for, ridden round the line
+    // ...or a TRANSIT network's lines: "bus" (the road file's bus lines, ADR-0484) or "rail" (the trains, the one-brain
+    // plan step 4f): walked to a stop, waited for, ridden along the line. Empty: not a transit way.
+    std::string transit;
+    // A TRANSIT WAY'S REACH (travel.lua `stop_reach_m`): a stop is considered only this far, in a straight line, from
+    // where a trip begins or ends
+    Real stopReach = 800;
+    bool isTransit() const { return !transit.empty(); }
     // WHO HAS IT (travel.lua `requires`): the trait a person must have for this row to be priced for them
     // ("has_board"), and its place in TravelCatalog::traits. Empty and -1: anyone.
     std::string needs;
@@ -102,7 +108,7 @@ struct TravelCatalog {
 
 // WHAT A LEG ENDS AT, so a reader that keeps places as handles (the agent brain) knows which handle each leg's end is
 // without comparing points: the door the trip is for, the vehicle where it stands, or where the vehicle is left.
-enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft, Stop };   // Stop: a bus stop (its line and index on the leg)
+enum class LegEnd : uint8_t { Door, Vehicle, VehicleLeft, Stop };   // Stop: a transit stop (its line and index on the leg)
 
 // One leg: a single way of travelling from one point to another.
 struct TripLeg {
@@ -119,9 +125,9 @@ struct TripLeg {
     // each
     std::vector<Real> kindMetres;
     std::vector<int> kindStretches;
-    // A LEG THAT ENDS AT A BUS STOP (LegEnd::Stop; ADR-0484): the line and the stop's index in it. A bus leg also names
-    // the stop it is boarded at (`busFrom`).
-    int busLine = -1, busTo = -1, busFrom = -1;
+    // A LEG THAT ENDS AT A TRANSIT STOP (LegEnd::Stop; ADR-0484): the line (of the transit timetable: a bus line or a
+    // rail line) and the stop's index in it. A ride leg also names the stop it is boarded at (`fromStop`).
+    int line = -1, toStop = -1, fromStop = -1;
 };
 
 // One way of making the whole trip.
@@ -181,8 +187,8 @@ struct FixedLeg {
     uint8_t way = 0;             // row in the catalog
     LegEnd end = LegEnd::Door;
     uint16_t seconds = 0;        // the leg's minutes, in whole seconds
-    uint8_t busLine = 0;         // LegEnd::Stop: the line ...
-    uint16_t busStop = 0;        // ... and the stop the leg ends at
+    uint8_t line = 0;            // LegEnd::Stop: the transit line ...
+    uint16_t stop = 0;           // ... and the stop the leg ends at
 };
 struct FixedLegs {
     FixedLeg legs[kMaxPlanLegs];
@@ -194,37 +200,50 @@ constexpr long kMaxLegSeconds = 65535;
 // more than kMaxPlanLegs legs, or holds a leg longer than kMaxLegSeconds.
 bool fixedLegs(const TravelCatalog& cat, const TripOption& o, FixedLegs& out, std::string* err);
 
-// THE BUS LINES AS THE PLANNER PRICES THEM (ADR-0484): for each line of the road model, each stop's waiting place (where
-// it joins the walks, RoadModel::busStopWalk) and the seconds from it to the next stop (the bus's route there at the
-// free-flow speed, and its wait at a stop). Made by the host from the road model, the driving and the bus service.
-struct BusTimetable {
+// THE TRANSIT LINES AS THE PLANNER PRICES THEM (ADR-0484; trains: the one-brain plan step 4f). Every line of every
+// transit network, the buses' and the trains', in one list: for each stop, where a rider waits for it on the walks (a
+// bus stop's waiting place, RoadModel::busStopWalk; a station's way in from the street) and the seconds on to the next
+// stop (driving or running time, and the wait there). Made by the host from the bus service and the rail lines.
+struct TransitTimetable {
     struct Stop {
         Vec2 wait;
         Real toNextSeconds = 0;
+        // from the street to where the vehicle is boarded (a station's footway and stairs) -- and back, getting off
+        Real accessSeconds = 0;
     };
-    std::vector<std::vector<Stop>> lines;
-    Real walkReach = 800;   // a stop is considered only this far (straight line) from where a trip begins or ends
+    struct Line {
+        std::string network;       // "bus", "rail": the travel.lua row that rides it has this `network`
+        int source = -1;           // its index in its own network (the road model's bus line, the rail sim's line)
+        bool loop = true;          // round and round (a bus line, a rail loop); else end to end, one way
+        Real headwaySeconds = 0;   // how often one comes: the mean wait is half of it
+        std::vector<Stop> stops;
+    };
+    std::vector<Line> lines;
+    // the first line of `network` (-1: none), and whether there is any
+    int firstOf(const std::string& network) const;
+    bool any(const std::string& network) const { return firstOf(network) >= 0; }
 };
 
-// THE BEST BUS RIDE between two points (ADR-0484): the line and the two stops (each within the timetable's walk reach of
-// its end, in a straight line) whose estimate is least -- the two walks in a straight line at `walkPace`, and the ride
-// round the line by the timetable from the first stop to the second. The wait is not in it (the caller's). What the trip
-// planner and the sim's own walkers choose a bus by. Not found: no line has a stop near both ends.
-struct BusRide {
+// THE BEST RIDE between two points on `network`'s lines (ADR-0484): the line and the two stops (each within `reach` of
+// its end, in a straight line) whose estimate is least -- the two walks in a straight line at `walkPace`, the mean wait
+// (half the headway), the way in and out, and the ride along the line by the timetable from the first stop to the
+// second. What the trip planner chooses a ride by. Not found: no line has a stop near both ends.
+struct TransitRide {
     int line = -1, board = -1, alight = -1;
-    Real rideSeconds = 0;   // the timetable's, from `board` to `alight`
+    Real rideSeconds = 0;   // the timetable's, from `board` to `alight`: the mean wait, the way in and out, the ride
     Real estimate = 0;      // the two walks and the ride
     bool found() const { return line >= 0; }
 };
-BusRide bestBusRide(const BusTimetable& tt, Vec2 from, Vec2 to, Real walkPace);
+TransitRide bestRide(const TransitTimetable& tt, const std::string& network, Vec2 from, Vec2 to, Real walkPace, Real reach);
 
 // The network a plan is routed on: the road model, the walker on its walks (route.h bindWalker), the driving, whose
-// router prices a leg on the roads (none: no leg on the roads can be made), and the buses' timetable (none: no bus).
+// router prices a leg on the roads (none: no leg on the roads can be made), and the transit timetable (none: no bus,
+// no train).
 struct TripNetwork {
     const engine::RoadModel* model = nullptr;
     const engine::roads::RouteWalker* walker = nullptr;
     const driving::Driving* driving = nullptr;
-    const BusTimetable* buses = nullptr;
+    const TransitTimetable* transit = nullptr;
     bool valid() const;
 };
 

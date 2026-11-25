@@ -12,7 +12,7 @@ namespace citysim {
 
 void BusRiders::reset() {
     riders_.clear();
-    timetable_ = BusTimetable();
+    timetable_ = TransitTimetable();
     world_ = nullptr;
     counts_ = Counts();
 }
@@ -25,10 +25,15 @@ void BusRiders::build(const engine::RoadModel& model, const driving::Driving& d,
     const BusService& service = busService();
     if (bus < 0 || model.busLines.empty() || !service.usable) return;
     for (const engine::ModelBusLine& line : model.busLines) {
-        std::vector<BusTimetable::Stop> stops;
+        TransitTimetable::Line tl;
+        tl.network = "bus";
+        tl.source = static_cast<int>(timetable_.lines.size());
+        tl.loop = true;   // (a bus line runs round)
+        tl.headwaySeconds = service.headwayMinutes * 60.0;
+        std::vector<TransitTimetable::Stop>& stops = tl.stops;
         const std::size_t n = line.stops.size();
         for (std::size_t k = 0; k < n; ++k) {
-            BusTimetable::Stop st;
+            TransitTimetable::Stop st;
             const engine::WalkJoin w = model.busStopWalk(line.stops[k], openWalks);
             const engine::KerbLanePlace a = model.busStopLane(line.stops[k]), b = model.busStopLane(line.stops[(k + 1) % n]);
             st.wait = w.valid() ? w.point : a.at;
@@ -45,12 +50,12 @@ void BusRiders::build(const engine::RoadModel& model, const driving::Driving& d,
             st.toNextSeconds = drive + service.dwellSeconds;
             stops.push_back(st);
         }
-        timetable_.lines.push_back(std::move(stops));
+        timetable_.lines.push_back(std::move(tl));
     }
 }
 
 bool BusRiders::wait(int agent, uint32_t line, uint32_t board, uint32_t alight) {
-    if (line >= timetable_.lines.size() || board >= timetable_.lines[line].size() || alight >= timetable_.lines[line].size())
+    if (line >= timetable_.lines.size() || board >= timetable_.lines[line].stops.size() || alight >= timetable_.lines[line].stops.size())
         return false;
     riders_.erase(std::remove_if(riders_.begin(), riders_.end(), [agent](const Rider& r) { return r.agent == agent; }), riders_.end());
     Rider r;
@@ -64,7 +69,7 @@ bool BusRiders::wait(int agent, uint32_t line, uint32_t board, uint32_t alight) 
 }
 
 bool BusRiders::aboard(int agent, uint32_t line, uint32_t alight) {
-    if (line >= timetable_.lines.size() || alight >= timetable_.lines[line].size()) return false;
+    if (line >= timetable_.lines.size() || alight >= timetable_.lines[line].stops.size()) return false;
     riders_.erase(std::remove_if(riders_.begin(), riders_.end(), [agent](const Rider& r) { return r.agent == agent; }), riders_.end());
     Rider r;
     r.agent = agent;
@@ -94,8 +99,8 @@ int BusRiders::aboardOn(engine::Entity bus) const {
     return n;
 }
 
-std::vector<BusRiders::Event> BusRiders::tick(std::vector<Agent>& agents) {
-    std::vector<Event> out;
+std::vector<RideEvent> BusRiders::tick(std::vector<Agent>& agents) {
+    std::vector<RideEvent> out;
     if (!world_ || riders_.empty()) return out;
     std::vector<std::pair<uint32_t, engine::Entity>> buses;
     world_->each<CityBusRuns, CityCarBody>(
@@ -120,11 +125,11 @@ std::vector<BusRiders::Event> BusRiders::tick(std::vector<Agent>& agents) {
                 a.pos = at;   // carried where the bus is
                 if (runs.standing && runs.stop == r.alight) {
                     // OFF at their stop: on the pavement where people wait for it
-                    a.pos = timetable_.lines[r.line][r.alight].wait;
+                    a.pos = timetable_.lines[r.line].stops[r.alight].wait;
                     a.indoors = false;
                     if (r.bus == bus) --load;
                     ++counts_.alightings;
-                    out.push_back(Event{r.agent, false});
+                    out.push_back(RideEvent{r.agent, false});
                     continue;
                 }
                 if (r.bus == engine::Entity{}) r.bus = bus;   // (the first bus of the line it is seen on: theirs)
@@ -145,7 +150,7 @@ std::vector<BusRiders::Event> BusRiders::tick(std::vector<Agent>& agents) {
                 a.moving = false;
                 a.pos = at;
                 ++counts_.boardings;
-                out.push_back(Event{r.agent, true});
+                out.push_back(RideEvent{r.agent, true});
             }
             keep.push_back(r);
         }

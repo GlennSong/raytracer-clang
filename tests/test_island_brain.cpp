@@ -87,6 +87,21 @@ TEST_CASE(level_island_brain_runs_every_household) {
                 static_cast<unsigned long long>(b.machine()->counts().noPlans),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused));
+    // BY TRAIN (step 4f): the island's towns are joined by rail. Whose plan now has a train in it, an example, and the
+    // near riders the train riders carried.
+    int byTrain = 0;
+    std::string example;
+    for (int who = 0; who < b.residentCount(); ++who) {
+        const std::string plan = b.planText(who);
+        if (plan.find("train>") == std::string::npos) continue;
+        if (byTrain++ == 0) example = plan + " (" + b.planReason(who) + ")";
+    }
+    const citysim::TrainRiders::Counts& tc = sim.trainRiders().counts();
+    std::printf("    [island] trains: %zu lines, %zu stations; %d people's plans go by train, e.g. %s; near riders: %u went "
+                "in, %u came out; the riders: boarded %llu, got off %llu, a full train left someone %llu times\n",
+                sim.rail().lines().size(), sim.trainRiders().stations().size(), byTrain, example.c_str(), c.trainWaits,
+                c.trainRides, static_cast<unsigned long long>(tc.boardings), static_cast<unsigned long long>(tc.alightings),
+                static_cast<unsigned long long>(tc.leftFull));
     CHECK(b.residentCount() > static_cast<int>(sim.agents().size()) * 9 / 10);   // (the brain runs nearly everyone)
     CHECK(b.cars().empty());                                                     // (no driving on the island)
     CHECK(b.farCount() > b.residentCount() / 2);                                 // (most of the island is far)

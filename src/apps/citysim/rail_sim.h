@@ -94,6 +94,10 @@ public:
     // ...each line with the stock its track class runs (`kindOf`) and as many trains as `countOf` gives for its length
     void build(const std::vector<engine::RailTrack>& tracks, const std::function<TrainKind(const std::string& cls)>& kindOf,
                const std::function<int(double length, const TrainKind& kind)>& countOf, double joinTol = 3.0);
+    // THE LEVEL'S SERVICE on `tracks`: each line's stock by its track's class (a city line's light rail, else
+    // intercity; RT_TRAIN_KIND puts one kind on every line) and a train per ~9 km of intercity line, per ~1.5 km of a
+    // city one, two at least (RT_TRAINS_PER_LINE: that many). The one service the city and the train system run.
+    void buildService(const std::vector<engine::RailTrack>& tracks);
     void step(double dt);
 
     const std::vector<RailLine>& lines() const { return lines_; }

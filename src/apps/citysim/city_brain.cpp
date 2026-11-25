@@ -298,8 +298,12 @@ struct CityBrain::Impl {
             a.heading = carFacing(c);
         }
     }
-    // THE BUSES AS THE PLANNER PRICES THEM (ADR-0484): the sim's (city_buses.h), made with the buses
-    const BusTimetable& busTimetable() const { return sim.buses_.timetable(); }
+    // THE BUS AND RAIL LINES AS THE PLANNER PRICES THEM (ADR-0484; step 4f): the sim's (CitySim::transit). A stop handle
+    // names a line of it and a stop on that line.
+    const TransitTimetable& transit() const { return sim.transit_; }
+    bool stopKnown(PlaceRef p) const {
+        return isStop(p) && stopLine(p) < transit().lines.size() && stopIndex(p) < transit().lines[stopLine(p)].stops.size();
+    }
     static bool isStop(PlaceRef p) { return p.valid() && (p.id & kKindMask) == kStopTag; }
     static PlaceRef stopRef(uint32_t line, uint32_t stop) {
         PlaceRef p;
@@ -404,19 +408,22 @@ struct CityBrain::Impl {
             out = points[place.id & ~kKindMask];
             return true;
         }
-        if (isStop(place) && stopLine(place) < busTimetable().lines.size() &&
-            stopIndex(place) < busTimetable().lines[stopLine(place)].size()) {
-            out = busTimetable().lines[stopLine(place)][stopIndex(place)].wait;
+        if (stopKnown(place)) {
+            out = transit().lines[stopLine(place)].stops[stopIndex(place)].wait;
             return true;
         }
         return false;
     }
     std::string placeName(PlaceRef place) const {
         if (isMarker(place) && markerIndex(place) < markers.size()) return markers[markerIndex(place)].name;
-        if (isStop(place) && model && stopLine(place) < model->busLines.size() &&
-            stopIndex(place) < model->busLines[stopLine(place)].stops.size())
-            return "stop " + model->busLines[stopLine(place)].stops[stopIndex(place)].name + " (line " +
-                   model->busLines[stopLine(place)].id + ")";
+        if (stopKnown(place)) {
+            const TransitTimetable::Line& tl = transit().lines[stopLine(place)];
+            const std::size_t src = static_cast<std::size_t>(std::max(0, tl.source));
+            if (tl.network == "bus" && model && src < model->busLines.size() && stopIndex(place) < model->busLines[src].stops.size())
+                return "stop " + model->busLines[src].stops[stopIndex(place)].name + " (line " + model->busLines[src].id + ")";
+            if (tl.network == "rail" && src < sim.rail_.lines().size() && stopIndex(place) < sim.rail_.lines()[src].stops.size())
+                return "station " + sim.rail_.lines()[src].stops[stopIndex(place)].name + " (rail line " + sim.rail_.lines()[src].name + ")";
+        }
         engine::KerbSpace space;
         if (isSpace(place) && spaces->spaceOf(place, space)) return "space " + model->kerbSpaceName(space);
         Vec2 at;
@@ -644,9 +651,15 @@ struct CityBrain::Impl::LabWorld : brain::World {
     bool positionOf(PlaceRef place, Vec2& out) const override { return im.positionOf(place, out); }
     uint32_t carClass(CarRef car) const override { return im.classOf(car); }
     bool stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const override {
-        if (line >= im.busTimetable().lines.size() || stop >= im.busTimetable().lines[line].size()) return false;
+        if (line >= im.transit().lines.size() || stop >= im.transit().lines[line].stops.size()) return false;
         out = Impl::stopRef(line, stop);
         return true;
+    }
+    BrainTime rideWait(uint32_t line, PlaceRef board) const override {
+        if (!im.stopKnown(board) || Impl::stopLine(board) != line) return 0;
+        const TransitTimetable::Line& tl = im.transit().lines[line];
+        const Real s = 0.5 * tl.headwaySeconds + tl.stops[Impl::stopIndex(board)].accessSeconds;
+        return static_cast<BrainTime>(std::llround(s * 1000.0));
     }
     bool carOnLane(CarRef ref, engine::PathPoint& out) const override {
         const Car c = im.car(ref);
@@ -777,23 +790,44 @@ struct CityBrain::Impl::LabRide : brain::RideSkill {
     explicit LabRide(Impl& i) : im(i) {}
     Impl& im;
 
+    // (a line of the transit timetable: a bus line, carried by the sim's bus riders, or a rail line, by its train riders)
+    const TransitTimetable::Line* lineOf(uint32_t line) const {
+        return line < im.transit().lines.size() ? &im.transit().lines[line] : nullptr;
+    }
     bool waitFor(AgentId who, uint32_t line, PlaceRef board, PlaceRef alight) override {
-        if (who >= im.people.size() || !Impl::isStop(board) || !Impl::isStop(alight) || Impl::stopLine(board) != line ||
-            Impl::stopLine(alight) != line)
+        const TransitTimetable::Line* tl = lineOf(line);
+        if (who >= im.people.size() || !tl || tl->source < 0 || !Impl::isStop(board) || !Impl::isStop(alight) ||
+            Impl::stopLine(board) != line || Impl::stopLine(alight) != line)
             return false;
-        if (!im.sim.buses_.wait(im.people[who].agent, line, Impl::stopIndex(board), Impl::stopIndex(alight))) return false;
+        const int agent = im.people[who].agent;
+        if (tl->network == "rail") {
+            // in at the station's way in (the walk there ended at it): the train riders take them from the street
+            if (!im.sim.trainRiders_.wait(agent, tl->source, static_cast<int>(Impl::stopIndex(board)), static_cast<int>(Impl::stopIndex(alight))))
+                return false;
+            ++im.counts.trainWaits;
+            return true;
+        }
+        if (!im.sim.buses_.wait(agent, static_cast<uint32_t>(tl->source), Impl::stopIndex(board), Impl::stopIndex(alight))) return false;
         im.agentOf(who).indoors = false;   // (standing at the stop: the walk there left them on its waiting place)
         ++im.counts.busWaits;
         return true;
     }
     bool aboard(AgentId who, uint32_t line, PlaceRef alight) override {
-        if (who >= im.people.size() || !Impl::isStop(alight) || Impl::stopLine(alight) != line) return false;
-        if (!im.sim.buses_.aboard(im.people[who].agent, line, Impl::stopIndex(alight))) return false;
+        const TransitTimetable::Line* tl = lineOf(line);
+        if (who >= im.people.size() || !tl || tl->source < 0 || !Impl::isStop(alight) || Impl::stopLine(alight) != line) return false;
+        const int agent = im.people[who].agent;
+        if (tl->network == "rail") {
+            if (!im.sim.trainRiders_.aboard(agent, tl->source, static_cast<int>(Impl::stopIndex(alight)))) return false;
+        } else if (!im.sim.buses_.aboard(agent, static_cast<uint32_t>(tl->source), Impl::stopIndex(alight))) {
+            return false;
+        }
         im.agentOf(who).indoors = true;
         return true;
     }
     void cancel(AgentId who) override {
-        if (who < im.people.size()) im.sim.buses_.cancel(im.people[who].agent, im.sim.agents_);
+        if (who >= im.people.size()) return;
+        im.sim.buses_.cancel(im.people[who].agent, im.sim.agents_);
+        im.sim.trainRiders_.cancel(im.people[who].agent, im.sim.agents_);
     }
 };
 
@@ -801,10 +835,10 @@ void CityBrain::Impl::tickRides() {
     if (sim.brainRideEvents_.empty()) return;
     const brain::EventId boarded = static_cast<brain::EventId>(table.event("boarded"));
     const brain::EventId alighted = static_cast<brain::EventId>(table.event("alighted"));
-    for (const BusRiders::Event& e : sim.brainRideEvents_) {
+    for (const RideEvent& e : sim.brainRideEvents_) {
         const int who = personOfAgent(e.agent);
         if (who < 0) continue;
-        if (!e.boarded) ++counts.busRides;
+        if (!e.boarded) ++(e.train ? counts.trainRides : counts.busRides);
         machine->post(static_cast<AgentId>(who), e.boarded ? boarded : alighted);
     }
     sim.brainRideEvents_.clear();
@@ -1951,7 +1985,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
     }
 
     im.world = std::make_unique<Impl::LabWorld>(im);
-    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d, &sim.buses_.timetable()},
+    im.planner = std::make_unique<Impl::NotingPlanner>(im, TripNetwork{sim.roads(), &sim.walker_, im.d, &sim.transit_},
                                                        im.travel, *im.world);
     im.fronts = std::make_unique<Impl::FrontPoints>(im);
     if (im.d) im.room = std::make_unique<brain::LaneRoom>(*im.d);

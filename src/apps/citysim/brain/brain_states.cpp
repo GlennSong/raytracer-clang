@@ -162,12 +162,16 @@ void parkExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     ctx.world->leaveCar(carOf(a), ctx.agent);
 }
 
-// ---- WAITING FOR A BUS (ADR-0484): at the stop the leg before ended at, for a bus of the leg's line (its handle). Its
-// planned time is the way's start minutes, the mean wait. A near person is the ride skill's: it reports `boarded`.
+// ---- WAITING FOR A BUS OR A TRAIN (ADR-0484; step 4f): at the stop the leg before ended at, for one of the leg's line
+// (its handle). Its planned time is the line's mean wait at that stop (World::rideWait: half the headway, and a
+// station's way in) and the way's start minutes. A near person is the ride skill's: it reports `boarded`.
 // raises: 0 missed_ride
+BrainTime rideWaitOf(const StepContext& ctx, const AgentBrain& a) {
+    return ctx.world && ctx.machine ? ctx.world->rideWait(a.legHandle(a.legNow), ctx.machine->legStartPlace(a)) : 0;
+}
 BrainTime busWaitLasts(const StepContext& ctx, const AgentBrain& a) {
     const WayRow* way = legWayRow(ctx, a);
-    return way ? way->startMillis : kNever;
+    return way ? way->startMillis + rideWaitOf(ctx, a) : kNever;
 }
 EventId busWaitFrom(StepContext& ctx, AgentBrain& a, Real) {
     if (!ctx.skillsRun) return kNoId;   // far: nobody waits at a real stop; the clock stands for the wait
@@ -181,14 +185,14 @@ void busWaitExit(StepContext& ctx, AgentBrain&, ExitWhy why) {
     if (ctx.skillsRun && ctx.ride && why != ExitWhy::Done) ctx.ride->cancel(ctx.agent);
 }
 
-// ---- RIDING A BUS: aboard, to the leg's last stop. Its planned time is the leg's less the wait. A near person who
+// ---- RIDING A BUS OR A TRAIN: aboard, to the leg's last stop. Its planned time is the leg's less the wait. A near person who
 // boarded is already the skill's; one raised from far part-way through is put aboard (`aboard`). The skill reports
 // `alighted`. raises: 0 missed_ride
 BrainTime busRideLasts(const StepContext& ctx, const AgentBrain& a) {
     const WayRow* way = legWayRow(ctx, a);
     const BrainTime leg = legMillis(a);
     if (!way || leg == kNever) return kNever;
-    const BrainTime fixed = way->startMillis + way->endMillis;
+    const BrainTime fixed = way->startMillis + way->endMillis + rideWaitOf(ctx, a);
     return leg > fixed ? leg - fixed : 0;
 }
 EventId busRideEnter(StepContext&, AgentBrain&) { return kNoId; }   // (boarded: the skill has them aboard already)

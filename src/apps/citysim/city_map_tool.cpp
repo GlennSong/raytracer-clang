@@ -242,7 +242,7 @@ std::vector<TransitLine> CityMapToolSystem::transitLines() const {
     if (!city_.built()) return lines;
     // THE RAIL (Glenn, 2026-10-12: "it would be nice to see the trains on the map"): each line a dark casing with its
     // colour down the middle, every casing first so a double track reads as one line
-    if (const RailSim* rs = city_.sim().railRiders().rail()) {
+    if (const RailSim* rs = city_.sim().trainRiders().rail()) {
         for (int pass = 0; pass < 2; ++pass)
             for (const RailLine& L : rs->lines()) {
                 TransitLine l;
@@ -402,9 +402,9 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
 
     ensureSprites(ctx.renderer);
     // the transit lines, drawn live; again once the trains are there (they start a few frames after the city)
-    if (city_.built() && (!linesTaken_ || (!railInLines_ && city_.sim().railRiders().rail()))) {
+    if (city_.built() && (!linesTaken_ || (!railInLines_ && city_.sim().trainRiders().rail()))) {
         takeLines();
-        railInLines_ = city_.sim().railRiders().rail() != nullptr;
+        railInLines_ = city_.sim().trainRiders().rail() != nullptr;
     }
     const Rect p = panel(ctx.framebufferWidth, ctx.framebufferHeight);
     const double pw = p.x1 - p.x0, ph = p.y1 - p.y0;
@@ -585,7 +585,7 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
 
     // THE RAIL, live: each station a ringed square, each train its cars, a dot apiece in its line's colour
     if (city_.built())
-        if (const RailSim* rs = city_.sim().railRiders().rail()) {
+        if (const RailSim* rs = city_.sim().trainRiders().rail()) {
             std::vector<std::pair<std::string, Vec2>> stations;
             for (const RailLine& L : rs->lines())
                 for (const engine::RailStop& st : L.stops) {

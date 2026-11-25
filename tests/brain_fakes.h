@@ -65,6 +65,9 @@ public:
     PlaceRef addStop(uint32_t line, uint32_t stop, Vec2 at);
     bool stopPlace(uint32_t line, uint32_t stop, PlaceRef& out) const override;
     std::vector<std::pair<std::pair<uint32_t, uint32_t>, uint32_t>> stops;   // (line, stop) -> place id
+    // the lines' mean waits: half the headway and the way in (the lab's timetable, StreetNet::transit)
+    const TransitTimetable* transit = nullptr;
+    BrainTime rideWait(uint32_t line, PlaceRef board) const override;
 
     struct Car {
         PlaceRef standing;
@@ -155,7 +158,7 @@ const citytest::ModelScene& longStreet();
 struct StreetNet {
     engine::roads::RouteWalker walker;
     std::shared_ptr<driving::Driving> driving;   // its router prices the drives (trip_driving.h)
-    BusTimetable buses;                          // empty: no bus (a bus test fills it)
+    TransitTimetable transit;                    // empty: no bus, no train (a ride's test fills it)
     TripNetwork net() const;
 };
 StreetNet longStreetNet();

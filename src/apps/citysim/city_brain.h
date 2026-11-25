@@ -185,6 +185,8 @@ struct CityBrainCounts {
     uint32_t held = 0, letGo = 0;  // times a director took one of the brain's people over, and let them go
     uint32_t busWaits = 0;         // times someone near began waiting at a bus stop (ADR-0484)
     uint32_t busRides = 0;         // ...and got off a bus at their stop
+    uint32_t trainWaits = 0;       // times someone near went in at a station for a train (step 4f)
+    uint32_t trainRides = 0;       // ...and came out at the far station
     // ADR-0491: their role's day
     uint32_t daySetOut = 0;        // trips the day began (a GoTo state given a marker)
     uint32_t dayArrivals = 0;      // ...that arrived

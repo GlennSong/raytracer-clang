@@ -1459,7 +1459,7 @@ TEST_CASE(metro_pedestrians_walk_and_keep_apart) {
             const int ki = static_cast<int>(k);
             if (!city.sim().pedVisible(ki)) { ++indoors; continue; }
             if (a.moving) ++moving;
-            else if (!city.sim().onTrainJourney(ki)) ++standing;
+            else if (!city.sim().trainRiders().riding(ki)) ++standing;
             drawn.push_back(k);
         }
         for (std::size_t x = 0; x < drawn.size(); ++x)

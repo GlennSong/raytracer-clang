@@ -705,14 +705,13 @@ TEST_CASE(brain_trip_a_new_intent_on_foot_is_acted_on_at_once) {
 
 // ---- BY BUS (ADR-0484): walk to a stop, wait for the line's bus, ride it round to a stop near the door, walk on ----------
 namespace {
-// testTravel() with a bus row: the mean wait 4 minutes (its start minutes), nothing at its end
+// testTravel() with a bus row (its mean wait the line's: half its 8-minute headway, 4 minutes; nothing at either end)
 TravelCatalog withBus() {
     TravelCatalog c = testTravel();
     TravelMode bus;
     bus.name = "bus";
-    bus.bus = true;
+    bus.transit = "bus";
     bus.speed = 0;
-    bus.startMinutes = 4.0;
     bus.beginsIn = "waiting";
     c.modes.push_back(bus);
     return c;
@@ -731,9 +730,12 @@ struct BusScene {
         s800 = lab.world.addStop(0, 1, Vec2(800, 0));
         s1400 = lab.world.addStop(0, 2, Vec2(1400, 0));
         s1900 = lab.world.addStop(0, 3, Vec2(1900, 0));
-        std::vector<BusTimetable::Stop> line;
-        for (const Real x : {200.0, 800.0, 1400.0, 1900.0}) line.push_back(BusTimetable::Stop{Vec2(x, 0), x == 1900.0 ? 300.0 : 100.0});
-        lab.street.buses.lines = {line};
+        TransitTimetable::Line line;
+        line.network = "bus";
+        line.source = 0;
+        line.headwaySeconds = 480;
+        for (const Real x : {200.0, 800.0, 1400.0, 1900.0}) line.stops.push_back(TransitTimetable::Stop{Vec2(x, 0), x == 1900.0 ? 300.0 : 100.0, 0});
+        lab.street.transit.lines = {line};
         who = lab.person(home, 0, CarRef(), detail);
     }
 };

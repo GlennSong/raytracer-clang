@@ -112,6 +112,14 @@ public:
         (void)out;
         return false;
     }
+    // THE MEAN WAIT FOR A RIDE (step 4f), in milliseconds: at `board`, a stop of transit line `line`, until the bus or
+    // train is boarded -- half the line's headway, and a station's way in to the platform. What a far person's wait
+    // takes by the clock (the rest of the leg is the ride). 0: the world does not say.
+    virtual BrainTime rideWait(uint32_t line, PlaceRef board) const {
+        (void)line;
+        (void)board;
+        return 0;
+    }
     // WHERE A CAR ON THE ROAD IS on its lane (the driving's record: its front's path and how far along it), so a drive
     // planned at the wheel is priced from there. False: it is not on the road (or the world does not say).
     virtual bool carOnLane(CarRef car, engine::PathPoint& out) const {

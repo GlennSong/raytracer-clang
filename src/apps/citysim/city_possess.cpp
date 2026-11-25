@@ -577,7 +577,7 @@ void CityPossessSystem::publishStatus() {
                 a.leg, static_cast<int>(a.route.steps.size()),
                 a.route.found ? 1 : 0, a.tripGoal, a.home, a.work,
                 // what is carrying it: a train (past the street on a rail journey), or a household's car
-                sim.onTrainJourney(walkerAgent_) ? 1 : 0, a.inCar,
+                sim.trainRiders().riding(walkerAgent_) ? 1 : 0, a.inCar,
                 sim.steppedLastTick(walkerAgent_) ? 1 : 0,
                 static_cast<double>(sim.gapOf(walkerAgent_)),
                 static_cast<double>(sim.minGapOf(walkerAgent_)),

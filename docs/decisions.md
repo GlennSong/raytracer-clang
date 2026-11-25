@@ -24763,3 +24763,34 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - The engine docs' city sim page (web/engine/citysim.html) explains the deleted layer: #341.
 - The features to rebuild on the brain are listed in #342.
 - An agent's `brainOwned`, `directed`, `released`, `playerControlled` and `tethered` flags are still separate. The plan's "one field, written only by the brain or a possession" comes with the rebuilds.
+
+## ADR-0500 — The brain's people take the train: one transit timetable, the city runs the trains (one-brain plan, step 4f; 2026-11-24)
+
+**Why:** the island's towns are joined only by rail. Since ADR-0499 deleted the old sim's own train riding, a trip from one town to another found no way (1,282 such plans in the island's first 3 minutes). Glenn asked for the old features to come back as things the brain's people can do, not as the old code (#342).
+
+**Words:**
+- **A transit line:** a bus line or a rail line, anything a person waits for at a stop and rides.
+- **The way in:** where a station's footway leaves the street. It is what a person walks to, and the stairs to the platform are a timed walk.
+- **Headway:** how often a vehicle of a line comes. A person who does not time their arrival waits half of it on average.
+
+**What happens:**
+- **One transit timetable** (`TransitTimetable`, trip_plan.h; it was `BusTimetable`). It holds every line of every network, the buses' first, then the rail lines. Each line says its network (`bus` or `rail`), its index in that network (`source`), whether it loops, and its headway. Each stop says where it is waited for, the seconds on to the next stop, and its way in (`accessSeconds`, 0 for a bus stop). CitySim keeps it (`transit()`), rebuilt whenever the buses or the stations are made.
+- **The wait is the line's.** A ride is priced as half the headway, the way in, the ride and the way out. Before, the bus's wait was a fixed 4 minutes in travel.lua; it is now half bus_service.json's 8-minute headway, the same number from one place. The brain's `waiting` state asks the world for the wait (`World::rideWait`), and `riding` takes the rest of the leg.
+- **A `train` row in travel.lua** (`network = "rail"`), priced by the same walk → ride → walk code as the bus (`bestRide`). Each transit row has a reach (`stop_reach_m`): 800 m for a bus stop, 2 km for a station.
+- **The city runs the trains.** CitySim owns the RailSim, built on the level's tracks (`RailSim::buildService`, the service TrainSystem used to make) and stepped every fixed step. So trains run headless, and far from the player. TrainSystem draws the city's trains, and runs its own only until a city is built with trains: a level whose city never builds (rail_lab: its roads have no lane level) keeps its trains.
+- **TrainRiders** (city_rail_riders.h; it was RailRiders) carries the brain's people as BusRiders does: in along the footway (not drawn), standing on the platform at its height, aboard the first train to stand there with its doors open and a seat free, off at their stop, out along the far footway to the street. It reports boarding and getting off as the same `RideEvent` the buses give (`train` set). The brain's ride skill hands a rail line to it and a bus line to BusRiders.
+- **A ride that cannot win is not routed.** The planner keeps the best option so far. If a ride's least possible cost cannot beat it, its walks are not routed: that is the walks in a straight line at the person's cheapest pace on foot, plus the ride. (Ties go to the earlier row.) Choices are unchanged; on the island, planning went from 5.7 to 3.8 ms a tick.
+- **The job search** still asks the train riders whether a train joins two towns (`TrainRiders::doorToDoor`, the old riders' estimate). It is the one place that asks "can this person commute by train at all".
+
+**Checked:**
+- **The island, 3 minutes:** trips with no way 1,282 → 828. 2,655 people's plans go by train, e.g. "walk 23.4 min, train 21.4 min (15.7 walk + 2.9 train + 2.8 walk): train". Near the player, 30 went in at a station and 6 boarded (none had arrived yet in 3 minutes). 0 errors. The brain 11.4 → 13.2 ms a tick (planning 2.8 → 3.8); the whole step 10.2 → 11.4 ms.
+- **New case** `train_riders_carry_a_rider_between_two_ways_in`: the timetable's rail lines, and one person carried from one way in to the other, with the two reports in order.
+- **river_town** (buses, no rail): every pin unchanged, since the bus's wait is the same 4 minutes, now from the headway.
+- Unit suite 1,570 of 1,570; brain suite 24 of 24. brain_lab's 14 failing checks were failing before this.
+- The viewer: rail_lab's trains run (TrainSystem's own); the island's are the city's (6 lines, 20 trains).
+- **Found on the way, fixed:** the island's viewer ran at half a frame a second. The brain's overlay (CityBrainSystem) looked up the ground height every frame for everyone, before checking distance: 115,000 people when finding who the camera looks at, and 7,698 markers ringed island-wide. It now checks distance in plan first and draws markers within 250 m. Since then: about 17 fps.
+
+**Found, not done:**
+- A trip can't change lines yet: bus to a station, or a train then a bus. It is one ride between two walks. The island's walks to a station can be long (15.7 minutes in the example).
+- A station is chosen by straight-line estimate, before its walk is routed. A station across a river from home can win and then fail as "no route to the stop", even when another station would do.
+- Far riders are not drawn on trains or platforms: their wait and ride are the clock's (like far bus riders, step 4e).

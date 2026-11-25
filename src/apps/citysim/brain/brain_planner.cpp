@@ -71,15 +71,15 @@ bool TripPlanner::plan(const PlanAsk& ask, PlanLegs& out) {
         PlaceRef end = ask.to;
         if (leg.end == LegEnd::Vehicle) end = carAt;
         else if (leg.end == LegEnd::VehicleLeft) end = leaveAt;
-        else if (leg.end == LegEnd::Stop && !world_.stopPlace(leg.busLine, leg.busStop, end)) {
-            lastError_ = "the plan names bus stop " + std::to_string(leg.busStop) + " of line " + std::to_string(leg.busLine) +
+        else if (leg.end == LegEnd::Stop && !world_.stopPlace(leg.line, leg.stop, end)) {
+            lastError_ = "the plan names stop " + std::to_string(leg.stop) + " of transit line " + std::to_string(leg.line) +
                          ", which the world does not know";
             return false;
         }
         legs.end[i] = end.id;
-        // (a bus leg's handle is its line: the ride skill is told which bus to get on)
-        const bool byBus = travel_.modes[leg.way].bus;
-        legs.use[i] = packLegUse(leg.way, usesCar ? ask.car.id : byBus ? static_cast<uint32_t>(leg.busLine) : kNoHandle);
+        // (a ride's handle is its transit line: the ride skill is told which bus or train to get on)
+        const bool rides = travel_.modes[leg.way].isTransit();
+        legs.use[i] = packLegUse(leg.way, usesCar ? ask.car.id : rides ? static_cast<uint32_t>(leg.line) : kNoHandle);
         legs.seconds[i] = leg.seconds;
     }
     legs.count = fixed.count;
