@@ -123,6 +123,20 @@ uint32_t batchPrefab(World& world, Entity holder, ModelDresser* dresser, const P
     copy.lively = !prefab.script.empty() || !prefab.free.empty();   // (a door is made lively by whoever hangs it)
     for (const PrefabUse& u : copy.uses) copy.lively = copy.lively || u.near > 0;
     PrefabBatches* b = world.get<PrefabBatches>(holder);
+    if (b->copies.empty()) { b->boundsCenter = at.position; b->boundsRadius = 2; }
+    else {
+        // (the ball is moved toward the new copy and grown to hold both)
+        const Vec3 to = at.position - b->boundsCenter;
+        const Real d = to.length();
+        if (d + 2 > b->boundsRadius) {
+            const Real r = (b->boundsRadius + d + 2) * Real(0.5);
+            if (d > 1e-9) b->boundsCenter = b->boundsCenter + to * ((r - b->boundsRadius) / d);
+            b->boundsRadius = r;
+        }
+    }
+    b->mayLight = b->mayLight || !prefab.lights.empty();
+    for (const PrefabUse& u : copy.uses) b->mayLight = b->mayLight || !u.light.empty();
+    b->mayStir = b->mayStir || copy.lively;
     b->copies.push_back(std::move(copy));
     b->fixedStale = b->restingStale = true;
     return index;
@@ -157,6 +171,24 @@ void releaseBatches(World& world, Entity holder, const std::function<void(Physic
     world.remove<PrefabBatches>(holder);
 }
 
+void removeBatchCopy(World& world, Entity holder, uint32_t copy, const std::function<void(PhysicsBodyId)>& removeBody) {
+    PrefabBatches* b = world.get<PrefabBatches>(holder);
+    if (b == nullptr || copy >= b->copies.size() || b->copies[copy].gone) return;
+    const Entity awake = b->copies[copy].awake;
+    if (awake.valid() && world.alive(awake)) {
+        world.remove<BatchAwake>(awake);   // (it does not go back to the batch)
+        unstampPrefab(world, awake, removeBody);
+    }
+    b = world.get<PrefabBatches>(holder);
+    b->copies[copy].awake = Entity();
+    b->copies[copy].gone = true;
+    b->copies[copy].lively = false;
+    b->copies[copy].busy = 0;
+    b->restingStale = b->fixedStale = true;
+    b->copies[copy].shown = true;   // (so hiding writes its transforms)
+    showBatchCopy(world, holder, copy, false);
+}
+
 bool batchCopyMarker(const PrefabBatches::Copy& copy, const std::string& marker, Vec3& position, Quat& rotation) {
     if (copy.model == nullptr) return false;
     int node = 0;
@@ -174,7 +206,7 @@ void batchCollisionTriangles(const PrefabBatches& batches, bool moving, std::vec
         indices.push_back(a); indices.push_back(c); indices.push_back(b);
     };
     for (const PrefabBatches::Copy& c : batches.copies) {
-        if (c.model == nullptr || c.line.body != Prefab::Body::Static) continue;
+        if (c.model == nullptr || c.gone || c.line.body != Prefab::Body::Static) continue;
         if (moving && c.awake.valid()) continue;   // (its moving shapes are its own bodies while it is awake)
         const ProcFrame at{c.at.position, c.at.orientation};
         for (const ProcCollider& pc : c.model->colliders) {
@@ -206,7 +238,7 @@ void batchCollisionTriangles(const PrefabBatches& batches, bool moving, std::vec
 
 Entity wakeBatchCopy(World& world, Entity holder, uint32_t copy) {
     PrefabBatches* b = world.get<PrefabBatches>(holder);
-    if (b == nullptr || copy >= b->copies.size()) return Entity();
+    if (b == nullptr || copy >= b->copies.size() || b->copies[copy].gone) return Entity();
     if (b->copies[copy].awake.valid() && world.alive(b->copies[copy].awake)) return b->copies[copy].awake;
     const PrefabBatches::Copy c = b->copies[copy];   // (a copy: stamping makes entities, and the list may move)
     std::string why;
@@ -259,6 +291,7 @@ void batchSpots(World& world, Entity holder, std::vector<BatchSpot>& out, const 
     if (b == nullptr) return;
     for (std::size_t ci = 0; ci < b->copies.size(); ++ci) {
         const PrefabBatches::Copy& c = b->copies[ci];
+        if (c.gone) continue;
         for (std::size_t ui = 0; ui < c.uses.size(); ++ui) {
             const PrefabUse& use = c.uses[ui];
             if (!use.sit && !use.lie) continue;
@@ -303,6 +336,7 @@ void occupyBatchSpot(World& world, Entity holder, uint32_t copy, uint32_t use, b
     if (use < c.on.size()) c.on[use] = taken ? 1 : 0;
     const bool moves = !c.uses[use].run.empty() || !c.uses[use].sway.empty();
     if (moves) c.busy = std::max(0, c.busy + (taken ? 1 : -1));
+    if (moves) b->mayStir = true;
     const Entity awake = c.awake;
     if (awake.valid() && world.alive(awake)) setPrefabUse(world, awake, use, taken);
 }

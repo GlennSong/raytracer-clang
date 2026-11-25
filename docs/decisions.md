@@ -25196,3 +25196,36 @@ They are single polygon operations over the whole island. An index cannot speed 
 - No prefab has a place to work yet (a counter is still the kit's), so staff still stand at the kit's counters only. `BatchSpot::staff` is there for when one does.
 - A person on a rocking chair is drawn at the chair's rest place while the chair rocks under them.
 - Outdoors (a bench, a swing) waits for the first port, when the city's outdoor prefabs are batch copies with a tile as their holder: then a brain state for using a thing can find a spot near a person with the same two calls.
+
+## ADR-0523 — Kerb props are prefab copies (#315, the first port; 2026-11-25)
+
+**Why:** the bins, bike racks, news boxes, hydrants and bus stops along a city's kerbs were meshes of their own: three built in C++ (`litterBinProto`, `bikeRackProto`, `newsBoxesProto`) and two written as a `mesh()` in `street_props.lua`. The same things already existed as prefabs (`litter_bin`, `bike_rack`, `newspaper_box`, `hydrant`), with parts that move and uses. So the city had two bins. #315 makes the prefab the one.
+
+**Words:** a *batch copy* is a prefab drawn without an entity of its own, one transform per part in draw groups it shares with the other copies of its *holder* (ADR-0520). It becomes a full prefab only while someone uses it (ADR-0521).
+
+**What happens:**
+- **Each kerb kind names its prefab** in `street_props.lua` (`prefab = "litter_bin"`). The road planner still decides where they stand (`planStreetFurniture`), and the level loader still places them at load. Nothing about this is baked, so there is no re-bake.
+- **The loader makes each one a batch copy.** The holders are a kilometre square, so the island's 8,132 kerb props are 50 holders and 626 draw groups.
+- **What a car meets is unchanged.** The box each entry gives in `street_props.lua` is still the body, streamed round the player with the trees' and lamp posts' (`NatureColliderSystem`), and a light piece is still knocked loose at its breaking speed. The prefab's own collision is not used here (its body is set to none): the streamed boxes are far cheaper than 8,000 prefabs' shapes.
+- **A piece knocked loose takes its copy out of the batch** (`removeBatchCopy`): it is no longer drawn, solid, usable, or able to wake. What flies off is the model as one mesh (`flattenModel`).
+- **The bus stop is a prefab too** (`bus_stop`), its model the same Lua mesh through `prop_models.lua`, as the hydrant's already was.
+- **Deleted:** `litterBinProto`, `bikeRackProto`, `newsBoxesProto` and the loader's own kerb draw groups.
+- **A holder knows roughly where its copies are and what they can do** (`boundsCenter`, `boundsRadius`, `mayLight`, `mayStir`). The system that wakes copies, offers their uses and lights their lamps asks the holder first and skips it whole. Without this every frame would look at all 8,132 copies.
+
+**What changes to the eye:** a bin has its flap, a news box is one box with a door where it was a pair on a plinth, a bike rack is 2.4 m long where it was 1.9 m. The boxes in `street_props.lua` were resized to match.
+
+**Measured** (island_8_nature, `tools/prefab_yardstick.py`, the old and new viewers run in turn three times each with nothing else on the machine):
+
+| | frame avg (ms) | p95 (ms) | GPU buffers |
+|---|---|---|---|
+| before (6e299982) | 24.98, 25.52, 24.72 | 32.60, 32.79, 32.64 | 3,523 MB |
+| kerb props as copies | 25.66, 25.43, 24.55 | 32.87, 32.75, 32.58 | 3,523 MB |
+
+No worse: the two overlap. (The baseline of 23.18 ms in ADR-0521 was one run; the island reads 24.5 to 25.7 from run to run. Compare runs taken in turn, never a number from another hour.) `tools/prefab_yardstick.py --viewer <path>` measures another build's viewer from this folder, which is how the "before" rows were taken.
+
+**What is left:**
+- **Nobody can use a kerb prop yet.** The copies offer their uses to the player (a bin's flap), but the player is never the reason one wakes unless they use it, and no person in the city uses them. `findBatchUse`, for a brain state that uses a bench or a bin, comes with the outdoor port.
+- **Seen in the game: the hydrant only** (river_town, standing on the pavement the right way up). The bin, bike rack, news box and bus stop were not looked at, so which way each faces is unchecked.
+- A knocked-off piece is one colour of material (its paint is on its vertices); a bin's flap flies off with the bin as one piece.
+- Park, playground and garden pieces are placed in the lot pass and baked. Porting them changes a baked format and so needs a lots tag bump, which waits for Glenn's word.
+

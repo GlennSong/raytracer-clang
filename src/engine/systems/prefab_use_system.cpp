@@ -259,8 +259,9 @@ void PrefabUseSystem::render(FrameContext& ctx) {
     });
     // ...and of the copies drawn in batches while they sleep: a lamp post's lamp, a fridge left open
     ctx.world.each<PrefabBatches>([&](Entity, PrefabBatches& b) {
+        if (!b.mayLight) return;
         for (const PrefabBatches::Copy& copy : b.copies) {
-            if (copy.awake.valid()) continue;
+            if (copy.awake.valid() || copy.gone) continue;
             auto lamp = [&](const std::string& marker, const std::string& kind) {
                 Vec3 at;
                 Quat turn;
@@ -299,6 +300,7 @@ void PrefabUseSystem::batches(FrameContext& ctx, Entity player, const Vec3& pos)
     auto removeBody = [&](PhysicsBodyId id) { if (physics_ != nullptr) physics_->physicsWorld().removeBody(id); };
     std::vector<std::pair<Entity, uint32_t>> wake;
     world.each<PrefabBatches>([&](Entity holder, PrefabBatches& b) {
+        if (!b.mayStir || !b.near(pos, WAKE_M)) return;
         for (std::size_t i = 0; i < b.copies.size(); ++i)
             if ((b.copies[i].lively || b.copies[i].busy > 0) && !b.copies[i].awake.valid() && (b.copies[i].at.position - pos).length() < WAKE_M)
                 wake.emplace_back(holder, static_cast<uint32_t>(i));
@@ -469,9 +471,10 @@ void PrefabUseSystem::update(FrameContext& ctx) {
     };
     std::vector<BatchNear> batchNear;
     ctx.world.each<PrefabBatches>([&](Entity holder, PrefabBatches& b) {
+        if (!b.near(feet, 14)) return;
         for (std::size_t ci = 0; ci < b.copies.size(); ++ci) {
             const PrefabBatches::Copy& c = b.copies[ci];
-            if (c.awake.valid() || c.uses.empty()) continue;
+            if (c.awake.valid() || c.gone || c.uses.empty()) continue;
             if (std::fabs(c.at.position.x - feet.x) > 12 || std::fabs(c.at.position.z - feet.z) > 12 || std::fabs(c.at.position.y - feet.y) > 6) continue;
             PrefabUses as;
             for (std::size_t i = 0; i < c.uses.size(); ++i) {

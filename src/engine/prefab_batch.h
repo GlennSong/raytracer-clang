@@ -53,6 +53,7 @@ struct PrefabBatches {
         // where each thing it draws is: a group and one of that group's transforms, in the model's draw order
         std::vector<std::pair<uint32_t, uint32_t>> draws;
         bool shown = true;                       // false: taken out of the picture (it has woken, part c)
+        bool gone = false;                       // removed for good (a hydrant a car knocked off): never drawn, used or woken
         Prefab line;                             // the prefab as it was placed (a door's has its opening's size in it)
         std::vector<PrefabUse> uses;             // prefabUsesFor: the uses a stamped copy would have, in its order
         std::vector<uint8_t> on;                 // which of them are on (kept while it sleeps)
@@ -71,6 +72,15 @@ struct PrefabBatches {
         std::vector<std::pair<uint32_t, std::string>> riders;
     };
     int building = -1;   // the building whose interior this is (its record's index); -1: not a building's
+    // WHERE ITS COPIES ARE, as a ball round them all (grown as copies are added): what looks for a copy near a point
+    // asks the holder first, so a city's thousand holders cost a thousand tests and not a test for every copy
+    Vec3 boundsCenter;
+    Real boundsRadius = 0;
+    bool near(const Vec3& point, Real reach) const { return copies.empty() ? false : (point - boundsCenter).length() < boundsRadius + reach; }
+    // Whether any copy may be lit while it sleeps (a lamp of its own, or a use with a light), and whether any does
+    // something by itself or under someone: set as copies are added and used, never cleared, so the holders that
+    // have neither are skipped without a look at their copies
+    bool mayLight = false, mayStir = false;
     // What dresses a copy that wakes (shared with whoever made the copies).
     std::shared_ptr<ModelDresser> dresser;
     // THE COLLISION of the copies at rest: two bodies the holder's owner makes from batchCollisionTriangles and
@@ -97,6 +107,10 @@ void poseBatchCopy(World& world, Entity holder, uint32_t copy, const ProcPose& p
 
 // Take a copy out of the picture, or put it back (where its pose has it). It stays in the list either way.
 void showBatchCopy(World& world, Entity holder, uint32_t copy, bool shown);
+
+// A copy is no more (a kerb prop knocked loose: what flies off is somebody else's): it is taken out of the picture,
+// offers nothing and never wakes; if it was awake, the stamped copy goes too.
+void removeBatchCopy(World& world, Entity holder, uint32_t copy, const std::function<void(PhysicsBodyId)>& removeBody = {});
 
 // Let every copy and group of a holder go, its awake copies and its two collision bodies with them: `removeBody` is
 // called with each body for the caller to hand to its PhysicsWorld. (The holder entity itself is the caller's.)

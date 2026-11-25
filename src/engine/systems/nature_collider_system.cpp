@@ -1,4 +1,5 @@
 #include "nature_collider_system.h"
+#include "../prefab_batch.h"   // a knocked-off piece that is a prefab copy
 
 #include "physics_system.h"
 #include "../components.h"
@@ -68,6 +69,9 @@ void NatureColliderSystem::breakPieces(FrameContext& ctx, NatureColliders& nc) {
         if (InstanceGroup* g = ctx.world.alive(piece.group) ? ctx.world.get<InstanceGroup>(piece.group) : nullptr)
             if (piece.instance < g->transforms.size())
                 g->transforms[piece.instance] = Mat4::translate(shape.centre.x, shape.centre.y, shape.centre.z) * Mat4::scale(0, 0, 0);
+        // (a prefab copy: gone from its batches, and from use)
+        if (piece.holder.valid() && ctx.world.alive(piece.holder))
+            removeBatchCopy(ctx.world, piece.holder, piece.copy, [&](PhysicsBodyId id) { pw.removeBody(id); });
         const NatureColliders::PieceKind& kind = nc.pieceKinds[static_cast<std::size_t>(piece.kind)];
         // the loose one
         const Entity e = ctx.world.create();

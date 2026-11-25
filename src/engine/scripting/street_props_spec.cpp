@@ -21,6 +21,7 @@ StreetPropCollider readCollider(lua_State* L, int t) {
     lua_pop(L, 1);
     c.breaksAt = numField(L, t, "breaks_at", 0.0);
     c.mass = numField(L, t, "mass", c.mass);
+    c.prefab = strField(L, t, "prefab");
     return c;
 }
 

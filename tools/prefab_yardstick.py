@@ -24,13 +24,14 @@ ap.add_argument("--teleport", default="", help='"x y z": move the player there f
 ap.add_argument("--settle", type=float, default=45.0, help="seconds to let the world stream in before measuring")
 ap.add_argument("--seconds", type=float, default=30.0)
 ap.add_argument("--wait", type=float, default=2400.0, help="how long to wait for the level to load (a first load bakes)")
+ap.add_argument("--viewer", default=os.path.join(ROOT, "build-viewer", "viewer"), help="another build's viewer, to measure it from this folder (the same assets and bakes)")
 a = ap.parse_args()
 
 out = os.path.join(ROOT, "build-viewer", "yardstick")
 os.makedirs(out, exist_ok=True)
 name = os.path.splitext(os.path.basename(a.level))[0]
 env = dict(os.environ, RT_VSYNC="0", RT_AUDIO="null")
-proc, sock = rtctl.launch(os.path.join(ROOT, "build-viewer", "viewer"), os.path.join(ROOT, a.level),
+proc, sock = rtctl.launch(a.viewer, os.path.join(ROOT, a.level),
                           log=open(os.path.join(out, name + ".log"), "wb"), env=env, play=True, wait=a.wait)
 try:
     rtctl.send(sock, "camera?", timeout=a.wait)

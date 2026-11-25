@@ -71,9 +71,8 @@ RenderMesh trafficSignalProto(const SignalParams& p = {});
 // KERB LIFE (2026-10-09, the city's next ten #3): the small pieces a real pavement carries, each built once at the
 // origin as an instance prototype. Frame: +X along the street, +Z from the kerb toward the buildings, y = 0 the
 // pavement.
-RenderMesh litterBinProto();    // a black steel bin with a domed lid, 1.0 m
-RenderMesh bikeRackProto();     // three steel hoops in a row along the kerb
-RenderMesh newsBoxesProto();    // a pair of coin newspaper boxes on a plinth, their fronts to the pavement
+// (The litter bin, the bike rack and the news boxes were here. They are prefabs now: litter_bin, bike_rack and
+// newspaper_box in prefabs.lua, named by street_props.lua and drawn in their street cell's batches -- ADR-0523.)
 RenderMesh treePitProto();      // a 1.4 m square tree pit: dark soil inside a steel grate frame
 }  // namespace engine
 

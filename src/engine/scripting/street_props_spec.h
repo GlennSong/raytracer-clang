@@ -19,6 +19,7 @@ struct StreetPropCollider {
     Vec3 half{0, 0, 0};       // a box standing on the pavement (half extents)
     Real breaksAt = 0;        // m/s a car knocks it loose at (0: it stops the car)
     Real mass = 30;           // kg, once loose
+    std::string prefab;       // the prefab it is drawn as (prefabs.lua)
 };
 
 struct StreetPropKind {

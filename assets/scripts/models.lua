@@ -20,6 +20,7 @@ return {
   office_chair = { recipe = "prop_models", args = { kind = "furniture", name = "office_chair" } },
   sofa = { recipe = "prop_models", args = { kind = "furniture", name = "sofa", variant = 41 } },
   hydrant = { recipe = "prop_models", args = { kind = "street_prop", name = "hydrant" } },
+  bus_stop = { recipe = "prop_models", args = { kind = "street_prop", name = "bus_stop" } },
   street_lamp = { recipe = "prop_models", args = { kind = "lamp", height = 6 } },
   oak = { recipe = "prop_models", args = { kind = "tree", shape = "oak", seed = 3 } },
   boulder = { recipe = "prop_models", args = { kind = "rock", seed = 5 } },

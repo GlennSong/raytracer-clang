@@ -9,7 +9,10 @@
 --   verge         metres from the kerb line out onto the pavement
 --   junction      metres clear of a junction (sightlines)
 --   main_only     only along main streets
---   mesh()        the prop at the origin: y = 0 the pavement, +X along the street, +Z from the kerb to the buildings
+--   prefab        the prefab it is drawn as (prefabs.lua), a copy in its street cell's batches (#315): with its uses
+--                 (a bin's flap), and nothing else new -- its body and its breaking are still the entry's own, below
+--   mesh()        the prop at the origin: y = 0 the pavement, +X along the street, +Z from the kerb to the buildings.
+--                 The prefab's model is this mesh where the prefab is the kind itself (prop_models.lua street_prop)
 --   collider      { half = {x, y, z} }: a box standing on the pavement
 --   breaks_at     m/s: a car hitting it this hard knocks it loose (nil: it stops the car, as a tree does)
 --   mass          kg once it is loose
@@ -45,6 +48,7 @@ end
 
 props[#props + 1] = {
   name = "hydrant",
+  prefab = "hydrant",
   every = 90,
   verge = 0.55,
   junction = 6,
@@ -76,6 +80,7 @@ end
 
 props[#props + 1] = {
   name = "bus_stop",
+  prefab = "bus_stop",
   at_bus_stops = true,
   verge = 0.9,
   junction = 0,
@@ -87,10 +92,12 @@ props[#props + 1] = {
 }
 
 -- WHAT THE PLANNER ALREADY PLACES, as bodies: a car knocks the light pieces loose and stops at the rest
+-- Each is drawn as its `prefab` (prefabs.lua), like the kinds above: a bin's flap swings, and so on. The box is the
+-- prefab's own size.
 props.legacy = {
-  bin = { collider = { half = { 0.24, 0.50, 0.24 } }, breaks_at = 2.0, mass = 25 },          -- a steel bin, 1.0 m
-  bike_rack = { collider = { half = { 0.95, 0.42, 0.10 } }, breaks_at = 4.0, mass = 35 },    -- three hoops along the kerb
-  news_boxes = { collider = { half = { 0.55, 0.55, 0.28 } }, breaks_at = 3.0, mass = 45 },   -- a pair on a plinth
+  bin = { prefab = "litter_bin", collider = { half = { 0.27, 0.52, 0.29 } }, breaks_at = 2.0, mass = 25 },        -- a steel bin, 1.0 m
+  bike_rack = { prefab = "bike_rack", collider = { half = { 1.20, 0.42, 0.10 } }, breaks_at = 4.0, mass = 35 },   -- hoops along the kerb
+  news_boxes = { prefab = "newspaper_box", collider = { half = { 0.24, 0.60, 0.23 } }, breaks_at = 3.0, mass = 45 },
 }
 -- how a piece knocked loose leaves (ADR-0355): this share of the knock's speed on along it, and up `up` m/s plus
 -- `up_per_speed` for each m/s of the knock

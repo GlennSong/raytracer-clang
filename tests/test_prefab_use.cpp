@@ -575,6 +575,47 @@ TEST_CASE(copies_drawn_in_batches_share_groups_and_stand_where_stamped_copies_do
 // A BATCH COPY IS READY, WAKES AND SLEEPS (#315 step 10, parts b and c). At rest it is solid from its model's shapes
 // and its markers are found without an entity; used, it is stamped in full where and as the batch drew it; put
 // back, the batch draws it in the pose it was left in with the uses that were on still on.
+// A kerb prop a car knocks off (ADR-0523): its copy leaves the batch for good, awake or asleep.
+TEST_CASE(a_batch_copy_removed_is_not_drawn_solid_used_or_woken_again) {
+    World world;
+    ModelStore store;
+    Prefab bin;
+    CHECK(findPrefab("litter_bin", bin));
+    const Entity holder = world.create();
+    Transform at;
+    at.position = Vec3(4, 0, -2);
+    const uint32_t a = batchPrefab(world, holder, nullptr, bin, at, std::string(), nullptr, &store);
+    Transform far = at;
+    far.position.x += 900;
+    const uint32_t b2 = batchPrefab(world, holder, nullptr, bin, far, std::string(), nullptr, &store);
+    CHECK(a == 0 && b2 == 1);
+    const PrefabBatches* b = world.get<PrefabBatches>(holder);
+    // the holder knows where its copies are: near either, not near the middle
+    CHECK(b->near(at.position, 5) && b->near(far.position, 5) && !b->near(Vec3(4, 0, 2000), 5));
+    std::vector<Vec3> v0, v1;
+    std::vector<uint32_t> i0, i1;
+    batchCollisionTriangles(*b, false, v0, i0);
+    // awake first, then removed: the stamped copy goes too
+    const Entity woken = wakeBatchCopy(world, holder, a);
+    CHECK(woken.valid());
+    removeBatchCopy(world, holder, a);
+    CHECK(!world.alive(woken));
+    b = world.get<PrefabBatches>(holder);
+    CHECK(b->copies[a].gone && !b->copies[a].awake.valid());
+    CHECK(!wakeBatchCopy(world, holder, a).valid());
+    batchCollisionTriangles(*b, false, v1, i1);
+    CHECK(i1.size() * 2 == i0.size());                       // one bin's shapes left of two
+    // every transform of the removed copy is nothing; the other's are as they were
+    bool hidden = true;
+    for (const std::pair<uint32_t, uint32_t>& d : b->copies[a].draws) {
+        const InstanceGroup* g = world.get<InstanceGroup>(b->groups[d.first].entity);
+        if (g == nullptr || (g->transforms[d.second].transformPoint(Vec3(1, 1, 1)) - g->transforms[d.second].transformPoint(Vec3(0, 0, 0))).length() > 1e-9) hidden = false;
+    }
+    CHECK(hidden && !b->copies[a].draws.empty());
+    removeBatchCopy(world, holder, a);                       // (twice is once)
+    CHECK(wakeBatchCopy(world, holder, b2).valid());          // the other is untouched
+}
+
 TEST_CASE(a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_left) {
     World world;
     ModelStore store;

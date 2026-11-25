@@ -32,6 +32,7 @@ return {
   office_chair = { model = "office_chair", physics = { body = "static" } },
   sofa = { model = "sofa", physics = { body = "static" } },
   hydrant = { model = "hydrant", physics = { body = "static" } },
+  bus_stop = { model = "bus_stop", physics = { body = "static" }, draw = { class = "structure" } },
   street_lamp = { model = "street_lamp", physics = { body = "static" }, lights = { { at = "lamp", kind = "street_lamp" } } },
   oak = { model = "oak", physics = { body = "static" }, draw = { class = "scenery" } },
   boulder = { model = "boulder", physics = { body = "static" }, draw = { class = "scenery" } },

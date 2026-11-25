@@ -96,6 +96,7 @@
 #include "procgen/proc_model.h"      // ProcModel (script model cache)
 #include "model_spawn.h"             // the dresser, the model's colliders, the surface texture helpers
 #include "prefab_stamp.h"            // a level's shape:"prefab" entity
+#include "prefab_batch.h"            // kerb props: prefab copies in their street cell's batches (#315)
 #include "scripting/prefab_list.h"   // findPrefab
 #include "scripting/model_recipes.h" // obtainModel: a recipe's model.get
 #ifdef RT_ENABLE_SCRIPTING
@@ -8704,33 +8705,38 @@ bool LevelLoader::load(const std::string& path,
                     groupBounds(g, 1.0);
                     world.add<InstanceGroup>(world.create(), g);
                 }
-                // THE KINDS: the planner's own three, then street_props.lua's (ADR-0354), each its mesh, its material,
-                // and the box it stands in as a body (a car knocks the light ones loose)
+                // THE KINDS: the planner's own three, then street_props.lua's (ADR-0354). Each is drawn as a PREFAB
+                // (#315, ADR-0523): a copy in the batches of the street cell it stands in (prefab_batch.h), so a bin's
+                // flap swings and a bus stop's bench is a bench. What a car meets is still the box the entry gives
+                // (below), streamed round the player; a piece knocked loose takes its copy out of the batch.
                 const std::size_t nKinds = 3 + streetProps.kinds.size();
-                std::vector<engine::RenderMesh> kindMesh = {engine::litterBinProto(), engine::bikeRackProto(), engine::newsBoxesProto()};
                 std::vector<std::string> kindName = {"bin", "bike_rack", "news_boxes"};
-                for (const engine::StreetPropKind& k : streetProps.kinds) { kindMesh.push_back(*k.mesh); kindName.push_back(k.name); }
-                std::vector<MeshHandle> propMesh;
-                std::vector<RenderMaterial> propMat;
+                for (const engine::StreetPropKind& k : streetProps.kinds) kindName.push_back(k.name);
+                std::vector<engine::StreetPropCollider> kindBody(nKinds);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    auto it = streetProps.legacy.find(kindName[k]);
+                    if (it != streetProps.legacy.end()) kindBody[k] = it->second;
+                }
+                for (std::size_t k = 3; k < nKinds; ++k) kindBody[k] = streetProps.kinds[k - 3].collider;
+                std::vector<engine::Prefab> kindPrefab(nKinds);
+                std::vector<std::shared_ptr<const engine::ProcModel>> kindModel(nKinds);
+                const std::shared_ptr<ModelDresser> kerbDresser = std::make_shared<ModelDresser>(renderer, assets);
                 for (std::size_t k = 0; k < nKinds; ++k) {
-                    propMesh.push_back(assets.acquireMesh(kindMesh[k], "city:kerb:" + kindName[k]));
-                    RenderMaterial m;
-                    m.albedo = Vec3(1, 1, 1);
-                    m.metallic = k == 1 ? 0.6f : 0.2f;
-                    m.roughness = 0.5f;
-                    propMat.push_back(m);
+                    std::string why = "street_props.lua gives it no `prefab`";
+                    if (!kindBody[k].prefab.empty() && engine::findPrefab(kindBody[k].prefab, kindPrefab[k], levelDir, &why))
+                        kindModel[k] = engine::obtainModel(kindPrefab[k].model, levelDir, &why);
+                    if (kindModel[k] == nullptr) {
+                        LOG_WARN << "[furniture] kerb prop '" << kindName[k] << "': " << why << " (none are drawn)";
+                        continue;
+                    }
+                    kindPrefab[k].body = engine::Prefab::Body::None;   // (its body is the street's own box, below)
+                    const Real reach = kerbDist * 0.5;
+                    kindPrefab[k].drawDistance = kindPrefab[k].drawDistance > 0 ? std::min(kindPrefab[k].drawDistance, reach) : reach;
                 }
-                std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> propCells;
-                std::vector<int> nProp(nKinds, 0);
-                for (const engine::KerbProp& kp : fplan.props) {
-                    if (kp.kind >= nKinds) continue;
-                    // the prototype's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
-                    const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
-                    auto& cell = propCells[cellOf(kp.base)];
-                    if (cell.empty()) cell.resize(nKinds);
-                    cell[kp.kind].push_back(Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
-                    ++nProp[kp.kind];
-                }
+                RenderMaterial looseMat;   // a piece knocked loose: its model as one mesh, its paint on its vertices
+                looseMat.albedo = Vec3(1, 1, 1);
+                looseMat.metallic = 0.2f;
+                looseMat.roughness = 0.5f;
                 // THE BODIES (ADR-0354): every kerb piece, tree trunk and lamp post a static shape the car meets,
                 // streamed round the player with the forests' (NatureColliderSystem); the pieces with a breaking speed
                 // are knocked loose
@@ -8738,22 +8744,16 @@ bool LevelLoader::load(const std::string& path,
                 streetBodies.knockPush = streetProps.knockPush;
                 streetBodies.knockUp = streetProps.knockUp;
                 streetBodies.knockUpPerSpeed = streetProps.knockUpPerSpeed;
-                std::vector<engine::StreetPropCollider> kindBody(nKinds);
-                for (std::size_t k = 0; k < 3; ++k) {
-                    auto it = streetProps.legacy.find(kindName[k]);
-                    if (it != streetProps.legacy.end()) kindBody[k] = it->second;
-                }
-                for (std::size_t k = 3; k < nKinds; ++k) kindBody[k] = streetProps.kinds[k - 3].collider;
                 std::vector<int> pieceKindOf(nKinds, -1);
                 for (std::size_t k = 0; k < nKinds; ++k) {
-                    if (kindBody[k].breaksAt <= 0 || kindBody[k].half.y <= 0) continue;
-                    // the loose body's mesh: the prototype re-centred on its box
-                    engine::RenderMesh centred = kindMesh[k];
+                    if (kindModel[k] == nullptr || kindBody[k].breaksAt <= 0 || kindBody[k].half.y <= 0) continue;
+                    // the loose body's mesh: the model as one mesh, re-centred on its box
+                    engine::RenderMesh centred = engine::flattenModel(*kindModel[k]);
                     for (engine::Vertex& v : centred.vertices) v.position.y -= kindBody[k].half.y;
                     engine::NatureColliders::PieceKind pk;
                     pk.name = kindName[k];
                     pk.mesh = assets.acquireMesh(centred, "city:kerb:loose:" + kindName[k]);
-                    pk.material = propMat[k];
+                    pk.material = looseMat;
                     pk.breaksAt = kindBody[k].breaksAt;
                     pk.mass = kindBody[k].mass;
                     if (k >= 3) {
@@ -8764,37 +8764,55 @@ bool LevelLoader::load(const std::string& path,
                     pieceKindOf[k] = static_cast<int>(streetBodies.pieceKinds.size());
                     streetBodies.pieceKinds.push_back(pk);
                 }
-                for (auto& [key, byKind] : propCells)
-                    for (std::size_t k = 0; k < nKinds; ++k) {
-                        if (byKind[k].empty()) continue;
-                        InstanceGroup g;
-                        g.mesh = propMesh[k];
-                        g.material = propMat[k];
-                        // the bodies: a box standing where each one stands, turned as it is
-                        std::vector<engine::NatureCollider> shapes;
-                        if (kindBody[k].half.y > 0)
-                            for (const Mat4& m : byKind[k]) {
-                                engine::NatureCollider c;
-                                c.centre = m.transformPoint(Vec3(0, kindBody[k].half.y, 0));
-                                const Vec3 ax = m.transformPoint(Vec3(1, 0, 0)) - m.transformPoint(Vec3(0, 0, 0));
-                                c.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(-ax.z, ax.x));
-                                c.half = kindBody[k].half;
-                                shapes.push_back(c);
-                            }
-                        g.transforms = std::move(byKind[k]);
-                        g.drawDistance = kerbDist * 0.5;
-                        g.drawClass = engine::DrawClass::Furniture;
-                        groupBounds(g, 1.5);
-                        const Entity ge = world.create();
-                        world.add<InstanceGroup>(ge, g);
-                        for (std::size_t i = 0; i < shapes.size(); ++i) {
-                            if (pieceKindOf[k] >= 0) {
-                                shapes[i].piece = static_cast<int>(streetBodies.pieces.size());
-                                streetBodies.pieces.push_back({pieceKindOf[k], ge, i, false});
-                            }
-                            streetBodies.add(shapes[i]);
-                        }
+                // The copies are held by the kilometre (four street cells a side). A prefab is several things to draw
+                // (a news box is six parts and a far shape) where the old prop was one, and the renderer walks every
+                // group several times a frame: held by the 280 m cell the island's kerb props were 4,026 groups and
+                // cost a millisecond of drawing; by the kilometre they are a few hundred. Each copy is still culled
+                // by its own distance.
+                auto holderCell = [&](const Vec3& b) {
+                    const std::pair<int, int> c = cellOf(b);
+                    return std::make_pair(static_cast<int>(std::floor(c.first / 4.0)), static_cast<int>(std::floor(c.second / 4.0)));
+                };
+                std::map<std::pair<int, int>, Entity> cellHolder;
+                std::vector<int> nProp(nKinds, 0);
+                for (const engine::KerbProp& kp : fplan.props) {
+                    if (kp.kind >= nKinds || kindModel[kp.kind] == nullptr) continue;
+                    const std::size_t k = kp.kind;
+                    // the model's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
+                    const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
+                    Transform at;
+                    at.position = kp.base;
+                    at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
+                    std::map<std::pair<int, int>, Entity>::iterator cell = cellHolder.find(holderCell(kp.base));
+                    if (cell == cellHolder.end()) {
+                        const Entity holder = world.create();
+                        engine::PrefabBatches held;
+                        held.dresser = kerbDresser;
+                        world.add<engine::PrefabBatches>(holder, std::move(held));
+                        cell = cellHolder.emplace(holderCell(kp.base), holder).first;
                     }
+                    std::string why;
+                    const uint32_t copy = engine::batchPrefab(world, cell->second, kerbDresser.get(), kindPrefab[k], at, levelDir, &why);
+                    if (copy == engine::kNoBatchCopy) continue;
+                    ++nProp[k];
+                    if (kindBody[k].half.y <= 0) continue;
+                    // the body: a box standing where it stands, turned as it is
+                    const Mat4 m = Mat4::trs(kp.base, at.orientation, Vec3(1, 1, 1));
+                    engine::NatureCollider c;
+                    c.centre = m.transformPoint(Vec3(0, kindBody[k].half.y, 0));
+                    const Vec3 ax = m.transformPoint(Vec3(1, 0, 0)) - m.transformPoint(Vec3(0, 0, 0));
+                    c.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(-ax.z, ax.x));
+                    c.half = kindBody[k].half;
+                    if (pieceKindOf[k] >= 0) {
+                        c.piece = static_cast<int>(streetBodies.pieces.size());
+                        engine::NatureColliders::Piece piece;
+                        piece.kind = pieceKindOf[k];
+                        piece.holder = cell->second;
+                        piece.copy = copy;
+                        streetBodies.pieces.push_back(piece);
+                    }
+                    streetBodies.add(c);
+                }
                 // the trunks and the lamp posts: they stop the car
                 if (streetProps.trunkRadius > 0)
                     for (const engine::StreetTree& st : fplan.trees) {
@@ -8831,6 +8849,15 @@ bool LevelLoader::load(const std::string& path,
                         for (auto pc : streetBodies.pieces) { pc.kind += kindBase; into->pieces.push_back(pc); }
                         for (auto c : streetBodies.shapes) { if (c.piece >= 0) c.piece += pieceBase; into->add(c); }
                     }
+                }
+                {   // (what the kerb props cost to draw: the groups, which the renderer walks every frame)
+                    engine::BatchCount all;
+                    for (const std::pair<const std::pair<int, int>, Entity>& ch : cellHolder) {
+                        const engine::BatchCount one = engine::countBatches(world, ch.second);
+                        all.copies += one.copies; all.groups += one.groups; all.transforms += one.transforms;
+                    }
+                    LOG_INFO << "[furniture] kerb props as prefab copies: " << all.copies << " copies in " << cellHolder.size() << " holders (a kilometre each), "
+                             << all.groups << " groups, " << all.transforms << " transforms";
                 }
                 std::string census;
                 for (std::size_t k = 0; k < nKinds; ++k) census += ", " + std::to_string(nProp[k]) + " " + kindName[k];

@@ -276,9 +276,6 @@ TEST_CASE(mesh_audit_street_kit_signs_ladders) {
     const std::pair<const char*, RenderMesh> meshes[] = {
         {"streetLamp", streetLamp()},
         {"trafficSignalProto", trafficSignalProto()},
-        {"litterBinProto", litterBinProto()},
-        {"bikeRackProto", bikeRackProto()},
-        {"newsBoxesProto", newsBoxesProto()},
         {"treePitProto", treePitProto()},
         {"openSignMesh", openSignMesh()},
         {"busSignMesh", busSignMesh(0, 2)},

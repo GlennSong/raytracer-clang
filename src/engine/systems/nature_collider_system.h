@@ -47,6 +47,10 @@ struct NatureColliders {
         Entity group;             // the InstanceGroup drawing it...
         std::size_t instance = 0; // ...and which of its instances
         bool broken = false;
+        // ...or, for a piece that is a prefab copy drawn in batches (prefab_batch.h; a kerb prop, #315): its holder
+        // and which copy. `group` is then invalid, and breaking it removes the copy.
+        Entity holder;
+        uint32_t copy = 0;
     };
     std::vector<PieceKind> pieceKinds;
     std::vector<Piece> pieces;
