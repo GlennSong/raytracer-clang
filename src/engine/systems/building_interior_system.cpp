@@ -559,6 +559,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     // (the copies are drawn in batches the resident holds: one entity for the lot, and a group for each thing drawn)
     res.holder = world.create();
     world.add<PrefabBatches>(res.holder, PrefabBatches{});
+    world.get<PrefabBatches>(res.holder)->building = static_cast<int>(key);   // (whose people sit on its seats: the citysim's)
     struct OnTop {
         std::size_t piece;     // an index into bm.furniture as it is after the swap
         uint32_t owner;        // the copy it stands on
@@ -626,6 +627,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                 if (!pieceIsPrefab(static_cast<Piece>(pp.piece))) rest.push_back(pp);
                 continue;
             }
+            world.get<PrefabBatches>(res.holder)->copies[e].unit = pp.unit;
             stoodCopies.push_back(e);
             ++stood;
             if (!what.surface.empty()) {

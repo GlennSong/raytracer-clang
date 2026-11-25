@@ -300,7 +300,7 @@ void PrefabUseSystem::batches(FrameContext& ctx, Entity player, const Vec3& pos)
     std::vector<std::pair<Entity, uint32_t>> wake;
     world.each<PrefabBatches>([&](Entity holder, PrefabBatches& b) {
         for (std::size_t i = 0; i < b.copies.size(); ++i)
-            if (b.copies[i].lively && !b.copies[i].awake.valid() && (b.copies[i].at.position - pos).length() < WAKE_M)
+            if ((b.copies[i].lively || b.copies[i].busy > 0) && !b.copies[i].awake.valid() && (b.copies[i].at.position - pos).length() < WAKE_M)
                 wake.emplace_back(holder, static_cast<uint32_t>(i));
     });
     for (const std::pair<Entity, uint32_t>& w : wake) wakeBatchCopy(world, w.first, w.second);
@@ -310,8 +310,13 @@ void PrefabUseSystem::batches(FrameContext& ctx, Entity player, const Vec3& pos)
     world.each<BatchAwake, Transform>([&](Entity e, BatchAwake& a, Transform& t) {
         const PrefabBatches* b = world.alive(a.holder) ? world.get<PrefabBatches>(a.holder) : nullptr;
         if (b == nullptr || a.copy >= b->copies.size()) { sleep.push_back(e); return; }   // (its holder has gone: so does it)
-        const bool lively = b->copies[a.copy].lively && (t.position - pos).length() < SLEEP_M;
-        const bool held = (seated != nullptr && seated->set == e) || world.has<RidesMarker>(e) || lively || !batchCopySettled(world, e);
+        const PrefabBatches::Copy& c = b->copies[a.copy];
+        const bool mine = seated != nullptr && seated->set == e;
+        const bool near = (t.position - pos).length() < SLEEP_M;
+        // far from the player, a copy that moves by itself or under someone the city put on it goes back at once:
+        // nothing is drawn moving that nobody is near enough to see
+        if ((c.lively || c.busy > 0) && !near && !mine && !world.has<RidesMarker>(e)) { sleep.push_back(e); return; }
+        const bool held = mine || world.has<RidesMarker>(e) || ((c.lively || c.busy > 0) && near) || !batchCopySettled(world, e);
         if (held) { a.still = 0; return; }
         a.still += ctx.frameDelta;
         if (a.still > STILL_S) sleep.push_back(e);
@@ -445,6 +450,7 @@ void PrefabUseSystem::update(FrameContext& ctx) {
         for (std::size_t i = 0; i < uses.uses.size(); ++i) {
             Vec3 at;
             Quat turn;
+            if ((uses.uses[i].use.sit || uses.uses[i].use.lie) && uses.uses[i].on) continue;   // (someone is on it)
             if (!prefabUseOffered(uses, i)) continue;
             if (!modelMarkerWorld(ctx.world, e, uses.uses[i].use.at, at, turn)) continue;
             if (std::hypot(at.x - feet.x, at.z - feet.z) > REACH || at.y < feet.y - 0.5 || at.y > feet.y + 2.6) continue;
@@ -476,6 +482,7 @@ void PrefabUseSystem::update(FrameContext& ctx) {
             for (std::size_t i = 0; i < as.uses.size(); ++i) {
                 Vec3 at;
                 Quat turn;
+                if ((as.uses[i].use.sit || as.uses[i].use.lie) && as.uses[i].on) continue;   // (someone is on it)
                 if (!prefabUseOffered(as, i) || !batchCopyMarker(c, as.uses[i].use.at, at, turn)) continue;
                 if (std::hypot(at.x - feet.x, at.z - feet.z) > REACH || at.y < feet.y - 0.5 || at.y > feet.y + 2.6) continue;
                 batchNear.push_back(BatchNear{holder, static_cast<uint32_t>(ci), i, at, prefabUseWord(as.uses[i]), c.prefab,

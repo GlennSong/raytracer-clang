@@ -4,6 +4,7 @@
 #include "../src/engine/audio/sfx.h"
 #include "../src/engine/components.h"
 #include "../src/engine/model_motion.h"
+#include "../src/engine/interior_occupants.h"
 #include "../src/engine/prefab_batch.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/prefab_use.h"
@@ -658,6 +659,97 @@ TEST_CASE(a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_le
     // letting the holder go takes the awake copy with it
     releaseBatches(world, holder);
     CHECK(!world.alive(again));
+}
+
+// PEOPLE ON PREFAB SEATS (ADR-0522): a building's prefab copies list their free seats and beds in a fixed order; the
+// city's own planner fills them as it fills the kit's; a taken seat is off the list (but still "free" to the one
+// who holds it, so a plan made again takes the same seats); a seat that rocks makes its copy busy.
+TEST_CASE(a_buildings_prefab_seats_take_the_citys_people_in_a_fixed_order) {
+    World world;
+    ModelStore store;
+    Prefab chair, bed, rocker;
+    CHECK(findPrefab("office_chair_adjustable", chair));
+    CHECK(findPrefab("kids_bed", bed));
+    CHECK(findPrefab("rocking_chair", rocker));
+    const Entity holder = world.create();
+    Transform at;
+    for (int i = 0; i < 4; ++i) { at.position = Vec3(2.0 * i, 0, 0); CHECK(batchPrefab(world, holder, nullptr, chair, at, std::string(), nullptr, &store) == static_cast<uint32_t>(i)); }
+    at.position = Vec3(0, 0, 5);
+    const uint32_t bedCopy = batchPrefab(world, holder, nullptr, bed, at, std::string(), nullptr, &store);
+    at.position = Vec3(4, 0, 5);
+    const uint32_t rockCopy = batchPrefab(world, holder, nullptr, rocker, at, std::string(), nullptr, &store);
+    CHECK(bedCopy == 4 && rockCopy == 5);
+
+    std::vector<BatchSpot> spots;
+    batchSpots(world, holder, spots);
+    int seats = 0, beds = 0;
+    for (std::size_t i = 0; i < spots.size(); ++i) {
+        seats += spots[i].pose == 0;
+        beds += spots[i].pose == 1;
+        if (i > 0) CHECK(spots[i - 1].copy < spots[i].copy || (spots[i - 1].copy == spots[i].copy && spots[i - 1].use < spots[i].use));
+    }
+    CHECK(seats == 5 && beds == 1);
+    // a seat is where its copy stands, and a bed's body lies above the bed
+    CHECK(std::fabs(spots[0].at.m[0][3] - 0.0) < 0.5 && std::fabs(spots[1].at.m[0][3] - 2.0) < 0.5);
+    for (const BatchSpot& sp : spots)
+        if (sp.pose == 1) CHECK(sp.at.m[1][3] > 0.3 && sp.at.m[1][3] < 0.9);
+
+    // THE PLANNER (interior_occupants.h): three people by day sit; nobody lies down. The same three seats each time.
+    const Interactables none;
+    const FurnitureLibrary& lib = FurnitureLibrary::global();
+    OccupantPlan plan;
+    plan.people = 3;
+    plan.seed = 7;
+    std::vector<BatchSpot> first = spots, second = spots;
+    const std::vector<Occupant> a = planOccupants(none, lib, plan, &first), b = planOccupants(none, lib, plan, &second);
+    CHECK(a.size() == 3 && b.size() == 3);
+    for (std::size_t i = 0; i < a.size() && i < b.size(); ++i) {
+        CHECK(a[i].batchSpot >= 0 && a[i].batchSpot == b[i].batchSpot && a[i].pose == Occupant::Pose::Sit);
+        CHECK(first[static_cast<std::size_t>(a[i].batchSpot)].taken);
+    }
+    // a second plan over the same list (another shop unit's people) does not share a seat with the first
+    OccupantPlan more = plan;
+    more.people = 2;
+    more.seed = 8;
+    const std::vector<Occupant> c = planOccupants(none, lib, more, &first);
+    CHECK(c.size() == 2);
+    for (const Occupant& o : c)
+        for (const Occupant& taken : a) CHECK(o.batchSpot != taken.batchSpot);
+    // at night at home the bed is taken first
+    OccupantPlan night = plan;
+    night.people = 1;
+    night.night = true;
+    std::vector<BatchSpot> forNight = spots;
+    const std::vector<Occupant> asleep = planOccupants(none, lib, night, &forNight);
+    CHECK(asleep.size() == 1 && asleep[0].pose == Occupant::Pose::Lie && forNight[static_cast<std::size_t>(asleep[0].batchSpot)].copy == bedCopy);
+
+    // TAKING ONE: off the list for anyone else, still on it for whoever holds it
+    const BatchSpot held = spots[static_cast<std::size_t>(a[0].batchSpot)];
+    occupyBatchSpot(world, holder, held.copy, held.use, true);
+    std::vector<BatchSpot> others, mineToo;
+    batchSpots(world, holder, others);
+    const std::vector<std::pair<uint32_t, uint32_t>> mine{{held.copy, held.use}};
+    batchSpots(world, holder, mineToo, &mine);
+    CHECK(others.size() == spots.size() - 1 && mineToo.size() == spots.size());
+    occupyBatchSpot(world, holder, held.copy, held.use, false);
+    others.clear();
+    batchSpots(world, holder, others);
+    CHECK(others.size() == spots.size());
+
+    // A SEAT THAT ROCKS: taken, its copy is busy (it wakes and rocks only with the player near); woken, the seat's use
+    // is on and rocking; let go, the copy is quiet again
+    uint32_t rockUse = 99;
+    for (const BatchSpot& sp : spots) if (sp.copy == rockCopy) rockUse = sp.use;
+    CHECK(rockUse != 99);
+    if (rockUse == 99) return;
+    CHECK(world.get<PrefabBatches>(holder)->copies[rockCopy].busy == 0);
+    occupyBatchSpot(world, holder, rockCopy, rockUse, true);
+    CHECK(world.get<PrefabBatches>(holder)->copies[rockCopy].busy == 1);
+    const Entity woken = wakeBatchCopy(world, holder, rockCopy);
+    CHECK(woken.valid() && world.get<PrefabUses>(woken)->uses[rockUse].on && !batchCopySettled(world, woken));
+    occupyBatchSpot(world, holder, rockCopy, rockUse, false);
+    CHECK(world.get<PrefabBatches>(holder)->copies[rockCopy].busy == 0 && !world.get<PrefabUses>(woken)->uses[rockUse].on);
+    releaseBatches(world, holder);
 }
 
 TEST_CASE(a_prefab_is_a_piece_the_floor_planner_can_place) {

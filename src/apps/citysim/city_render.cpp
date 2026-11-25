@@ -1,3 +1,4 @@
+#include "../../engine/prefab_batch.h"   // a building's prefab copies: their seats take people too (ADR-0522)
 #include "city_render.h"
 #include "../../engine/lights/light_kinds.h"   // lightKindId: traffic's lamps as lights (ADR-0362)
 
@@ -2690,8 +2691,17 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
     }
     const engine::FurnitureLibrary& lib = engine::FurnitureLibrary::global();
     const Real h = sim_.clockHours();
+    // THE BUILDINGS' PREFAB COPIES (ADR-0522): a seat or a bed on one takes a person as the kit's do. Each building's
+    // copies are held by one entity (engine::PrefabBatches), found here by the building's record.
+    std::unordered_map<int, engine::Entity> holderOf;
+    world.each<engine::PrefabBatches>([&](engine::Entity e, engine::PrefabBatches& b) { if (b.building >= 0) holderOf[b.building] = e; });
     for (Inside& in : inside) {
         engine::Interactables& set = *in.set;
+        const std::unordered_map<int, engine::Entity>::const_iterator holder = holderOf.find(in.building);
+        std::vector<std::pair<uint32_t, uint32_t>>& heldSpots = indoorHeldSpots_[in.building];
+        std::vector<engine::BatchSpot> spots;   // the free ones, ours from the last plan among them
+        if (holder != holderOf.end()) engine::batchSpots(world, holder->second, spots, &heldSpots);
+        std::vector<std::pair<uint32_t, uint32_t>> nowSpots;
         std::vector<uint32_t>& held = indoorHeld_[in.building];
         held.resize(set.pieces.size(), 0);
         for (std::size_t i = 0; i < set.pieces.size(); ++i) set.pieces[i].taken &= ~held[i];   // ours back first
@@ -2704,10 +2714,15 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
             plan.night = (h >= 22.5 || h < 6.5) && places_[s.place].type == PlaceType::Home;   // asleep at home, not at work
             plan.lecturer = cb->records[static_cast<std::size_t>(in.building)].params.campus == 1 && s.people > 0 && !plan.night;
             plan.seed = static_cast<uint32_t>(in.building);
-            const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan);
+            const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan, spots.empty() ? nullptr : &spots);
             for (const engine::Occupant& o : occ) {
-                set.pieces[o.piece].taken |= o.spots;
-                held[o.piece] |= o.spots;
+                if (o.batchSpot >= 0) {
+                    const engine::BatchSpot& spot = spots[static_cast<std::size_t>(o.batchSpot)];
+                    nowSpots.emplace_back(spot.copy, spot.use);
+                } else {
+                    set.pieces[o.piece].taken |= o.spots;
+                    held[o.piece] |= o.spots;
+                }
                 (o.pose == engine::Occupant::Pose::Sit ? sit : body)->transforms.push_back(o.at);
                 ++indoorDrawn_;
             }
@@ -2715,9 +2730,11 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
                 const Place& p = places_[s.place];
                 int lie = 0, stand = 0;
                 for (const engine::Occupant& o : occ) { lie += o.pose == engine::Occupant::Pose::Lie; stand += o.pose == engine::Occupant::Pose::Stand; }
-                std::fprintf(stderr, "[indoors] %.2f h building %d place %u (%s \"%s\" at %.0f %.0f): %d inside (%d staff), %zu placed (%d lying, %d standing)\n",
+                int onPrefabs = 0;
+                for (const engine::Occupant& o : occ) onPrefabs += o.batchSpot >= 0;
+                std::fprintf(stderr, "[indoors] %.2f h building %d place %u (%s \"%s\" at %.0f %.0f): %d inside (%d staff), %zu placed (%d lying, %d standing, %d on prefab copies)\n",
                              h, in.building, static_cast<unsigned>(s.place), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
-                             s.people, s.staff, occ.size(), lie, stand);
+                             s.people, s.staff, occ.size(), lie, stand, onPrefabs);
                 for (const engine::Occupant& o : occ)   // where to stand and look at them: 3 m in front, looking back
                     if (o.pose == engine::Occupant::Pose::Stand) {
                         const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
@@ -2730,6 +2747,19 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
                     }
             }
         }
+        // the places on prefab copies: let go of the ones this plan no longer fills, then take the new ones, each in
+        // the order it was planned (a seat held from one step to the next is left alone: nobody is stood up and sat
+        // down again every step)
+        if (holder != holderOf.end()) {
+            auto among = [](const std::vector<std::pair<uint32_t, uint32_t>>& list, const std::pair<uint32_t, uint32_t>& one) {
+                return std::find(list.begin(), list.end(), one) != list.end();
+            };
+            for (const std::pair<uint32_t, uint32_t>& was : heldSpots)
+                if (!among(nowSpots, was)) engine::occupyBatchSpot(world, holder->second, was.first, was.second, false);
+            for (const std::pair<uint32_t, uint32_t>& is : nowSpots)
+                if (!among(heldSpots, is)) engine::occupyBatchSpot(world, holder->second, is.first, is.second, true);
+        }
+        heldSpots = nowSpots;
     }
     refreshBounds(sit);   // a group with no bounds is culled whole
     refreshBounds(body);
@@ -2738,6 +2768,11 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
         bool live = false;
         for (const Inside& in : inside) live = live || in.building == it->first;
         it = live ? std::next(it) : indoorHeld_.erase(it);
+    }
+    for (auto it = indoorHeldSpots_.begin(); it != indoorHeldSpots_.end();) {   // (its copies went with it)
+        bool live = false;
+        for (const Inside& in : inside) live = live || in.building == it->first;
+        it = live ? std::next(it) : indoorHeldSpots_.erase(it);
     }
 }
 

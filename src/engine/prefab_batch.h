@@ -58,6 +58,9 @@ struct PrefabBatches {
         std::vector<uint8_t> on;                 // which of them are on (kept while it sleeps)
         Entity awake;                            // the stamped copy while it is awake
         bool lively = false;                     // it does something by itself: awake whenever the player is close
+        // (and while someone the city put on it makes it move -- a rocking chair, an exercise bike: occupyBatchSpot)
+        int busy = 0;
+        int16_t unit = -1;                       // the shop unit it furnishes (PlacedPiece::unit); -1: the building's own
         // A DOOR THAT SWINGS (components.h SwingDoor): given to the stamped copy when it wakes
         bool swings = false;
         Vec2 swingFoot, swingNormal;
@@ -67,6 +70,7 @@ struct PrefabBatches {
         std::vector<GroupRider> groupRiders;
         std::vector<std::pair<uint32_t, std::string>> riders;
     };
+    int building = -1;   // the building whose interior this is (its record's index); -1: not a building's
     // What dresses a copy that wakes (shared with whoever made the copies).
     std::shared_ptr<ModelDresser> dresser;
     // THE COLLISION of the copies at rest: two bodies the holder's owner makes from batchCollisionTriangles and
@@ -112,6 +116,28 @@ bool batchCopyMarker(const PrefabBatches::Copy& copy, const std::string& marker,
 // holds from either side). `moving` false: the shapes that never move, of every copy. `moving` true: the shapes on
 // parts that can move, where each sleeping copy's pose has them (an awake copy has its own bodies for those).
 void batchCollisionTriangles(const PrefabBatches& batches, bool moving, std::vector<Vec3>& vertices, std::vector<uint32_t>& indices);
+
+// A PLACE FOR A PERSON on a holder's copies (ADR-0522): a seat or a place to lie that one of a copy's uses offers,
+// and where a body on it is drawn. The city's own planner (interior_occupants.h planOccupants) puts the people a
+// place has inside on these, with the furniture kit's spots; nothing here decides who is where.
+//   pose 0 sit: `at` is the hip on the seat, facing the way the seat faces (the seated body's own origin)
+//   pose 1 lie: `at` is a standing body's middle, turned onto its back, its head at the marker
+struct BatchSpot {
+    uint32_t copy = 0, use = 0;
+    uint8_t pose = 0;
+    bool staff = false;   // a place to work (no prefab has one yet: a counter is still the kit's)
+    Mat4 at;
+    int16_t unit = -1;
+    bool taken = false;   // (the planner's own: set as it fills them, so two plans over one list do not share a seat)
+};
+// Every spot of a holder that is free, in a fixed order (by copy, then by use), so the same people take the same
+// seats each time. `mine`: spots to count as free although they are taken (the caller's own, from its last plan).
+void batchSpots(World& world, Entity holder, std::vector<BatchSpot>& out, const std::vector<std::pair<uint32_t, uint32_t>>* mine = nullptr);
+// Put someone on a spot, or take them off. A taken seat is not offered to the player. A seat whose use runs or
+// sways makes its copy busy: it wakes and moves while the player is near, and is only a flag when they are not.
+void occupyBatchSpot(World& world, Entity holder, uint32_t copy, uint32_t use, bool taken);
+// Whether a copy's use is on now, asleep or awake.
+bool batchUseOn(World& world, const PrefabBatches::Copy& copy, std::size_t use);
 
 // Wake a copy: stamp it in full where and as the batch drew it, its uses that were on still on, and take it out of
 // the picture. Returns the stamped copy (the one already awake, if it is). What stands on it is tied to it.

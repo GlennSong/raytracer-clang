@@ -579,6 +579,9 @@ private:
     void dealOpenSigns(engine::World& world, engine::Vec3 cam);
     int parkingTick_ = 0;   // (traffic? telemetry every 60 frames, the open signs every 30)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
+    // ...and the places they hold on the building's prefab copies (prefab_batch.h): a copy and one of its uses each,
+    // in the order they were taken
+    std::unordered_map<int, std::vector<std::pair<uint32_t, uint32_t>>> indoorHeldSpots_;
     std::unordered_map<PlaceId, PlaceInside> insideByPlace_;          // who is in each place, the brain's answer (ADR-0508)
     int indoorDrawn_ = 0;
 public:

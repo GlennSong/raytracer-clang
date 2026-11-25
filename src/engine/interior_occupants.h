@@ -23,6 +23,9 @@ struct Occupant {
     Mat4 at;
     uint32_t piece = 0;   // index into the set's pieces
     uint32_t spots = 0;   // the spots held on it
+    // ...or a place on a prefab copy (prefab_batch.h BatchSpot): its index in the list the plan was given, and then
+    // `piece` and `spots` mean nothing. -1: on the furniture kit's own piece, as above.
+    int batchSpot = -1;
 };
 
 struct OccupantPlan {
@@ -41,7 +44,11 @@ struct OccupantPlan {
 // toilet); a lectern takes its lecturer first, and while one is there the lecture hall's rows fill first. A place to
 // STAND that is not a lectern (a lab bench) takes a standing worker like a seat takes a sitter. Fewer places than people: the rest are elsewhere in the building
 // (a storey not streamed, the corridor).
-std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan);
+// `prefabSpots`: the free places on the building's prefab copies (prefab_batch.h batchSpots), which take people as
+// the kit's seats and beds do, in the same draw: a chair is a chair whichever way it is drawn. The planner marks
+// each one it fills `taken`, so the next plan over the same list (another shop unit's) leaves it.
+std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan,
+                                    std::vector<struct BatchSpot>* prefabSpots = nullptr);
 
 }  // namespace engine
 

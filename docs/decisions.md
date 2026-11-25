@@ -25165,7 +25165,7 @@ They are single polygon operations over the whole island. An index cannot speed 
 | Of it, drawing | 7.05 ms | 5.95 ms |
 | GPU buffers | 42 MB | 42 MB |
 
-- The island (`python3 tools/prefab_yardstick.py`): avg 28.09 ms, p95 41.82 ms after, against 28.51 and 41.62 before; GPU buffers 3,523 MB both times. No interior is streamed in at the player's start and no prefab is stamped there, so this change is not in that picture yet: the island is no worse, and will only show a difference once the ports place prefabs in it.
+- The island (`python3 tools/prefab_yardstick.py`): avg 28.09 ms, p95 41.82 ms after, against 28.51 and 41.62 before; GPU buffers 3,523 MB both times. (Those two were taken with the tool setting the clock to noon, which jumped the sim's clock and set off a burst of trips. With the clock left at the level's own hour, the tool as it now is, the same tree reads avg 23.18 ms, p95 31.32 ms, of it 14.52 ms the fixed step and 6.31 ms drawing. That is the line later steps are measured against.) No interior is streamed in at the player's start and no prefab is stamped there, so this change is not in that picture yet: the island is no worse, and will only show a difference once the ports place prefabs in it.
 - Tests: `a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_left`, the batch case of ADR-0520, prefab 9 of 9, furniture 12 of 12, interior 6 of 6, door 22 of 22; physics crane 2 of 2, arrived 1 of 1.
 
 **What is left:**
@@ -25174,3 +25174,25 @@ They are single polygon operations over the whole island. An index cannot speed 
 - A woken copy's fixed shapes are both in the merged body and its own bodies while it is awake. Harmless, and a little waste.
 - A sphere or a capsule at rest is solid as the box round it.
 - Only the player wakes a copy. People using things through the agent brain is the next step.
+
+## ADR-0522 — The people inside a building sit and lie on its prefab copies as they do on the kit's furniture (#315; 2026-11-25)
+
+**Why:** who is inside a place is the agent brain's answer (ADR-0508), and the indoor planner (`planOccupants`) puts that many people on the building's furniture. It knew only the furniture kit's own pieces. A chair that is a prefab was not on its list, so a room furnished with prefabs stood empty of people whatever the brain said, and the more of the city becomes prefabs the emptier it would get. Glenn's rule for this work is one brain: no second system deciding who uses what.
+
+**Words:** a *spot* is a place on a prefab copy where a person can be drawn: a seat or a place to lie that one of the copy's uses offers.
+
+**What happens:**
+- **`batchSpots` lists a holder's free spots** (`prefab_batch.h`), each with where a seated or lying body is drawn, in a fixed order: by copy, then by use.
+- **`planOccupants` takes that list as one more argument** and fills the spots in the same draw as the kit's seats and beds: beds first at night at home, seats by day with about one in five left empty. It marks each one it fills, so a second plan over the same list (another shop unit's people) does not share a seat. It decides only which spots; how many people there are is still the brain's count.
+- **The city's indoor step (`CityRenderSystem::stepIndoors`) says which spots its people hold** with `occupyBatchSpot`. Each step it lets go of the ones the new plan no longer fills and takes the new ones, each in the order planned; a seat held from one step to the next is left alone.
+- **A taken seat is not offered to the player.**
+- **A seat that moves under whoever is on it** (a rocking chair, an exercise bike) makes its copy *busy*: it wakes and moves while the player is within 28 m, and far from the player it is only a flag. A lively or busy copy far from the player now goes back to its batch at once.
+- Nothing in the brain changed.
+
+**Measured:** the test `a_buildings_prefab_seats_take_the_citys_people_in_a_fixed_order`: six copies give five seats and one bed in order; three people take the same three seats on two plans; a second plan over the same list takes other seats; one person at night takes the bed; a taken seat is off the list for others and on it for its holder; a taken rocking chair is busy, and rocks once woken. run_tests: that case, the two batch cases, prefab 10 of 10, furniture 12 of 12, interior 6 of 6, door 22 of 22, people 8 of 8, inside 23 of 23, indoor 2 of 2, staff 1 of 1.
+
+**What is left:**
+- **Not seen in the game.** `prefab_street` has nobody indoors, and no interior is streamed in at `river_town`'s start. With `RT_CAMPUS_DEBUG=1` the `[indoors]` line now says how many of a place's people are on prefab copies; that is the thing to look at in a building with people in it.
+- No prefab has a place to work yet (a counter is still the kit's), so staff still stand at the kit's counters only. `BatchSpot::staff` is there for when one does.
+- A person on a rocking chair is drawn at the chair's rest place while the chair rocks under them.
+- Outdoors (a bench, a swing) waits for the first port, when the city's outdoor prefabs are batch copies with a tile as their holder: then a brain state for using a thing can find a spot near a person with the same two calls.

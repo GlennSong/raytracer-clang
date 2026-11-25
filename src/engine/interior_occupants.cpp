@@ -1,5 +1,6 @@
 #include "interior_occupants.h"
 #include "../hash.h"   // lowbias32
+#include "prefab_batch.h"   // BatchSpot: a place on a prefab copy
 
 #include <algorithm>
 #include <cmath>
@@ -26,13 +27,14 @@ Real yawOf(const Mat4& xform, const Vec3& look) {
 
 struct Use {
     uint32_t piece;
-    int verb;
+    int verb;         // -1: `piece` is an index into the prefab spots
     uint32_t order;   // the piece's draw, then the verb's place on it: a piece fills together
 };
 
 }  // namespace
 
-std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan) {
+std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan,
+                                    std::vector<BatchSpot>* prefabSpots) {
     std::vector<Occupant> out;
     if (plan.people <= 0) return out;
     std::vector<uint32_t> held(set.pieces.size(), 0);
@@ -124,13 +126,40 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
             else if (v.verb == Verb::Stand && !hasTag(*a, "lecture")) seats.push_back(u);   // at a lab bench: a place to work
         }
     }
-    auto byOrder = [](const Use& x, const Use& y) { return x.order != y.order ? x.order < y.order : x.piece < y.piece; };
+    // ...and the places on the building's prefab copies: a copy's draw, then the use's place on it, in the same draw
+    // as the kit's pieces (the high bit keeps a copy's number clear of a piece's)
+    auto takeSpot = [&](uint32_t si) {
+        BatchSpot& spot = (*prefabSpots)[si];
+        Occupant o;
+        o.pose = spot.pose == 1 ? Occupant::Pose::Lie : Occupant::Pose::Sit;
+        o.at = spot.at;
+        o.batchSpot = static_cast<int>(si);
+        spot.taken = true;
+        out.push_back(o);
+    };
+    if (prefabSpots != nullptr)
+        for (uint32_t si = 0; si < prefabSpots->size(); ++si) {
+            const BatchSpot& spot = (*prefabSpots)[si];
+            const int k = spot.unit + 1;
+            if (plan.units && !(k >= 0 && k < static_cast<int>(plan.units->size()) && (*plan.units)[static_cast<std::size_t>(k)])) continue;
+            if (spot.staff) continue;   // (a place to work is the staff's, above; no prefab has one yet)
+            const uint32_t draw = (lowbias32(plan.seed * 0x9E3779B9u + (spot.copy | 0x40000000u) * 0x85EBCA6Bu) >> 1) | 0x80000000u;
+            const Use u{si, -1, (draw & 0xFFFFFF00u) | (spot.use & 0xFFu)};
+            (spot.pose == 1 ? beds : seats).push_back(u);
+        }
+    // (one order for both: by the draw, then a kit piece before a prefab spot, then by number)
+    auto byOrder = [](const Use& x, const Use& y) {
+        if (x.order != y.order) return x.order < y.order;
+        if ((x.verb < 0) != (y.verb < 0)) return y.verb < 0;
+        return x.piece < y.piece;
+    };
     std::sort(beds.begin(), beds.end(), byOrder);
     std::sort(seats.begin(), seats.end(), byOrder);
 
     if (plan.night)
         for (const Use& u : beds) {
             if (static_cast<int>(out.size()) >= people) break;
+            if (u.verb < 0) { if (!(*prefabSpots)[u.piece].taken) takeSpot(u.piece); continue; }
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[u.piece].piece));
             if (freeNow(u.piece, a->verbs[static_cast<std::size_t>(u.verb)])) take(u.piece, u.verb, Occupant::Pose::Lie);
         }
@@ -140,6 +169,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
         for (const Use& u : seats) {
             if (static_cast<int>(out.size()) >= people) break;
             if (pass == 0 && lowbias32(u.order ^ (plan.seed + 0x51u)) % 5u == 0u) continue;
+            if (u.verb < 0) { if (!(*prefabSpots)[u.piece].taken) takeSpot(u.piece); continue; }
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[u.piece].piece));
             const FurnVerb& v = a->verbs[static_cast<std::size_t>(u.verb)];
             if (freeNow(u.piece, v)) take(u.piece, u.verb, v.verb == Verb::Stand ? Occupant::Pose::Stand : Occupant::Pose::Sit);

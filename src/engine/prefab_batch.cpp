@@ -120,7 +120,7 @@ uint32_t batchPrefab(World& world, Entity holder, ModelDresser* dresser, const P
     copy.line = prefab;
     copy.uses = prefabUsesFor(*model, prefab);
     copy.on.assign(copy.uses.size(), 0);
-    copy.lively = !prefab.script.empty() || !prefab.free.empty();
+    copy.lively = !prefab.script.empty() || !prefab.free.empty();   // (a door is made lively by whoever hangs it)
     for (const PrefabUse& u : copy.uses) copy.lively = copy.lively || u.near > 0;
     PrefabBatches* b = world.get<PrefabBatches>(holder);
     b->copies.push_back(std::move(copy));
@@ -224,8 +224,14 @@ Entity wakeBatchCopy(World& world, Entity holder, uint32_t copy) {
     for (Entity pe : world.get<ModelInstance>(e)->pieces)
         if (PrevTransform* prev = world.get<PrevTransform>(pe))
             if (const Transform* t = world.get<Transform>(pe)) prev->value = *t;
-    if (PrefabUses* uses = world.get<PrefabUses>(e))
-        for (std::size_t i = 0; i < uses->uses.size() && i < c.on.size(); ++i) uses->uses[i].on = c.on[i] != 0;
+    if (world.has<PrefabUses>(e))
+        for (std::size_t i = 0; i < c.on.size(); ++i) {
+            PrefabUses* uses = world.get<PrefabUses>(e);
+            if (i >= uses->uses.size() || c.on[i] == 0) continue;
+            // (a use that runs or sways while it is on starts doing so: a rocking chair someone is in rocks)
+            if (!uses->uses[i].use.run.empty() || !uses->uses[i].use.sway.empty()) setPrefabUse(world, e, i, true);
+            else uses->uses[i].on = true;
+        }
     if (c.swings) world.add<SwingDoor>(e, SwingDoor{c.swingFoot, c.swingNormal, c.at.position.y});
     world.add<BatchAwake>(e, BatchAwake{holder, copy, 0});
     for (const PrefabBatches::Copy::GroupRider& r : c.groupRiders)
@@ -240,6 +246,65 @@ Entity wakeBatchCopy(World& world, Entity holder, uint32_t copy) {
         if (rider.valid()) rideMarker(world, rider, e, r.second);
     }
     return e;
+}
+
+bool batchUseOn(World& world, const PrefabBatches::Copy& copy, std::size_t use) {
+    if (copy.awake.valid() && world.alive(copy.awake))
+        if (const PrefabUses* uses = world.get<PrefabUses>(copy.awake)) return use < uses->uses.size() && uses->uses[use].on;
+    return use < copy.on.size() && copy.on[use] != 0;
+}
+
+void batchSpots(World& world, Entity holder, std::vector<BatchSpot>& out, const std::vector<std::pair<uint32_t, uint32_t>>* mine) {
+    const PrefabBatches* b = world.get<PrefabBatches>(holder);
+    if (b == nullptr) return;
+    for (std::size_t ci = 0; ci < b->copies.size(); ++ci) {
+        const PrefabBatches::Copy& c = b->copies[ci];
+        for (std::size_t ui = 0; ui < c.uses.size(); ++ui) {
+            const PrefabUse& use = c.uses[ui];
+            if (!use.sit && !use.lie) continue;
+            if (batchUseOn(world, c, ui)) {
+                bool ours = false;
+                if (mine != nullptr)
+                    for (const std::pair<uint32_t, uint32_t>& m : *mine) ours = ours || (m.first == ci && m.second == ui);
+                if (!ours) continue;
+            }
+            Vec3 at;
+            Quat turn;
+            if (!batchCopyMarker(c, use.at, at, turn)) continue;
+            Vec3 facing = turn.rotate(Vec3(0, 0, 1));
+            facing.y = 0;
+            facing = facing.lengthSquared() > 1e-8 ? normalize(facing) : Vec3(0, 0, 1);
+            const Real yaw = std::atan2(facing.x, facing.z);
+            BatchSpot spot;
+            spot.copy = static_cast<uint32_t>(ci);
+            spot.use = static_cast<uint32_t>(ui);
+            spot.unit = c.unit;
+            if (use.lie) {
+                // on the back: the marker is the head and its +z runs to the feet (a standing body is built about its
+                // middle, 0.9 m from its feet; lying, half its depth above what it lies on)
+                spot.pose = 1;
+                const Vec3 middle = at + facing * Real(0.85) + Vec3(0, 0.13, 0);
+                spot.at = Mat4::translate(middle.x, middle.y, middle.z) * Mat4::rotateY(yaw) * Mat4::rotateX(Real(-3.14159265358979323846 * 0.5));
+            } else {
+                spot.pose = 0;
+                spot.at = Mat4::translate(at.x, at.y, at.z) * Mat4::rotateY(yaw);
+            }
+            out.push_back(spot);
+        }
+    }
+}
+
+void occupyBatchSpot(World& world, Entity holder, uint32_t copy, uint32_t use, bool taken) {
+    PrefabBatches* b = world.get<PrefabBatches>(holder);
+    if (b == nullptr || copy >= b->copies.size() || use >= b->copies[copy].uses.size()) return;
+    PrefabBatches::Copy& c = b->copies[copy];
+    const bool was = batchUseOn(world, c, use);
+    if (was == taken) return;
+    if (use < c.on.size()) c.on[use] = taken ? 1 : 0;
+    const bool moves = !c.uses[use].run.empty() || !c.uses[use].sway.empty();
+    if (moves) c.busy = std::max(0, c.busy + (taken ? 1 : -1));
+    const Entity awake = c.awake;
+    if (awake.valid() && world.alive(awake)) setPrefabUse(world, awake, use, taken);
 }
 
 bool batchCopySettled(World& world, Entity awake) {
