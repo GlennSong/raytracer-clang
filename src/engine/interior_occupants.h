@@ -14,6 +14,8 @@
 
 namespace engine {
 
+struct BatchSpot;   // a place on a prefab copy (prefab_batch.h)
+
 struct Occupant {
     enum class Pose : uint8_t { Sit, Lie, Stand };
     Pose pose = Pose::Sit;
@@ -48,7 +50,7 @@ struct OccupantPlan {
 // the kit's seats and beds do, in the same draw: a chair is a chair whichever way it is drawn. The planner marks
 // each one it fills `taken`, so the next plan over the same list (another shop unit's) leaves it.
 std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan,
-                                    std::vector<struct BatchSpot>* prefabSpots = nullptr);
+                                    std::vector<BatchSpot>* prefabSpots = nullptr);
 
 }  // namespace engine
 

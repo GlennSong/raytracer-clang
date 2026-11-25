@@ -1,5 +1,5 @@
-#include "../../engine/prefab_batch.h"   // a building's prefab copies: their seats take people too (ADR-0522)
 #include "city_render.h"
+#include "../../engine/prefab_batch.h"   // a building's prefab copies: their seats take people too (ADR-0522)
 #include "../../engine/lights/light_kinds.h"   // lightKindId: traffic's lamps as lights (ADR-0362)
 
 #include "../../engine/procgen/person.h"   // buildStandingPerson (the far crowd)
