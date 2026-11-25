@@ -25091,6 +25091,31 @@ They are single polygon operations over the whole island. An index cannot speed 
 
 **What is left:** the model now finishes well inside the meshes (about 87 s), so the products phase is set by the meshes. The longest stretch on one core in the city bake is now the pavement's footprints (about 108 s: `unionAll`, `closing` and the global union in `buildFootprints`, single-threaded Clipper work), ahead of the surfaces (40 s, mostly parallel already). That union is the next target.
 
+## ADR-0508 — Who is inside a place is the brain's answer: interiors draw their people and staff at their posts again (#342; 2026-11-25)
+
+**Why:** ADR-0499 listed "staff standing at their posts" as lost with the old sim. The cause was narrower than the old sim. The interiors draw a place's people on its own furniture once a second (`CityRenderSystem::stepIndoors`, `planOccupants`: staff behind the counter, customers at the tables, residents in the flats). They found who was in by looking for people resting at the place's door point, and they looked in the street list (`streetAgents`). Since ADR-0499 that list holds only people walking or standing outside, so nobody indoors was ever found: every streamed interior stood empty, staff included. `findplace?` read the same list and said "0 in" everywhere. And the brain leaves an arrived person on their marker's spot on the sidewalk, not at the door point, so matching by position would have failed anyway.
+
+**What happens:**
+- **A brain marker knows its place.** `BrainMarker::place` is the place it is the marker of, read from its name (`placeOfMarkerName`, the inverse of `placeMarkerName`, side by side in brain_people.cpp). A lab level's own markers have none.
+- **The brain says who is inside each place:** `CityBrain::insidePlaces` makes one scan of its people. A person is in a place when their day last brought them to its marker (`atMarker`) and they are in a state out of sight there (brain.lua `seen = false`, the `indoors` state), not travelling. Staff are those of them at their own work place with their activity at work.
+- **The interiors and `findplace?` read that answer**, by place, not by position. The door point and the old match are gone. There is one brain and no second "who is where" model.
+- One scan of 115k people once a second on the island, and only while an interior is streamed in.
+
+**Checked:**
+- river_town, no driving, 10 minutes from the level's start: 4,490 people inside 697 places; 1,369 staff at work in 322 places. A new check in `level_river_town_without_the_driving_the_brain_still_runs_everyone`.
+
+**Re-pinned** (ADR-0503/0504 regrew every lot, which moved the town's homes and people; those two cases had not been re-pinned then):
+- `..._without_the_driving_...`: set out 2567 → 2584, arrived 2095 → 2040, at work 1433 → 1369, arrivals 2112 → 2053.
+- `level_river_town_far_people_keep_their_day`: the most far 2719 → 2967; lowered 3068 → 3234, raised 571 → 684, far visits 2878 → 3040; set out 2812 → 2819, arrived 2283 → 2321, at work 1519 → 1523; hash `0xba9eaef6e5933eb5` → `0x13aced87fe819df6`. Its end line now prints the most far.
+
+## ADR-0509 — A resting person sleeps while the clock stands too (2026-11-25)
+
+**Why:** a resting person's day is read only when their next event is due (ADR-0496): they sleep until `hoursUntilRestEvent`. One case stayed awake: when the sim's clock stood (`hoursPerSecond` 0, which is what holding the sky does, `daynight hold` or the Debug window's Pause), every resting person was read again every tick. On the island that is about 100,000 rest reads a tick. Measured in the viewer from the player's start with the sky held: 14.6 ms a fixed step, and 3.8 steps a frame to keep up, so 57 ms of every frame was the sim. A held sky is also remembered in settings.json (`daynight.paused`), so a viewer could start that way.
+
+**What happens:** a resting person with nothing due sleeps whether or not the clock runs. While it stands, nothing they wait for can come. When it runs again, or jumps past their hour (`setClock`), their gate opens as before. `hoursUntilRestEvent` reads only game hours, not the clock's rate.
+
+**Checked (island_8_nature viewer, player start, RT_DUMP_STATS):** sky held: 14.6 → 8.5 ms a step, 3.8 → 1.1 steps a frame. Sky running: 7.6 ms a step, 1.0 a frame. City unit cases 39 of 39; brain_lab 13 of 13.
+
 ## ADR-0520 — Copies of a prefab can be drawn in batches, with no entity for each copy (#315, step 10 part a; 2026-11-25)
 
 **Why:** a stamped prefab is one entity, one more for each thing it draws, and a body for each collision shape. A fridge is 23 entities and a stocked drinks fridge 566. Three storeys of an office tower with the prefab list on stood 354 prefabs. Most copies of a thing are only ever looked at, so the city cannot be furnished with prefabs at that price.

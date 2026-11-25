@@ -2596,7 +2596,7 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
     world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cb = &c; });
     // A SLOT: one place's people on its own pieces -- each shop unit's (its staff behind the counter, its customers at
     // its tables), and the building's own (the flats, the offices) on the rest
-    struct Slot { PlaceId place; std::vector<uint8_t> units; Vec2 door; int people = 0, staff = 0; };
+    struct Slot { PlaceId place; std::vector<uint8_t> units; int people = 0, staff = 0; };
     struct Inside { engine::Interactables* set; int building; std::vector<Slot> slots; };
     std::vector<Inside> inside;
     world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
@@ -2663,39 +2663,31 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
             }
         }
         const BuildingPeople& bp = it->second;
-        // the door an indoor agent rests at (CitySim::assignPlaces' doorOf)
-        auto restAt = [&](PlaceId q) { const Place& p = places_[q]; return p.entrance + (p.site - p.entrance) * 0.4; };
         Inside in{&set, set.building, {}};
-        Slot whole{bp.whole, std::vector<uint8_t>(set.units.size() + 1, 0), Vec2(0, 0)};
+        Slot whole{bp.whole, std::vector<uint8_t>(set.units.size() + 1, 0)};
         whole.units[0] = 1;   // the building's own pieces, and any shop unit that found no place
         for (std::size_t u = 0; u < bp.unit.size(); ++u) {
             if (bp.unit[u] == kNoPlace) { whole.units[u + 1] = 1; continue; }
-            Slot s{bp.unit[u], std::vector<uint8_t>(set.units.size() + 1, 0), restAt(bp.unit[u])};
+            Slot s{bp.unit[u], std::vector<uint8_t>(set.units.size() + 1, 0)};
             s.units[u + 1] = 1;
             in.slots.push_back(std::move(s));
         }
-        if (bp.whole != kNoPlace) { whole.door = restAt(bp.whole); in.slots.push_back(std::move(whole)); }
+        if (bp.whole != kNoPlace) in.slots.push_back(std::move(whole));
         if (!in.slots.empty()) inside.push_back(std::move(in));
     });
-    // who is in: indoors, at rest, at that place's door -- and of them, who works there and is at work
-    // (the near list: interiors stream in round the player, and whoever rests inside one is near -- this was every
-    // indoor agent in the city against every streamed building, once a second)
-    if (!inside.empty())
-        for (int ni : sim_.streetAgents()) {
-            const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
-            if (!a.indoors || a.moving) continue;
-            bool done = false;
-            for (Inside& in : inside) {
-                for (Slot& s : in.slots)
-                    if ((a.pos - s.door).lengthSquared() < 0.25) {
-                        ++s.people;
-                        s.staff += a.workPlace == s.place && a.activity == Agent::Activity::AtWork;
-                        done = true;
-                        break;
-                    }
-                if (done) break;
+    // WHO IS IN, AND WHO OF THEM WORKS THERE (ADR-0508): the brain's answer, by place. (It was the people resting at
+    // each place's door, read from the street list -- which since ADR-0499 holds nobody indoors, so every interior
+    // stood empty, its staff's posts too.)
+    if (!inside.empty() && sim_.brain()) {
+        sim_.brain()->insidePlaces(insideByPlace_);
+        for (Inside& in : inside)
+            for (Slot& s : in.slots) {
+                const std::unordered_map<PlaceId, PlaceInside>::const_iterator q = insideByPlace_.find(s.place);
+                if (q == insideByPlace_.end()) continue;
+                s.people = q->second.people;
+                s.staff = q->second.staff;
             }
-        }
+    }
     const engine::FurnitureLibrary& lib = engine::FurnitureLibrary::global();
     const Real h = sim_.clockHours();
     for (Inside& in : inside) {
@@ -3146,12 +3138,11 @@ void CityRenderSystem::dealOpenSigns(World& world, Vec3 cam) {
         std::snprintf(h, sizeof(h), " | place %u %s \"%s\" door %.1f %.1f, %d streamed buildings draw its people; staff:",
                       static_cast<unsigned>(signWatch_), placeTypeName(wp.type), wp.name.c_str(), wp.door.x, wp.door.y, drawnFor);
         who = h;
-        const Vec2 restAt = wp.entrance + (wp.site - wp.entrance) * 0.4;
         for (int ai : staff) {
             const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
             char b[160];
-            std::snprintf(b, sizeof(b), " %d[act %d%s%s at %.0f %.0f, %.1f m from rest]", ai,
-                          static_cast<int>(a.activity), a.indoors ? " in" : "", a.moving ? " moving" : "", a.pos.x, a.pos.y, (a.pos - restAt).length());
+            std::snprintf(b, sizeof(b), " %d[act %d%s%s at %.0f %.0f]", ai, static_cast<int>(a.activity), a.indoors ? " in" : "",
+                          a.moving ? " moving" : "", a.pos.x, a.pos.y);
             if (who.size() < 1500) who += b;
         }
     }
@@ -3423,25 +3414,22 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         // someone who works there is at work; `opensigns?` says how many
         if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.view.camera.position);
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
-        // `findplace <name>`: the places whose name contains it -- where, what, open now, and who is in at its door
+        // `findplace <name>`: the places whose name contains it -- where, what, open now, and who is in (the brain's answer)
         {
             const std::string fq = findPlace_;
             if (!fq.empty()) {
                 findPlace_.clear();
                 std::string res;
                 const Real h = sim_.clockHours();
+                std::unordered_map<PlaceId, PlaceInside> insideFresh;
                 for (const Place& p : places_.places()) {
                     if (p.name.find(fq) == std::string::npos || res.size() > 1200) continue;
-                    const Vec2 rest = p.entrance + (p.site - p.entrance) * 0.4;
-                    int in = 0, staff = 0;
-                    for (int ni : sim_.streetAgents()) {
-                        const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
-                        if (!a.indoors || a.moving || (a.pos - rest).lengthSquared() >= 0.25) continue;
-                        ++in;
-                        staff += a.workPlace == p.id && a.activity == Agent::Activity::AtWork;
-                    }
+                    if (insideFresh.empty() && sim_.brain()) sim_.brain()->insidePlaces(insideFresh);
+                    const std::unordered_map<PlaceId, PlaceInside>::const_iterator q = insideFresh.find(p.id);
+                    const int in = q == insideFresh.end() ? 0 : q->second.people;
+                    const int staff = q == insideFresh.end() ? 0 : q->second.staff;
                     char b[256];
-                    std::snprintf(b, sizeof(b), "%s%u %s \"%s\" site %.1f %.1f door %.1f %.1f %s (%.1f-%.1f h), %d in (%d staff; near only)",
+                    std::snprintf(b, sizeof(b), "%s%u %s \"%s\" site %.1f %.1f door %.1f %.1f %s (%.1f-%.1f h), %d in (%d staff)",
                                   res.empty() ? "" : "; ", static_cast<unsigned>(p.id), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
                                   p.door.x, p.door.y, p.openAt(h) ? "open" : "closed", p.openHour, p.closeHour, in, staff);
                     res += b;

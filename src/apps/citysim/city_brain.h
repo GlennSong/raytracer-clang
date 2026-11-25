@@ -79,11 +79,13 @@
 #include "../../engine/procgen/city/polygon.h"
 #include "../../engine/procgen/city/roads/road_model.h"
 #include "../../rt_math.h"
+#include "places.h"   // PlaceId
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -156,6 +158,14 @@ struct BrainMarker {
     Vec2 stand;                      // where a person at it stands: the middle of the sidewalk beside it
     Vec2 post;                       // where its post is drawn: kMarkerPostOffset from `stand`, beside the ring
     bool stated = false;             // by street, station and kerb (false: looked up from a plan point)
+    PlaceId place = kNoPlace;        // the place it is the marker of (placeMarkerName), else none
+};
+
+// WHO IS INSIDE A PLACE NOW (ADR-0508): the people at its marker in a state out of sight (brain.lua `seen = false`),
+// and of them the staff, at their own work place at work. What the interiors draw behind the counters and at the tables.
+struct PlaceInside {
+    int people = 0;
+    int staff = 0;
 };
 
 // WHAT HAS HAPPENED SO FAR, for a test and for `brain?`.
@@ -211,6 +221,9 @@ struct CityBrainCost {
     // ...and inside them: trips planned (the machine's) and set out by a day (the days'; the place chosen), in all
     double planMs = 0, setOutMs = 0;
     uint64_t plans = 0;
+    // ...and how many people's days were read (past their gate), of them on their way to a place, and rests read for
+    // their next event (CitySim::restEvents), in all
+    uint64_t dayReads = 0, goToReads = 0, restReads = 0;
     std::string describe() const;
 };
 
@@ -313,6 +326,8 @@ public:
     const CityBrainCost& cost() const;
     // How many people are far now (ADR-0493).
     int farCount() const;
+    // Who is inside each place now, by place (ADR-0508): the brain's own answer, one scan of its people.
+    void insidePlaces(std::unordered_map<PlaceId, PlaceInside>& out) const;
     // Who is far, and why each near person is near (`brain? attention`).
     std::string attentionText() const;
     brain::BrainTime now() const;
