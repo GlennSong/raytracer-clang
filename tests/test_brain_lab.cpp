@@ -827,17 +827,18 @@ TEST_CASE(level_brain_lab_six_residents_in_three_households) {
     CHECK(b.planText(kFay) == "scooter>home");
     CHECK(b.planText(kDan) == "skateboard>home");
     CHECK(b.planText(kCat) == "walk>space s229 along 3, car>space s288 along 1, walk>far");
-    CHECK(b.planReason(kFay) == "walk 4.6 min, car -- no car, scooter 1.9 min: scooter");
+    // (re-pinned at ADR-0500, failing since before ADR-0489: walk 4.6 -> 4.8 min, scooter 1.9 -> 2.0 -- the walks a
+    // little longer from where the household's people now stand, the walks laid since)
+    CHECK(b.planReason(kFay) == "walk 4.8 min, car -- no car, scooter 2.0 min: scooter");
     CHECK(b.heldSpace(kCat).valid() && !b.heldSpace(kDan).valid() && !b.heldSpace(kFay).valid());
     CHECK(b.stateName(kAna) == "standing" && b.stateName(kBen) == "standing" && b.stateName(kEve) == "standing");
     CHECK(r.holdFaults == 0);
     CHECK(r.riderApart == 0);   // (ADR-0445: every rider, every tick, where their car is)
 }
 
-// WHOEVER REACHES THE HOUSEHOLD'S CAR FIRST TAKES IT (design section 12). Ana and ben, of one household, are told a
-// second apart to be at far-apart places (`work`, east; `ramp`, by the east freeway ramps). Both plan with the car, which
-// is free and stands beside them. BEN, told second, reaches it first (his spot at `home` is the nearer to it by
-// kStandApart) and drives off; ana finds it gone at the kerb and goes on foot. The car stays where ben parks it (by
+// WHOEVER REACHES THE HOUSEHOLD'S CAR FIRST TAKES IT (design section 12). Ana and ben, of one household, are told at
+// once to be at far-apart places (`work`, east; `ramp`, by the east freeway ramps). Both plan with the car, which
+// is free and stands beside them. BEN reaches it first (his spot at `home` is the nearer to it by kStandApart) and drives off; ana finds it gone at the kerb and goes on foot. The car stays where ben parks it (by
 // `ramp`). Later ana, sent to `ramp`, is where the car is and takes it home; ben, left at `ramp`, then walks home,
 // since the car is no longer there.
 TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
@@ -846,15 +847,19 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     citysim::CityBrain& b = *r.b;
     const engine::RoadModel& model = *r.sim().drivingV2()->model();
     std::string why;
+    // (both set off together: Ben stands nearer the car. Until ADR-0500 Ana was sent a second earlier, and won the race
+    // once the household's standing spots moved her nearer -- her walk to the car 4 s -> 2.5 s, Ben's 1.9 s)
     CHECK(b.goTo(kAna, "work", &why));
-    r.run(1.0);
     CHECK(b.goTo(kBen, "ramp", &why));
     r.step();
     // BOTH PLANS PRICE THE CAR: it is free at that moment and stands in its space beside home. Each holds a space of
     // their own at the far end.
     CHECK(b.planText(kAna) == "walk>space s19 along 3, car>space s182 against 3, walk>work");
     CHECK(b.planText(kBen) == "walk>space s19 along 3, car>space s223 against 3, walk>ramp");
-    CHECK(b.planReason(kBen) == "walk 10.2 min, car 6.3 min (0.2 walk + 6.0 car + 0.2 walk): car");
+    std::printf("    [brain-lab] ben: %s (%s)\n", b.planText(kBen).c_str(), b.planReason(kBen).c_str());
+    // (re-pinned at ADR-0500: walk 10.2 -> 10.5 min, car 6.3 -> 5.4 (0.2 + 6.0 + 0.2 -> 0.1 + 5.3 + 0.1): the walks a
+    // little longer, the drive quicker by the driving's router as it is now)
+    CHECK(b.planReason(kBen) == "walk 10.5 min, car 5.4 min (0.1 walk + 5.3 car + 0.1 walk): car");
     CHECK(model.kerbSpaceName(b.heldSpace(kAna)) == "s182 against 3" && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
     // BEN IS AT THE CAR FIRST and takes it; ANA, at the kerb a second later, finds it taken: `vehicle_gone`, and a
     // plan without it
@@ -865,10 +870,11 @@ TEST_CASE(level_brain_lab_whoever_reaches_the_household_car_first_takes_it) {
     const double anaFound = r.seconds();
     std::printf("    [brain-lab] ben took the car at %.2f s; ana found it gone at %.2f s: %s (%s)\n", benTook, anaFound,
                 b.planText(kAna).c_str(), b.planReason(kAna).c_str());
-    CHECK(approxEqual(benTook, 3.0, 0.02) && approxEqual(anaFound, 4.07, 0.02));
+    // (3.0 -> 1.88 s and 4.07 -> 2.53 s: both set off together now, ben's walk to the car 1.87 s, ana's 2.52)
+    CHECK(approxEqual(benTook, 1.88, 0.02) && approxEqual(anaFound, 2.53, 0.02));
     CHECK(stateNames(b, kAna) == "standing walking pulling_out walking");
     CHECK(b.planText(kAna) == "walk>work");
-    CHECK(b.planReason(kAna) == "walk 9.3 min, car -- the car is in use: walk");
+    CHECK(b.planReason(kAna) == "walk 9.7 min, car -- the car is in use: walk");   // (9.3 -> 9.7 min, as above)
     CHECK(!b.heldSpace(kAna).valid() && model.kerbSpaceName(b.heldSpace(kBen)) == "s223 against 3");
     CHECK(!b.inCar(kAna) && b.inCar(kBen));
     // BOTH ARRIVE: ben by car, ana on foot. The car is where ben left it, free.
