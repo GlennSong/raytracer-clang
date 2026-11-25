@@ -4,6 +4,7 @@
 #include "engine/procgen/city/polyline.h"                           // segmentsCross: an outline crossing itself
 #include "engine/procgen/city/roads/lane_turns.h"                   // turnKey: a turn's word; laneLineBetween: the lines' one rule
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"              // LaneLookup: the paved road, for the corner fit
+#include "../../../../../job_system.h"   // parallelRows: the corners fitted on the shared pool (ADR-0507)
 #include "engine/procgen/city/roads/lanes/lane_graph_connect.h"     // fitConnector, reachReport
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"   // where the paths' bodies could touch
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
@@ -900,6 +901,34 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
         out.problems.push_back(RoadProblem(RoadProblemKind::TurnNoJunction).number(t));
         ++turnsPlaced;
     }
+    // EVERY TURN'S CORNER FITTED FIRST, on the shared pool (ADR-0507): a fit reads only the two lane paths it joins (laid
+    // above) and the build, never the connectors fitted before it, so each is its own item; the loop below takes them in
+    // its order. The lane path a turn starts from and the one it ends on, as the loop finds them (-1: none).
+    auto turnEnds = [&](uint32_t j, uint32_t t, int& from, int& into) {
+        const ModelTurn& mt = m.turns[t];
+        from = -1; into = -1;
+        for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j])
+            if (pa.second == mt.fromArm && G.paths[pa.first].modelLane == mt.from.index) from = static_cast<int>(pa.first);
+        for (const std::pair<uint32_t, uint32_t>& pa : leavingAt[j])
+            if (pa.second == mt.toArm && G.paths[pa.first].modelLane == mt.to.index) into = static_cast<int>(pa.first);
+    };
+    std::vector<ConnectorFit> fitOf(m.turns.size());
+    {
+        std::vector<std::pair<uint32_t, uint32_t>> toFit;   // (junction, turn)
+        for (uint32_t j = 0; j < m.junctions.size(); ++j) {
+            if (arrivingAt[j].empty() && leavingAt[j].empty()) continue;
+            for (uint32_t t : turnsAt[j]) toFit.emplace_back(j, t);
+        }
+        parallelRows(static_cast<int>(toFit.size()), [&](int k) {
+            const uint32_t j = toFit[static_cast<std::size_t>(k)].first, t = toFit[static_cast<std::size_t>(k)].second;
+            int from = -1, into = -1;
+            turnEnds(j, t, from, into);
+            if (from < 0 || into < 0) return;
+            const ModelTurn& mt = m.turns[t];
+            fitOf[t] = fitConnector(r, look, G, PathId(static_cast<uint32_t>(from)), PathId(static_cast<uint32_t>(into)),
+                                    static_cast<int>(mt.from.index), static_cast<int>(mt.to.index), opts.vehicles);
+        }, 1);
+    }
     for (uint32_t j = 0; j < m.junctions.size(); ++j) {
         const ModelJunction& J = m.junctions[j];
         if (arrivingAt[j].empty() && leavingAt[j].empty()) {
@@ -1010,10 +1039,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
             ++note.turnsStated;
             ++turnsPlaced;
             int from = -1, into = -1;
-            for (const std::pair<uint32_t, uint32_t>& pa : arrivingAt[j])
-                if (pa.second == mt.fromArm && G.paths[pa.first].modelLane == mt.from.index) from = static_cast<int>(pa.first);
-            for (const std::pair<uint32_t, uint32_t>& pa : leavingAt[j])
-                if (pa.second == mt.toArm && G.paths[pa.first].modelLane == mt.to.index) into = static_cast<int>(pa.first);
+            turnEnds(j, t, from, into);
             if (from < 0 || into < 0) {   // no lane path to take it: the lanes stop short of the junction, no corner's fault
                 Refusal ref;
                 ref.junction = lj;
@@ -1029,8 +1055,7 @@ LaneGraphBuild buildLaneLevel(const Result& r, RoadModel& model, const LaneGraph
                 ++note.turnsRefused;
                 continue;
             }
-            const ConnectorFit fit = fitConnector(r, look, G, PathId(static_cast<uint32_t>(from)), PathId(static_cast<uint32_t>(into)),
-                                                  static_cast<int>(mt.from.index), static_cast<int>(mt.to.index), opts.vehicles);
+            const ConnectorFit& fit = fitOf[t];   // (fitted above, on the pool)
             for (uint32_t i = 0; i < tagCount; ++i) {
                 if (fit.whyClosed[i].empty()) continue;
                 CornerFault f;

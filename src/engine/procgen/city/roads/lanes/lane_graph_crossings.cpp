@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/lanes/lane_graph_crossings.h"
+#include "../../../../../job_system.h"   // parallelRows: each path's meetings on the shared pool (ADR-0507)
 
 #include "engine/procgen/city/polygon.h"    // bounds, pointInPolygon
 #include "engine/procgen/city/polyline.h"   // distToPolyline, distSegmentToSegment
@@ -614,9 +615,20 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                 if (g.paths[q].kind == PathKind::Lane) branching[q] = 1;
         }
     }
-    for (uint32_t c = 0; c < n; ++c) {
+    // (each path's meetings on the shared pool, ADR-0507: a path reads the samples, bodies and indexes made above and
+    // writes only its own list and counts, gathered in path order -- the records and counts of the loop one path after
+    // another)
+    struct PathCrossings {
+        std::vector<CrossingPoint> found;   // its records, in the order the loop made them
+        uint32_t byMeeting[kMeetingCount] = {};
+        uint32_t betweenJunctions = 0, withLanes = 0, onlyForLength = 0, widenedForLength = 0, forSomeVehicles = 0;
+    };
+    std::vector<PathCrossings> crossingsOf(n);
+    parallelRows(static_cast<int>(n), [&](int row) {
+        const uint32_t c = static_cast<uint32_t>(row);
+        PathCrossings& lc = crossingsOf[c];
         const bool laneFirst = g.paths[c].kind == PathKind::Lane;
-        if (laneFirst && !branching[c]) continue;
+        if (laneFirst && !branching[c]) return;
         const Sampled& A = samples[c];
         std::vector<uint64_t> keys;
         for (const Vec2& q : A.xy) {
@@ -728,7 +740,7 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                                         continue;
                                     if (onA.first < x.aFrom || onA.second > x.aTo || onOther.first < x.otherFrom ||
                                         onOther.second > x.otherTo)
-                                        ++rep.widenedForLength;
+                                        ++lc.widenedForLength;
                                     x.aFrom = std::min(x.aFrom, onA.first);
                                     x.aTo = std::max(x.aTo, onA.second);
                                     x.otherFrom = std::min(x.otherFrom, onOther.first);
@@ -750,7 +762,7 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                                 if (pathQ.kind == PathKind::Connector && pathQ.junction == g.paths[c].junction)
                                     x.junction = g.paths[c].junction;
                                 s.records.push_back(x);
-                                ++rep.onlyForLength;
+                                ++lc.onlyForLength;
                             }
                             mergeOverlapping(s.records);
                         }
@@ -766,12 +778,21 @@ CrossingReport findCrossingPoints(LaneGraph& g, const CrossingOptions& opts) {
                 for (CrossingPoint x : s.records) {
                     x.aTags = s.aTags;
                     x.otherTags = s.otherTags;
-                    ++rep.byMeeting[static_cast<std::size_t>(x.meeting)];
-                    if (!x.junction.valid()) ++(g.paths[q].kind == PathKind::Connector ? rep.betweenJunctions : rep.withLanes);
-                    if (x.aTags != kEveryVehicle || x.otherTags != kEveryVehicle) ++rep.forSomeVehicles;
-                    g.crossings.push_back(x);
+                    ++lc.byMeeting[static_cast<std::size_t>(x.meeting)];
+                    if (!x.junction.valid()) ++(g.paths[q].kind == PathKind::Connector ? lc.betweenJunctions : lc.withLanes);
+                    if (x.aTags != kEveryVehicle || x.otherTags != kEveryVehicle) ++lc.forSomeVehicles;
+                    lc.found.push_back(x);
                 }
         }
+    }, 1);
+    for (const PathCrossings& lc : crossingsOf) {
+        g.crossings.insert(g.crossings.end(), lc.found.begin(), lc.found.end());
+        for (std::size_t k = 0; k < kMeetingCount; ++k) rep.byMeeting[k] += lc.byMeeting[k];
+        rep.betweenJunctions += lc.betweenJunctions;
+        rep.withLanes += lc.withLanes;
+        rep.onlyForLength += lc.onlyForLength;
+        rep.widenedForLength += lc.widenedForLength;
+        rep.forSomeVehicles += lc.forSomeVehicles;
     }
 
     // ---- crosswalks: each path whose body could be on one ----

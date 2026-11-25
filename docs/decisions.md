@@ -25066,3 +25066,27 @@ They are single polygon operations over the whole island. An index cannot speed 
 - A new check in `lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache`: the model saved from a build already made has the same key and the same bytes as one `obtainLevelRoadModel` builds, and the next obtain reads it with no road build. lanes_tests 159 of 159.
 
 **What is left:** the model's assembly (144 s on the island, on one core for most of it) now sets the end of the city bake's products: the meshes (83 s) and the blocks (52 s) finish before it.
+
+## ADR-0507 — The road model's corners and crossings are worked out on the shared pool (#317, step 8; 2026-11-25)
+
+**Why:** after ADR-0506 the city bake's products waited on the road model, and the model took 144 s on the island, almost all of it on one core. A profile of the thread that builds it put 85% of the time in the lane level (`buildLaneLevel`): fitting each stated turn's corner (`fitConnector`, about 60%) and finding where two paths meet (`findCrossingPoints`, about 20%). Neither was waiting on a slow search -- both already ask spatial indexes -- they were simply many independent jobs taken one after another.
+
+**Words:** a *corner fit* shapes the connector for one turn at a junction and sweeps each vehicle's body along it to see which vehicles it takes off the paved road. A *crossing record* says where two paths' vehicles could touch (a cross, a split or a join). The *shared pool* is the bake's one set of worker threads (`parallelRows`, job_system.h).
+
+**What happens:**
+- **Every turn's corner is fitted first, on the pool.** A fit reads only the two lane paths it joins, laid before any connector, and the build; it never reads a connector fitted before it. So each fit is its own item, kept in its turn's slot, and the junction loop then takes them in its usual order and adds the connectors exactly as before.
+- **Each path's crossings are found on the pool.** One path's search reads the samples, bodies and indexes made before the loop and writes only its own list of records and its own counts. The lists are joined in path order, and the counts added, so the records come out in the order the one-at-a-time loop made them.
+- Nothing else changed: the same model, made the same one way, with the same key.
+
+**Measured** (island_8_nature, scratch copy, 24 threads):
+
+| | Before (ADR-0506) | After |
+|---|---|---|
+| The road model | 144 s | 48 s |
+| Full bake, nothing saved before | 6:32 | 5:28 |
+| One street bent 3 m, rebaked | 6:10 | 5:14 |
+
+- The saved `.roadmodel` files are byte-for-byte the same as the binary before this change made: the island with the bent street, and river_town with one street bent 1 m.
+- lanes_tests 158 of 158; run_tests lane cases 33 of 33.
+
+**What is left:** the model now finishes well inside the meshes (about 87 s), so the products phase is set by the meshes. The longest stretch on one core in the city bake is now the pavement's footprints (about 108 s: `unionAll`, `closing` and the global union in `buildFootprints`, single-threaded Clipper work), ahead of the surfaces (40 s, mostly parallel already). That union is the next target.
