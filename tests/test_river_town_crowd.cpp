@@ -429,6 +429,11 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // trips due at once wait their turn first come first served (ADR-0496): the most on the road 117 -> 120 (still
     // minute 6), trips by car 164 -> 169, parked 151 -> 156, arrivals 3281 -> 3249; set out 3611 -> 3604, arrived 3247
     // -> 3215, at work 1767 the same; no way 62 -> 64, plans with no way 317 -> 332. The brain 0.87 -> 0.37 ms a tick.
+    // RE-PINNED when the old sim's people went (ADR-0499; the one-brain plan, step 2b): its goal layer, tiers and sleep
+    // queue deleted, the sim's step only moves bodies out on the street. The 34 people the brain does not run (16
+    // households whose home has no street beside its door) no longer walk the old sim's days: trips by car 169 -> 170,
+    // parked 156 -> 153, arrivals 3249 -> 3259; set out 3604 -> 3600, arrived 3215 -> 3224, at work 1767 -> 1766, no
+    // way 64 -> 63, plans with no way 332 -> 318. The whole step 2.9 ms a tick (the brain 0.29).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 5115);
         CHECK(households == 2686);
@@ -437,22 +442,22 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(homeMarkers == 278u);
         CHECK(mostOnRoad == 120);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 169u);
-        CHECK(b.counts().parkedReports == 156u);
+        CHECK(b.counts().tripsBegun == 170u);
+        CHECK(b.counts().parkedReports == 153u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3249u);
+        CHECK(b.machine()->counts().arrivals == 3259u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3604u);
-        CHECK(b.counts().dayArrivals == 3215u);
-        CHECK(b.counts().dayToWork == 1767u);
+        CHECK(b.counts().daySetOut == 3600u);
+        CHECK(b.counts().dayArrivals == 3224u);
+        CHECK(b.counts().dayToWork == 1766u);
         CHECK(b.counts().dayNowhere == 8u);
-        CHECK(b.counts().dayNoWay == 64u);
-        CHECK(b.machine()->counts().noPlans == 332u);
+        CHECK(b.counts().dayNoWay == 63u);
+        CHECK(b.machine()->counts().noPlans == 318u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -517,7 +522,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x4d453ad8fdb637d9 -> 0x7ed5a8a9fec97fa4 (ADR-0493: the brain runs every household): the counts above, and
         // the buses' below
         // 0x7ed5a8a9fec97fa4 -> 0x0e41f1185e8239f8 (ADR-0496: resting days sleep, and the rest): the counts above
-        CHECK(hash == 0x0e41f1185e8239f8ull);
+        // 0x0e41f1185e8239f8 -> 0x5ab02c088a376691 (ADR-0499: the old sim's people gone): the counts above
+        CHECK(hash == 0x5ab02c088a376691ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
@@ -539,8 +545,7 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             // kBusBeatsWalk; none of the brain's 218 to work went by bus: #335)
             CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 0u && rc.leftFull == 0u);
             CHECK(b.counts().busWaits == 0u && b.counts().busRides == 0u);
-            // FAILING since ADR-0491: nobody rides in this half hour (#335)
-            CHECK(rc.waits > b.counts().busWaits);   // (some of the sim's own walkers rode too: "everyone")
+            // (the check that some of the sim's own walkers rode too went with them, ADR-0499: every rider is the brain's)
         }
     }
 }
@@ -600,11 +605,13 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // then the scan) and trips due at once wait their turn first come first served (ADR-0496): the most far 2718 ->
     // 2719; lowered 3070 the same, raised 568 -> 569, far visits 2889 -> 2887; set out 2820, arrived 2293 -> 2292, at
     // work 1521 -> 1520; 0xd898a2ec3bb6bbe9 -> 0xe2c8701064b9badc. The brain 1.05 -> 0.53 ms a tick.
+    // (ADR-0499, the old sim's people gone: lowered 3070 -> 3068, raised 569 -> 571, far visits 2887 -> 2878; set out
+    // 2820 -> 2812, arrived 2292 -> 2283, at work 1520 -> 1519; 0xe2c8701064b9badc -> 0xba9eaef6e5933eb5)
     if (kFarMinutes == 15) {
         CHECK(mostFar == 2719);
-        CHECK(c.lowered == 3070u && c.raised == 569u && c.farVisits == 2887u);
-        CHECK(c.daySetOut == 2820u && c.dayArrivals == 2292u && c.dayToWork == 1520u);
-        CHECK(hash == 0xe2c8701064b9badcull);
+        CHECK(c.lowered == 3068u && c.raised == 571u && c.farVisits == 2878u);
+        CHECK(c.daySetOut == 2812u && c.dayArrivals == 2283u && c.dayToWork == 1519u);
+        CHECK(hash == 0xba9eaef6e5933eb5ull);
     }
 }
 
@@ -647,6 +654,7 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
     // arrivals in all; the brain 0.84 ms a tick (worst 3.2). RE-PINNED when a resting day sleeps until its next event
     // (ADR-0496; its time in the state caught up in one sum on waking, not tick by tick, so a stay ends a tick either
     // way): 2569 set out, 2100 arrived, 1433 at work, 2117 arrivals; the brain 0.84 -> 0.41 ms a tick.
-    CHECK(c.daySetOut == 2569u && c.dayArrivals == 2100u && c.dayToWork == 1433u);
-    CHECK(b.machine()->counts().arrivals == 2117u);
+    // (ADR-0499, the old sim's people gone: set out 2569 -> 2567, arrived 2100 -> 2095, arrivals 2117 -> 2112)
+    CHECK(c.daySetOut == 2567u && c.dayArrivals == 2095u && c.dayToWork == 1433u);
+    CHECK(b.machine()->counts().arrivals == 2112u);
 }

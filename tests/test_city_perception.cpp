@@ -51,6 +51,7 @@ TEST_CASE(pedestrians_walk_around_static_poles) {
 
     Real minDist = 1e9;
     for (int i = 0; i < 4000; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
         sim.step(0.1, 0.4);
         for (const Agent& a : sim.agents()) {
             if (!a.moving) continue;

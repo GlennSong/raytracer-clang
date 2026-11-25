@@ -73,7 +73,6 @@ TEST_CASE(city_map_tool_draws_you_facing_the_way_you_look) {
     params.cars = 12;
     params.pedestrians = 0;
     params.seed = 7;
-    params.wander = true;
     params.vehicleScript = readAsset("vehicles.lua");
     CityRenderSystem city(params);
     StubUploader uploader;

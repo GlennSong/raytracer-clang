@@ -264,7 +264,7 @@ static void readCityMarkers(const json& cs, const std::string& levelPath, CitySi
         }
     // A CROWD MADE FROM THE ROADS (ADR-0446): the file under assets/scripts that says what to make
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490): how many of their people
-    cfg.brainPeople = std::max(-1, cs.value("brainPeople", 0));
+    cfg.brainPeople = std::max(-1, cs.value("brainPeople", -1));   // (every household, unless the level says: ADR-0499)
     cfg.drivableSpacesOnly = cs.value("drivableSpacesOnly", false);
     if (cs.contains("near") && cs["near"].is_object()) {   // the near tier (ADR-0448)
         const json& n = cs["near"];
@@ -6361,7 +6361,6 @@ bool LevelLoader::load(const std::string& path,
         cfg.tieredAgents = cs.value("tiered", cfg.tieredAgents);
         cfg.dormantAgents = cs.value("dormancy", cfg.dormantAgents);
         cfg.showPlan = cs.value("showPlan", false);
-        cfg.wander = cs.value("wander", cfg.wander);
         cfg.schedule = cs.value("schedule", cfg.schedule);
         // (`homeNear`, the lab person's home, went with the old driving: it moved the first resident with an old car,
         // ADR-0462; ignored if a level still sets it)

@@ -122,7 +122,6 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) {
             const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
             const char* why = ga.inCar >= 0 ? "got in a car"
-                              : ga.far()                       ? "left the near tier"
                               : ga.indoors                        ? "went indoors"
                                                                   : "stopped (not moving, not indoors?)";
             gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -153,7 +152,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size()))
             haveWalker_[w.agentId] = 1;
     // (a visible pedestrian is never far: the near list, in the same order -- not all 100k agents every step)
-    for (int i : sim.nearAgents()) {
+    for (int i : sim.streetAgents()) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
         if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;

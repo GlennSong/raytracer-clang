@@ -63,6 +63,7 @@ TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
     sim.setExternalObstacles({ player });
     Real minDist = 1e9;
     for (int i = 0; i < 4000; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
         sim.step(0.1, 0.5);
         for (const Agent& a : sim.agents())
             if (a.moving)
@@ -83,7 +84,10 @@ TEST_CASE(agents_commit_to_decisions_between_thinks) {
     s.build(sim, 20, 11);   // a crowd of walkers (plenty to react to)
 
     // Warm up until several peds are moving.
-    for (int i = 0; i < 2000; ++i) sim.step(0.05, 0.5);
+    for (int i = 0; i < 2000; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
+        sim.step(0.05, 0.5);
+    }
 
     std::vector<Real> lastTarget(sim.agents().size(), 0.0);
     std::vector<int> changes(sim.agents().size(), 0);
@@ -93,6 +97,7 @@ TEST_CASE(agents_commit_to_decisions_between_thinks) {
 
     const int ticks = 200;                       // 10 s at dt 0.05
     for (int i = 0; i < ticks; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
         sim.step(0.05, 0.5);
         for (std::size_t k = 0; k < sim.agents().size(); ++k) {
             const Agent& a = sim.agents()[k];

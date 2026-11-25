@@ -1246,7 +1246,6 @@ struct CitySimConfig {
     bool dormantAgents = false;
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
-    bool wander = false;                 // agents take perpetual random trips
     bool schedule = true;                // false: nobody keeps a day; everyone waits at home to be sent (the trip lab)
     // MARKERS AND THE RESIDENT WITH THE AGENT BRAIN (ADR-0441). `"markers"`: a list, or the name of a file beside the
     // level holding {"markers": [...]} (so two levels on the same roads share one list). `"residents"` and
@@ -1257,8 +1256,9 @@ struct CitySimConfig {
     std::vector<CityHousehold> households;
     // THE CITY'S OWN HOUSEHOLDS, RUN BY THE BRAIN (ADR-0490; apps/citysim/brain_people.h): `"brainPeople": 630` has the
     // agent brain run whole households of the people the city's dwellings were filled with, up to that many people,
-    // added to what the level states. -1: every household (ADR-0493: the brain runs everyone). 0: none.
-    int brainPeople = 0;
+    // added to what the level states. -1 (the default since ADR-0499, the old sim's people gone): every household.
+    // 0: none -- the city's people stand where they were made.
+    int brainPeople = -1;
     // `"drivableSpacesOnly": true` (ADR-0446): the brain offers its households only kerb spaces a car can drive away
     // from and back to (apps/citysim/city_brain.h). brain_lab, built before it, does not ask.
     bool drivableSpacesOnly = false;

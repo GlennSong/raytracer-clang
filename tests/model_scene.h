@@ -172,6 +172,24 @@ inline const ModelScene& gridScene(engine::Real extent, engine::Real cellSize, u
                       });
 }
 
+// KEEP EVERYONE WALKING (ADR-0499): the sim's own days are gone (the brain runs a level's people), so a test of how
+// bodies walk -- round poles, round the player, round each other, in files -- sends its walkers itself: each one
+// standing still is sent, by the walking the brain sends its people by (CitySim::sendAgentTo), to where another one
+// stands (a fixed choice per agent and round). Call it as often as the test steps; true when anyone was sent.
+template <class Sim>   // (a template, as above: this header needs no sim)
+bool keepEveryoneWalking(Sim& sim, int round = 0) {
+    const int n = static_cast<int>(sim.agents().size());
+    bool sent = false;
+    for (int i = 0; i < n; ++i) {
+        const auto& a = sim.agents()[static_cast<std::size_t>(i)];
+        if (a.moving || a.playerControlled || a.released || n < 2) continue;
+        const int to = static_cast<int>((static_cast<uint32_t>(i) * 7919u + static_cast<uint32_t>(round) * 104729u + 13u) % static_cast<uint32_t>(n));
+        if (to == i) continue;
+        sent = sim.sendAgentTo(i, sim.agents()[static_cast<std::size_t>(to)].pos) || sent;
+    }
+    return sent;
+}
+
 }  // namespace citytest
 
 #endif

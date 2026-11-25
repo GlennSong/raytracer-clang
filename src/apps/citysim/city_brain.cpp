@@ -2057,8 +2057,7 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
         {
             Agent& a = sim.agents_[static_cast<std::size_t>(person.agent)];
             sim.setAgentDirected(person.agent, true);
-            a.brainOwned = true;   // the sim's day table never places them (CitySim::placeFromSchedule)
-            sim.pinAgent(person.agent, true);
+            a.brainOwned = true;
             a.pos = im.spotAt(homeMarker, im.spotFor(made[r].home, id));
             a.tickFromPos = a.pos;
             a.heading = unit(homeMarker.frontage.on - homeMarker.stand, a.heading);
@@ -2067,7 +2066,6 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
             a.moving = false;
             a.speed = 0;
             a.route = engine::roads::WalkRoute{};
-            a.wakeAt = -1;
             a.state = Agent::State::Resting;
             sim.grid_.place(person.agent, a.pos);
         }

@@ -125,66 +125,6 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
     CHECK(std::fabs(top - 1.05) < 1e-9);
 }
 
-TEST_CASE(people_sent_to_the_other_town_go_by_train_and_arrive) {
-    const citytest::ModelScene& s = twoTowns();
-    CitySim sim;
-    s.build(sim, 120, 17);
-    RailSim rail;
-    rail.build(ovalWithWaysIn(sim.walkPoints()), trainKindNamed("intercity"), 2);
-    sim.setRail(&rail);
-    CHECK(sim.railRiders().active());
-
-    const RailRiders& rr = sim.railRiders();
-    std::vector<int> startNet(sim.agents().size(), -1);
-    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
-        const Vec2 p = sim.agents()[i].pos;
-        startNet[i] = p.y < 0 ? 0 : 1;
-    }
-    // a dozen from each town to the middle of the other; what happens after is the sim's own
-    int sent = 0;
-    for (std::size_t i = 0; i < sim.agents().size() && sent < 24; ++i)
-        if (sim.sendAgentByTrain(static_cast<int>(i), Vec2(0, startNet[i] == 0 ? 650.0 : -650.0))) ++sent;
-    std::printf("    [rail] sent %d by train\n", sent);
-    CHECK(sent >= 12);
-    // within a town, no train
-    CHECK(!sim.sendAgentByTrain(23, sim.agents()[23].pos + Vec2(150, 0)));
-    long waitedOnPlatform = 0, rodeFar = 0, arrivedOtherTown = 0;
-    std::vector<char> seenWait(sim.agents().size(), 0), seenRide(sim.agents().size(), 0), seenArrive(sim.agents().size(), 0);
-    std::vector<Vec2> boardedAt(sim.agents().size(), Vec2(0, 0));
-    for (int tick = 0; tick < 60000; ++tick) {
-        rail.step(0.05);
-        sim.step(0.05, 0.05);
-        for (std::size_t i = 0; i < sim.agents().size(); ++i) {
-            const int ai = static_cast<int>(i);
-            const RailTrip* t = rr.tripOf(ai);
-            const Vec2 p = sim.agents()[i].pos;
-            if (t && t->phase == RailTrip::Phase::Waiting && !seenWait[i]) {
-                seenWait[i] = 1; ++waitedOnPlatform;
-                CHECK(sim.pedVisible(ai));   // seen on the platform
-            }
-            if (t && t->phase == RailTrip::Phase::Aboard) {
-                CHECK(!sim.pedVisible(ai));  // not on foot while aboard
-                if (!seenRide[i]) { seenRide[i] = 1; boardedAt[i] = p; }
-                else if (std::hypot(p.x - boardedAt[i].x, p.y - boardedAt[i].y) > 300 && seenRide[i] == 1) { seenRide[i] = 2; ++rodeFar; }
-            }
-            // off the train and out on the other town's street
-            if (!t && seenRide[i] && !seenArrive[i] && (p.y < 0 ? 0 : 1) != startNet[i] && std::fabs(p.y) > 240) {
-                seenArrive[i] = 1; ++arrivedOtherTown;
-            }
-        }
-    }
-    const RailRiders::Stats& st = rr.stats;
-    std::printf("    [rail] planned %ld entered %ld boarded %ld set down %ld gave up %ld | waited %ld rode >300 m %ld "
-                "arrived %ld\n", st.planned, st.entered, st.boarded, st.setDown, st.gaveUp, waitedOnPlatform, rodeFar,
-                arrivedOtherTown);
-    CHECK(st.planned > 0);          // trips into the other town chose the train
-    CHECK(waitedOnPlatform > 0);    // walked to the station and in
-    CHECK(st.boarded > 0);          // a train stopped and took them
-    CHECK(rodeFar > 0);             // and carried them, not just flagged them
-    CHECK(st.setDown > 0);          // and let them off
-    CHECK(arrivedOtherTown > 0);    // in the other town, on its streets
-}
-
 // THE STATION ENTRANCE (Glenn, 2026-10-13: station buildings). A pavilion over a station's way in: the roof 3.6 m
 // over the ground with the name board on it facing the street, the walls and machines solid, and a line of ticket
 // gates across the way up with passages a walker fits through -- on a slope, every piece standing on its own ground.

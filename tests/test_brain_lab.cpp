@@ -451,7 +451,7 @@ TEST_CASE(level_brain_lab_one_resident_makes_the_trip) {
     // viewer before this was held: the resident stood 500 m from home, where the day of a role they do not keep had
     // them.)
     CHECK(r.person().brainOwned);
-    r.lc.city.simMutable().seedFromSchedule(15.0);
+    r.lc.city.simMutable().setClock(15.0);
     CHECK(approxEqual(r.person().pos.x, b.markers()[0].stand.x, kParkedWithin) &&
           approxEqual(r.person().pos.y, b.markers()[0].stand.y, kParkedWithin));
     CHECK(!r.person().indoors && !r.person().moving);
@@ -595,7 +595,7 @@ TEST_CASE(level_brain_lab_a_goto_while_driving_redirects_the_drive) {
     // repair this replaced only ever looked at a person standing still)
     {
         const Vec2 carWas = r.car().pos, personWas = r.person().pos;
-        r.lc.city.simMutable().seedFromSchedule(9.0);
+        r.lc.city.simMutable().setClock(9.0);
         CHECK(approxEqual((r.car().pos - carWas).length(), 0, kSamePoint) &&
               approxEqual((r.person().pos - personWas).length(), 0, kSamePoint));
         CHECK(b.inCar(0) && r.sim().drivingV2()->car(car) != nullptr);

@@ -66,11 +66,13 @@ TEST_CASE(pedestrians_react_and_walk_around_each_other) {
     std::vector<Real> prevLean(a.agents().size(), 0.0);
     std::vector<bool> wasMoving(a.agents().size(), false);
     for (int i = 0; i < 8000; ++i) {
+        citytest::keepEveryoneWalking(a, i / 600);   // (no day walks them: ADR-0499)
         a.step(0.1, 0.5);
+        citytest::keepEveryoneWalking(b, i / 600);   // (no day walks them: ADR-0499)
         b.step(0.1, 0.5);
         const auto& ag = a.agents();
         for (std::size_t p = 0; p < ag.size(); ++p) {
-            if (ag[p].activity == Agent::Activity::AtWork) anyArrived = true;
+            if (wasMoving[p] && !ag[p].moving) anyArrived = true;   // a walk ended where it was sent
             if (ag[p].state == Agent::State::Avoiding) anyAvoided = true;
             // The sideways lean only ever changes by a bounded amount per step
             // (continuous steer, never a discrete pop) while the ped keeps walking.
@@ -113,6 +115,7 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     // Walk until someone is properly en route.
     int target = -1;
     for (int i = 0; i < 4000 && target < 0; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
         sim.step(0.1, 0.5);
         const auto& ag = sim.agents();
         for (int k = 0; k < static_cast<int>(ag.size()); ++k)
@@ -126,6 +129,7 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
     Real maxDrift = 0;
     for (int i = 0; i < 300; ++i) {
         sim.setAgentTether(target, anchor, 5.0);
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499)
         sim.step(0.1, 0.5);
         maxDrift = std::max(maxDrift, (sim.agents()[target].pos - heldAt).length());
     }
@@ -139,7 +143,6 @@ TEST_CASE(tether_held_pedestrian_ghost_does_not_drift) {
 TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     const citytest::ModelScene& s = citytest::gridScene(600.0, 120.0, 5);
     CitySim sim;
-    sim.setWander(true);
     s.build(sim, 300, 11);
     int byFile[3] = {0, 0, 0};
     for (const Agent& a : sim.agents()) ++byFile[std::clamp(sim.walkerFile(a), 0, 2)];
@@ -163,6 +166,9 @@ TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
     // where they walk: their own file across the street's walk (W3: measured against the walk's own line, the sidewalk's
     // middle; a file is its distance in from the kerb, walkerVerge, held within the walk)
     sim.setJunctionPad(5.0);
+    // (each sent to where another stands, the walking the brain sends its people by: no sim day walks them, ADR-0499)
+    const int n = static_cast<int>(sim.agents().size());
+    for (int i = 0; i < n; ++i) sim.sendAgentTo(i, sim.agents()[static_cast<std::size_t>((i * 7919 + 13) % n)].pos);
     for (int t = 0; t < 200; ++t) sim.step(0.05, 0.0);
     int checked = 0, onFile = 0;
     for (const Agent& a : sim.agents()) {

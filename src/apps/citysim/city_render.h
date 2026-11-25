@@ -93,7 +93,6 @@ struct CityRenderParams {
     Real localHz = 0.0;
     bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
-    bool wander = false;                   // perpetual random trips (the agent lab)
     bool schedule = true;                  // false: everyone waits at home to be sent (CitySim::setDaySchedule)
     std::vector<engine::CityMarker> markers;   // named points beside streets (CitySimConfig::markers, ADR-0441)
     std::vector<engine::CityResident> residents;     // the people with the agent brain (CitySimConfig::residents; city_brain.h)
@@ -550,9 +549,6 @@ private:
     std::vector<float> crowdLinkLen_;
     Real farPedDistance = 1500.0;
     int crowdLive_ = 0, crowdDrawnSeen_ = 0;
-    long lastDormantEvents_ = 0;      // the stats line's sleepers' events since the last line
-    double lastDormantMs_ = 0;
-    Real farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
     engine::Entity indoorSitGroup_, indoorBodyGroup_;

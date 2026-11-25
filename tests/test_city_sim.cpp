@@ -56,27 +56,19 @@ TEST_CASE(city_player_agent_is_not_auto_driven) {
     scene.build(sim,10, 7);
     sim.setPlayerControlled(0, true);
     Vec2 start = sim.agents()[0].pos;
+    std::vector<Vec2> starts;
+    for (const Agent& ag : sim.agents()) starts.push_back(ag.pos);
     bool othersMoved = false;
-    for (int i = 0; i < 4000; ++i) sim.step(0.1, 0.3);
+    for (int i = 0; i < 4000; ++i) {
+        citytest::keepEveryoneWalking(sim, i / 600);   // (no day walks them: ADR-0499; the player is skipped)
+        sim.step(0.1, 0.3);
+    }
     // The player agent stays put (its brain is the host, not the sim).
     CHECK_APPROX(sim.agents()[0].pos.x, start.x, 1e-9);
     CHECK_APPROX(sim.agents()[0].pos.y, start.y, 1e-9);
     for (std::size_t i = 1; i < sim.agents().size(); ++i)
-        if ((sim.agents()[i].pos - start).length() > 5.0) othersMoved = true;
+        if ((sim.agents()[i].pos - starts[i]).length() > 5.0) othersMoved = true;
     CHECK(othersMoved);   // the AI crowd still moves
-}
-
-TEST_CASE(city_people_commute) {
-    const citytest::ModelScene& scene = town();
-    CitySim sim;
-    scene.build(sim,40, 55);
-    bool atWork = false;
-    for (int i = 0; i < 6000 && !atWork; ++i) {
-        sim.step(0.1, 0.3);
-        for (const Agent& a : sim.agents())
-            if (a.activity == Agent::Activity::AtWork) atWork = true;
-    }
-    CHECK(atWork);
 }
 
 TEST_CASE(city_is_deterministic) {
@@ -84,7 +76,12 @@ TEST_CASE(city_is_deterministic) {
     CitySim a, b;
     scene.build(a,40, 4242);
     scene.build(b,40, 4242);
-    for (int i = 0; i < 2500; ++i) { a.step(0.1, 0.3); b.step(0.1, 0.3); }
+    for (int i = 0; i < 2500; ++i) {
+        citytest::keepEveryoneWalking(a, i / 600);   // (no day walks them: ADR-0499)
+        citytest::keepEveryoneWalking(b, i / 600);
+        a.step(0.1, 0.3);
+        b.step(0.1, 0.3);
+    }
     bool same = a.agents().size() == b.agents().size();
     for (std::size_t i = 0; i < a.agents().size() && same; ++i)
         if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
@@ -201,37 +198,6 @@ TEST_CASE(a_commute_fits_inside_the_working_day) {
     CHECK(fastHours > saneHours);   // faster clock = more of the day burned
 }
 
-// SLEEPING AGENTS. An NPC waiting out its day at home or at work has nothing to
-// decide until its own schedule says otherwise, so it names the moment it next
-// needs thinking about and drops out of the active list until then. It used to
-// be asked the same question sixty times a second, and — since the sim resolves
-// its active set once and every pass iterates it — that put a resting agent
-// through a dozen sweeps per step to do nothing.
-//
-// Its CAR stays where it is, drawn and collidable. Cars are state; agents are
-// the thing that can be recomputed.
-TEST_CASE(resting_agents_sleep_until_their_next_activity) {
-    const citytest::ModelScene& scene = town();
-    CitySim sim;
-    scene.build(sim,300, 5);
-
-    int peakSleeping = 0;
-    long sleepingTicks = 0;
-    for (int i = 0; i < 4000; ++i) {
-        sim.step(0.1, 0.05);
-        peakSleeping = std::max(peakSleeping, sim.sleepingAgents());
-        sleepingTicks += sim.sleepingAgents();
-    }
-    const int population = static_cast<int>(sim.agents().size());
-    std::printf("    [sleep] peak %d of %d agents asleep (mean %.0f)\n",
-                peakSleeping, population, double(sleepingTicks) / 4000.0);
-    // A real fraction of the city is idle at any moment — that is the whole
-    // point. (Before the schedule was fixed, every agent commuted in the same
-    // 90 minutes and almost nobody was ever resting at the same time.)
-    CHECK(peakSleeping > population / 10);
-    CHECK(peakSleeping <= population);
-}
-
 // A slept day must be the SAME day. The wake time is derived from the schedule,
 // so an agent that sleeps through a stretch and wakes on its window must end up
 // where one that was polled the whole time does.
@@ -265,245 +231,6 @@ TEST_CASE(sleeping_does_not_change_the_day) {
             a.agents()[i].activity != b.agents()[i].activity)
             same = false;
     CHECK(same);
-}
-
-// THE SNAPSHOT MUST AGREE WITH THE SIMULATION. scheduleSnapshot answers "where
-// does this agent's day put it at hour T" without simulating anything, which is
-// what lets a city be seeded at its start hour instead of stepped up to it. If
-// it disagrees with what stepping actually produces, a seeded city is a
-// different city.
-//
-// Asserted as a DISTRIBUTION rather than pose-for-pose: the snapshot places an
-// agent from the population's median travel time, not its own route, so
-// individuals legitimately differ while the shape of the day must not.
-TEST_CASE(schedule_snapshot_agrees_with_a_stepped_day) {
-    const citytest::ModelScene& scene = town();
-    CitySim sim;
-    scene.build(sim,400, 17);
-
-    // Step to a definite hour, then ask the snapshot about that same hour. THE RATE: 0.05 -> 0.02 h/s (#306 piece 6 W2).
-    // At 0.05 h/s a walk of a few minutes is most of a working day in-world: the hand-made map's town drew a median
-    // commute of 171.5 s (8.6 in-world hours); the same town built from its road file draws other home and work nodes
-    // (82 nodes, not 81; the same pairs route the same metres, measured: 95 pairs, 295.5 m mean on both) and a median of
-    // 219.6 s, 11 in-world hours, so at 14:00 nobody had arrived in the snapshot (0 at work) and the stepped sim had 304
-    // of 400 still walking. At 0.02 h/s the commute is 4.4 hours and the day's shape is the test's again.
-    const Real rate = 0.02;
-    while (sim.timeOfDay() < 14.0) sim.step(0.1, rate);
-    const Real clock = sim.timeOfDay();
-
-    int simAtWork = 0, simAtHome = 0, simMoving = 0;
-    int snapAtWork = 0, snapAtHome = 0, snapMoving = 0;
-    for (const Agent& a : sim.agents()) {
-        if (a.home == a.work) continue;   // never departs; not a schedule case
-        if (a.moving) ++simMoving;
-        else if (a.activity == Agent::Activity::AtWork) ++simAtWork;
-        else ++simAtHome;
-
-        const CitySim::Snapshot s = sim.scheduleSnapshot(a, clock);
-        switch (s.where) {
-            case CitySim::Snapshot::Where::AtWork: ++snapAtWork; break;
-            case CitySim::Snapshot::Where::AtHome: ++snapAtHome; break;
-            default: ++snapMoving; break;
-        }
-    }
-    std::printf("    [snapshot] at %.1fh  sim: %d work / %d home / %d moving | "
-                "snapshot: %d / %d / %d\n",
-                clock, simAtWork, simAtHome, simMoving,
-                snapAtWork, snapAtHome, snapMoving);
-    std::printf("    [snapshot] median commute %.1f s, %.1f in-world hours at this rate\n", sim.commuteSecondsMedian(),
-                sim.commuteSecondsMedian() * rate);
-    // The same half of the day dominates in both. At 14:00 the standard and
-    // early shifts are at work, so "at work" must lead in both accounts.
-    CHECK(snapAtWork > 0);
-    CHECK(simAtWork > 0);
-    CHECK((snapAtWork > snapAtHome) == (simAtWork > simAtHome));
-}
-
-// It is a PURE function of the hour: same agent, same clock, same answer, and
-// no dependence on what the sim happens to be doing.
-TEST_CASE(schedule_snapshot_is_pure_and_covers_the_whole_day) {
-    const citytest::ModelScene& scene = town();
-    CitySim sim;
-    scene.build(sim,200, 23);
-    const Agent& a = sim.agents()[0];
-
-    for (Real h = 0; h < 24.0; h += 0.5) {
-        const CitySim::Snapshot s1 = sim.scheduleSnapshot(a, h);
-        const CitySim::Snapshot s2 = sim.scheduleSnapshot(a, h);
-        CHECK(s1.where == s2.where);                  // pure
-        CHECK(s1.elapsedSeconds == s2.elapsedSeconds);
-    }
-    // Over a full day a commuter must be found at BOTH ends — a schedule that
-    // only ever reports one is the "never goes home" class of bug.
-    int atWork = 0, atHome = 0;
-    for (const Agent& ag : sim.agents()) {
-        if (ag.home == ag.work) continue;
-        bool sawWork = false, sawHome = false;
-        for (Real h = 0; h < 24.0; h += 0.25) {
-            const auto w = sim.scheduleSnapshot(ag, h).where;
-            if (w == CitySim::Snapshot::Where::AtWork) sawWork = true;
-            if (w == CitySim::Snapshot::Where::AtHome) sawHome = true;
-        }
-        if (sawWork) ++atWork;
-        if (sawHome) ++atHome;
-    }
-    std::printf("    [snapshot] over a day: %d reach work, %d reach home\n",
-                atWork, atHome);
-    CHECK(atWork > 0);
-    CHECK(atWork == atHome);   // everyone who works also gets home
-}
-
-// SEEDING REPLACES STEPPING. The host used to run 400 full-fidelity steps just
-// to get the city moving before the level appeared — thousands of agents, 40
-// sim-seconds, and it could only ever reach "a little after the build hour".
-// seedFromSchedule places everyone directly from their own day, so any start
-// hour costs the same.
-//
-// Asserted as a DISTRIBUTION, not pose-for-pose: seeding uses the population's
-// median travel time rather than each agent's own route, so individuals differ
-// while the shape of the day must not.
-TEST_CASE(seeding_produces_a_lived_in_city_at_any_hour) {
-    const citytest::ModelScene& scene = town();
-
-    auto census = [&](Real hour, int& atWork, int& atHome, int& moving) {
-        CitySim sim;
-        scene.build(sim,400, 29);
-        sim.seedFromSchedule(hour);
-        atWork = atHome = moving = 0;
-        for (const Agent& a : sim.agents()) {
-            if (a.home == a.work) continue;
-            if (a.moving) ++moving;
-            else if (a.activity == Agent::Activity::AtWork) ++atWork;
-            else ++atHome;
-        }
-        CHECK_APPROX(sim.timeOfDay(), hour, 1e-9);   // the clock really moved
-    };
-
-    int dayWork = 0, dayHome = 0, dayMoving = 0;
-    int nightWork = 0, nightHome = 0, nightMoving = 0;
-    census(13.0, dayWork, dayHome, dayMoving);
-    census(3.0, nightWork, nightHome, nightMoving);
-    std::printf("    [seed] 13:00 -> %d work / %d home / %d moving\n",
-                dayWork, dayHome, dayMoving);
-    std::printf("    [seed] 03:00 -> %d work / %d home / %d moving\n",
-                nightWork, nightHome, nightMoving);
-
-    // Midday: most of the city is at work. Small hours: most is at home. If
-    // these came out the same, the schedule would not be driving the seeding.
-    CHECK(dayWork > dayHome);
-    CHECK(nightHome > nightWork);
-    // Both hours place SOMEBODY, and nobody is left in limbo.
-    CHECK(dayWork + dayHome + dayMoving > 200);
-    CHECK(nightWork + nightHome + nightMoving > 200);
-}
-
-// Seeding is deterministic and repeatable — it is the same code path a woken
-// dormant agent will use, so an unstable seed would be an unstable world.
-TEST_CASE(seeding_is_deterministic) {
-    const citytest::ModelScene& scene = town();
-    CitySim a, b;
-    scene.build(a,280, 77);
-    scene.build(b,280, 77);
-    a.seedFromSchedule(9.25);
-    b.seedFromSchedule(9.25);
-    bool same = true;
-    for (std::size_t i = 0; i < a.agents().size() && same; ++i)
-        if (a.agents()[i].pos.x != b.agents()[i].pos.x ||
-            a.agents()[i].pos.y != b.agents()[i].pos.y ||
-            a.agents()[i].activity != b.agents()[i].activity ||
-            a.agents()[i].moving != b.agents()[i].moving)
-            same = false;
-    CHECK(same);
-
-    // ...and the city keeps running normally from a seeded start.
-    for (int i = 0; i < 600; ++i) a.step(0.1, 0.05);
-    bool anyMoved = false;
-    for (const Agent& ag : a.agents())
-        if (ag.moving) anyMoved = true;
-    CHECK(anyMoved);
-}
-
-// SEEDING MUST USE THE LEVEL'S OWN CLOCK RATE.
-//
-// scheduleSnapshot turns "a commute takes N seconds" into "a commute eats H
-// hours of the day" by multiplying by hoursPerSecond. Seeding runs before any
-// step(), so the sim has to be TOLD the rate — and when it was not, it used the
-// 0.05 header default against a level authored at 0.004. That made the travel
-// window 12.5x too wide: every agent whose last schedule boundary was under
-// ~8 in-world hours back seeded as "still travelling", which is roughly three
-// quarters of the population launched onto full-length routes the moment the
-// level loaded. It showed up as a city permanently at 60% in transit.
-TEST_CASE(seeding_respects_the_levels_clock_rate) {
-    const citytest::ModelScene& scene = town();
-
-    auto travellingAt = [&](Real rate, Real hour) {
-        CitySim sim;
-        scene.build(sim,1000, 19);
-        sim.setHoursPerSecond(rate);
-        sim.seedFromSchedule(hour);
-        int moving = 0;
-        for (const Agent& a : sim.agents())
-            if (a.moving) ++moving;
-        return moving;
-    };
-
-    const int population = 1000;
-    const int slow = travellingAt(0.004, 10.5);   // a big world's clock
-    const int fast = travellingAt(0.05, 10.5);    // the old default
-    std::printf("    [seed] travelling at 0.004: %d/%d | at 0.05: %d/%d\n",
-                slow, population, fast, population);
-
-    // At a scale-appropriate clock only agents within one commute of a
-    // boundary are under way — a small minority, not the city.
-    CHECK(slow < population / 4);
-    // ...and the rate genuinely matters, so this cannot pass by accident.
-    CHECK(fast > slow);
-}
-
-// A RATE CHANGE UNDER SLEEPING AGENTS (lockstep with the sky: `daynight
-// minutes` retunes the loop, `hold` stops it, `run` releases it). Wake times
-// are sim-seconds derived at the OLD rate; the sleeper must still wake on its
-// own in-world HOUR — slowed ten times, held, then run ten times faster.
-TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
-    const citytest::ModelScene& scene = town();
-    CitySim sim;
-    scene.build(sim,300, 5);
-    for (int i = 0; i < 6000 && sim.sleepingAgents() == 0; ++i) sim.step(0.1, 0.05);
-    CHECK(sim.sleepingAgents() > 0);
-
-    // A sleeper due between half an hour and a day from now.
-    int idx = -1;
-    Real dueHour = -1;
-    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
-        const Agent& a = sim.agents()[i];
-        if (a.wakeAt < 0 || a.wakeAt <= sim.seconds()) continue;
-        const Real hoursUntil = (a.wakeAt - sim.seconds()) * 0.05;
-        if (hoursUntil < 0.5 || hoursUntil > 20.0) continue;
-        idx = static_cast<int>(i);
-        dueHour = std::fmod(sim.timeOfDay() + hoursUntil, Real(24));
-        break;
-    }
-    CHECK(idx >= 0);
-    if (idx < 0) return;
-    const Real sleptAt0 = sim.agents()[idx].sleptAt;
-
-    for (int i = 0; i < 50; ++i) sim.step(0.1, 0.005);   // ten times slower
-    for (int i = 0; i < 50; ++i) sim.step(0.1, 0.0);     // held
-    CHECK(sim.agents()[idx].wakeAt >= 0);                 // still under
-    CHECK(sim.agents()[idx].sleptAt == sleptAt0);
-    // Released ten times faster: 0.05 h per tick, so within two ticks.
-    Real wokeAt = -1;
-    for (int i = 0; i < 100000 && wokeAt < 0; ++i) {
-        sim.step(0.1, 0.5);
-        const Agent& a = sim.agents()[idx];
-        if (a.wakeAt < 0 || a.sleptAt != sleptAt0) wokeAt = sim.timeOfDay();
-    }
-    CHECK(wokeAt >= 0);
-    Real diff = std::fabs(wokeAt - dueHour);
-    if (diff > 12.0) diff = 24.0 - diff;
-    std::printf("    [rerate] due %.3f h, woke %.3f h (|diff| %.3f h)\n",
-                dueHour, wokeAt, diff);
-    CHECK(diff < 0.15);
 }
 
 // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load that

@@ -231,7 +231,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.pedDemoteRadius = c.pedDemoteRadius;
         params_.drivingRules = c.drivingRules;
         params_.levelPath = c.levelPath;
-        params_.wander = c.wander;
         params_.schedule = c.schedule;
         params_.markers = c.markers;
         params_.residents = c.residents;
@@ -710,23 +709,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
     }
-    sim_.setWander(params_.wander);
     sim_.setDaySchedule(params_.schedule);
-    // Three-tier traffic (P4): the level's opt-in. The bubble only engages
-    // once a player position is fed each fixed step (see step() below) — the
-    // build warm-up therefore runs everything K, exactly as before.
-    sim_.tieringEnabled = params_.tieredAgents;
-    // RT_NEAR_TARGET=<n>: hold about n agents in the full sim round the player (the ring adapts; the GPU crowd shows
-    // the rest) -- for populations past what a full ring can carry. The island at 309k: 28 -> 66 fps at 1500 (K
-    // 3,501 -> 1,350; ring x0.46). NOT on by default: metro_planned's ring holds more than 1500, and the smaller
-    // ring there lets a junction near (45, -195) gridlock (eastbound, northbound and southbound queues all
-    // waiting), which strands the regional bus and its riders (metro_planned_regional_bus_joins_the_towns).
-    // A level whose population needs it sets "nearTarget" (island_8_nature: 1500); RT_NEAR_TARGET overrides.
-    sim_.nearTarget = params_.nearTarget;
-    if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
-    sim_.farTarget = params_.farTarget;   // (the busy streets: downtown's towers fill the far ring too)
-    if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
-    sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
     sim_.pedDemoteRadius = params_.pedDemoteRadius;
     // THE NEW MODEL BEGINS (v2 with a rule set; #255, ADR-0453): the level's cars are made, entities that drive round
@@ -761,37 +744,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     } else if (sim_.drivingV2()) {
         LOG_INFO << "[citysim] driving v2: no rule set named (citysim.drivingRules), so it drives no cars";
     }
-    // What this LEVEL asked for, beside the density line above. Nothing used
-    // to print it, so a level that silently failed to opt into tiering looked
-    // exactly like one that had (2026-09-16).
-    LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")
-             << " dormancy=" << (params_.dormantAgents ? "on" : "off")
-             << " localHz=" << params_.localHz
-             << " maxAmbient=" << params_.maxAmbient;
-    // DORMANCY MUST BE FURTHER OUT THAN ANYTHING DRAWN. A dormant agent's
-    // position is rebuilt from its schedule when it wakes, so if it slept while
-    // its parked car was still on screen, world-hours could pass and the wake
-    // would move a car the player is looking at. Keeping the dormant radius
-    // outside the parked-car draw radius makes that unobservable — and this is
-    // exactly the coupling someone breaks later by tuning sceneryRadius up, so
-    // it is enforced here rather than written in a comment somewhere.
-    if (sim_.dormancyEnabled &&
-        sim_.dormantResumeRadius <= params_.sceneryRadius) {
-        const Real want = params_.sceneryRadius * 2.0;
-        LOG_WARN << "[citysim] dormantResumeRadius ("
-                 << sim_.dormantResumeRadius << " m) is inside the parked-car "
-                    "draw radius (" << params_.sceneryRadius
-                 << " m) — cars could visibly jump when their owner wakes; "
-                    "raising to " << want << " m";
-        sim_.dormantResumeRadius = want;
-        sim_.dormantRadius = std::max(sim_.dormantRadius, want * 1.2);
-    }
 #ifdef RT_ENABLE_SCRIPTING
-    // Scripted goal tables (ADR-0064): a level's citysim block may name an
-    // agents.lua-style script (level_loader reads its text into the config);
-    // its archetype tables replace the built-ins BEFORE the warm-up below, so
-    // the whole visible day runs on the scripted goals. Lua runs only here, at
-    // load — every per-tick transition executes in C++ from the tables.
     // THE ACTIVITY CATALOG (activities framework): what there is to go and do, and the menus that choose -- from
     // assets/scripts/activities.lua when it is there (the built-in catalog otherwise: the same, by test)
     {
@@ -821,26 +774,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 LOG_WARN << "[citysim] roles.lua: " << err
                          << " (using the built-in roles)";
             }
-        }
-    }
-    if (!params_.agentScript.empty()) {
-        engine::ScriptVM vm;
-        std::string err;
-        citysim::GoalTable ped, driver;
-        const char* pedName = params_.wander ? "wander_pedestrian" : "schedule";
-        const char* drvName = params_.wander ? "wander_driver" : "schedule";
-        if (vm.doString(params_.agentScript, &err) &&
-            engine::loadGoalTable(vm, pedName, ped, &err) &&
-            engine::loadGoalTable(vm, drvName, driver, &err)) {
-            sim_.setGoalTables(std::move(ped), std::move(driver));
-            // The day OUT's own table, when the script has one (`stroller`): every role that spends the day out.
-            citysim::GoalTable stroll;
-            std::string serr;
-            if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
-                for (const ResidentRole& r : sim_.roles().roles)
-                    if (!r.day.commute) sim_.setRoleTable(r.name, stroll);
-        } else {
-            LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }
     }
 #endif
@@ -927,18 +860,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         report("WALKER", walkHours, sim_.commuteSecondsWalk());
     }
 
-    // Open the city at its authored hour, with everyone already where their own
-    // day puts them. This replaces a 400-step warm-up that existed only to get
-    // the population moving before the level appeared: at city scale that is
-    // thousands of agents stepped at full fidelity for 40 sim-seconds, and it
-    // could only ever express "a little after the build hour" — opening at
-    // 22:00 would have meant simulating 27 in-world hours to reach it.
-    // The rate FIRST: seeding converts commute seconds into a share of the day,
-    // and step() has not run yet to supply it. Without this the sim seeded at
-    // the 0.05 default while the level ran at 0.004 — a travel window 12.5x too
-    // wide, which put ~3/4 of the city mid-commute the moment it loaded.
+    // THE CITY OPENS AT ITS AUTHORED HOUR (and rate): the brain starts each person at home, at the start of their
+    // role's day, and their day reads this clock (ADR-0499; the old sim placed everyone where its schedule said)
     sim_.setHoursPerSecond(params_.hoursPerSecond);
-    sim_.seedFromSchedule(params_.startHour);
+    sim_.setClock(params_.startHour);
 
     MeshHandle pedMesh{}, lensMesh{};
     if (assets) {
@@ -2366,12 +2291,11 @@ void CityRenderSystem::syncGroups(World& world) {
         for (auto it = drawCache_.begin(); it != drawCache_.end();)
             it = drawBake_ - it->second.used > 600 ? drawCache_.erase(it) : std::next(it);
     // the K tier only, ascending (agents() order): a far agent has no render membership
-    for (int nearIdx : sim_.nearAgents()) {
+    for (int nearIdx : sim_.streetAgents()) {
         const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
         // P4: a far (V) agent has NO render membership — no instance, no lamp,
         // no kinematic proxy (the physics diff keys off these id lists).
-        if (a.far()) continue;
         if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
             // HOW TALL (people.lua band heights by age): every pose scaled about its feet, or its hip on a seat
@@ -2420,31 +2344,9 @@ void CityRenderSystem::syncGroups(World& world) {
             if (lens) lens->transforms.push_back(signalHeads_[k].arrowLens[h.arrowFor == driving::Movement::NearTurn ? 1 : 0]);
         }
 
-    // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
+    // (THE MID-RANGE BAND of the old far tier's stand-ins went with the tiers, ADR-0499: a far person on a walk is drawn by
+    // the GPU crowd, ADR-0495)
     farDrawn_ = 0;
-    if (farPedGroup_.valid() && sim_.hasTierCenter() && !gpuCrowd_ && crowdInit_) {   // (the GPU crowd draws them
-        // when it can -- and until feedGpuCrowd has decided whether it can, nothing: see its note)
-        InstanceGroup* fp = world.get<InstanceGroup>(farPedGroup_);
-        if (fp) fp->transforms.clear();
-        const Vec2 c = sim_.tierCenter();
-        for (int vi : sim_.farAgents()) {
-            const Vec2 d = sim_.agents()[static_cast<std::size_t>(vi)].pos - c;
-            if (d.x * d.x + d.y * d.y > farPedRadius * farPedRadius) continue;
-            Vec2 p, h;
-            if (!sim_.farDrawPose(vi, p, h)) continue;
-            AgentDrawCache& dcf = drawCache(vi);
-            if ((p - dcf.farYAt).lengthSquared() > 25.0) { dcf.farY = groundAt(p.x, p.y); dcf.farYAt = p; }
-            const Real yaw = std::atan2(h.x, h.y);
-            if (fp) {
-                const Real s = sim_.bodyScale(vi);   // (a child's height: the feet stay on the ground)
-                const Real deck = boardUnder(vi, p.x, dcf.farY, p.y, yaw);
-                fp->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, dcf.farY + deck + 0.9 * s, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
-            }
-            ++farDrawn_;
-        }
-        refreshBounds(fp);
-    }
 
     for (InstanceGroup* c : cars) refreshBounds(c);
     refreshBounds(ped);
@@ -2575,7 +2477,6 @@ void CityRenderSystem::syncGroups(World& world) {
         const auto& agents = sim_.agents();
         for (std::size_t ai = 0; ai < agents.size() && debugWidgets_; ++ai) {
             const Agent& a = agents[ai];
-            if (a.far()) continue;   // far tier: nothing drawn
             Real x = a.pos.x, z = a.pos.y;
             Vec2 heading = a.heading;
             // Where this agent is TRYING to go (the arrow's tip): the ghost's
@@ -2775,7 +2676,7 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
     // (the near list: interiors stream in round the player, and whoever rests inside one is near -- this was every
     // indoor agent in the city against every streamed building, once a second)
     if (!inside.empty())
-        for (int ni : sim_.nearAgents()) {
+        for (int ni : sim_.streetAgents()) {
             const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
             if (!a.indoors || a.moving) continue;
             bool done = false;
@@ -2914,7 +2815,6 @@ void CityRenderSystem::step(World& world, Real dt) {
         LOG_INFO << "[stats] SPIKE citysim step " << std::chrono::duration<double, std::milli>(t1 - t0).count()
                  << " ms, group sync " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
                  << " | phases ms: rehash " << (sim_.phaseTimes().rehash - ph0.rehash) / 1000.0
-                 << " tier " << (sim_.phaseTimes().tierPass - ph0.tierPass) / 1000.0
                  << " goals " << (sim_.phaseTimes().goals - ph0.goals) / 1000.0
                  << " sensed " << (sim_.phaseTimes().sensedBuild - ph0.sensedBuild) / 1000.0
                  << " gaps " << (sim_.phaseTimes().gaps - ph0.gaps) / 1000.0
@@ -2931,10 +2831,8 @@ void CityRenderSystem::step(World& world, Real dt) {
         // modelled junction dwells. On its own it cannot tell a jam from a
         // backlog of trips still in flight, so count the ones with actual
         // speed beside it: a big gap between the two IS the jam.
-        int kTier = 0, vTier = 0, moving = 0, rolling = 0, dormant = 0;
+        int moving = 0, rolling = 0;
         for (const Agent& a : sim_.agents()) {
-            if (a.far()) ++vTier; else ++kTier;
-            if (a.tier == Agent::Tier::D) ++dormant;
             if (a.moving) {
                 ++moving;
                 if (a.speed > 0.5) ++rolling;
@@ -2943,21 +2841,9 @@ void CityRenderSystem::step(World& world, Real dt) {
         LOG_INFO << "[stats] citysim step " << (simMs / calls)
                  << " ms, group sync " << (syncMs / calls)
                  << " ms (per fixed step) | hour " << sim_.clockHours()
-                 << " | active(K/P) " << kTier
-                 << ", far(V) " << vTier << ", dormant(D) " << dormant
+                 << " | out on the street " << sim_.streetAgents().size()
                  << ", moving " << moving << ", rolling " << rolling
-                 << ", asleep " << sim_.sleepingAgents()
-                 << " | far band drawn " << farDrawn_
-                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale()
-                 << " | stand-ins left in the CPU band's group " << [&] {
-                        // (0 whenever the GPU crowd draws them: anything else is frozen boxes)
-                        const InstanceGroup* g = farPedGroup_.valid() ? world.get<InstanceGroup>(farPedGroup_) : nullptr;
-                        return g ? g->transforms.size() : std::size_t(0);
-                    }()
-                 << " | sleepers' events " << (sim_.dormantEvents() - lastDormantEvents_) << " in "
-                 << (sim_.dormantEventMs() - lastDormantMs_) / calls << " ms per step";
-        lastDormantEvents_ = sim_.dormantEvents();
-        lastDormantMs_ = sim_.dormantEventMs();
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_;
         simMs = syncMs = 0.0;
         calls = 0;
     }
@@ -3058,8 +2944,7 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
         const engine::RoadModel* model = sim_.roads();
         const bool live = model && !a.released && !a.playerControlled &&
-                          ((a.tier != Agent::Tier::K && CitySim::onRoute(a)) ||
-                           (a.farWalk && a.route.found && a.leg >= 0 && a.leg < static_cast<int>(a.route.steps.size())));
+                          a.farWalk && a.route.found && a.leg >= 0 && a.leg < static_cast<int>(a.route.steps.size());
         int& slot = crowdSlot_[static_cast<std::size_t>(i)];
         if (!live) {
             if (slot >= 0) {
@@ -3259,7 +3144,7 @@ void CityRenderSystem::dealOpenSigns(World& world, Vec3 cam) {
         for (int ai : staff) {
             const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
             char b[160];
-            std::snprintf(b, sizeof(b), " %d[tier %d act %d%s%s at %.0f %.0f, %.1f m from rest]", ai, static_cast<int>(a.tier),
+            std::snprintf(b, sizeof(b), " %d[act %d%s%s at %.0f %.0f, %.1f m from rest]", ai,
                           static_cast<int>(a.activity), a.indoors ? " in" : "", a.moving ? " moving" : "", a.pos.x, a.pos.y, (a.pos - restAt).length());
             if (who.size() < 1500) who += b;
         }
@@ -3451,7 +3336,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                 for (std::size_t i = 0; i < ag.size(); ++i) {
                     const Agent& a = ag[i];
                     if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
-                    if (a.tier == Agent::Tier::K) ++nearK;
+                    if (a.moving || !a.indoors) ++nearK;
                     if (a.indoors) ++nearIndoors;
                     else ++nearPeds;
                 }
@@ -3459,9 +3344,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                 // it's some spawn point"): drawn near K agents by 1.5 m cell -- how many stand in a cell with 3+ others,
                 // the biggest pile, and who is in it
                 std::unordered_map<int64_t, std::vector<int>> pile;
-                for (int nearIdx : sim_.nearAgents()) {
+                for (int nearIdx : sim_.streetAgents()) {
                     const Agent& a = ag[static_cast<std::size_t>(nearIdx)];
-                    if (a.far() || a.released || !sim_.pedVisible(nearIdx)) continue;
+                    if (a.released || !sim_.pedVisible(nearIdx)) continue;
                     if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
                     const int64_t cx = static_cast<int64_t>(std::floor(a.pos.x / 1.5)), cz = static_cast<int64_t>(std::floor(a.pos.y / 1.5));
                     pile[(cx << 32) ^ (cz & 0xffffffff)].push_back(nearIdx);
@@ -3508,8 +3393,8 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     pileWho = "; piled 4+ to a 1.5 m spot: " + std::to_string(piled);
                 }
                 char tb[256];
-                std::snprintf(tb, sizeof(tb), "within 300 m: %d out of doors, %d indoors, %d in tier K; sleeper waypoints %ld",
-                              nearPeds, nearIndoors, nearK, sim_.dormantWaypoints());
+                std::snprintf(tb, sizeof(tb), "within 300 m: %d out of doors, %d indoors, %d out on the street",
+                              nearPeds, nearIndoors, nearK);
                 // ...and the riders astride (a motorcycle's): how many are drawn, the nearest one's spot -- a probe aims there
                 int riders = 0; Vec3 riderAt(0, 0, 0); Real riderD = 1e30;
                 for (Entity re : carRiderGroups_)
@@ -3541,7 +3426,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     if (p.name.find(fq) == std::string::npos || res.size() > 1200) continue;
                     const Vec2 rest = p.entrance + (p.site - p.entrance) * 0.4;
                     int in = 0, staff = 0;
-                    for (int ni : sim_.nearAgents()) {
+                    for (int ni : sim_.streetAgents()) {
                         const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
                         if (!a.indoors || a.moving || (a.pos - rest).lengthSquared() >= 0.25) continue;
                         ++in;
@@ -3561,11 +3446,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             pins.swap(pinRequests_);
             for (const engine::PinRequest& pr : pins) {
                 const int id = pr.agent;
-                if (id >= 0 && id < static_cast<int>(sim_.agents().size())) {
-                    sim_.pinAgent(id, pr.on);
-                    answers_.set("pin?", std::to_string(sim_.pinnedCount()) + " followed; last " + std::to_string(id) +
-                                             (pr.on ? " pinned" : " unpinned"));
-                }
+                if (id >= 0 && id < static_cast<int>(sim_.agents().size()))   // (every person is simulated: ADR-0499)
+                    answers_.set("pin?", "nothing to pin: every person is the brain's, simulated wherever they are (agent " +
+                                             std::to_string(id) + ")");
             }
         }
         const std::string q = groundQuery_;
@@ -3886,7 +3769,7 @@ bool CityRenderSystem::setWorldClock(Real hour, Real hoursPerSecond) {
              << sim_.clockHours() << " h — re-seeding the population at "
              << hour << " h";
     sim_.setHoursPerSecond(hoursPerSecond);
-    sim_.seedFromSchedule(hour);
+    sim_.setClock(hour);   // (each person's day reads the new hour at its next event, ADR-0499)
     return true;
 }
 

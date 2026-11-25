@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "model_scene.h"   // keepEveryoneWalking
 
 #include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/apps/citysim/city_render.h"
@@ -136,6 +137,7 @@ TEST_CASE(city_render_debug_widgets) {
     // count over time — arrows exist only while an agent is actually moving.
     std::size_t maxArrows = 0;
     for (int i = 0; i < 3000; ++i) {
+        citytest::keepEveryoneWalking(city.simMutable(), i / 600);   // (no day walks them: ADR-0499)
         city.step(world, 0.1);
         std::size_t arrows = groupCount(world, city.forwardGroup());
         maxArrows = std::max(maxArrows, arrows);
@@ -311,6 +313,9 @@ TEST_CASE(level_citysim_config_overrides_build_params) {
     // no driving, so no car, ADR-0461)
     CHECK(city.sim().agents().size() == 1u);
     CHECK(carTotal(world, city) == 0u);
+    // (its body is drawn once it is out of doors: sent on a walk, ADR-0499)
+    city.simMutable().sendAgentTo(0, city.sim().walkPoints().nodes.back());
+    city.step(world, 0.1);
     CHECK(groupCount(world, city.pedGroup()) == 1u);
 }
 
@@ -383,11 +388,9 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
     cfg.cars = 1;
     cfg.pedestrians = 1;
     cfg.seed = 7;
-    cfg.wander = true;   // the lab keeps its agents perpetually on the move
     world.add<CitySimConfig>(world.create(), cfg);
     CityRenderSystem city(cityParams());
     CHECK(city.build(world, nullptr));
-    CHECK(city.sim().wander());
 
     // Fully connected on foot: every walk point is in one part of the walks, and a sample of pairs route.
     const WalkPointMap& pts = city.sim().walkPoints();
@@ -400,17 +403,25 @@ TEST_CASE(agent_lab_theta_circuit_is_navigable) {
             if (a != b && !city.sim().pointRoute(a, b).found) allRoute = false;
     CHECK(allRoute);
 
-    // The lab's walker comes alive and, wandering, strings trip after trip together. (Its car was the old driving's:
-    // with no rule set named the level has no driving, so no car, ADR-0461.)
+    // The lab's walker, sent from walk point to walk point, strings trip after trip together. (Its car was the old
+    // driving's: with no rule set named the level has no driving, so no car, ADR-0461. Its own perpetual wander went with
+    // the old sim's days, ADR-0499: sent here as the brain would send it.)
     bool pedMoved = false;
+    int arrivals = 0, nextPoint = 1;
     for (int i = 0; i < 6000; ++i) {
+        citysim::CitySim& sim = city.simMutable();
+        if (!sim.agents().empty() && !sim.agents().front().moving && pts.nodeCount() > 1) {
+            if (i > 0) ++arrivals;
+            sim.sendAgentTo(0, pts.nodes[static_cast<std::size_t>(nextPoint)]);
+            nextPoint = (nextPoint * 7 + 3) % pts.nodeCount();
+        }
         city.step(world, 0.1);
         for (const Agent& a : city.sim().agents())
             if (a.moving && a.speed > 0.5) pedMoved = true;
     }
     CHECK(pedMoved);
     CHECK(city.sim().agents().size() == 1u);
-    CHECK(!city.sim().agents().empty() && city.sim().agents().front().trips >= 3);
+    CHECK(arrivals >= 3);
 }
 
 TEST_CASE(wedge_mesh_is_a_flat_outline_cone) {
@@ -467,6 +478,7 @@ TEST_CASE(debug_navgraph_and_vision_cones_draw_with_the_hud) {
     // Cones: exactly one per MOVING walker every step; the navgraph stays put (static bake, not rebaked per frame).
     bool sawPedCone = false;
     for (int i = 0; i < 3000; ++i) {
+        citytest::keepEveryoneWalking(city.simMutable(), i / 600);   // (no day walks them: ADR-0499)
         city.step(world, 0.1);
         std::size_t movingPeds = 0;
         for (const Agent& a : city.sim().agents())
@@ -638,6 +650,7 @@ Real driveDistance(World& world, CityRenderSystem& city, int steps, Real dt) {
     std::vector<Vec3> prev = snapshot();
     Real total = 0;
     for (int i = 0; i < steps; ++i) {
+        citytest::keepEveryoneWalking(city.simMutable(), i / 600);   // (no day walks them: ADR-0499)
         city.step(world, dt);
         std::vector<Vec3> now = snapshot();
         for (std::size_t k = 0; k < now.size() && k < prev.size(); ++k)
@@ -656,7 +669,6 @@ TEST_CASE(city_sim_rate_default_is_every_step) {
     testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 0; p.pedestrians = 6; p.seed = 5;
-    p.wander = true;              // move continuously (no schedule window)
     CityRenderParams q = p;
     q.localHz = 0.0;              // explicit default
     CityRenderSystem ca(p), cb(q);
@@ -680,7 +692,6 @@ TEST_CASE(city_sim_rate_30hz_covers_the_same_ground) {
     testmap::addRoads(b, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 0; p.pedestrians = 8; p.seed = 5;
-    p.wander = true;              // move continuously (no schedule window)
     CityRenderParams q = p;
     q.localHz = 30.0;
     q.adaptiveRate = false;       // pin the rate: this asserts 30 Hz, not load
@@ -704,12 +715,14 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     testmap::addRoads(world, squareLoop());
     CityRenderParams p = cityParams();
     p.cars = 0; p.pedestrians = 8; p.seed = 5;
-    p.wander = true;              // move continuously (no schedule window)
     p.localHz = 30.0;
     p.adaptiveRate = false;
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
-    for (int i = 0; i < 240; ++i) city.step(world, 1.0 / 60.0);   // get going
+    for (int i = 0; i < 240; ++i) {   // get going (sent: no day walks them, ADR-0499)
+        citytest::keepEveryoneWalking(city.simMutable());
+        city.step(world, 1.0 / 60.0);
+    }
 
     auto poses = [&]() {
         std::vector<Vec3> out;
@@ -735,71 +748,6 @@ TEST_CASE(city_sim_rate_poses_keep_moving_between_ticks) {
     CHECK(frozen == 0);
 }
 
-TEST_CASE(city_sim_far_tier_refreshes_on_a_clock_not_a_tick_count) {
-    // The bug this pins: the far tier's refresh was budgeted in TICKS ("60
-    // buckets, one per tick"), which only means ~1 Hz while 60 ticks take a
-    // second. Halve the sim rate and distant agents refreshed half as often,
-    // went stale near the bubble edge, and the tier pass over-promoted them.
-    // Same wall time, two rates: the far population must be comparable.
-    auto activeCount = [](CityRenderSystem& c) {
-        int k = 0;
-        for (const Agent& a : c.sim().agents())
-            if (a.tier != Agent::Tier::V) ++k;
-        return k;
-    };
-    auto run = [&](Real hz, int& active, int& far) {
-        World world;
-        // A loop big enough that traffic actually LEAVES the bubble (promote
-        // 500 m / demote 620 m) — on a 40 m fixture everything stays K and the
-        // gate would prove nothing.
-        RoadEntity big;
-        big.look.defaultWidth = 10.0;
-        big.look.sidewalk = 2.5;
-        // (#306 piece 6 W2: a T at the east side's middle with a 100 m stub, so the road file has a junction and a lane
-        // level; it was the bare square)
-        big.graph.nodes = { RoadNode{Vec2(0, 0)}, RoadNode{Vec2(1600, 0)},
-                            RoadNode{Vec2(1600, 1600)}, RoadNode{Vec2(0, 1600)},
-                            RoadNode{Vec2(1600, 800)}, RoadNode{Vec2(1700, 800)} };
-        big.graph.addEdge(0, 1, big.look.defaultWidth);
-        big.graph.addEdge(1, 4, big.look.defaultWidth);
-        big.graph.addEdge(4, 2, big.look.defaultWidth);
-        big.graph.addEdge(2, 3, big.look.defaultWidth);
-        big.graph.addEdge(3, 0, big.look.defaultWidth);
-        big.graph.addEdge(4, 5, big.look.defaultWidth);
-        testmap::addRoads(world, big);
-        CityRenderParams p = cityParams();
-        p.cars = 0; p.pedestrians = 60; p.seed = 5;
-        p.wander = true;
-        p.tieredAgents = true;
-        p.localHz = hz;
-        p.adaptiveRate = false;
-        CityRenderSystem city(p);
-        CHECK(city.build(world, nullptr));
-        // A player entity IS the bubble centre: the bridge feeds its position
-        // to the sim every step (no player => everything stays K).
-        Entity player = world.create();
-        world.add<Transform>(player);
-        world.add<CharacterController>(player);
-        for (int i = 0; i < 600; ++i) city.step(world, 1.0 / 60.0);   // 10 s
-        active = activeCount(city);
-        far = static_cast<int>(city.sim().agents().size()) - active;
-    };
-    int a60 = 0, f60 = 0, a30 = 0, f30 = 0;
-    run(0.0, a60, f60);     // every step
-    run(30.0, a30, f30);    // half rate
-    std::printf("        [far tier] 60Hz active %d/far %d | 30Hz active %d/far %d\n",
-                a60, f60, a30, f30);
-    // The tier split must not depend on the sim's rate.
-    //
-    // HONEST SCOPE: this pins the INVARIANT, not the piedmont regression. On
-    // this fixture the old tick-count budget passes too — 60 agents on a 6.4 km
-    // loop put only a handful near the 500 m boundary, where two seconds of
-    // staleness moves a car ~26 m. Piedmont's K/P inflation (950 -> 2650) needs
-    // a dense population against that boundary to reproduce, so the mechanism
-    // there may be more than sample staleness. Enable localHz on a real level
-    // only behind a measurement.
-    CHECK(a30 <= a60 + 6);
-}
 
 // The fleet bridge end to end (scripting builds only): a level whose citysim
 // block names a vehicles.lua-style script must leave the render bridge holding
@@ -1001,27 +949,10 @@ TEST_CASE(city_clock_follows_the_sky_in_lockstep) {
     for (int i = 0; i < 10; ++i) city.step(world, 0.1);   // 1 s at 3 h/s
     CHECK_APPROX(city.sim().timeOfDay(), 9.0, 1e-6);       // the sky's rate, not 0.05
 
-    // A JUMP: the sky goes to 22:00. The sim re-seeds at 22:00 and every
-    // resting AI agent is where its own schedule puts it at that hour. At a
-    // LIVABLE rate: at 3 h/s a one-minute commute is 180 in-world hours and
-    // the whole city is "in flight" all day (the first cut checked 0 agents).
+    // A JUMP: the sky goes to 22:00, and the sim's clock with it. (Every resting person was re-placed where the old
+    // sim's schedule put them at that hour; since ADR-0499 each person's day, the brain's, reads the new hour.)
     CHECK(city.setWorldClock(22.0, 0.005));
     CHECK_APPROX(city.sim().timeOfDay(), 22.0, 1e-6);
-    int checked = 0, agree = 0;
-    for (const Agent& a : city.sim().agents()) {
-        if (a.playerControlled || a.released || a.home == a.work) continue;
-        const CitySim::Snapshot s = city.sim().scheduleSnapshot(a, 22.0);
-        Agent::Activity want;
-        if (s.where == CitySim::Snapshot::Where::AtHome) want = Agent::Activity::AtHome;
-        else if (s.where == CitySim::Snapshot::Where::AtWork) want = Agent::Activity::AtWork;
-        else continue;   // in flight: placed a measured distance along the trip
-        ++checked;
-        if (a.activity == want) ++agree;
-    }
-    std::printf("    [lockstep] %d/%d resting agents where 22:00 puts them\n",
-                agree, checked);
-    CHECK(checked > 0);
-    CHECK(agree == checked);
     // Drift inside the tolerance is not a jump (no re-seed churn).
     CHECK(!city.setWorldClock(22.01, 0.005));
     CHECK_APPROX(city.sim().timeOfDay(), 22.0, 1e-6);

@@ -68,21 +68,6 @@ struct Agent {
         Count
     };
 
-    // Simulation tier (P4 three-tier traffic). K (Kinematic) is the full agent
-    // as it always ran: sensing, FSM, signals, render bake, kinematic proxy.
-    // V (Virtual) is a persistent FAR agent: full identity + exact route state
-    // (link, lane, param, speed) but no rendering, no physics proxy, no
-    // sensing/FSM and no live signal queries — it traverses its real A* route
-    // on a coarse ~1 Hz tick at a modelled speed (class speed shaped by fixed
-    // average junction delays), so promotion finds it where it should be.
-    // Everything is K until a level opts in (CitySim::tieringEnabled) AND a
-    // player position is fed (setTierCenter) — headless sims are unchanged.
-    // D (Dormant) is the tier BELOW V: not simulated at all, not even coarsely.
-    // A V agent still walks its route link by link once a second — cheap, but
-    // not free, and there are thousands of them. A D agent costs nothing: when
-    // the player comes near it is reconstructed from its own schedule
-    // (scheduleSnapshot) and handed to V.
-    enum class Tier : uint8_t { D, V, K };
 
     // Stable identity (Living City, ADR-0066 Phase 1). Assigned once at build in
     // agent order and never reused for a different agent this run, so relationship
@@ -111,48 +96,12 @@ struct Agent {
     float sideStart = 0, sideEnd = 0;
 
     State state = State::Resting;
-    Tier tier = Tier::K;
-    // Sim-seconds at which a DORMANT agent stopped being simulated. Its state is
-    // reconstructed from its schedule on waking, so this is only telemetry.
-    Real dormantSince = 0;
-    // CONTINUITY (the 100k plan; Glenn: "I'd definitely want it so I could follow someone around the city ... I
-    // don't want it so that if you turn around and turn back that person disappears"):
-    //   rememberUntil -- sim seconds: someone near you lately stays FAR (its exact trip) instead of going dormant
-    //                    (rebuilt from its schedule), so it is where it should be when you come back;
-    //   pinned        -- followed: simulated in full however far it goes.
-    Real rememberUntil = 0;
-    bool pinned = false;
-    // "Is this agent too far away to have a body?" — no drawn instance, no
-    // physics proxy, nothing for anyone to sense or brake for.
-    //
-    // Ask through this rather than comparing to a specific tier. Nearly every
-    // site in the sim wants exactly this question, and writing it as
-    // `tier == Tier::V` silently means "the ONE far tier", so adding another
-    // one below V turns each of those into a wrong answer with no compile
-    // error. The tier PASS itself still compares explicitly — it is the thing
-    // that decides which tier an agent belongs in.
-    bool far() const { return tier != Tier::K; }
-    // V-tier bookkeeping: sim-seconds at this agent's last coarse tick (its
-    // next tick advances by the difference — no wall clock), and the remaining
-    // modelled junction dwell it is currently "waiting out" mid-route.
+    // the sim second a far walker's crowd route began (farWalk, below)
     Real vLastTick = 0;
     // A FAR BRAIN WALKER DRAWN BY THE GPU CROWD (ADR-0495): `route` from where they were when their walk began far, at
     // `speed` from `vLastTick` (sim seconds), moved by the crowd shader alone -- the sim does not move them (not
     // `moving`), and their own body is not drawn (`indoors`).
     bool farWalk = false;
-    Real vHold = 0;
-    // SCHEDULED WAKE. An agent resting at home or at work has nothing to decide
-    // until its own day says otherwise, so instead of re-reading the clock every
-    // tick it names the sim-second it next needs thinking about and drops out of
-    // the active list entirely until then. `wakeAt` < 0 means awake; `sleptAt`
-    // is the UNWRAPPED in-world hour it went under (clockTotalHours), so the
-    // dwell clock is caught up exactly on waking whatever the rate did
-    // meanwhile — the sky's loop can be retuned or held under a sleeper.
-    //
-    // This is why the schedule had to be fixed first: a population that all
-    // departs in the same 90 minutes has almost nobody asleep at any moment.
-    Real wakeAt = -1;
-    Real sleptAt = 0;
     bool playerControlled = false;
     // DIRECTED (ADR-0091): a director owns this agent's plan — the possession
     // channel now, a model later. The goal layer leaves it entirely alone (no
@@ -451,35 +400,13 @@ public:
     Real commuteSecondsMedian() const { return commuteSecondsMedian_; }
     // The same, on foot: a kilometre-scale walk is hours of world time. 0 when nobody has a routable commute.
     Real commuteSecondsWalk() const { return commuteSecondsWalk_; }
-
-    // WHERE AN AGENT'S DAY SAYS IT SHOULD BE at in-world hour `clock`.
-    //
-    // Pure: no rng, no shared state, and the clock is a PARAMETER rather than
-    // the sim's own — so it can be asked about any hour, tested in isolation,
-    // and reused to place an agent that has not been simulated at all. That is
-    // what lets a city be seeded at its start hour instead of stepped up to it,
-    // and (later) lets an agent sleep through hours of world time and be
-    // reconstructed on demand when the player comes near.
-    struct Snapshot {
-        // ...and the night out (eveningPlan): on the way to tonight's place, there, on the way home from it
-        enum class Where : uint8_t { AtHome, AtWork, ToWork, ToHome, ToEvening, AtEvening, FromEvening };
-        Where where = Where::AtHome;
-        int venue = -1;   // the evening's: an index into venues_ (eveningVenue)
-        // For the travelling cases: how long the agent has been under way, in
-        // sim-seconds. Zero when it is at either end.
-        Real elapsedSeconds = 0;
-    };
-    Snapshot scheduleSnapshot(const Agent& a, Real clock) const;
     // WHO IS ON SHIFT (storefronts stage 3, the OPEN signs): per place (by PlaceId), how many of the people who work
     // there are at work now -- a simulated agent by its own state, a dormant one by its schedule. `out` is resized to
     // `placeCount`. `only` (by PlaceId, non-zero = wanted) limits the count to those places: a dormant worker's
     // schedule costs a snapshot, and the island's few hundred thousand of them took ~180 ms a call.
     // Is this worker at work now? A simulated agent by its own state, a dormant one by its schedule (a snapshot,
     // ~0.75 us): the one test staffOnShift makes, for callers that spread it over frames.
-    bool atWorkNow(const Agent& a) const {
-        return a.tier == Agent::Tier::D ? scheduleSnapshot(a, clockHours_).where == Snapshot::Where::AtWork
-                                        : a.activity == Agent::Activity::AtWork;
-    }
+    bool atWorkNow(const Agent& a) const { return a.activity == Agent::Activity::AtWork; }   // (the brain keeps `activity`)
     void staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired = nullptr,
                       const std::vector<uint8_t>* only = nullptr, PlaceId watch = kNoPlace,
                       std::vector<int>* watchers = nullptr) const;   // + who works at `watch` (opensigns? telemetry)
@@ -493,31 +420,16 @@ public:
     // made the travel window 12.5x too wide and launched roughly three quarters
     // of the population onto the road at load.
     void setHoursPerSecond(Real h) { hoursPerSecond_ = h; }
+    // The clock's hour now (the level's start hour, at load).
+    void setClock(Real hours) {
+        clockHours_ = std::fmod(hours, Real(24));
+        if (clockHours_ < 0) clockHours_ += 24;
+    }
     Real hoursPerSecond() const { return hoursPerSecond_; }
     // A resting agent with nothing ahead of it in its day (hoursUntilRestEvent): never wakes by the clock.
     static constexpr Real kNoRestEvent = 1e9;
 
-    // Place the whole population where `clock` says it should be, and set the
-    // sim clock to it. Replaces stepping the city up to its start hour: opening
-    // at 22:00 is the same cost as opening at 08:00. Call after build() and
-    // assignPlaces(); the host then steps normally from there.
-    void seedFromSchedule(Real clock);
 
-    // Dormancy telemetry: how many agents were put to sleep / rebuilt so far,
-    // and how many are dormant right now. A healthy far field is mostly
-    // dormant with a trickle of wakes, not a churn of both.
-    int dormancies() const { return dormancies_; }
-    int wakes() const { return wakes_; }
-    int dormantAgents() const {
-        int n = 0;
-        for (const Agent& a : agents_) if (a.tier == Agent::Tier::D) ++n;
-        return n;
-    }
-
-    // How many agents the scheduled wake skipped on the last step — the ones
-    // waiting out their day at a door and costing nothing. Rises at night and
-    // midday, falls through both rush hours.
-    int sleepingAgents() const { return sleeping_; }
     // The hour this agent must LEAVE to arrive at departWork, at the current
     // clock rate. Wraps midnight: a long commute on a fast clock departs the
     // previous evening.
@@ -550,7 +462,7 @@ public:
     // rather than read the code and conclude. Microseconds, accumulated since
     // the last resetPhaseTimes().
     struct PhaseTimes {
-        double rehash = 0, tierPass = 0, activeList = 0, goals = 0,
+        double rehash = 0, activeList = 0, goals = 0,
                sensedBuild = 0, gaps = 0, advance = 0, total = 0;
         // advance split five ways: the movement loop, the car pair check,
         // the two WHOLE-POPULATION loops, the 6-pass overlap relaxation,
@@ -564,8 +476,9 @@ public:
     Real timeOfDay() const { return clockHours_; }
     Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
     const std::vector<Agent>& agents() const { return agents_; }
-    // Every K agent (the simulated-in-full, drawn tier), ascending: what a drawer walks instead of agents()
-    const std::vector<int>& nearAgents() const { return kIdx_; }
+    // THE PEOPLE OUT ON THE STREET as of the last tick (walking, or standing outside), ascending: what a drawer walks
+    // instead of agents() (ADR-0499; it was the K tier)
+    const std::vector<int>& streetAgents() const { return street_; }
     // THE GPU CROWD'S FEED: the agents whose far trip may have changed since the last take (a tier change, a far
     // tick, a wake) -- a drawer re-reads just those. `all` set: re-read everyone (the list overflowed, untaken).
     void takeCrowdChanges(std::vector<int>& out, bool& all) {
@@ -574,12 +487,6 @@ public:
         all = crowdDirtyAll_;
         crowdDirtyAll_ = false;
     }
-    // Every V agent (simulated coarsely, not drawn in full), ascending: the drawers' mid-range band
-    const std::vector<int>& farAgents() const { return vIdx_; }
-    // A far agent's drawn pose: its last coarse pose run on along its heading at its speed for the time since that
-    // tick (capped, and never past its link's end), so a far crowd moves rather than hopping once a second. False
-    // for an agent with nothing to show: not far, indoors at rest, riding, released.
-    bool farDrawPose(int agentIndex, engine::Vec2& pos, engine::Vec2& heading) const;
     int walkerFile(const Agent& a) const;       // which file across the pavement a walker keeps (0 = by the kerb)
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
     const WalkPointMap& walkPoints() const { return walkPoints_; }
@@ -600,55 +507,12 @@ public:
     std::vector<uint8_t> holdWhy_;
     std::vector<int> solverFrom_, solverNbr_;   // the overlap solver's neighbours, gathered once a tick (advance)
 
-    // --- three-tier traffic (P4) --------------------------------------------
-    // Public knobs with the approved defaults; a level/test opts in by setting
-    // tieringEnabled and feeding the player position each fixed step. (The
-    // level_loader JSON pass-through is a one-line hookup owned by the level
-    // pipeline; the sim only exposes the fields.) Without BOTH the switch and
-    // a centre, every agent stays K and behaviour is bit-identical to before.
-    bool tieringEnabled = false;
-    // THE NEAR TARGET (the 100k plan, pushing past it): with nearTarget > 0 the K ring's radii are scaled (35%..100%)
-    // to hold about that many agents simulated in full round the player -- denser cities, a smaller ring; the GPU
-    // crowd shows everyone past it. 0: the radii as set.
-    int nearTarget = 0;
-    Real nearScale() const { return nearScale_; }
-    // ...and the FAR ring (V): with farTarget > 0 the dormant / resume radii scale (20%..100%) to hold about that many
-    // agents in the coarse tier -- at 5x density a 1.2 km circle held 105,000 of them, ticked once a second. The GPU
-    // crowd draws dormant travellers moving, so a smaller far ring is not an emptier view.
-    int farTarget = 0;
-    Real farScale() const { return farScale_; }
-    long resumedTrips() const { return resumedTrips_; }
-    long dormantEvents() const { return dormantEventsRun_; }   // schedule events run for sleeping agents
-    long dormantWaypoints() const { return dormantWaypoints_; }   // sleepers under way moved on (through traffic)
-    double dormantEventMs() const { return dormantEventMs_; }   // ...and the wall time they took, in all
-    Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
-    Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
+    // THE BRAIN'S NEAR RING (ADR-0493): its people are near inside pedPromoteRadius of the player, far beyond
+    // pedDemoteRadius (the level's own numbers; they were the old K tier's ring)
     Real pedPromoteRadius = 280.0;
     Real pedDemoteRadius = 350.0;
-    // How often a FAR agent refreshes, in SIM SECONDS. The bucket count is
-    // derived from this and the tick length (capped by vTickDivisor), so the
-    // far tier keeps its ~1 Hz refresh whether the sim runs at 60 Hz or 15.
-    Real vRefreshSeconds = 1.0;
-    int vTickDivisor = 60;           // V bucket count: uid % divisor, one bucket
-                                     // per fixed frame (~1 Hz per agent at 60 Hz)
 
-    // DORMANCY (the tier below V). Off by default: with the switch off nothing
-    // ever enters Tier::D and behaviour is bit-identical to the V/K sim.
-    bool dormancyEnabled = false;
-    // V->D beyond this, D->V inside `dormantResumeRadius` (hysteresis).
-    //
-    // THIS MUST EXCEED THE RADIUS AT WHICH PARKED CARS ARE DRAWN (the render
-    // bridge's sceneryRadius, 450 m by default). A dormant agent's position is
-    // reconstructed from its schedule when it wakes, so if it went dormant
-    // while its car was still on screen, hours of world time could pass and the
-    // wake would move it — teleporting a car the player is looking at. Keeping
-    // dormancy strictly further out than anything drawn makes that
-    // unobservable. The host asserts the relation at build.
-    Real dormantRadius = 1200.0;
-    Real dormantResumeRadius = 1000.0;
-
-    // The tier bubble's centre (the player), fed by the host each fixed step.
-    // No centre = no player = everything stays K (headless sims/tests).
+    // THE PLAYER'S PLACE, fed by the host each fixed step: the centre of the brain's near ring. None: headless.
     // TICK CADENCE (P8.2e). The sim owns how often it advances — the caller
     // only hands it elapsed time. `seconds` 0 = every call (historical, and
     // what every existing level/test relies on); 1/30 = tick at 30 Hz,
@@ -678,9 +542,6 @@ public:
     engine::Vec2 tierCenter() const { return tierCenter_; }
     bool hasTierCenter() const { return haveTierCenter_; }
 
-    // Lifetime tier-transition counters (test gates: conservation, engagement).
-    long tierPromotions() const { return promotions_; }
-    long tierDemotions() const { return demotions_; }
 
     // Agent indices whose grid cell falls within `radius` of `pos`: a SUPERSET
     // by cell coverage, sorted ascending — callers apply exact predicates (the
@@ -691,32 +552,6 @@ public:
         grid_.query(pos, radius, out);
     }
 
-    // TAKE THE TRAIN (city_rail_riders.h): plan the journey to `dest` in another town, register it, and walk the
-    // agent to the station's way in; the sim takes it from there. False when no train helps (same town, or a town
-    // without a station) or the station cannot be walked to.
-    bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
-        if (walkPoints_.empty() || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
-        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        if (rail_.tripOf(agentIndex)) return false;
-        const int origin = walkPoints_.nearestNode(a.pos);
-        const int to = walkPoints_.nearestNode(dest);
-        if (origin < 0 || to < 0 || origin == to) return false;
-        RailTrip t;
-        if (!rail_.plan(origin, walkPoints_.nodes[static_cast<std::size_t>(origin)], to, walkPoints_.nodes[static_cast<std::size_t>(to)], t))
-            return false;
-        // (the station's way in can be walked to: the one router, point to point)
-        const int acc = rail_.stations()[static_cast<std::size_t>(t.from)].accessNode;
-        if (acc != origin && !pointRoute(origin, acc).found) return false;
-        rail_.start(agentIndex, t);
-        ++rail_.stats.planned;
-        a.wakeAt = -1;
-        a.activity = Activity::Outing;
-        if (acc == origin) { enterStation(a, agentIndex); return true; }
-        startTrip(a, origin, acc, /*fromRest=*/!a.moving);
-        if (!a.moving) { rail_.forget(agentIndex); return false; }
-        a.state = Agent::State::Walking;
-        return true;
-    }
 
     // GO INSIDE (ADR-0091). A place is somewhere people are hidden from the
     // street while they are in it — pedVisible() is false for a still agent
@@ -790,9 +625,6 @@ public:
     // whenever it is more than `maxLead` metres from `anchor` (the car's real
     // position, re-fed each step). Determinism holds for an identical call
     // sequence — the host owns whatever nondeterminism it feeds in.
-    // Follow an agent: keep it in the full sim wherever it goes (and back off when unpinned).
-    void pinAgent(int agentIndex, bool on);
-    int pinnedCount() const { return static_cast<int>(pinned_.size()); }
     Real rememberSeconds = 600.0;   // how long someone near you stays exact once you have gone (0: off)
     void setAgentTether(int agentIndex, engine::Vec2 anchor, Real maxLead) {
         if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
@@ -852,14 +684,6 @@ public:
     bool walkJoin(engine::Vec2 p, engine::WalkPoint& out, bool* cutOff = nullptr) const;
 
 
-    // WANDER mode (ADR-0063, the agent lab): agents ignore the daily schedule and
-    // start a fresh trip to a random reachable node the moment they arrive — so a
-    // one-car lab level has its car lapping the circuit continuously instead of
-    // parking until the evening commute. Deterministic (draws from the sim rng).
-    // Since ADR-0064 this INSTALLS the built-in wander goal tables (replacing
-    // whatever tables are set — call setGoalTables after it, not before).
-    void setWander(bool on);
-    bool wander() const { return wander_; }
     // NO DAY SCHEDULE (citysim.schedule = false; the trip lab, ADR-0415): everyone is seeded at home -- a car owner's
     // car parked outside, the person indoors -- and held there for a director (`directed`), going only where they are
     // sent. Set before seedFromSchedule.
@@ -927,20 +751,9 @@ public:
     // city_possess.cpp): the brain's `possessed` state holds them (their intent kept, nothing moving them on) until
     // `on` is false, when they plan again from where they stand. Nothing happens for an agent the brain does not own.
     void brainNoteHeld(int agent, bool on);
-    // Does this agent drive one trip straight into the next (the level's wander mode, or a roaming role's day)?
-    // The chained-arrival corner, the final-leg turn yield and the no-parking rules ask this, not wander_.
-    bool roams(const Agent& a) const {
-        return wander_ || (a.role < roles_.roles.size() && roles_.roles[a.role].day.roam);
-    }
+    // Does this agent drive one trip straight into the next (a roaming role's day)?
+    bool roams(const Agent& a) const { return a.role < roles_.roles.size() && roles_.roles[a.role].day.roam; }
 
-    // The goal layer as data (ADR-0064): replace the per-archetype goal tables
-    // (states + transitions over the C++ action vocabulary — city_goals.h).
-    // Load-time only by design: call at level load (e.g. from tables authored
-    // in agents.lua); every per-tick transition then runs in C++ from the
-    // table. Agents are remapped onto the new table by their activity label
-    // (first state with a matching label, else the entry state); a rebuild or
-    // setWander() resets back to the built-ins.
-    void setGoalTables(GoalTable pedestrian, GoalTable driver);
 
     // Why is this agent standing still? The question splits in two: advance()
     // was never called (a guard above the call site), or it ran and something
@@ -1245,27 +1058,12 @@ private:
     // fromRest: the trip starts from a PARKED pose (not chained mid-motion) —
     // a rest departure whose origin is a junction skips past the box so the car
     // never materializes among crossing traffic.
-    void startTrip(Agent& a, int origin, int goal, bool fromRest = true);
-    bool startWanderTrip(Agent& a, int from, bool fromRest = true);
     // Goal layer (ADR-0064). goalThink is step()'s pass 1 for one agent: run
     // the agent's current goal state — retry a GoTo departure, or (Rest) emit
     // this tick's events and take the first table row that fires.
-    void goalThink(Agent& a, Real dtHours);
     int indexOf(const Agent& a) const {
         return static_cast<int>(&a - agents_.data());
     }
-    enum class GoalFire { NoRow, Blocked, Fired };
-    GoalFire tryGoalEvent(Agent& a, GoalEvent event);
-    // DEPARTURES PER STEP: each departure routes, and a clock window can send thousands at once --
-    // measured on island_8_saltwood, 2313 wander routes in ONE step (357 ms), the hitch Glenn felt
-    // driving the pass. Past the budget a departure reports Blocked and retries next tick, as a
-    // driver waiting for launch clearance does. Buses are exempt.
-    static constexpr int kDeparturesPerStep = 200;
-    int departuresThisStep_ = 0;
-    // Execute the agent's (GoTo) goal state: start the trip toward its target.
-    // False when no trip launched (then a NoRoute row, if any, has been taken).
-    bool startGoalTrip(Agent& a, int origin, bool fromRest);
-    int departNode(const Agent& a) const;   // where a rest departure starts from
     // The node a picked GoTo goes to (an outing, lunch, a campus break, an activity, the errand menu), its venue, seat
     // or session held; -1: the state's target is fixed, or nothing was found. Shared with the brain's day (ADR-0491).
     int choosePickedNode(Agent& a, int origin, const GoalState& s);
@@ -1279,16 +1077,9 @@ private:
     // How long a visit lasts (hours): the activity's minutes, else its kind of site's; drawn from the agent's stream.
     Real visitHours(Agent& a);
     Real jitterHours(Agent& a, Real lo, Real hi);
-    // The node a GoTo state aims at, or -1 when it has no fixed one (Random
-    // picks inside startWanderTrip; Fare/Drop come from the Dispatch).
-    int goalNodeFor(const Agent& a, GoalTarget target) const;
     void applyTaxiFraction();
-    // WHAT AN AGENT'S DAY IS: its ROLE's table (setRoleCatalog); the agent lab's wanderers run their perpetual loop
-    // (goalPed_).
-    const GoalTable& tableFor(const Agent& a) const {
-        if (wander_) return goalPed_;
-        return roleTables_[static_cast<std::size_t>(dayRoleOf(a))];
-    }
+    // WHAT AN AGENT'S DAY IS: its ROLE's table (setRoleCatalog), which the brain runs (ADR-0491)
+    const GoalTable& tableFor(const Agent& a) const { return roleTables_[static_cast<std::size_t>(dayRoleOf(a))]; }
     GoalTable& tableFor(const Agent& a) { return const_cast<GoalTable&>(static_cast<const CitySim&>(*this).tableFor(a)); }
     // The role whose day an agent runs: its own -- except a day out with none to take (one who drives, or a city
     // with nowhere to go), whose park is its "work": the catch-all job's day (the historical park-as-destination).
@@ -1298,7 +1089,7 @@ private:
         if (daysOut(a) && venues_.empty()) return catchAllRole_;
         return r;
     }
-    bool outingStroller(const Agent& a) const { return !wander_ && daysOut(a) && dayRoleOf(a) == static_cast<int>(a.role); }
+    bool outingStroller(const Agent& a) const { return daysOut(a) && dayRoleOf(a) == static_cast<int>(a.role); }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
@@ -1316,12 +1107,10 @@ private:
     std::string siteKindOf(const Agent& a) const;   // the kind of site the agent's trip is for (arrival's dwell)
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
-    void installGoalTables(GoalTable pedestrian, GoalTable driver);
     void rebuildRoleTables();   // every role's day, from roles_
     // A walker on a walk beside a road (a street's sidewalk or footway stretch, or a corner walk round a junction's kerb:
     // Agent::roadSide): it does not step into that road to get round anyone (no further than Agent::kerbRoom).
     bool onStreet(const Agent& a) const { return onRoute(a) && a.roadSide != 0; }
-    void reseatOnTables();      // each agent onto its table's state wearing its label (else the entry)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s crossing verdict for a walker: the speed target after the hold at the next crossing on its route.
     struct CrossingGate {
@@ -1331,27 +1120,10 @@ private:
         CrossingKind kind = CrossingKind::Unmarked;   // how they would cross it, going now
     };
     CrossingGate crossingGate(const Agent& a, Real target) const;
-    void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain or rest
+    void arrive(Agent& a);   // arrival: it stops; whoever sent it says what next
     void computeGaps();
-    // --- three-tier traffic (P4) ---
-    // Promote/demote against the bubble (fixed update, agent-index order:
-    // demotions swept first, then promotions from a grid query — deterministic).
-    void tierPass(Real hoursPerSecond);
-    // Put one agent where its schedule says it is; shared by load-time seeding
-    // and by waking a dormant agent, so both place by identical rules.
-    void placeFromSchedule(int idx);
-    void wakeDormant(int idx);        // D -> V, rebuilt from the schedule
-    // One coarse V tick for agent `i`: goal layer at accumulated hours, then
-    // vAdvance over the accumulated seconds; re-hashes the agent in the grid.
-    // Promotion runs this as its catch-up so the K handoff pose is exact.
     // The actual advance. step() is the cadence gate in front of it.
     void stepTick(Real dt, Real hoursPerSecond);
-    void railPass(Real dt);                        // walks in and out, boarding, riding (city_rail_riders.h)
-    void enterStation(Agent& a, int self);
-    void tickV(int i, Real hoursPerSecond);
-    // Advance a V agent along its REAL route at the modelled pace, a fixed dwell at each crossing it steps onto (vHold,
-    // kVJunctionDelay). No sensing, no FSM, no signal state.
-    void vAdvance(Agent& a, Real dt);
     // Begin agent `a` on `route` (found): the trip's state, placed at its start. The one place a trip begins.
     void beginRoute(Agent& a, engine::roads::WalkRoute route);
     // A walk route for a walker from point `from` to point `to`, each end joined to the walks from what its place states
@@ -1430,10 +1202,6 @@ private:
     AgentGrid grid_;
     AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
     std::vector<int> pedGridIds_;
-    // ...and the same cells holding ONE tier each (setTier keeps them): the wake check asks for dormant agents in a
-    // kilometre and the promote check for far ones in 500 m -- from grid_ that was everyone there (~5,000 at 100k),
-    // each loaded and sorted to read its tier
-    AgentGrid vGrid_, dGrid_;
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
     RailRiders rail_;
@@ -1441,10 +1209,6 @@ private:
     std::string populationCacheDir_;      // setPopulationCacheDir
     PopulationCacheReport popCache_;
                                               // never nest across a live iteration)
-    std::vector<int> tierScratch_;            // tierPass promotion candidates
-    std::vector<int> dormantScratch_;         // tierPass wake candidates
-    int dormancies_ = 0;
-    int wakes_ = 0;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
     PlaceKindCatalog placeKinds_ = defaultPlaceKindCatalog();
@@ -1458,7 +1222,6 @@ private:
         for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));
         return v;
     }();
-    GoalTable goalPed_ = wanderGoals(false);
     ActivityCatalog catalog_ = defaultActivityCatalog();
     int students_ = 0;
     std::vector<Venue> venues_;
@@ -1486,11 +1249,9 @@ private:
     bool clearOfWalks(engine::Vec2 p, Real r) const;
     int joinSettled(Agent& a, int def, const std::vector<std::pair<Real, int>>& cand,
                     const std::function<int(const Session&)>& freeRole);
-    void stepSessions();
     engine::Vec2 zonePoint(const Session& s, int role, uint32_t bits) const;   // a point in that role's zone
     void releaseSeat(Agent& a);
     int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
-    void stepSeats(Real dt);                     // the walk off the path to a seat and back
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     Real commuteSecondsMedian_ = 0;
     Real commuteSecondsWalk_ = 0;
@@ -1498,22 +1259,13 @@ private:
     // until my next event" into a sim-second wake time.
     Real hoursPerSecond_ = 1.0 / 3600.0;   // (real time)
     Real staffingRate_ = 0;   // the clock rate Venue::staffed was worked out at (indexVenueStaffing)
-    int sleeping_ = 0;   // agents skipped this step by the scheduled wake
     PhaseTimes phase_;   // print-only instrumentation
     Real clockHours_ = 6.0;
-    // The clock UNWRAPPED (never reset): the time base for dwell accounting
-    // across sleeps, immune to rate changes and holds. heldSeconds_ counts
-    // sim-seconds spent at rate 0 so sleepers' wake times can be shifted
-    // past a hold on release (rerateSleep).
-    Real clockTotalHours_ = 0;
-    Real heldSeconds_ = 0;
-    Real lastLiveRate_ = 0;   // the rate sleepers' wake times were last valid at
-    void rerateSleep(Real newRate);
+    Real clockTotalHours_ = 0;   // the clock unwrapped (never reset)
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
     std::vector<engine::Vec2> crowdBase_;   // scratch: each walker's pose before the crowd offset (Agent::crowdOffset)
     std::vector<uint8_t> crowdHas_;
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
-    bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     bool daySchedule_ = true;   // false: everyone at home, held for a director (setDaySchedule)
     std::optional<driving::Driving> drivingV2_;   // the new driving model, when the level asks for it (useDrivingV2)
     // The level's road model (setRoads), the driving's road too: shared, so its address stays put while the driving
@@ -1522,16 +1274,9 @@ private:
     std::string roadsReport_ = "no lane graph yet";
     DrivingHost drivingHost_;   // the hand-over to the new model (startDrivingV2); inactive on a v1 level
     // THE PEOPLE ON THE BUSES (ADR-0484), made with the buses in startDrivingV2; the brain's residents' rides are reported
-    // to it (brainRideEvents_), the sim's own walkers' are its own to carry on from (rideEventsForWalkers)
+    // to it (brainRideEvents_)
     BusRiders buses_;
     std::vector<BusRiders::Event> brainRideEvents_;
-    void rideEventsForWalkers(const std::vector<BusRiders::Event>& events);
-    // A WALKER'S BUS RIDE (ADR-0484), by agent: 0 none, 1 walking to its stop, 2 waiting or aboard; the line and stops
-    struct WalkerRide {
-        uint8_t phase = 0;
-        uint32_t line = 0, board = 0, alight = 0;
-    };
-    std::vector<WalkerRide> walkerRides_;
     CityPoses poses_;           // where the bodies are each fixed step (poses())
     std::function<void(driving::Driving&)> beforeDriving_;   // setBeforeDriving
     // The resident with the agent brain and everything it needs (startBrain; city_brain.h). It reads and moves this
@@ -1539,44 +1284,14 @@ private:
     friend class CityBrain;
     std::shared_ptr<CityBrain> brain_;
     void tickBrain(Real dt);    // one tick of it, after the driving's (defined in city_brain.cpp)
-    // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame
-    // counter the V buckets key off (frameIndex_ % vTickDivisor — no wall
-    // clock), and the lifetime transition counters the tests gate on.
     // Cadence state (see setTickPeriod): time banked toward the next tick, and
     // time elapsed since the last one.
     Real tickPeriodSeconds_ = 0.0;
     Real tickAccum_ = 0.0;
     Real sinceTick_ = 0.0;
     engine::Vec2 tierCenter_;
-    // Indices of the agents that need this step's full passes (everything but
-    // the far/V tier), resolved once per step in step(). Ascending, so the
-    // passes keep their original iteration order.
-    std::vector<int> active_;
-    // THE TIER LISTS (the 100k plan, stage 1): every K agent and every V agent, ascending, kept by setTier. The
-    // per-tick passes walk these, never the whole population -- a dormant agent (93% of 100k) is touched only when
-    // the bubble calls it back. Ascending order keeps every pass's order, and so its result, as it was.
-    std::vector<int> kIdx_, vIdx_, tierScan_;
-    std::vector<int> pinned_;   // the followed agents (pinAgent)
-    std::vector<int> seatScan_;   // stepSeats' K + V, ascending
-    Real nearScale_ = 1.0, farScale_ = 1.0;
-    long resumedTrips_ = 0;   // wakes that resumed a trip (wakeDormant) rather than rebuilt from the schedule
-    // THE SLEEPERS' DAY (Glenn: the island "feels like a graveyard"; the census: a dormant agent ran no schedule, so
-    // no new trip ever started across 90% of the island). A dormant agent's next schedule event -- its next departure,
-    // or its arrival when mid-trip -- sits in a min-heap on the game clock; when it comes due the agent is placed by
-    // its schedule (placeFromSchedule: a trip begun, or indoors at the far end) without waking, the GPU crowd draws the
-    // trip, and its next event goes in. Stale entries (it woke since) are skipped when popped.
-    struct DormantEvent { double at; int agent; bool operator>(const DormantEvent& o) const { return at > o.at || (at == o.at && agent > o.agent); } };
-    std::priority_queue<DormantEvent, std::vector<DormantEvent>, std::greater<DormantEvent>> dormantHeap_;
-    std::vector<double> dormantEventAt_;   // per agent: its live event's time (-1 none)
-    long dormantEventsRun_ = 0;
-    double dormantEventMs_ = 0;
-    void scheduleDormantEvent(int i);
-    void runDormantEvents();
-    // through traffic: a sleeper under way is moved on every few seconds (a waypoint event) so the wake finds it
-    static constexpr Real kDormantWaypointSeconds = 4.0;
-    std::vector<double> dormantArriveAt_;   // per agent: when its trip ends (its arrival event), -1 none
-    long dormantWaypoints_ = 0;
-    void dormantGlide(Agent& a, Real seconds);
+    std::vector<int> active_;   // the people walking this tick, ascending (stepTick)
+    std::vector<int> street_;   // the people out on the street this tick (walking, or standing outside): ADR-0499
     std::vector<int> crowdDirty_;  // takeCrowdChanges
     bool crowdDirtyAll_ = true;
     void crowdChanged(int i) {
@@ -1584,13 +1299,8 @@ private:
         if (crowdDirty_.size() > agents_.size()) { crowdDirtyAll_ = true; crowdDirty_.clear(); return; }
         crowdDirty_.push_back(i);
     }
-    bool rehashAll_ = true;   // a bulk move (build, seedFromSchedule): re-place EVERYONE in the grid next tick
-    void setTier(int agentIndex, Agent::Tier t);
-    void rebuildTierLists();
+    bool rehashAll_ = true;   // a bulk move (build, setClock): re-place EVERYONE in the grid next tick
     bool haveTierCenter_ = false;
-    uint64_t frameIndex_ = 0;
-    long promotions_ = 0;
-    long demotions_ = 0;
     engine::ProcRng rng_{1};
     // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
     // order. Separate from rng_ so identity allocation never perturbs the sim's

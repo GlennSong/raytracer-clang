@@ -55,10 +55,6 @@ constexpr int kLookMaxAgents = 6;
 // How close to a door you have to be to walk through it (as close as to a car: kBoardReach, city_sim.h).
 constexpr engine::Real kEnterReach = 25.0;
 
-char tierLabel(Agent::Tier t) {
-    using T = Agent::Tier;
-    return t == T::K ? 'K' : (t == T::V ? 'V' : 'D');
-}
 
 }  // namespace
 
@@ -566,7 +562,7 @@ void CityPossessSystem::publishStatus() {
             char buf[512];
             std::snprintf(
                 buf, sizeof(buf),
-                "agent=%d mode=%s activity=%s state=%s tier=%c moving=%d "
+                "agent=%d mode=%s activity=%s state=%s moving=%d "
                 "indoors=%d restDwell=%.1f speed=%.2f pos=%.1f,%.1f "
                 "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
                 "train=%d inCar=%d stepped=%d gap=%.1f minGap=%.1f "
@@ -575,7 +571,7 @@ void CityPossessSystem::publishStatus() {
                 walkerAgent_,
                 a.inCar >= 0 ? "car" : "ped",   // in a household's car (inCar), else on foot
                 activityLabel(a.activity), stateLabel(a.state),
-                tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
+                a.moving ? 1 : 0, a.indoors ? 1 : 0,
                 static_cast<double>(a.restDwell), static_cast<double>(a.speed),
                 static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),
                 a.leg, static_cast<int>(a.route.steps.size()),

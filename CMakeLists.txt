@@ -1017,7 +1017,6 @@ add_executable(run_tests
     tests/test_regrade.cpp
     tests/test_earthwork.cpp
     tests/test_winding.cpp
-    tests/test_sim_rate_ab.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
@@ -1067,8 +1066,6 @@ add_executable(run_tests
     tests/test_places.cpp
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
-    tests/test_tier_v.cpp
-    tests/test_sim_scale.cpp
     tests/test_city_lots.cpp
     tests/test_site_plan.cpp
     tests/test_core_plan.cpp

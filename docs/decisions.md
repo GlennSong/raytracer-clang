@@ -24713,3 +24713,53 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 **The whole island now:** city about 14.5 min plus lots about 2.8 min (ADR-0497), against about 57 min this afternoon.
 
 **What is left:** stack samples of the new run put about a quarter in projections (now many cheap ones), a quarter in the footprints' polygon unions, and an eighth in `distanceToLane`'s point-in-polygon. Next is the report's step 2: the thread pool in the loops whose items are already independent.
+
+## ADR-0499 — The old sim's people are gone: the brain decides, the sim moves bodies (one-brain plan, step 2b; 2026-11-24)
+
+**Why:** two things decided what a city's people did. One was the brain (ADR-0490..0496). The other was the old sim's own layer: its goal table (`goalThink` chained each person's next trip from a day table), its K/V/D tiers (K near and stepped in full; V far, walked on a coarse 1 Hz tick; D dormant, rebuilt from the schedule on waking) and its sleepers' event heap. Since ADR-0496 the brain runs every household on all four city levels. The old layer had become a second model of a day, and on the island it cost about 36 ms of a 48 ms step for nothing (it stepped every brain person at K). Glenn: "We don't have to keep legacy, nobody is relying on legacy code… delete it first and then add the existing features second."
+
+**What happens:**
+- **`CitySim` now only moves bodies.** It walks, steers, avoids and lays out the people the brain (or a possession, or a test) sends with `sendAgentTo`. It never picks a trip.
+  - Each tick it makes two lists in one scan: the people **out on the street** (`streetAgents()`: walking, or standing outside) and the people **walking** (`active_`). Every pass reads one of those lists. Before, the passes walked the K tier.
+  - An arrival is one function, `arrive`: stop, rest at the trip's goal node. There is no next trip chained on.
+- **Deleted** (about 1,700 lines of `city_sim.cpp`/`.h`):
+  - the goal layer: `goalThink`, `tryGoalEvent`, `startGoalTrip`, `startTrip`, `startWanderTrip`, `departNode`, `goalNodeFor`, `installGoalTables`, `setGoalTables`, `reseatOnTables`, `rerateSleep`;
+  - the tiers: `Agent::Tier`, `far()`, `tierPass`, `setTier`, `tickV`, `vAdvance`, `rebuildTierLists`, the tier grids and lists, the tier knobs (`tieringEnabled`, near/far targets, radii, `vRefresh`);
+  - dormancy and placement from the schedule: `scheduleSnapshot`, `seedFromSchedule`, `placeFromSchedule`, `wakeDormant`, `dormantGlide`, the sleepers' event heap, `wakeAt`/`sleptAt`;
+  - pins (`pinAgent`; the `pin?` question now answers that everyone is simulated);
+  - the old sim's own seat and group-game stepping (`stepSeats`, `stepSessions`), its walkers' train rides (`enterStation`, `railPass`) and bus rides (`rideEventsForWalkers`; every bus event now goes to the brain), the far band's CPU stand-ins in the renderer, and the `wander` switch (`citysim.wander`, `CityRenderParams::wander`).
+- **The brain is the default** on every city level: `citysim.brainPeople` now defaults to -1, every household. 0 still means none.
+- **A clock jump** (`setWorldClock`) sets the clock (`CitySim::setClock`). Each person's day reads the new hour at its next event. Nobody is re-placed.
+- **Staffing** (`indexVenueStaffing`) reads each worker's window from their departure hours (`inWindow`), not from the deleted schedule snapshot.
+
+**Lost, to be rebuilt as brain extensions** (as agreed: delete first, rebuild second):
+- trains between towns (the island's towns): plan step 4f;
+- sitting on a seat, group games (kickabouts, lawn groups), joggers' laps: #334;
+- staff standing at their posts;
+- the agent lab's perpetual wander (its level now has a walker that stands still).
+
+**Tests:**
+- Deleted, because they tested only the old layer:
+  - whole files: `test_tier_v.cpp` (5 cases), `test_sim_scale.cpp`, `test_sim_rate_ab.cpp`;
+  - `test_city_goals.cpp` (14): the footpath commute, a shop open while staffed, activity spots by kind, children's play, a custom goal table, the activity catalog's rules, default tables unchanged, joggers' laps, bench sitting, students' halls and evening jobs, two kickabouts, lawn groups;
+  - `test_city_sim.cpp` (8): resting agents sleep, the schedule snapshot (2), seeding (4), sleepers wake on their hour, and people commute;
+  - `test_rail_riders.cpp`: people sent to the other town by train;
+  - `test_city_render.cpp`: the far tier's clock;
+  - river_town's "some of the sim's own walkers rode a bus too" (failing since ADR-0491, #335).
+- Changed so they still test something: the body tests (round poles, round the player, round each other, in files, a tethered ghost, decisions between thinks, sim rate, debug widgets, the navgraph and cones, determinism, the player not auto-driven) no longer get walkers from a day. They send them with a new test helper, `citytest::keepEveryoneWalking` (model_scene.h), which sends each standing person to where another stands, by `sendAgentTo`. The agent lab's case sends its walker from walk point to walk point and counts arrivals. The clock case keeps its clock checks and drops the "everyone where the schedule puts them" part.
+- **Re-pinned on river_town**, old → new. The likely cause: the people the brain does not run (16 households whose home has no street by its door) no longer walk the old sim's days. Every other person was already the brain's.
+  - the crowd case: car trips 169 → 170, parked 156 → 153, arrivals 3249 → 3259, set out 3604 → 3600, arrived 3215 → 3224, at work 1767 → 1766, no way 64 → 63, plans with no way 332 → 318; hash 0x0e41f1185e8239f8 → 0x5ab02c088a376691;
+  - far people: lowered 3070 → 3068, raised 569 → 571, far visits 2887 → 2878, set out 2820 → 2812, arrived 2292 → 2283, at work 1520 → 1519; hash 0xe2c8701064b9badc → 0xba9eaef6e5933eb5;
+  - no driving: set out 2569 → 2567, arrived 2100 → 2095, arrivals 2117 → 2112;
+  - the near tier in the crowd (physics_tests): the most near 14 → 16 at minute 12, out 15 → 13, hash 0xc8ce00bf216e0269 → 0x7caa9eaebc49437d; contacts 5 → 0, by chance (#336 is not fixed, and its hit checks still fail).
+
+**Checked:**
+- **The island, 3 minutes** (`level_island_brain_runs_every_household`, the player in Saltwood): **the whole step 47.7 → 7.5–10.2 ms a tick** (it climbs as more people set out). The old sim's 36 ms is gone. The brain's own share is about 11 ms a tick, measured its own way; the two figures are not reconciled. 115,377 brain people; 43,154 set out, 4,378 arrived, 3,001 at work inside their shift; nobody at a shut place; 0 errors. Load and build 284 s; 9.0 GB resident.
+- **river_town, 30 minutes:** the whole step 2.9 ms a tick (the brain 0.29).
+- **Unit suite:** 1,569 of 1,569.
+- **Failing before this ADR and still failing** (not caused by it): brain_lab's 14 checks (the household car race, Fay's plan reason); traffic_lab_v2 `drives` and `rebuild_hands_over_again` (jumps and queue gaps; the same with `brainPeople` 0); `near_tier_a_near_car_with_no_way_past_finds_another_way`; the near-crowd's hit checks (#336); `river_town_streets_are_drivable_grades` (#337).
+
+**Found, not done:**
+- The engine docs' city sim page (web/engine/citysim.html) explains the deleted layer: #341.
+- The features to rebuild on the brain are listed in #342.
+- An agent's `brainOwned`, `directed`, `released`, `playerControlled` and `tethered` flags are still separate. The plan's "one field, written only by the brain or a possession" comes with the rebuilds.
