@@ -441,30 +441,37 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // arrivals 3259 -> 3357; set out 3600 -> 3667, arrived 3224 -> 3317, at work 1766 -> 1782, nowhere 8 -> 4, no way
     // 63 -> 50, plans with no way 318 -> 178. The longest stand 1456.0 s (car 482, waiting to change lanes at the end of
     // its way, #328's kind).
+    // RE-PINNED when the lots were grown, cut and written a tile at a time (ADR-0504, #317 step 6b; lots tag
+    // 2026-11-25.2): every block's number now 31 bits (so other dice), the blocks' records in tile order. Residents 5134
+    // -> 5106, households 2699 -> 2715, cars 787 -> 865, residents with one 1159 -> 1280, home markers 291 -> 280; the
+    // most on the road 127 -> 137 (still minute 6); trips by car 165 -> 179, parked 155 -> 163, arrivals 3357 -> 3227;
+    // set out 3667 -> 3520, arrived 3317 -> 3200, at work 1782 -> 1759, nowhere 4 the same, no way 50 -> 42, plans with
+    // no way 178 -> 238. A NEW FAILURE, the buses' check below: bus 11 stood 192.3 s at junction 50's red light
+    // (its far turn), over the 180 s it allows -- not re-pinned, for the driving's owner to judge.
     if (minutes == kRiverMinutes) {
-        CHECK(b.residentCount() == 5134);
-        CHECK(households == 2699);
-        CHECK(b.cars().size() == 787u);
-        CHECK(withCar == 1159);
-        CHECK(homeMarkers == 291u);
-        CHECK(mostOnRoad == 127);
+        CHECK(b.residentCount() == 5106);
+        CHECK(households == 2715);
+        CHECK(b.cars().size() == 865u);
+        CHECK(withCar == 1280);
+        CHECK(homeMarkers == 280u);
+        CHECK(mostOnRoad == 137);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 165u);
-        CHECK(b.counts().parkedReports == 155u);
+        CHECK(b.counts().tripsBegun == 179u);
+        CHECK(b.counts().parkedReports == 163u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3357u);
+        CHECK(b.machine()->counts().arrivals == 3227u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3667u);
-        CHECK(b.counts().dayArrivals == 3317u);
-        CHECK(b.counts().dayToWork == 1782u);
+        CHECK(b.counts().daySetOut == 3520u);
+        CHECK(b.counts().dayArrivals == 3200u);
+        CHECK(b.counts().dayToWork == 1759u);
         CHECK(b.counts().dayNowhere == 4u);
-        CHECK(b.counts().dayNoWay == 50u);
-        CHECK(b.machine()->counts().noPlans == 178u);
+        CHECK(b.counts().dayNoWay == 42u);
+        CHECK(b.machine()->counts().noPlans == 238u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -532,13 +539,14 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x0e41f1185e8239f8 -> 0x5ab02c088a376691 (ADR-0499: the old sim's people gone): the counts above
         // 0x5ab02c088a376691 -> 0xf535cd1ac2925c02 (ADR-0503: every lot regrown once, seeds from outlines): the counts
         // above and the buses' below
-        CHECK(hash == 0xf535cd1ac2925c02ull);
+        // 0xf535cd1ac2925c02 -> 0xb25113df86e3d71d (ADR-0504: the lots grown a tile at a time): the counts above
+        CHECK(hash == 0xb25113df86e3d71dull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
         // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333; 147 -> 160, ADR-0491: bus 4 stood there instead)
         // (160 -> 182, ADR-0493: nobody stands in junction 62's turn now that the old sim walks nobody, #333)
-        CHECK(sim.drivingHost().counts().busCalls == 184u);   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503)
+        CHECK(sim.drivingHost().counts().busCalls == 181u);   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         // (FAILING from ADR-0490 to ADR-0491, the sim's own walkers standing in junction 62's turn, #333; passes since

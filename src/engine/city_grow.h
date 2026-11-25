@@ -58,6 +58,7 @@ struct CityGrowInputs {
     std::function<bool(Real, Real, Real*)> streetHeight;
     std::function<bool(Real, Real)> nearFreeway;   // lanesNearFreeway (LotParams)
     std::function<bool(const std::vector<Vec2>&)> trackKeepOut;   // lanesTrackKeepOut (LotParams)
+    std::shared_ptr<const LotTileHooks> tiles;   // the tiles' host (LotParams::tiles, ADR-0504); none: every part kept
 };
 
 // `setupOut` (optional) receives the parameters the grow ran with — the loader

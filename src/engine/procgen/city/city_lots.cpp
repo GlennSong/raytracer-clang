@@ -3372,37 +3372,53 @@ TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff
     return makeFlattenPad(std::move(poly), lb.groundY, falloff);
 }
 
+// every count of the ledger, in one order (ADR-0504: a tile's counts are stored as a list in it)
+const std::vector<int LotPlanDebug::*>& lotPlanCountFields() {
+    static const std::vector<int LotPlanDebug::*> kCounts = {
+        &LotPlanDebug::wholeBlocks, &LotPlanDebug::rejChance, &LotPlanDebug::rejSliver, &LotPlanDebug::rejAspect, &LotPlanDebug::rejFill,
+        &LotPlanDebug::attachedSites, &LotPlanDebug::attachedBuilt, &LotPlanDebug::partyTopped, &LotPlanDebug::bigBoxBlocks,
+        &LotPlanDebug::mallBlocks, &LotPlanDebug::paseoBlocks, &LotPlanDebug::nightlifeBuildings, &LotPlanDebug::towerVenues,
+        &LotPlanDebug::campusBlocks, &LotPlanDebug::sportsBlocks, &LotPlanDebug::dormBlocks, &LotPlanDebug::depotBlocks,
+        &LotPlanDebug::rejPlan, &LotPlanDebug::rejClear, &LotPlanDebug::rejBox, &LotPlanDebug::rejFrontage, &LotPlanDebug::bisectedBlocks,
+        &LotPlanDebug::pEdgeShort, &LotPlanDebug::pShallow, &LotPlanDebug::pMitered, &LotPlanDebug::pOverlap, &LotPlanDebug::pNotStreet,
+        &LotPlanDebug::pEscaped, &LotPlanDebug::pTiny, &LotPlanDebug::pThin, &LotPlanDebug::pPlaced, &LotPlanDebug::pClips,
+        &LotPlanDebug::pLeftOverlapping, &LotPlanDebug::pSameEdge, &LotPlanDebug::pAtInsert, &LotPlanDebug::pConcave,
+        &LotPlanDebug::pClipFailed, &LotPlanDebug::rejRelief, &LotPlanDebug::openCarParks, &LotPlanDebug::openPlaygrounds,
+        &LotPlanDebug::openGardens, &LotPlanDebug::openParks};
+    return kCounts;
+}
+std::vector<int> lotPlanCounts(const LotPlanDebug& d) {
+    std::vector<int> out;
+    for (int LotPlanDebug::*c : lotPlanCountFields()) out.push_back(d.*c);
+    return out;
+}
+bool setLotPlanCounts(LotPlanDebug& d, const std::vector<int>& v) {
+    const std::vector<int LotPlanDebug::*>& f = lotPlanCountFields();
+    if (v.size() != f.size()) return false;
+    for (std::size_t i = 0; i < f.size(); ++i) d.*f[i] = v[i];
+    return true;
+}
+
 namespace {
+// THE LEDGER'S COUNTS, `sign` times d's added to into's (a lot's or a tile's counts added to the pass's, or taken off a
+// snapshot to see what a tile added: ADR-0502, ADR-0504)
+void addPlanCounts(LotPlanDebug& into, const LotPlanDebug& d, int sign = 1) {
+    for (int LotPlanDebug::*c : lotPlanCountFields()) into.*c += sign * d.*c;
+}
 // A lot's own ledger (grown on the pool, PASS C) added to the pass's, as if it had counted into it: every count summed,
 // every list appended -- the two the log keeps only the first four of, to four (#317 step 5).
 void addPlanDebug(LotPlanDebug& into, const LotPlanDebug& d) {
-    into.wholeBlocks += d.wholeBlocks;
+    addPlanCounts(into, d);
     into.blocks.insert(into.blocks.end(), d.blocks.begin(), d.blocks.end());
     into.lots.insert(into.lots.end(), d.lots.begin(), d.lots.end());
     into.alleys.insert(into.alleys.end(), d.alleys.begin(), d.alleys.end());
-    into.rejChance += d.rejChance; into.rejSliver += d.rejSliver; into.rejAspect += d.rejAspect; into.rejFill += d.rejFill;
-    into.attachedSites += d.attachedSites; into.attachedBuilt += d.attachedBuilt; into.partyTopped += d.partyTopped;
     for (const Vec2& a : d.attachedAt) if (into.attachedAt.size() < 4) into.attachedAt.push_back(a);
-    into.bigBoxBlocks += d.bigBoxBlocks; into.mallBlocks += d.mallBlocks;
     into.mallAt.insert(into.mallAt.end(), d.mallAt.begin(), d.mallAt.end());
-    into.paseoBlocks += d.paseoBlocks;
     into.paseoAt.insert(into.paseoAt.end(), d.paseoAt.begin(), d.paseoAt.end());
-    into.nightlifeBuildings += d.nightlifeBuildings; into.towerVenues += d.towerVenues;
-    into.campusBlocks += d.campusBlocks; into.sportsBlocks += d.sportsBlocks; into.dormBlocks += d.dormBlocks;
     into.campusAt.insert(into.campusAt.end(), d.campusAt.begin(), d.campusAt.end());
     into.campusWhat.insert(into.campusWhat.end(), d.campusWhat.begin(), d.campusWhat.end());
     for (const Vec2& a : d.bigBoxAt) if (into.bigBoxAt.size() < 4) into.bigBoxAt.push_back(a);
-    into.depotBlocks += d.depotBlocks;
     into.depotAt.insert(into.depotAt.end(), d.depotAt.begin(), d.depotAt.end());
-    into.rejPlan += d.rejPlan; into.rejClear += d.rejClear; into.rejBox += d.rejBox; into.rejFrontage += d.rejFrontage;
-    into.bisectedBlocks += d.bisectedBlocks;
-    into.pEdgeShort += d.pEdgeShort; into.pShallow += d.pShallow; into.pMitered += d.pMitered; into.pOverlap += d.pOverlap;
-    into.pNotStreet += d.pNotStreet; into.pEscaped += d.pEscaped; into.pTiny += d.pTiny; into.pThin += d.pThin;
-    into.pPlaced += d.pPlaced; into.pClips += d.pClips; into.pLeftOverlapping += d.pLeftOverlapping;
-    into.pSameEdge += d.pSameEdge; into.pAtInsert += d.pAtInsert; into.pConcave += d.pConcave; into.pClipFailed += d.pClipFailed;
-    into.rejRelief += d.rejRelief;
-    into.openCarParks += d.openCarParks; into.openPlaygrounds += d.openPlaygrounds; into.openGardens += d.openGardens;
-    into.openParks += d.openParks;
 }
 }  // namespace
 
@@ -3939,6 +3955,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         Real lotSetback, buildChance;
         Yards yards;  // front / side / rear setbacks the site plan honours
         Poly2 foot;   // the parcelled interior (the alley pass clips to it)
+        uint32_t key = 0;   // the block's own number (its outline's, ADR-0503): its lots' records name it
+        LotTileId tile;     // the kLotTile square holding its centre (ADR-0504)
+        Vec2 lo, hi;        // its outline's box
     };
     struct LotCand {
         std::size_t li;      // lot index within its block
@@ -3970,6 +3989,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // reserve the lot and record the seed; the sculpt runs post-rebind.
     struct DeferredPark { std::size_t lot; uint32_t seed; };
     std::vector<DeferredPark> deferredParks;
+    std::vector<LotTileId> outTile;   // the tile of each record PASS A makes (its block's)
 
     // WHICH BLOCK EDGES ARE STREETS: a block edge whose nearest road is a freeway or a ramp gets no lots
     // (ParcelParams::isFrontage). The road segments are binned once on a 32 m grid; an edge is asked at its
@@ -3997,10 +4017,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     std::vector<uint32_t> blockKey(blocks.size());
     {
         std::map<uint32_t, uint32_t> seen;
+        // (31 bits: the number is a record's `block`, where -1 is none -- ADR-0504; twins told apart in the same 31)
         for (std::size_t i = 0; i < blocks.size(); ++i) {
-            const uint32_t k = outlineKey(blocks[i]);
-            const uint32_t before = seen[k]++;
-            blockKey[i] = before == 0 ? k : hashPair(k, before);
+            const uint32_t k = outlineKey(blocks[i]) & 0x7fffffffu;
+            uint32_t before = seen[k]++, key = k;
+            while (before > 0 && seen.count(key = hashPair(k, before) & 0x7fffffffu)) ++before;
+            if (key != k) ++seen[key];
+            blockKey[i] = key;
         }
     }
     // THE ORDER THE BLOCKS ARE TAKEN IN is where they stand: by the kLotTile square holding the block's centre (row, then
@@ -4049,6 +4072,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         blockFoots.push_back(foot);
 
         BlockInfo bf;
+        bf.key = blockKey[bi];
+        {
+            const Vec2 c0 = centroid(blocks[bi]);
+            bf.tile = LotTileId{static_cast<int64_t>(std::floor(c0.y / kLotTile)), static_cast<int64_t>(std::floor(c0.x / kLotTile))};
+            bounds(blocks[bi], bf.lo, bf.hi);
+        }
         bf.pp.seed = mix(blockKey[bi], p.seed);
         bf.pp.isFrontage = isFrontage;
         bf.pp.targetArea = 480;
@@ -4145,6 +4174,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // part of plazas and parks"). Same ordering fix the pads
                 // got in the buried-buildings round.
                 out.push_back(std::move(g));
+                outTile.push_back(bf.tile);
                 deferredParks.push_back({out.size() - 1, mix(bf.pp.seed, 0xB10C2u)});
                 continue;
             }
@@ -4811,6 +4841,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // Deferred like the city square above: sculpt on the graded
                 // ground, not the pre-terrace hill.
                 out.push_back(std::move(g));
+                outTile.push_back(bf.tile);
                 deferredParks.push_back(
                     {out.size() - 1,
                      mix(bf.pp.seed, 0xC0947u + lotKey[li])});
@@ -5004,15 +5035,23 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // Deferred park sculpting (see the parcelling loop): now that p.ground is
     // the grade-aware sampler, parks drape their plazas, paths and furniture
     // on the same terraced ground the terrain will show.
-    for (const DeferredPark& dp : deferredParks) {
-        LotBuilding& g = out[dp.lot];
-        sculptPark(g, g.pad, g.height, meshGround, dp.seed, outParts, outGrade,
+    // (done tile by tile, ADR-0504: `sculptDeferred` for the greens a tile holds, into its own sets)
+    auto sculptDeferred = [&](LotBuilding& g, uint32_t seed, std::vector<RenderMesh>* intoParts, std::vector<TerrainFlatten>* intoGrade) {
+        sculptPark(g, g.pad, g.height, meshGround, seed, intoParts, intoGrade,
                    p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
-    }
+    };
     // Deferred alley pavements: draped on the SAME terraced ground as the
     // parks, and each segment stamps its band into the flatten set so the
     // rendered terrain agrees at every LOD (see the sculptPark spoke ramps).
-    if (outParts && !lotRoads.alleys().empty()) {
+    // (an alley is paved with the tile holding its middle, ADR-0504)
+    auto alleyTile = [](const LotRoads::Alley& da) {
+        const Vec2 m = (da.a + da.b) * 0.5;
+        return LotTileId{static_cast<int64_t>(std::floor(m.y / kLotTile)), static_cast<int64_t>(std::floor(m.x / kLotTile))};
+    };
+    auto paveAlleys = [&](const LotTileId& tile, std::vector<RenderMesh>* intoParts, std::vector<TerrainFlatten>* intoGrade) {
+        if (!intoParts || lotRoads.alleys().empty()) return;
+        std::vector<RenderMesh>* const outParts = intoParts;
+        std::vector<TerrainFlatten>* const outGrade = intoGrade;
         // GROUND-RELATIVE ribbon (kDrapedPartBase); the RAMP it stamps grades the
         // terrain and so reads the absolute ground.
         RenderMesh& path = (*outParts)[drapedSlot(PartId::Path)];
@@ -5020,6 +5059,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             return meshGround ? meshGround(v.x, v.y) : Real(0);
         };
         for (const LotRoads::Alley& da : lotRoads.alleys()) {
+            if (!(alleyTile(da) == tile)) continue;
             const Vec2 dirN = normalize(da.b - da.a);
             const Vec2 perp(-dirN.y, dirN.x);
             const Real hw = p.alleyWidth * Real(0.5);
@@ -5053,7 +5093,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         (y1L + y1R) * Real(0.5) - Real(0.05), hw + 0.6, 2.5));
             }
         }
-    }
+    };
 
     // ---- THE PASEOS, graded flat (one level for the walk and every shop on it), on top of the block grades ----
     if (p.ground && !paseoGrades.empty()) {
@@ -5145,7 +5185,6 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         Real baseY = 0;
         std::vector<PartRun> runs, flatRuns;
     };
-    std::vector<Attached> attached;
     auto mergePartsRuns = [](std::vector<RenderMesh>* dst, const BuildingMesh& bm) {
         std::vector<PartRun> runs;
         if (!dst) return runs;
@@ -5284,7 +5323,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                             ++dbg->openParks;
                         }
                         if (!ok) continue;
-                        o.block = cand.block;
+                        o.block = static_cast<int>(bf.key);   // (the block's own number, ADR-0504)
                         o.district = districtName(blockTag);
                         pruneTreeSpotsIntoRoad(o.treeSpots);
                         out.push_back(std::move(o));
@@ -5782,7 +5821,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
             b.type = rec.placeType;
             b.recipe = rec.name;
-            b.block = cand.block;
+            b.block = static_cast<int>(bf.key);   // (the block's own number: a kept tile's records still name it, ADR-0504)
             b.district = districtName(tag);
             b.color = colorFor(b.type);
             if (lot.carPark || rec.name == "car_park") {   // a car park: the open lots' (sculptCarPark), its way in a street
@@ -6944,7 +6983,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const std::size_t unitAt = b.units.size();
             collectUnit(b, b.plan, bp, b.baseY, bm);
             if (planOk && bp.partyWalls > 0) {
-                attached.push_back({out.size(), unitAt, cand.block, plan, bp, b.baseY,
+                attached.push_back({out.size(), unitAt, static_cast<int>(bf.key), plan, bp, b.baseY,
                                     mergePartsRuns(outParts, bm), mergePartsRuns(outFlatParts, bmFlat)});
             } else {
                 mergeParts(outParts, bm);
@@ -7142,145 +7181,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             out.push_back(std::move(b));
         }
     };
-    {
-        // The lots handed to the pool in order, a window of them at a time (so few grown lots wait to be added), and
-        // added here, on this thread, in order.
-        struct Grown {
-            GrowInto into;
-            std::vector<LotBuilding> out;
-            std::vector<RenderMesh> parts, flatParts;
-            std::vector<TerrainFlatten> grade;
-            LotPlanDebug dbg;
-            std::vector<Attached> attached;
-            GrowTally tally;
-            std::exception_ptr failed;
-        };
-        struct TallyScope {   // this thread's tallies go to `t` (null: the pass's) until the scope ends
-            GrowTally* saved;
-            explicit TallyScope(GrowTally* t) : saved(tallyHere) { tallyHere = t; }
-            ~TallyScope() { tallyHere = saved; }
-        };
-        const std::size_t nc = cands.size();
-        std::vector<std::unique_ptr<Grown>> grown(nc);
-        std::vector<char> done(nc, 0);
-        std::mutex doneMu;
-        std::condition_variable doneCv;
-        auto growAlone = [&](std::size_t i) {
-            std::unique_ptr<Grown> g = std::make_unique<Grown>();
-            auto slots = [](std::vector<RenderMesh>& m) {
-                m.assign(kLotPartSlots, RenderMesh{});
-                for (std::size_t k = 0; k < m.size(); ++k) m[k].materialIndex = static_cast<int>(baseSlot(k));
-            };
-            if (outParts) slots(g->parts);
-            if (outFlatParts) slots(g->flatParts);
-            g->into.out = &g->out;
-            g->into.parts = outParts ? &g->parts : nullptr;
-            g->into.flatParts = outFlatParts ? &g->flatParts : nullptr;
-            g->into.grade = outGrade ? &g->grade : nullptr;
-            g->into.dbg = &g->dbg;
-            g->into.attached = &g->attached;
-            g->into.alone = true;
-            try {
-                TallyScope scope(&g->tally);
-                growLot(cands[i], g->into);
-            } catch (...) { g->failed = std::current_exception(); }
-            {
-                std::lock_guard<std::mutex> lock(doneMu);
-                grown[i] = std::move(g);
-                done[i] = 1;
-            }
-            doneCv.notify_all();
-        };
-        // A RUN OF GROWN LOTS ADDED TO THE PASS'S SETS, in lot order: their records, their parts (each material's mesh on
-        // the pool: one mesh per task, the lots' pieces appended in order), the attached ledger's indices into those
-        // meshes moved by what stood before, their grades, ledgers and tallies.
-        auto addGrown = [&](std::vector<std::unique_ptr<Grown>>& run) {
-            auto addParts = [&](std::vector<RenderMesh>* into, std::vector<RenderMesh> Grown::*piece, std::vector<PartRun> Attached::*runsOf) {
-                if (!into) return;
-                std::vector<std::size_t> vb(into->size()), ib(into->size());   // where the next lot's pieces start
-                for (std::size_t k = 0; k < into->size(); ++k) { vb[k] = (*into)[k].vertices.size(); ib[k] = (*into)[k].indices.size(); }
-                for (std::unique_ptr<Grown>& g : run) {
-                    for (Attached& at : g->attached)
-                        for (PartRun& r : at.*runsOf) {
-                            const std::size_t k = static_cast<std::size_t>(r.mi);
-                            r.v0 += vb[k]; r.v1 += vb[k]; r.i0 += ib[k]; r.i1 += ib[k];
-                        }
-                    for (std::size_t k = 0; k < into->size(); ++k) { vb[k] += ((*g).*piece)[k].vertices.size(); ib[k] += ((*g).*piece)[k].indices.size(); }
-                }
-                parallelRows(static_cast<int>(into->size()), [&](int k) {
-                    RenderMesh& m = (*into)[static_cast<std::size_t>(k)];
-                    // grown by half again, not doubled (a mesh of the island's parts is gigabytes, and a doubling holds
-                    // the old buffer and one twice its size at once); still geometric, so a few copies in all
-                    auto grow = [](auto& v, std::size_t need) { if (need > v.capacity()) v.reserve(std::max(need, v.capacity() + v.capacity() / 2)); };
-                    grow(m.vertices, vb[static_cast<std::size_t>(k)]);
-                    grow(m.indices, ib[static_cast<std::size_t>(k)]);
-                    for (std::unique_ptr<Grown>& g : run) {
-                        RenderMesh& part = ((*g).*piece)[static_cast<std::size_t>(k)];
-                        MeshBuilder::append(m, part);
-                        part = RenderMesh();   // (freed as soon as it is added)
-                    }
-                }, 1);
-            };
-            addParts(outParts, &Grown::parts, &Attached::runs);
-            addParts(outFlatParts, &Grown::flatParts, &Attached::flatRuns);
-            for (std::unique_ptr<Grown>& g : run) {
-                for (Attached& at : g->attached) { at.outAt += out.size(); attached.push_back(std::move(at)); }
-                for (LotBuilding& lb : g->out) out.push_back(std::move(lb));
-                if (outGrade) outGrade->insert(outGrade->end(), g->grade.begin(), g->grade.end());
-                addPlanDebug(*dbg, g->dbg);
-                passTally.add(g->tally);
-            }
-            run.clear();
-        };
-        JobSystem& jobs = sharedJobs();
-        const std::size_t window = 16 * (static_cast<std::size_t>(jobs.workerCount()) + 1);   // lots handed out, not yet added
-        std::size_t handed = 0;
-        std::atomic<int> running{0};
-        std::vector<std::unique_ptr<Grown>> run;
-        for (std::size_t i = 0; i < nc;) {
-            for (; handed < std::min(nc, i + window); ++handed) {
-                const std::size_t k = handed;
-                jobs.run([&growAlone, k] { growAlone(k); }, &running);
-            }
-            {
-                std::unique_lock<std::mutex> lock(doneMu);
-                doneCv.wait(lock, [&] { return done[i] != 0; });
-            }
-            std::unique_ptr<Grown> g = std::move(grown[i]);
-            if (g->failed) { jobs.wait(&running); std::rethrow_exception(g->failed); }
-            if (g->into.again) {
-                // grown again in its turn, on the pass's own sets, as the serial pass grew it
-                GrowInto pass;
-                pass.out = &out; pass.parts = outParts; pass.flatParts = outFlatParts; pass.grade = outGrade;
-                pass.dbg = dbg; pass.attached = &attached;
-                TallyScope scope(nullptr);
-                growLot(cands[i], pass);
-                ++i;
-                continue;
-            }
-            // this lot and the grown ones after it that are ready (none needing its turn), added together
-            run.push_back(std::move(g));
-            ++i;
-            while (i < nc && run.size() < window) {
-                {
-                    std::lock_guard<std::mutex> lock(doneMu);
-                    if (!done[i]) break;
-                }
-                if (grown[i]->failed || grown[i]->into.again) break;
-                run.push_back(std::move(grown[i]));
-                ++i;
-            }
-            addGrown(run);
-        }
-        jobs.wait(&running);
-    }
     // PARTY WALLS STOP AT THE NEIGHBOUR'S ROOF (Glenn's grey glass towers, 2026-10-23): PASS C grows a lot before
     // its neighbour, so every party wall went up blank to the roof, and a tower against a walk-up showed a whole
     // blank side. Now that every building on the block stands, each wall is blank only as high as the neighbour
     // against it (its highest storey still on the line), and the storeys above take their windows (partyTop, as a
     // complex's cells do). A building that changes is grown again and its first growth cut out of the parts. A wall
     // with no building against it stays blank to the roof: the bare party wall by a vacant lot.
-    {
+    // (per tile, ADR-0504: a block is whole in its tile, so every wall and its neighbour are in the same tile's sets)
+    auto cutPartyWalls = [&](std::vector<LotBuilding>& out, std::vector<RenderMesh>* outParts, std::vector<RenderMesh>* outFlatParts,
+                             std::vector<Attached>& attached) {
         constexpr Real kNearGap = 6.0;   // a detached neighbour this close to the line still stands against the wall
         std::map<int, std::vector<std::size_t>> byBlock;
         for (std::size_t i = 0; i < attached.size(); ++i) byBlock[attached[i].block].push_back(i);
@@ -7398,7 +7307,317 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         };
         for (std::size_t mi = 0; mi < drop.size(); ++mi) cut((*outParts)[mi], drop[mi]);
         for (std::size_t mi = 0; mi < dropFlat.size(); ++mi) cut((*outFlatParts)[mi], dropFlat[mi]);
-        dbg->partyTopped = topped;
+        dbg->partyTopped += topped;
+    };
+    {
+        // The lots handed to the pool in order, a window of them at a time (so few grown lots wait to be added), and
+        // added here, on this thread, in order.
+        struct Grown {
+            GrowInto into;
+            std::vector<LotBuilding> out;
+            std::vector<RenderMesh> parts, flatParts;
+            std::vector<TerrainFlatten> grade;
+            LotPlanDebug dbg;
+            std::vector<Attached> attached;
+            GrowTally tally;
+            std::exception_ptr failed;
+        };
+        // THE TILE BEING GROWN: the sets its lots are added to (ADR-0504)
+        struct TileSets { std::vector<LotBuilding> out; std::vector<RenderMesh> parts, flatParts; std::vector<TerrainFlatten> grade; std::vector<Attached> attached; };
+        TileSets cur;
+        std::vector<RenderMesh>* curParts = nullptr;
+        std::vector<RenderMesh>* curFlat = nullptr;
+        std::vector<TerrainFlatten>* curGrade = nullptr;
+        struct TallyScope {   // this thread's tallies go to `t` (null: the pass's) until the scope ends
+            GrowTally* saved;
+            explicit TallyScope(GrowTally* t) : saved(tallyHere) { tallyHere = t; }
+            ~TallyScope() { tallyHere = saved; }
+        };
+        const std::size_t nc = cands.size();
+        std::vector<std::unique_ptr<Grown>> grown(nc);
+        std::vector<char> done(nc, 0);
+        std::mutex doneMu;
+        std::condition_variable doneCv;
+        auto growAlone = [&](std::size_t i) {
+            std::unique_ptr<Grown> g = std::make_unique<Grown>();
+            auto slots = [](std::vector<RenderMesh>& m) {
+                m.assign(kLotPartSlots, RenderMesh{});
+                for (std::size_t k = 0; k < m.size(); ++k) m[k].materialIndex = static_cast<int>(baseSlot(k));
+            };
+            if (outParts) slots(g->parts);
+            if (outFlatParts) slots(g->flatParts);
+            g->into.out = &g->out;
+            g->into.parts = outParts ? &g->parts : nullptr;
+            g->into.flatParts = outFlatParts ? &g->flatParts : nullptr;
+            g->into.grade = outGrade ? &g->grade : nullptr;
+            g->into.dbg = &g->dbg;
+            g->into.attached = &g->attached;
+            g->into.alone = true;
+            try {
+                TallyScope scope(&g->tally);
+                growLot(cands[i], g->into);
+            } catch (...) { g->failed = std::current_exception(); }
+            {
+                std::lock_guard<std::mutex> lock(doneMu);
+                grown[i] = std::move(g);
+                done[i] = 1;
+            }
+            doneCv.notify_all();
+        };
+        // A RUN OF GROWN LOTS ADDED TO THE PASS'S SETS, in lot order: their records, their parts (each material's mesh on
+        // the pool: one mesh per task, the lots' pieces appended in order), the attached ledger's indices into those
+        // meshes moved by what stood before, their grades, ledgers and tallies.
+        auto addGrown = [&](std::vector<std::unique_ptr<Grown>>& run) {
+            auto addParts = [&](std::vector<RenderMesh>* into, std::vector<RenderMesh> Grown::*piece, std::vector<PartRun> Attached::*runsOf) {
+                if (!into) return;
+                std::vector<std::size_t> vb(into->size()), ib(into->size());   // where the next lot's pieces start
+                for (std::size_t k = 0; k < into->size(); ++k) { vb[k] = (*into)[k].vertices.size(); ib[k] = (*into)[k].indices.size(); }
+                for (std::unique_ptr<Grown>& g : run) {
+                    for (Attached& at : g->attached)
+                        for (PartRun& r : at.*runsOf) {
+                            const std::size_t k = static_cast<std::size_t>(r.mi);
+                            r.v0 += vb[k]; r.v1 += vb[k]; r.i0 += ib[k]; r.i1 += ib[k];
+                        }
+                    for (std::size_t k = 0; k < into->size(); ++k) { vb[k] += ((*g).*piece)[k].vertices.size(); ib[k] += ((*g).*piece)[k].indices.size(); }
+                }
+                parallelRows(static_cast<int>(into->size()), [&](int k) {
+                    RenderMesh& m = (*into)[static_cast<std::size_t>(k)];
+                    // grown by half again, not doubled (a mesh of the island's parts is gigabytes, and a doubling holds
+                    // the old buffer and one twice its size at once); still geometric, so a few copies in all
+                    auto grow = [](auto& v, std::size_t need) { if (need > v.capacity()) v.reserve(std::max(need, v.capacity() + v.capacity() / 2)); };
+                    grow(m.vertices, vb[static_cast<std::size_t>(k)]);
+                    grow(m.indices, ib[static_cast<std::size_t>(k)]);
+                    for (std::unique_ptr<Grown>& g : run) {
+                        RenderMesh& part = ((*g).*piece)[static_cast<std::size_t>(k)];
+                        MeshBuilder::append(m, part);
+                        part = RenderMesh();   // (freed as soon as it is added)
+                    }
+                }, 1);
+            };
+            addParts(curParts, &Grown::parts, &Attached::runs);
+            addParts(curFlat, &Grown::flatParts, &Attached::flatRuns);
+            for (std::unique_ptr<Grown>& g : run) {
+                for (Attached& at : g->attached) { at.outAt += cur.out.size(); cur.attached.push_back(std::move(at)); }
+                for (LotBuilding& lb : g->out) cur.out.push_back(std::move(lb));
+                if (curGrade) curGrade->insert(curGrade->end(), g->grade.begin(), g->grade.end());
+                addPlanDebug(*dbg, g->dbg);
+                passTally.add(g->tally);
+            }
+            run.clear();
+        };
+        JobSystem& jobs = sharedJobs();
+        const std::size_t window = 16 * (static_cast<std::size_t>(jobs.workerCount()) + 1);   // lots handed out, not yet added
+        std::atomic<int> running{0};
+        std::vector<std::unique_ptr<Grown>> run;
+        // ---- THE TILES (ADR-0504) ----
+        // Which tile each lot, green and alley is in (a block's lots are one run of `cands`, the blocks having been
+        // taken tile by tile), each tile's reach, and the hash of its slice of the plan.
+        struct TilePlan {
+            std::size_t c0 = 0, c1 = 0;   // its lots: cands[c0, c1)
+            bool anyLots = false;
+            std::vector<std::size_t> greens;   // its records from PASS A (indices into `out` as it stands)
+            Vec2 lo{1e30, 1e30}, hi{-1e30, -1e30};
+            std::vector<std::size_t> blocks;   // binfos indices
+        };
+        std::map<LotTileId, TilePlan> tilePlans;
+        auto grow = [](TilePlan& t, const Vec2& a, const Vec2& b) {
+            t.lo = Vec2(std::min(t.lo.x, a.x), std::min(t.lo.y, a.y)); t.hi = Vec2(std::max(t.hi.x, b.x), std::max(t.hi.y, b.y));
+        };
+        for (std::size_t bi = 0; bi < binfos.size(); ++bi) { TilePlan& t = tilePlans[binfos[bi].tile]; t.blocks.push_back(bi); grow(t, binfos[bi].lo, binfos[bi].hi); }
+        for (std::size_t i = 0; i < cands.size(); ++i) {
+            TilePlan& t = tilePlans[binfos[static_cast<std::size_t>(cands[i].block)].tile];
+            if (!t.anyLots) { t.c0 = i; t.anyLots = true; }
+            else if (t.c1 != i) throw std::runtime_error("lot pass: a tile's lots are not one run (the blocks were not taken tile by tile)");
+            t.c1 = i + 1;
+        }
+        std::vector<LotBuilding> planned = std::move(out);   // PASS A's records, handed to their tiles below
+        out.clear();
+        for (std::size_t i = 0; i < planned.size(); ++i) {
+            TilePlan& t = tilePlans[outTile[i]]; t.greens.push_back(i);
+            if (!planned[i].pad.empty()) { Vec2 a, b; bounds(planned[i].pad, a, b); grow(t, a, b); }
+        }
+        std::map<std::size_t, uint32_t> deferredSeed;   // PASS A record -> its park's seed
+        for (const DeferredPark& dp : deferredParks) deferredSeed[dp.lot] = dp.seed;
+        for (const LotRoads::Alley& da : lotRoads.alleys()) {
+            TilePlan& t = tilePlans[alleyTile(da)];
+            grow(t, Vec2(std::min(da.a.x, da.b.x), std::min(da.a.y, da.b.y)), Vec2(std::max(da.a.x, da.b.x), std::max(da.a.y, da.b.y)));
+        }
+        // THE HASH OF A TILE'S SLICE OF THE PLAN: its blocks (their numbers, outlines, districts and parcel rules), its
+        // lots (their numbers, outlines, fronts, kinds and the landmark planned onto them), its PASS A records, its
+        // alleys, and every grade of the plan that reaches it
+        struct PlanHash {
+            uint64_t h = 0xcbf29ce484222325ull;
+            void bytes(const void* d, std::size_t n) { const unsigned char* c = static_cast<const unsigned char*>(d); for (std::size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 0x100000001b3ull; } }
+            void num(double v) { bytes(&v, sizeof v); }
+            void num(int64_t v) { bytes(&v, sizeof v); }
+            void str(const std::string& t) { num(static_cast<int64_t>(t.size())); bytes(t.data(), t.size()); }
+            void pt(const Vec2& v) { num(static_cast<double>(v.x)); num(static_cast<double>(v.y)); }
+            void ring(const Poly2& r) { num(static_cast<int64_t>(r.size())); for (const Vec2& v : r) pt(v); }
+        };
+        std::vector<LotTilePlan> plans;
+        for (std::pair<const LotTileId, TilePlan>& kv : tilePlans) {
+            TilePlan& t = kv.second;
+            t.lo = t.lo - Vec2(kLotTileReach, kLotTileReach); t.hi = t.hi + Vec2(kLotTileReach, kLotTileReach);
+            PlanHash h;
+            h.num(kv.first.tz); h.num(kv.first.tx);
+            for (std::size_t bi : t.blocks) {
+                const BlockInfo& b = binfos[bi];
+                h.num(static_cast<int64_t>(b.key)); h.num(static_cast<int64_t>(b.tag)); h.num(static_cast<double>(b.lotSetback)); h.num(static_cast<double>(b.buildChance));
+                h.num(static_cast<double>(b.yards.front)); h.num(static_cast<double>(b.yards.side)); h.num(static_cast<double>(b.yards.rear)); h.ring(b.foot);
+                const ParcelParams& q = b.pp;
+                for (Real v : {q.targetArea, q.minArea, q.minEdge, q.jitter, q.frontWidth, q.lotDepth, q.courtMinArea}) h.num(static_cast<double>(v));
+                h.num(static_cast<int64_t>(q.seed));
+            }
+            for (std::size_t i = t.c0; t.anyLots && i < t.c1; ++i) {
+                const LotCand& c = cands[i]; const Lot& l = c.lot;
+                h.num(static_cast<int64_t>(c.li)); h.num(static_cast<int64_t>(c.key)); h.num(static_cast<int64_t>(binfos[static_cast<std::size_t>(c.block)].key));
+                h.num(static_cast<int64_t>(c.landmark)); h.ring(l.footprint); h.pt(l.frontage); h.num(static_cast<double>(l.area)); h.num(static_cast<int64_t>(l.district));
+                h.num(static_cast<int64_t>((l.court ? 1 : 0) | (l.wholeBlock ? 2 : 0) | (l.bigBox ? 4 : 0) | (l.mall ? 8 : 0) | (l.mallWings ? 16 : 0) |
+                                           (l.carPark ? 32 : 0) | (l.depot ? 64 : 0)));
+                h.num(static_cast<int64_t>(l.campus)); h.num(static_cast<int64_t>(l.paseo)); h.num(static_cast<int64_t>(l.partyCount));
+                for (int k = 0; k < 2; ++k) { h.pt(l.partyN[k]); h.num(static_cast<double>(l.partyAt[k])); }
+            }
+            for (std::size_t gi : t.greens) {
+                const LotBuilding& g = planned[gi];
+                h.str(g.type); h.str(g.recipe); h.pt(g.site); h.ring(g.pad); h.ring(g.lot);
+                for (Real v : {g.width, g.depth, g.height, g.yaw, g.groundY, g.baseY}) h.num(static_cast<double>(v));
+                h.num(static_cast<double>(g.color.x)); h.num(static_cast<double>(g.color.y)); h.num(static_cast<double>(g.color.z));
+                const std::map<std::size_t, uint32_t>::const_iterator ds = deferredSeed.find(gi);
+                h.num(static_cast<int64_t>(ds == deferredSeed.end() ? -1 : static_cast<int64_t>(ds->second)));
+            }
+            for (const LotRoads::Alley& da : lotRoads.alleys())
+                if (alleyTile(da) == kv.first) { h.pt(da.a); h.pt(da.b); h.num(static_cast<double>(da.width)); }
+            if (outGrade)
+                for (const TerrainFlatten& f : *outGrade) {
+                    if (f.maxX + f.falloff < t.lo.x || f.minX - f.falloff > t.hi.x || f.maxZ + f.falloff < t.lo.y || f.minZ - f.falloff > t.hi.y) continue;
+                    h.num(static_cast<int64_t>(f.polygon.size()));
+                    for (const Vec3& v : f.polygon) { h.num(static_cast<double>(v.x)); h.num(static_cast<double>(v.z)); }
+                    for (double v : {f.c, f.dx, f.dz, f.falloff, f.cutBatter, f.fillBatter}) h.num(v);
+                    h.num(static_cast<int64_t>(f.falloffMode)); h.num(static_cast<int64_t>(f.priority)); h.num(static_cast<int64_t>(f.owner));
+                }
+            LotTilePlan tp; tp.id = kv.first; tp.lo = t.lo; tp.hi = t.hi; tp.plan = h.h;
+            plans.push_back(tp);
+        }
+        const LotTileHooks* hooks = p.tiles.get();
+        // each tile kept from the last bake, or grown: asked once, before any lot is handed out
+        std::vector<uint64_t> tileKey(plans.size(), 0);
+        std::vector<std::unique_ptr<LotTile>> kept(plans.size());
+        std::vector<char> growIt(cands.size(), 1);
+        // (every key first: whether a tile can be kept depends on its neighbours' keys, the cells they share)
+        for (std::size_t ti = 0; ti < plans.size(); ++ti)
+            if (hooks && hooks->key) tileKey[ti] = hooks->key(plans[ti]);
+        for (std::size_t ti = 0; ti < plans.size(); ++ti) {
+            if (!hooks) continue;
+            std::unique_ptr<LotTile> k = std::make_unique<LotTile>();
+            if (hooks->keep && hooks->keep(plans[ti], tileKey[ti], *k)) {
+                kept[ti] = std::move(k);
+                const TilePlan& t = tilePlans[plans[ti].id];
+                for (std::size_t i = t.c0; t.anyLots && i < t.c1; ++i) growIt[i] = 0;
+            }
+        }
+        std::size_t handed = 0;   // the next lot to hand out (those of kept tiles are passed over)
+        auto handOut = [&](std::size_t upTo) {
+            for (; handed < std::min(cands.size(), upTo); ++handed) {
+                if (!growIt[handed]) continue;
+                const std::size_t k = handed;
+                jobs.run([&growAlone, k] { growAlone(k); }, &running);
+            }
+        };
+        auto slotsOf = [](std::vector<RenderMesh>& m) {
+            m.assign(kLotPartSlots, RenderMesh{});
+            for (std::size_t k = 0; k < m.size(); ++k) m[k].materialIndex = static_cast<int>(baseSlot(k));
+        };
+        for (std::size_t ti = 0; ti < plans.size(); ++ti) {
+            const TilePlan& t = tilePlans[plans[ti].id];
+            if (kept[ti]) {   // kept from the last bake: its records, grades and counts as they were (no parts)
+                LotTile& k = *kept[ti];
+                k.id = plans[ti].id; k.key = tileKey[ti]; k.kept = true;
+                for (const LotBuilding& lb : k.lots) out.push_back(lb);
+                if (outGrade) outGrade->insert(outGrade->end(), k.grade.begin(), k.grade.end());
+                addPlanCounts(*dbg, k.counts);
+                if (hooks->done) hooks->done(k);
+                kept[ti].reset();
+                continue;
+            }
+            // a tile grown: its sets start empty
+            cur = TileSets();
+            if (outParts) slotsOf(cur.parts);
+            if (outFlatParts) slotsOf(cur.flatParts);
+            curParts = outParts ? &cur.parts : nullptr;
+            curFlat = outFlatParts ? &cur.flatParts : nullptr;
+            curGrade = outGrade ? &cur.grade : nullptr;
+            LotPlanDebug before; addPlanCounts(before, *dbg);
+            const std::vector<Vec2> mallsBefore = dbg->mallAt;
+            bool malls = false;
+            // its PASS A records, their parks sculpted, and its alleys paved
+            for (std::size_t gi : t.greens) {
+                cur.out.push_back(std::move(planned[gi]));
+                const std::map<std::size_t, uint32_t>::const_iterator ds = deferredSeed.find(gi);
+                if (ds != deferredSeed.end()) sculptDeferred(cur.out.back(), ds->second, curParts, curGrade);
+            }
+            paveAlleys(plans[ti].id, curParts, curGrade);
+            // its lots, from the pool, added in lot order
+            for (std::size_t i = t.c0; t.anyLots && i < t.c1;) {
+                handOut(i + window);
+                {
+                    std::unique_lock<std::mutex> lock(doneMu);
+                    doneCv.wait(lock, [&] { return done[i] != 0; });
+                }
+                std::unique_ptr<Grown> g = std::move(grown[i]);
+                if (g->failed) { jobs.wait(&running); std::rethrow_exception(g->failed); }
+                if (g->into.again) {
+                    // grown again in its turn, on the tile's own sets, as the serial pass grew it
+                    malls = true;   // (a lot grown again reads what earlier lots made: the malls among it)
+                    GrowInto pass;
+                    pass.out = &cur.out; pass.parts = curParts; pass.flatParts = curFlat; pass.grade = curGrade;
+                    pass.dbg = dbg; pass.attached = &cur.attached;
+                    TallyScope scope(nullptr);
+                    growLot(cands[i], pass);
+                    ++i;
+                    continue;
+                }
+                // this lot and the grown ones after it that are ready (none needing its turn), added together
+                run.push_back(std::move(g));
+                ++i;
+                while (i < t.c1 && run.size() < window) {
+                    {
+                        std::lock_guard<std::mutex> lock(doneMu);
+                        if (!done[i]) break;
+                    }
+                    if (grown[i]->failed || grown[i]->into.again) break;
+                    run.push_back(std::move(grown[i]));
+                    ++i;
+                }
+                addGrown(run);
+            }
+            cutPartyWalls(cur.out, curParts, curFlat, cur.attached);
+            // handed over: its records kept by the pass (for the paths, doors and census of the whole city), its grades
+            // added to the pass's, its parts to the host -- or, with none, to the pass's parts
+            LotTile done1;
+            done1.id = plans[ti].id; done1.key = tileKey[ti];
+            done1.counts = LotPlanDebug(); addPlanCounts(done1.counts, *dbg); addPlanCounts(done1.counts, before, -1);
+            auto sameList = [](const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
+                if (a.size() != b.size()) return false;
+                for (std::size_t k = 0; k < a.size(); ++k) if (a[k].x != b[k].x || a[k].y != b[k].y) return false;
+                return true;
+            };
+            done1.malls = malls || !sameList(dbg->mallAt, mallsBefore);
+            if (done1.malls) { done1.mallsBefore = mallsBefore; done1.mallsAfter = dbg->mallAt; }
+            for (const LotBuilding& lb : cur.out) out.push_back(lb);
+            if (outGrade) outGrade->insert(outGrade->end(), cur.grade.begin(), cur.grade.end());
+            done1.lots = std::move(cur.out);
+            done1.grade = std::move(cur.grade);
+            if (hooks && hooks->done) {
+                done1.parts = std::move(cur.parts);
+                done1.flatParts = std::move(cur.flatParts);
+                hooks->done(done1);
+            } else {
+                if (outParts) for (std::size_t k = 0; k < outParts->size(); ++k) MeshBuilder::append((*outParts)[k], cur.parts[k]);
+                if (outFlatParts) for (std::size_t k = 0; k < outFlatParts->size(); ++k) MeshBuilder::append((*outFlatParts)[k], cur.flatParts[k]);
+            }
+            cur = TileSets();
+        }
+        jobs.wait(&running);
     }
     if (tally().underFwCount > 0)
         LOG_INFO << "[citylots] under-freeway lots: " << tally().underFwCount

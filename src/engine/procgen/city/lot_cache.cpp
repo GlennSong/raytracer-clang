@@ -3,6 +3,10 @@
 #include "engine/mesh_builder.h"
 #include "job_system.h"   // parallelRows: the cell chunks encoded on the shared pool (#317 step 5)
 #include <set>
+#include <stdexcept>
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
 
 #include "engine/bundle/codecs.h"
 
@@ -299,6 +303,109 @@ void writeLotResult(bundle::BundleWriter& w, const std::string& prefix, const Ne
     w.addJson(prefix + "meta", nlohmann::json{{"format", kLotsFormatVersion}, {"lots", res.lots.size()}, {"built", built}, {"units", units}, {"parts", res.parts.size()}, {"flatParts", res.flatParts.size()}, {"grades", res.gradeFlatten.size()}, {"planBlocks", res.plan.blocks.size()}, {"planLots", res.plan.lots.size()}, {"cell", cell > 0.0 ? cell : 0.0}, {"cells", cellList}});
 }
 
+// ---- the lots written tile by tile (ADR-0504) -------------------------------------------------------------------
+
+namespace {
+std::string tileName(const LotTileId& t) { return std::to_string(t.tz) + "_" + std::to_string(t.tx); }
+std::string hexKey(uint64_t k) { char b[24]; std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(k)); return b; }
+uint64_t keyOfHex(const std::string& s) { return std::strtoull(s.c_str(), nullptr, 16); }
+}  // namespace
+
+TileCellWriter::TileCellWriter(bundle::BundleWriter& w, std::string prefix, double cell, const bundle::Bundle* previous)
+    : w_(w), prefix_(std::move(prefix)), cell_(cell), prev_(previous) {
+    if (!prev_) return;
+    const nlohmann::json was = prev_->json(prefix_ + "tiles");
+    if (!was.is_array()) { prev_ = nullptr; return; }
+    for (const nlohmann::json& t : was) {
+        Was& wt = was_[LotTileId{t.value("tz", int64_t(0)), t.value("tx", int64_t(0))}];
+        wt.key = keyOfHex(t.value("key", std::string()));
+        wt.malls = t.value("malls", false);
+        wt.counts = t.value("counts", std::vector<int>());
+        for (const nlohmann::json& c : t.value("cells", nlohmann::json::array()))
+            if (c.is_array() && c.size() == 2) wt.cells.push_back({c[0].get<int>(), c[1].get<int>()});
+    }
+}
+
+// Kept: the same key as last time, and it read nothing other tiles made (the malls placed before it)
+bool TileCellWriter::keep(const LotTilePlan& tile, uint64_t key, LotTile& kept) {
+    if (!prev_) return false;
+    const std::map<LotTileId, Was>::const_iterator wt = was_.find(tile.id);
+    if (wt == was_.end() || wt->second.key != key || wt->second.malls) return false;
+    const std::string pre = prefix_ + "tile/" + tileName(tile.id) + "/";
+    bundle::Bundle::View v = prev_->section(pre + "lots");
+    if (v.empty()) return false;
+    { bundle::BinReader r(v.data, v.size); if (!getLots(r, kept.lots)) return false; }
+    v = prev_->section(pre + "grade");
+    if (v.empty()) return false;
+    { bundle::BinReader r(v.data, v.size); if (!getFlattens(r, kept.grade)) return false; }
+    if (!setLotPlanCounts(kept.counts, wt->second.counts)) return false;
+    kept.malls = false;
+    return true;
+}
+
+void TileCellWriter::done(LotTile& tile) {
+    const std::string name = tileName(tile.id);
+    const std::string pre = prefix_ + "tile/" + name + "/";
+    { BinWriter b; putLots(b, tile.lots); w_.add(pre + "lots", b.bytes); }
+    { BinWriter b; putFlattens(b, tile.grade); w_.add(pre + "grade", b.bytes); }
+    std::set<std::pair<int, int>> cells;
+    const std::map<LotTileId, Was>::const_iterator wt = was_.find(tile.id);
+    if (tile.kept && prev_ && wt != was_.end()) {
+        // KEPT: its cells' sections copied as they were (the writer clones their blocks)
+        ++kept_;
+        for (const std::pair<int, int>& c : wt->second.cells) {
+            for (const std::string& s : prev_->sections(cellPrefix(prefix_, c.first, c.second) + name + "/")) {
+                const bundle::Bundle::View v = prev_->section(s);
+                w_.add(s, v.data, v.size);
+            }
+            cells.insert(c);
+        }
+    } else {
+        // GROWN: its parts cut into cells, each cell's chunks encoded on the pool and written in order
+        ++grown_;
+        struct Piece { std::pair<int, int> cell; bool flat; std::size_t slot; RenderMesh mesh; std::vector<uint8_t> bytes; };
+        std::vector<Piece> pieces;
+        auto cut = [&](std::vector<RenderMesh>& parts, bool flat) {
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (parts[i].vertices.empty()) continue;
+                MeshBuilder::forEachCellChunk(parts[i], cell_, [&](MeshBuilder::CellChunk& ch) {
+                    if (ch.mesh.vertices.empty()) return;
+                    ch.mesh.materialIndex = parts[i].materialIndex;
+                    pieces.push_back({{ch.cx, ch.cz}, flat, i, std::move(ch.mesh), {}});
+                });
+                parts[i] = RenderMesh();   // (let go as soon as it is cut)
+            }
+        };
+        cut(tile.parts, false);
+        cut(tile.flatParts, true);
+        std::stable_sort(pieces.begin(), pieces.end(), [](const Piece& a, const Piece& b) {
+            return std::tie(a.cell, a.flat, a.slot) < std::tie(b.cell, b.flat, b.slot);
+        });
+        parallelRows(static_cast<int>(pieces.size()), [&](int k) {
+            Piece& pc = pieces[static_cast<std::size_t>(k)];
+            BinWriter b; putPart(b, pc.mesh); pc.bytes = std::move(b.bytes); pc.mesh = RenderMesh();
+        }, 1);
+        for (const Piece& pc : pieces) {
+            w_.add(cellPrefix(prefix_, pc.cell.first, pc.cell.second) + name + (pc.flat ? "/flat/" : "/parts/") + std::to_string(pc.slot), pc.bytes);
+            cells.insert(pc.cell);
+        }
+    }
+    nlohmann::json cj = nlohmann::json::array();
+    for (const std::pair<int, int>& c : cells) { cj.push_back({c.first, c.second}); written_.insert(c); }
+    tiles_.push_back({{"tz", tile.id.tz}, {"tx", tile.id.tx}, {"key", hexKey(tile.key)}, {"malls", tile.malls}, {"cells", cj},
+                      {"counts", lotPlanCounts(tile.counts)}});
+}
+
+void TileCellWriter::finish(const NetLotResult& res) {
+    size_t built = 0, units = 0; for (const LotBuilding& lb : res.lots) { built += lb.plan.size() >= 3; units += lb.units.size(); }
+    { BinWriter b; putLots(b, res.lots); w_.add(prefix_ + "lots", b.bytes); }
+    { BinWriter b; putLotPlan(b, res.plan); w_.add(prefix_ + "plan", b.bytes); }
+    { BinWriter b; putFlattens(b, res.gradeFlatten); w_.add(prefix_ + "grade", b.bytes); }
+    w_.addJson(prefix_ + "tiles", tiles_);
+    nlohmann::json cellList = nlohmann::json::array(); for (const std::pair<int, int>& c : written_) cellList.push_back({c.first, c.second});
+    w_.addJson(prefix_ + "meta", nlohmann::json{{"format", kLotsFormatVersion}, {"lots", res.lots.size()}, {"built", built}, {"units", units}, {"parts", res.parts.size()}, {"flatParts", res.flatParts.size()}, {"grades", res.gradeFlatten.size()}, {"planBlocks", res.plan.blocks.size()}, {"planLots", res.plan.lots.size()}, {"cell", cell_}, {"cells", cellList}, {"tile", kLotTile}});
+}
+
 double lotCellSize(const bundle::Bundle& b, const std::string& prefix) { const nlohmann::json meta = b.json(prefix + "meta"); return meta.is_null() ? 0.0 : meta.value("cell", 0.0); }
 
 bool listLotCellParts(const bundle::Bundle& b, const std::string& prefix, std::vector<LotCellPart>& out, std::string* err) {
@@ -309,8 +416,18 @@ bool listLotCellParts(const bundle::Bundle& b, const std::string& prefix, std::v
     for (const nlohmann::json& c : meta.value("cells", nlohmann::json::array())) {
         if (!c.is_array() || c.size() < 2) continue;
         const int cx = c[0].get<int>(), cz = c[1].get<int>(); const std::string cp = cellPrefix(prefix, cx, cz);
-        for (size_t i = 0; i < nParts; ++i) { const std::string sec = cp + "parts/" + std::to_string(i); if (b.has(sec)) out.push_back({cx, cz, static_cast<int>(i), false, sec}); }
-        for (size_t i = 0; i < nFlat; ++i) { const std::string sec = cp + "flat/" + std::to_string(i); if (b.has(sec)) out.push_back({cx, cz, static_cast<int>(i), true, sec}); }
+        // (written tile by tile, ADR-0504: each tile's chunks under the cell, `<tz>_<tx>/parts/<i>`; LOD0 before LOD1)
+        std::vector<LotCellPart> flat;
+        for (const std::string& sec : b.sections(cp)) {
+            const std::size_t slash = sec.rfind('/');
+            if (slash == std::string::npos || slash == 0) continue;
+            const std::size_t kindAt = sec.rfind('/', slash - 1);
+            const std::string kind = sec.substr(kindAt + 1, slash - kindAt - 1);
+            const int part = std::atoi(sec.c_str() + slash + 1);
+            if (kind == "parts" && part >= 0 && static_cast<size_t>(part) < nParts) out.push_back({cx, cz, part, false, sec});
+            else if (kind == "flat" && part >= 0 && static_cast<size_t>(part) < nFlat) flat.push_back({cx, cz, part, true, sec});
+        }
+        out.insert(out.end(), flat.begin(), flat.end());
     }
     return true;
 }

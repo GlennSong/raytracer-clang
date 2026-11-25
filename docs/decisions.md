@@ -24963,3 +24963,66 @@ They are single polygon operations over the whole island. An index cannot speed 
 - run_tests: 1,570 of 1,571 pass. The one failing, `control_site_command_list_matches_the_table` (web/engine/commands.json out of date), is not the lot pass's. lanes_tests: 158 of 158.
 
 **Not done:** the city stage is still global. One edit refits the heights of the streets it joins and moves the ground under the blocks beside them, so their lots follow. That is the city's step 7 (city tiles), not this.
+
+## ADR-0504 — The lots are grown, cut and written a tile at a time, and a tile that did not change is kept from the last bake (#317, step 6b; 2026-11-25)
+
+**Why:** the lots stage held every building part on the island at once (203 million vertices, a peak of 30 GB). A render cell's chunk took from many lots, and the party walls were cut out of island-wide meshes, so nothing could be written before everything was grown. Any edit regrew every lot, even one junction far from most of them. With each block's dice its own (ADR-0503), a block's lots depend on the block, the ground and roads around it, and the plan. So the island can be grown in pieces, and a piece that did not change can be kept.
+
+**Words:**
+- a *tile* is a 1 km square of the map (`kLotTile`). A block belongs, whole, to the tile holding its centre.
+- the *plan* is what the lot pass decides for the whole city before any lot grows: the blocks and their lots (PASS A), the grades, and the landmarks (PASS B). Every choice made in block order is in it (big boxes 700 m apart, the campus, depots, paseos).
+- a tile's *reach* is its blocks, parks and alleys, 150 m out (`kLotTileReach`).
+- a tile's *key* is a hash of everything its lots read:
+  - its slice of the plan (its blocks' numbers, outlines, districts and parcel rules; its lots' numbers, outlines, kinds and landmarks; its PASS A parks; its alleys; every plan grade that reaches it);
+  - everything the pass reads that is not the city (`lotsInputsKey`: the tag and format, the city sim's block, the terrain and water, the style and archetype books, the spawn);
+  - the city within 200 m of its reach (the ground grid's nodes, the drawn deck's spines and pads, the streets it may front, rails, water).
+- *kept*: a tile whose key is the same as in the last bake. Its sections are copied, and it is not grown.
+
+**What happens:**
+- **The plan is made for the whole city, as before.** Then the tiles are taken in order, row then column. Each tile's lots grow on the shared pool into the tile's own sets (ADR-0502's window runs straight across tiles), and are added to the tile in lot order. Then:
+  - its PASS A parks are sculpted and its alleys paved (they were done for the whole city before PASS C);
+  - its party walls are cut (a block is whole in its tile, so every wall's neighbour is in the same tile's sets);
+  - it is handed over.
+- **The host writes a tile as soon as it is done** (`lotcache::TileCellWriter`):
+  - its parts are cut into render cells and written as sections of the tile's own in each cell (`lots/cell/<cx>_<cz>/<tz>_<tx>/parts/<i>`, `.../flat/<i>`), then let go;
+  - its records and grades are written as `lots/tile/<tz>_<tx>/lots` and `.../grade`;
+  - it is listed in `lots/tiles` with its key, its cells and what it added to the ledger's counts.
+
+  So the stage holds one tile's parts at a time. A render cell that two tiles' lots reach now holds a chunk from each: more chunks along tile edges, nothing drawn differently. The loader lists every chunk under a cell (`listLotCellParts`) and already took each section as a chunk of its own.
+- **A kept tile** (same key, and its lots did not read the malls placed by earlier tiles) is not grown. Its cell sections are copied (the writer clones their blocks), and its records, grades and counts are read back.
+- After every tile, the paths' ends, the doors' streets and the census are stated over the whole city's records, kept and grown alike, as before. That is why a tile's stored records are the ones before those steps.
+- **A tile whose lots read or changed the malls placed so far is never kept** (ONE MALL IN 1.5 km reaches across tiles).
+- A lot's record names its block by the block's own number (`LotBuilding::block`), not by its place in the list. The number is now 31 bits, so -1 still means none, and that changes every block's dice once more.
+- **`rt_bake --rebuild lots` and `--force` grow every tile.** The bake hands a producer the level's last bundle (`LevelInputs::reuseFrom`), and the lots producer keeps tiles from it only when it was grown under the same tag.
+- Lots tag `2026-11-25.2`, format 8. Every lot cell changes once: tile order, and party-wall regrowths at the end of their tile's run rather than the island's.
+
+**Measured** (island_8_nature, 64 tiles; one street, p0_s155, bent 3 m on a scratch copy of the level):
+
+| | Before (ADR-0503) | After |
+|---|---|---|
+| `rt_bake --rebuild lots`, wall | 1:30 | 0:59 |
+| ...its process peak | 30.0 GB | 7.0 GB |
+| A whole bake, its process peak | 34.3 GB | 13.2 GB (now in the city stage and the road model) |
+| The street edit rebaked | 5:59 (city 276 s, lots 82 s) | 5:08 (city 273 s, lots 34 s: 11 tiles grown, 53 kept) |
+
+- The first rebake after the edit took 10:10: the lots stage also built the level's road model for the new road file (about 5 minutes), which it reads only to say which paths do not land on it. A bake before this change pays that the same.
+- What is left of the lots stage's 34 s is the plan (PASS A and B over the whole island, about 20 s) and the 11 tiles.
+
+**Checked:**
+- island_8_nature, the street edit, rebaked on the last bake (11 tiles grown, 53 kept). Every one of its 36,012 sections is identical to a bake of the same level from nothing, except the city's report timings.
+- river_town, a street bent 3 m, the same way (4 tiles grown, 2 kept): every one of its 2,072 sections is identical to a bake from nothing, except the city's report timings.
+- river_town with `--threads 1` and full: identical, but the city's report timings.
+- run_tests 1,571 of 1,571; lanes_tests 158 of 158.
+- Re-pinned (old → new, "the lots grown a tile at a time, ADR-0504"):
+  - `a_tower_in_a_plaza_stands_back_from_the_avenue` looks for its first plaza in seeds 1–8 → 1–32: no seed of the eight rolls a tower in a plaza now.
+  - `level_river_town_crowd_drives_on_the_new_driving`:
+    - residents 5134 → 5106, households 2699 → 2715, cars 787 → 865, residents with a car 1159 → 1280, home markers 291 → 280;
+    - the most on the road 127 → 137, trips 165 → 179, parked 155 → 163, arrivals 3357 → 3227;
+    - set out 3667 → 3520, arrived 3317 → 3200, at work 1782 → 1759, no way 50 → 42, plans with no way 178 → 238;
+    - bus calls 184 → 181, hash `0xf535cd1ac2925c02` → `0xb25113df86e3d71d`.
+  - **A new failure there, not re-pinned:** bus 11 stood 192.3 s at junction 50's red light, over the 180 s the check allows. It is for the driving's owner to judge.
+
+**Not done, and why:**
+- The city stage is still the whole island. A street edit refits its road's heights and moves the city's ground under the blocks beside it, so those tiles regrow. The city stage itself (5–6 minutes) reruns on any road edit: the investigation's step 7.
+- A tile is kept or grown whole. A one-street edit regrows every tile whose reach (plus 200 m) the city changed in: 11 of 64 here, since the road design refits a street's heights along its whole length.
+- The lots stage builds the level's whole road model on a road edit (about 5 minutes on the island), only to report paths that do not land. It could read the model the city stage builds, or skip the check in a bake.

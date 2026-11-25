@@ -31,6 +31,9 @@ struct LevelInputs {
     std::string levelPath, levelDir;
     nlohmann::json level;
     unsigned threads = 0;   // 0 = the producer's default
+    // the level's last bundle a producer may keep parts of its own from (a tiled lots bake keeps the tiles that did not
+    // change, ADR-0504); empty on a forced or asked-for rebuild of it, or a bake to memory
+    std::string reuseFrom;
 };
 bool loadLevelInputs(const std::string& levelPath, LevelInputs& out, std::string* err);
 

@@ -19,6 +19,7 @@
 #include "engine/bundle/bake.h"
 #include "engine/bundle/codecs.h"
 #include "engine/procgen/city/city_lots.h"
+#include "engine/procgen/city/lot_cache.h"   // TileCellWriter: the lots written tile by tile
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"   // HeightGrid
 #include "engine/procgen/city/road_network.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
@@ -51,7 +52,10 @@ struct LotsCityInputs {
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.
-NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report = nullptr);
+// `cells` (the producer's): the lots grown tile by tile into it, unchanged tiles kept from the last bake (ADR-0504);
+// none: every part in the result
+NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report = nullptr,
+                              ::engine::lotcache::TileCellWriter* cells = nullptr);
 // The same inputs from a city's products as read from its bundle (or built a moment ago).
 struct CityProducts;
 LotsCityInputs lotsCityInputs(const CityProducts& p);

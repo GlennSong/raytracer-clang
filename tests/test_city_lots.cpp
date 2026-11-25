@@ -1376,7 +1376,7 @@ TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
 // tower re-capped on its own plate.
 TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
     int plazas = 0;
-    for (uint32_t seed = 1; seed <= 8 && plazas == 0; ++seed) {
+    for (uint32_t seed = 1; seed <= 32 && plazas == 0; ++seed) {
         LotParams p;
         p.center = {0, 0};
         p.seed = seed;

@@ -28,7 +28,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-11-25.1";   // every block's and lot's dice from its own outline, the blocks taken in that order: every lot changes once (ADR-0503); 2026-11-22.1 two new trades, the barber's and the gym: every street's shops dealt again (Glenn's word); .20.2 a lot's paths stated as walkways with their ends, read from the planned road model (ADR-0476); .1 every building and door records the street it fronts, its station and kerb (ADR-0474); 2026-11-14.1 the lot pass reads the road model's streets and the drawn deck, not a copy of the road graph (ADR-0430); 2026-11-06.3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
+const char* const kLotsBuildTag = "2026-11-25.2";   // grown, cut and written a 1 km tile at a time, each tile kept from the last bake when its key is the same: every lot cell changes once (ADR-0504); .1 every block's and lot's dice from its own outline, the blocks taken in that order: every lot changes once (ADR-0503); 2026-11-22.1 two new trades, the barber's and the gym: every street's shops dealt again (Glenn's word); .20.2 a lot's paths stated as walkways with their ends, read from the planned road model (ADR-0476); .1 every building and door records the street it fronts, its station and kerb (ADR-0474); 2026-11-14.1 the lot pass reads the road model's streets and the drawn deck, not a copy of the road graph (ADR-0430); 2026-11-06.3 the furniture upgraded with soft shapes (ADR-0347); .2 the furniture modelled by its Lua recipes (ADR-0346); .1 one annulus / band / fill / skirt for every disc, ring and paved plate (ADR-0345); 2026-11-03.1 a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -77,6 +77,46 @@ bool lotsWanted(const nlohmann::json& level) {
     return cs.value("buildLots", false) || cs.value("planOnly", false);
 }
 
+// EVERYTHING THE LOT PASS READS BUT THE CITY AND ITS STREETS (the producer's key adds those; a tile's key adds the
+// city it reaches, ADR-0504): the tag and format, the city sim's block as the pass reads it, the terrain and water, the
+// cell the ground is drawn at, the spawn, the style and archetype books
+uint64_t lotsInputsKey(const bundle::LevelInputs& in, std::vector<bundle::InputFile>* inputs) {
+#ifdef RT_ENABLE_SCRIPTING
+    const int scripting = 1;
+#else
+    const int scripting = 0;
+#endif
+    uint64_t k = bundle::fnv1aStr(std::string(kLotsProducerName) + "|" + std::to_string(::engine::lotcache::kLotsFormatVersion) + "|" + kLotsBuildTag + "|real" + std::to_string(sizeof(Real)) + "|scripting" + std::to_string(scripting));
+    // THE CITY SIM'S BLOCK AS THE LOT PASS READS IT (ADR-0457): exactly the fields it reads (lot_citysim.h
+    // kLotCitysimFields), the same LotCitysim the grow is handed below; the fields only the running sim reads
+    // (people, driving, crowds, buses, ...) re-bake nothing.
+    k = bundle::fnv1aStr("lotcitysim|" + LotCitysim::ofLevel(in.level).keyText(), k);
+    // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
+    // without its forest, which the loader places at load and the lots never read (a species mix tweak on the
+    // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)
+    nlohmann::json terrainKey = in.level.value("terrain", nlohmann::json());
+    if (terrainKey.is_object()) terrainKey.erase("forest");
+    // (nor the cover's heath, ADR-0331: it paints and plants, the lots never see it -- erased only where it is, so
+    // every level without one keeps its key)
+    if (terrainKey.is_object() && terrainKey.contains("groundCover") && terrainKey["groundCover"].is_object())
+        terrainKey["groundCover"].erase("heath");
+    k = bundle::fnv1aStr(terrainKey.dump(), k);
+    k = bundle::fnv1aStr(in.level.value("water", nlohmann::json()).dump(), k);
+    const double drawnCell = levelDrawnGroundCell(in.level);
+    k = bundle::fnv1a(&drawnCell, sizeof(drawnCell), k);
+    Vec2 spawn;
+    if (authoredSpawnXZ(in.level, spawn)) { k = bundle::fnv1a(&spawn.x, sizeof(spawn.x), k); k = bundle::fnv1a(&spawn.y, sizeof(spawn.y), k); }
+    else k = bundle::fnv1aStr("nospawn", k);
+    for (const char* book : {"style_book.lua", "archetype_book.lua"}) {
+        const std::string p = resolveScriptPath(book, in.levelDir);
+        if (p.empty()) { k = bundle::fnv1aStr(std::string("nobook:") + book, k); continue; }
+        bundle::InputFile f; f.path = p; uint64_t fk = bundle::kFnvOffset;
+        if (bundle::fnv1aFile(p, fk, &f.bytes, &f.mtime)) { f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k); } else k = bundle::fnv1aStr("missing:" + p, k);
+        if (inputs) inputs->push_back(f);
+    }
+    return k;
+}
+
 class LotsProducer : public bundle::BundleProducer {
 public:
     std::string name() const override { return kLotsProducerName; }
@@ -91,15 +131,10 @@ public:
 
     bundle::ProducerIdentity identity(const bundle::LevelInputs& in) const override {
         bundle::ProducerIdentity id; id.tag = kLotsBuildTag;
-#ifdef RT_ENABLE_SCRIPTING
-        const int scripting = 1;
-#else
-        const int scripting = 0;
-#endif
-        uint64_t k = bundle::fnv1aStr(std::string(kLotsProducerName) + "|" + std::to_string(lotcache::kLotsFormatVersion) + "|" + kLotsBuildTag + "|real" + std::to_string(sizeof(Real)) + "|scripting" + std::to_string(scripting));
+        uint64_t k = lotsInputsKey(in, &id.inputs);
         if (const bundle::BundleProducer* city = bundle::findProducer(kCityProducerName)) {
             const bundle::ProducerIdentity c = city->identity(in);
-            k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs = c.inputs;
+            k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs.insert(id.inputs.begin(), c.inputs.begin(), c.inputs.end());
         } else k = bundle::fnv1aStr("nocity", k);
         // The streets the lots front, by id (lotRoadsKeyText): the city's key leaves the road file's streets and
         // junctions out (no road mesh reads them), and the lot pass reads them -- editing a street re-grows the lots.
@@ -111,33 +146,6 @@ public:
                 try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
             }
             k = bundle::fnv1aStr("lotroads|" + lotRoadsKeyText(spec), k);
-        }
-        // THE CITY SIM'S BLOCK AS THE LOT PASS READS IT (ADR-0457): exactly the fields it reads (lot_citysim.h
-        // kLotCitysimFields), the same LotCitysim the grow is handed below; the fields only the running sim reads
-        // (people, driving, crowds, buses, ...) re-bake nothing.
-        k = bundle::fnv1aStr("lotcitysim|" + LotCitysim::ofLevel(in.level).keyText(), k);
-        // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
-        // without its forest, which the loader places at load and the lots never read (a species mix tweak on the
-        // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)
-        nlohmann::json terrainKey = in.level.value("terrain", nlohmann::json());
-        if (terrainKey.is_object()) terrainKey.erase("forest");
-        // (nor the cover's heath, ADR-0331: it paints and plants, the lots never see it -- erased only where it is, so
-        // every level without one keeps its key)
-        if (terrainKey.is_object() && terrainKey.contains("groundCover") && terrainKey["groundCover"].is_object())
-            terrainKey["groundCover"].erase("heath");
-        k = bundle::fnv1aStr(terrainKey.dump(), k);
-        k = bundle::fnv1aStr(in.level.value("water", nlohmann::json()).dump(), k);
-        const double drawnCell = levelDrawnGroundCell(in.level);
-        k = bundle::fnv1a(&drawnCell, sizeof(drawnCell), k);
-        Vec2 spawn;
-        if (authoredSpawnXZ(in.level, spawn)) { k = bundle::fnv1a(&spawn.x, sizeof(spawn.x), k); k = bundle::fnv1a(&spawn.y, sizeof(spawn.y), k); }
-        else k = bundle::fnv1aStr("nospawn", k);
-        for (const char* book : {"style_book.lua", "archetype_book.lua"}) {
-            const std::string p = resolveScriptPath(book, in.levelDir);
-            if (p.empty()) { k = bundle::fnv1aStr(std::string("nobook:") + book, k); continue; }
-            bundle::InputFile f; f.path = p; uint64_t fk = bundle::kFnvOffset;
-            if (bundle::fnv1aFile(p, fk, &f.bytes, &f.mtime)) { f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k); } else k = bundle::fnv1aStr("missing:" + p, k);
-            id.inputs.push_back(f);
         }
         id.key = k; return id;
     }
@@ -176,7 +184,15 @@ public:
         if (!report(0.03, "grow", std::to_string(city.holes.size()) + " pavement holes")) return fail("cancelled");
         const auto tg = std::chrono::steady_clock::now();
         nlohmann::json counts;
-        NetLotResult r = growLotsForLevel(in, city, &counts);
+        // THE LAST BAKE'S LOTS, when they were grown by this pass (the same tag): its unchanged tiles are kept (ADR-0504)
+        std::unique_ptr<bundle::Bundle> previous;
+        if (!in.reuseFrom.empty()) {
+            std::string err;
+            previous = bundle::Bundle::open(in.reuseFrom + "/" + bundle::kBundleFile, &err);
+            if (previous && bundle::manifestProducer(previous->manifest(), kLotsProducerName).value("tag", std::string()) != kLotsBuildTag) previous.reset();
+        }
+        ::engine::lotcache::TileCellWriter cells(out, kLotsSectionPrefix, cityRenderCell(in.level), previous.get());
+        NetLotResult r = growLotsForLevel(in, city, &counts, &cells);
         rep.timings["grow"] = secondsSince(tg);
 #ifdef __GLIBC__
         // the memory the growing freed, handed back before writing: the pool's threads each keep their own heap, and
@@ -190,8 +206,12 @@ public:
         LOG_INFO << "[lots] grown: memory " << rss << " GB, the peak so far " << peak << " GB";
         if (!report(0.95, "write", std::to_string(r.lots.size()) + " buildings")) return fail("cancelled");
         const auto tw = std::chrono::steady_clock::now();
-        lotcache::writeLotResult(out, kLotsSectionPrefix, r, cityRenderCell(in.level));   // parts per render cell: the loader never chunks at load
+        cells.finish(r);   // (the cells are written already, tile by tile; the lots, plan, grades, tiles and meta now)
         rep.timings["write"] = secondsSince(tw);
+        rep.timings["tilesGrown"] = cells.grownTiles();
+        rep.timings["tilesKept"] = cells.keptTiles();
+        LOG_INFO << "[lots] tiles: " << cells.grownTiles() << " grown, " << cells.keptTiles() << " kept from "
+                 << (previous ? in.reuseFrom : std::string("(no last bake)"));
         memoryNow(rss, peak);
         rep.timings["writtenPeakGb"] = peak;
         LOG_INFO << "[lots] written: memory " << rss << " GB, the peak so far " << peak << " GB";
@@ -385,7 +405,7 @@ std::string lotRoadsKeyText(const nlohmann::json& roadFile) {
     return text;
 }
 
-NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report) {
+NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report, ::engine::lotcache::TileCellWriter* cells) {
     const LotCitysim cs = LotCitysim::ofLevel(in.level);   // (what the key hashes, and nothing else: ADR-0457)
     // The blocks are the city's pavement holes; there are no nets. The ground: on a level with
     // terrain, the loader's -- the level's terrain with the city's grid blended in, sampled and
@@ -449,6 +469,63 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
         if (sh) gin.streetHeight = [sh](Real x, Real z, Real* y) { double d; if (!sh(x, z, &d)) return false; *y = static_cast<Real>(d); return true; };
     }
     if (haveSpawn) gin.enterableAt = &spawn;
+    // THE TILES' HOST (ADR-0504): each tile's key is the hash of its slice of the plan, of everything the pass reads but
+    // the city (lotsInputsKey), and of the city where the tile reaches -- kTileKeyHalo past its reach: the ground grid's
+    // nodes, the drawn deck's spines and pads, the streets it may front, the rails and the water
+    if (cells) {
+        constexpr double kTileKeyHalo = 200.0;
+        const uint64_t inputsKey = lotsInputsKey(in, nullptr);
+        std::shared_ptr<LotTileHooks> hooks = std::make_shared<LotTileHooks>();
+        hooks->key = [cells, inputsKey, &city, &roads, &water](const LotTilePlan& t) {
+            const double x0 = t.lo.x - kTileKeyHalo, x1 = t.hi.x + kTileKeyHalo, z0 = t.lo.y - kTileKeyHalo, z1 = t.hi.y + kTileKeyHalo;
+            auto meets = [&](const std::vector<Vec2>& pts) {
+                for (const Vec2& v : pts) if (v.x >= x0 && v.x <= x1 && v.y >= z0 && v.y <= z1) return true;
+                double a = 1e300, b = -1e300, c = 1e300, d = -1e300;
+                for (const Vec2& v : pts) { a = std::min(a, v.x); b = std::max(b, v.x); c = std::min(c, v.y); d = std::max(d, v.y); }
+                return !pts.empty() && b >= x0 && a <= x1 && d >= z0 && c <= z1;
+            };
+            uint64_t k = bundle::fnv1a(&inputsKey, sizeof inputsKey, bundle::kFnvOffset);
+            k = bundle::fnv1a(&t.plan, sizeof t.plan, k);
+            auto num = [&k](double v) { k = bundle::fnv1a(&v, sizeof v, k); };
+            num(city.pavedSidewalk);
+            if (city.hasTerrain) {   // the ground grid's nodes under the reach
+                const bundle::HeightGridBlob& g = city.ground;
+                num(g.x0); num(g.y0); num(g.res); num(static_cast<double>(g.nx)); num(static_cast<double>(g.ny));
+                const int i0 = std::max(0, static_cast<int>(std::floor((x0 - g.x0) / g.res))), i1 = std::min(g.nx - 1, static_cast<int>(std::ceil((x1 - g.x0) / g.res)));
+                const int j0 = std::max(0, static_cast<int>(std::floor((z0 - g.y0) / g.res))), j1 = std::min(g.ny - 1, static_cast<int>(std::ceil((z1 - g.y0) / g.res)));
+                for (int j = j0; j <= j1; ++j)
+                    for (int i = i0; i <= i1; ++i) num(static_cast<double>(g.z[static_cast<std::size_t>(j) * static_cast<std::size_t>(g.nx) + static_cast<std::size_t>(i)]));
+            }
+            for (const UnionSpine& sp : city.deck.spines) {   // the drawn deck
+                if (!meets(sp.points)) continue;
+                for (const Vec2& v : sp.points) { num(v.x); num(v.y); }
+                num(sp.halfWidth); num(sp.closed ? 1 : 0); num(static_cast<double>(sp.klass)); num(sp.access); num(sp.accessBack);
+                num(sp.authoredDeck ? 1 : 0); num(sp.layer); num(static_cast<double>(sp.use)); num(sp.travelEdgeFrac);
+                for (const std::vector<double>* a : {&sp.yAbs, &sp.hw, &sp.crossSlope, &sp.yLeft, &sp.yRight}) { num(static_cast<double>(a->size())); for (double v : *a) num(v); }
+            }
+            for (const RoadDeckField::Tri& tri : city.deck.pads) {
+                if (!meets({Vec2(tri.a.x, tri.a.z), Vec2(tri.b.x, tri.b.z), Vec2(tri.c.x, tri.c.z)})) continue;
+                for (const Vec3& v : {tri.a, tri.b, tri.c}) { num(v.x); num(v.y); num(v.z); }
+            }
+            for (const LotRoad& rd : roads.roads) {   // the streets it may front
+                if (!meets(rd.line)) continue;
+                k = bundle::fnv1aStr(rd.id, k);
+                for (const Vec2& v : rd.line) { num(v.x); num(v.y); }
+                for (Real v : rd.stations) num(v);
+                num(rd.insideJunction ? 1 : 0); num(rd.sidewalkFrom); num(rd.sidewalkTo); num(rd.halfWidth); num(rd.sidewalk);
+                num(static_cast<double>(rd.klass)); num(rd.overGround ? 1 : 0);
+            }
+            for (const RailTrack& rt : city.rails) {
+                std::vector<Vec2> plan; for (const Vec3& v : rt.pts) plan.push_back(Vec2(v.x, v.z));
+                if (meets(plan)) k = bundle::fnv1aStr(railTracksToJson({rt}).dump(), k);
+            }
+            for (const std::vector<Vec2>& wpoly : water) if (meets(wpoly)) for (const Vec2& v : wpoly) { num(v.x); num(v.y); }
+            return k;
+        };
+        hooks->keep = [cells](const LotTilePlan& t, uint64_t key, LotTile& kept) { return cells->keep(t, key, kept); };
+        hooks->done = [cells](LotTile& t) { cells->done(t); };
+        gin.tiles = hooks;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     LotGrowSetup s;
     NetLotResult r = growCity(gin, &s);

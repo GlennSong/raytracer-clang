@@ -15,13 +15,15 @@
 #include "engine/procgen/city/city_lots.h"
 #include "engine/procgen/terrain.h"
 
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace engine {
 namespace lotcache {
 
-constexpr int kLotsFormatVersion = 7;   // 7: LotBuilding::walkways, a lot's paths stated as the road model's walkways, replace LotBuilding::walks (ADR-0476)   // 6: LotBuilding::frontage and DoorSpec::frontage, where each fronts (ADR-0474)   // 5: DoorSpec::open (a fire station's open bays)   // 2: grown parts stored per render cell when written with cell > 0; 4: kLotPartSlots (ground-relative draped slots) + ground-relative park/under-deck padMesh
+constexpr int kLotsFormatVersion = 8;   // 8: written tile by tile, each tile's records and grades in sections of their own and listed in `tiles` (ADR-0504)   // 7: LotBuilding::walkways, a lot's paths stated as the road model's walkways, replace LotBuilding::walks (ADR-0476)   // 6: LotBuilding::frontage and DoorSpec::frontage, where each fronts (ADR-0474)   // 5: DoorSpec::open (a fire station's open bays)   // 2: grown parts stored per render cell when written with cell > 0; 4: kLotPartSlots (ground-relative draped slots) + ground-relative park/under-deck padMesh
 
 void putBuildingParams(bundle::BinWriter& w, const BuildingParams& p);
 bool getBuildingParams(bundle::BinReader& r, BuildingParams& p);
@@ -37,6 +39,34 @@ bool getFlattens(bundle::BinReader& r, std::vector<TerrainFlatten>& f);
 // `cell/<cx>_<cz>/flat/<i>`; cell > 0, MeshBuilder::chunkByCell) so the loader instantiates a cell's parts
 // straight from the sections, one chunk at a time, and never chunks at load. `meta` carries `cell` and `cells`.
 void writeLotResult(bundle::BundleWriter& w, const std::string& prefix, const NetLotResult& r, double cell = 0.0);
+
+// THE LOTS WRITTEN TILE BY TILE (#317 step 6b, ADR-0504): the host of a tiled lot pass (LotTileHooks). It takes each
+// tile as it is done, cuts its parts into render cells and writes them at once, as sections of that tile's own in the
+// cell (`cell/<cx>_<cz>/<tz>_<tx>/parts/<i>`, `.../flat/<i>`: a cell two tiles' lots reach holds a chunk of each), so it
+// holds one tile's parts at a time. A tile's records and grades are sections of its own (`tile/<tz>_<tx>/lots`,
+// `.../grade`), listed in `tiles` with its key, counts and cells: the next bake KEEPS a tile whose key is the same
+// (`keep`) and copies its sections instead of growing it.
+class TileCellWriter {
+public:
+    TileCellWriter(bundle::BundleWriter& w, std::string prefix, double cell, const bundle::Bundle* previous);
+    bool keep(const LotTilePlan& tile, uint64_t key, LotTile& kept);
+    void done(LotTile& tile);   // in tile order
+    // After the pass: the lots, plan and grade sections, the tile list, and the meta (every cell written).
+    void finish(const NetLotResult& r);
+    int keptTiles() const { return kept_; }
+    int grownTiles() const { return grown_; }
+private:
+    bundle::BundleWriter& w_;
+    std::string prefix_;
+    double cell_;
+    const bundle::Bundle* prev_;
+    struct Was { uint64_t key = 0; bool malls = false; std::vector<int> counts; std::vector<std::pair<int, int>> cells; };
+    std::map<LotTileId, Was> was_;   // the last bake's tiles
+    std::set<std::pair<int, int>> written_;
+    nlohmann::json tiles_ = nlohmann::json::array();
+    int kept_ = 0, grown_ = 0;
+};
+
 // `withParts` false leaves parts/flatParts empty (sized from meta) — the loader spawns per-cell sections instead.
 // A per-cell layout is reassembled into whole parts when parts are asked for.
 bool readLotResult(const bundle::Bundle& b, const std::string& prefix, NetLotResult& r, std::string* err, bool withParts = true);

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -95,7 +96,7 @@ struct LotBuilding {
     // bounded by streets, so every building in a block must share a district.
     // Without the block id that invariant can only be checked by
     // point-in-polygon against LotPlanDebug, which no test should have to do.
-    int block = -1;
+    int block = -1;   // the block's own number (its outline's, 31 bits: ADR-0503/0504), not its place in a list
     std::string district;   // districtName(tag) — "financial", "oldtown", ...
     std::string recipe;     // the architect RECIPE that built it ("school",
                             // "glass_tower", "fire_station", ...) — debug/UI
@@ -183,6 +184,7 @@ struct LotBuilding {
     Poly2 padBound;
 };
 
+struct LotTileHooks;   // (below: the lot pass by tiles)
 struct LotParams {
     // The ground already carries the streets smoothly (a lane city's earthwork field): skip the block
     // planes and terraces -- they would replace a gentle slope with steps.
@@ -353,6 +355,10 @@ struct LotParams {
     // (makeArchetypeBook). Empty = the architect's compiled ladders. The
     // style book restyles what stands; this book decides WHAT stands.
     ArchetypeBook archetypeBook;
+    // THE TILES' HOST (#317 step 6b, ADR-0504): asked for each tile's key and for a tile kept from the last bake, and
+    // handed each tile as it is done (its parts with it, which the pass then lets go). None: the pass keeps every tile's
+    // parts in `outParts` and `outFlatParts`, in tile order.
+    std::shared_ptr<const LotTileHooks> tiles;
 };
 
 // The intermediate planning geometry, exposed for debug visualization: the block
@@ -409,6 +415,50 @@ struct LotPlanDebug {
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
     // THE OPEN-LOT PROGRAM: what the lots that did not build became instead of a bare green
     int openCarParks = 0, openPlaygrounds = 0, openGardens = 0, openParks = 0;
+};
+
+// THE LOT PASS BY TILES (#317 step 6b, ADR-0504). The pass plans the whole city at once (parcels, grades, landmarks,
+// every choice made in block order), then grows it a tile at a time: a tile is a kLotTile square, and a block belongs,
+// whole, to the tile holding its centre. A tile's lots, their parts, the grades they add and what they counted are its
+// own; the next tile starts empty, so the pass holds one tile's parts at a time, not the city's.
+struct LotTileId {
+    int64_t tz = 0, tx = 0;   // the row (z) and column (x) of the kLotTile square
+    bool operator<(const LotTileId& o) const { return tz != o.tz ? tz < o.tz : tx < o.tx; }
+    bool operator==(const LotTileId& o) const { return tz == o.tz && tx == o.tx; }
+};
+// A tile as planned, before it grows: what the host needs to key it.
+struct LotTilePlan {
+    LotTileId id;
+    Vec2 lo, hi;              // its REACH: every block of it, the paths and parks round them, kLotTileReach out
+    uint64_t plan = 0;        // a hash of its slice of the plan: its blocks, lots, landmarks, greens and the grades
+                              // that reach it (the host adds the ground, roads and rules it reads)
+};
+// A tile as grown (or as kept from the last bake): its records (before the paths' ends and the doors' streets are
+// stated, which the pass does for the whole city after every tile), parts, the grades it added, and its counts.
+struct LotTile {
+    LotTileId id;
+    uint64_t key = 0;                     // the host's
+    bool kept = false;                    // kept from the last bake (no parts: the host copies its cells)
+    std::vector<LotBuilding> lots;
+    std::vector<RenderMesh> parts, flatParts;
+    std::vector<TerrainFlatten> grade;
+    LotPlanDebug counts;                  // what its lots added to the ledger's counts (no lists)
+    bool malls = false;                   // it read or changed the malls placed so far (ONE MALL IN kMallSpacing):
+    std::vector<Vec2> mallsBefore, mallsAfter;   // ...the list as it found it and as it left it
+};
+// The ledger's counts as one list, in a fixed order (a tile's, stored with it), and back
+const std::vector<int LotPlanDebug::*>& lotPlanCountFields();
+std::vector<int> lotPlanCounts(const LotPlanDebug& d);
+bool setLotPlanCounts(LotPlanDebug& d, const std::vector<int>& counts);
+constexpr Real kLotTileReach = 150.0;     // metres past a tile's blocks its lots may lay anything
+struct LotTileHooks {
+    // a tile's key (its plan's, with what else the host knows it reads)
+    std::function<uint64_t(const LotTilePlan&)> key;
+    // the tile kept from the last bake under `key`, when the host can hand it over unchanged (its lots, grades, counts
+    // and malls; never its parts): true = it is not grown
+    std::function<bool(const LotTilePlan&, uint64_t key, LotTile& kept)> keep;
+    // a tile done, grown or kept, in tile order (a kept one comes without parts)
+    std::function<void(LotTile&)> done;
 };
 
 // The SKYLINE CENSUS (skyscrapers v2, M0): what the lot pass actually BUILT, as
@@ -554,7 +604,7 @@ struct LotRoadInputs {
 // same half widths (flat, at height 0).
 LotRoadInputs lotRoadsFromLines(std::vector<LotRoad> roads);
 // WHERE THE LOTS' PATHS LAND (ADR-0476): the step growLotBuildings ends with, once every lot stands. Each lot's drawn
-// paths (LotBuilding::walkways) get an id ("lot<i>.p<k>"), a height per point (`ground`; none: the lot's groundY) and
+// paths (LotBuilding::walkways) get an id ("lot<8 hex of its site>.p<k>", ADR-0503), a height per point (`ground`; none: the lot's groundY) and
 // both ends stated, looked up once: another path's end or middle, else the street a building may front nearest within
 // reach (its station and kerb, by the road model's one rule), else a dead end. A door on a path states it in its
 // frontage's walkway slot. What landed where, counted:

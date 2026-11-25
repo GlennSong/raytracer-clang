@@ -194,6 +194,7 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
         if (progress) { local = [&](const Progress& p) { Progress q = p; q.producer = name; q.fraction = (doneWeight + wgt * std::clamp(p.fraction, 0.0, 1.0)) / totalWeight; return (*progress)(q); }; localPtr = &local; }
         const auto tp = std::chrono::steady_clock::now();
         ProducerReport pr;
+        in.reuseFrom = req.force || req.toMemory || rebuilt(name) ? std::string() : previousBundleFor(root, req.levelPath, std::string());
         try { pr = a.p->produce(in, w, localPtr); } catch (const std::exception& ex) { pr.ok = false; pr.error = ex.what(); }
         pr.seconds = secondsSince(tp);
         if (!pr.ok) {
