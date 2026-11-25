@@ -25156,7 +25156,16 @@ They are single polygon operations over the whole island. An index cannot speed 
 **Measured** (`prefab_street`, the player inside the courthouse at 55, 30):
 - Stamped prefabs: 666 before, 228 after. The 228 are the 195 the level places outdoors and the 33 doors near the player, awake.
 - Switching a desk lamp on woke one copy (218 to 219 stamped where I stood); seven seconds later it was back (218), still lit and offering "switch off".
-- Frame time is NOT measured yet: another session was profiling on this machine. Before: avg 7.73 ms, p95 11.33 ms at that spot (two runs, 7.76 the second). The after number, and the island's, go in here when the machine is free.
+- Frame time at that spot (`python3 tools/prefab_yardstick.py assets/levels/prefab_street.json --teleport "55 1.2 30" --camera "55 2.2 30 -5 0" --settle 15 --seconds 20`, two runs each):
+
+| | Before (every prefab stamped) | After (batch copies) |
+|---|---|---|
+| Frame, average | 7.73 and 7.76 ms | 6.30 and 6.33 ms |
+| Frame, 95th percentile | 11.33 and 11.39 ms | 6.45 and 6.42 ms |
+| Of it, drawing | 7.05 ms | 5.95 ms |
+| GPU buffers | 42 MB | 42 MB |
+
+- The island (`python3 tools/prefab_yardstick.py`): avg 28.09 ms, p95 41.82 ms after, against 28.51 and 41.62 before; GPU buffers 3,523 MB both times. No interior is streamed in at the player's start and no prefab is stamped there, so this change is not in that picture yet: the island is no worse, and will only show a difference once the ports place prefabs in it.
 - Tests: `a_batch_copy_is_solid_wakes_where_it_was_drawn_and_sleeps_as_it_was_left`, the batch case of ADR-0520, prefab 9 of 9, furniture 12 of 12, interior 6 of 6, door 22 of 22; physics crane 2 of 2, arrived 1 of 1.
 
 **What is left:**
