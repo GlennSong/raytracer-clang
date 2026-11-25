@@ -239,7 +239,7 @@ void CityBrainSystem::update(engine::FrameContext& ctx) {
         camOnce_ = true;
         followAsked_ = false;
     }
-    draw(ctx);
+    if (city_.brainOverlay()) draw(ctx);   // (debug: off until asked, `overlay brain on` or the / key)
 }
 
 void CityBrainSystem::draw(engine::FrameContext& ctx) {
@@ -380,7 +380,7 @@ void CityBrainSystem::lookedAt(const engine::FrameContext& ctx, const CityBrain&
 // THE NAMES, the followed resident in a few lines, and whoever is looked at (the game UI layer).
 void CityBrainSystem::render(engine::FrameContext& ctx) {
     const CityBrain* b = city_.built() ? city_.sim().brain() : nullptr;
-    if (!b || ctx.actions.layerUp()) return;
+    if (!b || ctx.actions.layerUp() || !city_.brainOverlay()) return;
     const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
     const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
     const float white[4] = {1, 1, 1, 0.95f}, gold[4] = {1.0f, 0.82f, 0.3f, 1.0f}, back[4] = {0, 0, 0, 0.6f};

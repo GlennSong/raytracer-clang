@@ -2859,6 +2859,7 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     // Semicolon, not L: L is the car's headlight toggle (VehicleSystem), and
     // switching lights used to flash the whole block/lot plan on with it.
     ctx.actions.bindButton("plan_widgets", engine::KeyCode::Semicolon);
+    ctx.actions.bindButton("brain_widgets", engine::KeyCode::Slash);   // the agent brain's overlay (CityBrainSystem)
     onSimHour_ = ctx.events.listen<engine::SimHourQuery>([this](const engine::SimHourQuery& q) {
         if (q.hours != nullptr && built_) *q.hours = sim_.clockHours();
     });
@@ -3302,6 +3303,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // ADR-0461.)
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
+    if (ctx.actions.pressed("brain_widgets")) showBrain_ = !showBrain_;   // (the brain's markers, plan and names)
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
     // master on when it was off, so the key works standalone on web (no ImGui
     // panel there).
@@ -3318,6 +3320,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         else if (r.layer == "cones") showVisionCones_ = r.on;
         else if (r.layer == "nav") showWalkPoints_ = r.on;
         else if (r.layer == "plan") showPlan_ = r.on;
+        else if (r.layer == "brain") showBrain_ = r.on;
     }
     layerRequests_.clear();
 

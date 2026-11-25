@@ -152,10 +152,10 @@ EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
 // Living City debug layers from the page (the web build has no ImGui panel):
 // a CityLayerRequest, the one `overlay <layer>` sends, setting the same flags
 // the J and ; keys flip. id: 0=master widgets 1=agent rings 2=vision cones
-// 3=nav graph 4=city plan (blocks + lots).
+// 3=nav graph 4=city plan (blocks + lots) 5=the agent brain's markers and plan.
 EMSCRIPTEN_KEEPALIVE void rt_web_city(int id, int val) {
-    static const char* layers[] = {"master", "agents", "cones", "nav", "plan"};
-    if (id < 0 || id >= 5) return;
+    static const char* layers[] = {"master", "agents", "cones", "nav", "plan", "brain"};
+    if (id < 0 || id >= 6) return;
     engine::CityLayerRequest r;
     r.layer = layers[id];
     r.on = val != 0;

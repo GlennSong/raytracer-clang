@@ -222,6 +222,7 @@ public:
     bool setWorldClock(Real hour, Real hoursPerSecond);
 
     bool built() const { return built_; }
+    bool brainOverlay() const { return showBrain_; }   // the agent brain's debug drawing (CityBrainSystem)
     const CitySim& sim() const { return sim_; }
     // THE TYRES AGAINST THE ROAD (the new model's drawing check, #255): the car entity `car` (city_car.h) as the
     // four-wheel fit puts it now (without the tilt filter's memory: a pure read), and for each of its wheels the height of the wheel's
@@ -731,6 +732,10 @@ private:
     bool showVisionCones_ = true;    // per-agent sensing wedges
     bool showWalkPoints_ = true;     // the walk points' strips and rings (the "nav" layer)
     bool showPlan_ = true;           // city-plan outlines: blocks + lots (L key)
+    // THE BRAIN'S OVERLAY (CityBrainSystem): the places' markers (a ring where a person arriving stands, a post, the name),
+    // the followed resident's plan line and panel, the names over people, the looked-at line. Debug: off until asked
+    // (`overlay brain on`, the / key).
+    bool showBrain_ = false;
     bool showColliders_ = false;     // building physics prisms (rims + posts)
     bool rebuildRoadsRequested_ = false;   // panel button → host reseeds + reloads
     int  inspectAgent_ = -1;         // agent selected in the inspector (-1 = none)

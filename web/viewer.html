@@ -179,6 +179,7 @@
     <div class="row"><span>Vision cones</span><button id="cityCones">on</button></div>
     <div class="row"><span>Nav graph</span><button id="cityNav">on</button></div>
     <div class="row"><span>Blocks + lots (L)</span><button id="cityPlan">on</button></div>
+    <div class="row"><span>Brain markers + plan (/)</span><button id="cityBrain">off</button></div>
     </details>
     <details class="sec"><summary>Touch controls</summary>
     <div class="row"><span>Look sens.</span><input id="lookSens" type="range" aria-label="Look stick sensitivity" min="20" max="300" value="100" style="flex:1"><span class="val" id="lookSensVal">1.00</span></div>
@@ -527,19 +528,19 @@
             tBloom = mkToggle('bloom', 4, true), tLens = mkToggle('lens', 5, true);
 
       // Living City layers (rt_web_city): 0=master(J) 1=agent rings 2=vision
-      // cones 3=nav graph 4=blocks+lots(L). One-shot writes; the engine-side
+      // cones 3=nav graph 4=blocks+lots(L) 5=the agent brain's markers and plan (/, off). One-shot writes; the engine-side
       // flags stay shared with the J/L keys. Defaults mirror the engine's.
       const cityCall = (id, v) => {
         if (typeof mod._rt_web_city === 'function') mod._rt_web_city(id, v);
       };
-      const mkCity = (btnId, cid) => {
-        const b = $(btnId); let on = true;
+      const mkCity = (btnId, cid, start = true) => {
+        const b = $(btnId); let on = start;
         const paint = () => { b.classList.toggle('on', on); b.textContent = on ? 'on' : 'off'; };
         paint();
         b.onclick = () => { on = !on; paint(); cityCall(cid, on ? 1 : 0); };
       };
       mkCity('cityMaster', 0); mkCity('cityAgents', 1); mkCity('cityCones', 2);
-      mkCity('cityNav', 3); mkCity('cityPlan', 4);
+      mkCity('cityNav', 3); mkCity('cityPlan', 4); mkCity('cityBrain', 5, false);
 
       // --- Planet Lab (rt_web_planet): only shown for the planet_lab scene. Each
       // control writes a param to settings; Generate bumps the rebuild counter that

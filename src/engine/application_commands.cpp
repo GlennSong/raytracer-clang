@@ -195,8 +195,9 @@ void Application::registerCameraVerbs() {
         return "ok shots armed for " + std::to_string(burstLeft_) + " frames";
     });
 
-    commandTable.add("overlay", "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan> <on|off>",
-                     "Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer.",
+    commandTable.add("overlay", "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan|brain> <on|off>",
+                     "Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer "
+                     "(brain: the agent brain's markers, plan line, panel and names; the / key).",
                      [this](const ControlCommand& cmd) -> std::string {
         if (cmd.args.size() < 2) return "err usage: overlay <name> <on|off>";
         const std::string& what = cmd.args[0];
@@ -219,13 +220,13 @@ void Application::registerCameraVerbs() {
         // The city sim's debug layers: a CityLayerRequest for CityRenderSystem,
         // the same one the web build's panel (rt_web_city) sends.
         if (what == "master" || what == "agents" || what == "cones" ||
-            what == "nav" || what == "plan") {
+            what == "nav" || what == "plan" || what == "brain") {
             CityLayerRequest r;
             r.layer = what;
             r.on = on;
             return publishRequest(eventBus, r, "overlay " + what, "ok " + what);
         }
-        return "err unknown overlay (hud|ui|debug|lamplights|master|agents|cones|nav|plan)";
+        return "err unknown overlay (hud|ui|debug|lamplights|master|agents|cones|nav|plan|brain)";
     });
 
     commandTable.add("person", "person first|third|toggle",
