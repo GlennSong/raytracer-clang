@@ -45,3 +45,8 @@ build-visionos-dev/
 citywalk-log.jsonl
 # Python bytecode.
 __pycache__/
+
+# probe and agent output (pictures archived to ~/Pictures/Raytracer)
+out/
+# the debug UI's window layout
+imgui.ini
