@@ -24794,3 +24794,56 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - A trip can't change lines yet: bus to a station, or a train then a bus. It is one ride between two walks. The island's walks to a station can be long (15.7 minutes in the example).
 - A station is chosen by straight-line estimate, before its walk is routed. A station across a river from home can win and then fail as "no route to the stop", even when another station would do.
 - Far riders are not drawn on trains or platforms: their wait and ride are the clock's (like far bus riders, step 4e).
+
+## ADR-0501 — The city bake spreads its independent loops over the shared pool (#317, step 2; 2026-11-24)
+
+**Why:** after step 1 (ADR-0498) the island's city stage took about 14.5 minutes, still nearly all on one core. Its loops over roads, lanes, polygons, vertices and triangles had items that were already independent: each read the finished build and wrote only its own answer. The investigation's step 2 was to run them on the engine's one thread pool, with the output unchanged (docs/bake-performance-investigation.md).
+
+**Words:**
+- the *shared pool* is the process's one set of worker threads (`sharedJobs`, ADR-0288); `parallelRows(n, f)` runs `f(0..n-1)` across it.
+- *gathered in order*: each item writes its own slot, and the slots are joined in the order the serial loop made them, so the result is the serial one byte for byte.
+- a *task* is one batch of items handed to one worker.
+
+**Measured first.** Stack samples of the island's city stage every 10 s (`eu-stack`), before the change, put the time in: the layer meshes' vertex heights (about 5 of 16 minutes), the footprints (4), the deck UVs (1.2), the road design's all-pairs checks (0.7), the pier placement and lane pairs (1.3), the walks (0.5), the blocks' polygon union (0.8), the paint, the road model's lane heights and the paint drape (about 1).
+
+**What happens (each gathered in order):**
+- **Road design** (`vertical_profile.cpp`): the crossings between roads (`crossingMeets`, per road), the road-end mismatch check (`nodeMismatch`, per road end, the first worst kept), the unplanned-crossing check (`undeclaredCrossings`, per road), and a ramp's projections onto its two host roads (per point).
+- **Footprints** (`buildFootprints`):
+  - the closing fillets are decided on the pool against the footprints as they stand, then taken in order. A fillet whose nearby lanes an earlier fillet has grown is decided again against the grown footprints, so each decision is the serial loop's.
+  - the roads' hulls and medians are unioned beside the closing and the merged lane outline (`bothAtOnce`, below), since one reads only the road file and the other only the lanes.
+  - each road's shoulder and sidewalk bands are cut at their own level on the pool (`cutAtLevel`, per road); the traffic islands are judged per hole; the shoulder and sidewalk layers are unioned and given their bodies two at once.
+- **Piers** (per road) and **lane pairs** (`adjacency`, per lane). The pier test now reads the prepared lane footprints (`LaneLookup`, made before the piers instead of after) and a box per lane made once. It measured every lane's first polygon's box again at every pier station.
+- **Walks** (`layWalks`): each corner's walk line is found on the pool; the walks are then laid into the lanes' one curve store in ring-pair order.
+- **Meshes** (`buildMeshes`):
+  - the layer meshes: every polygon triangulated, then every vertex's height, then each polygon's steep triangles dropped. The sidewalk layer is a few polygons the size of a town, so it is the vertices that spread.
+  - the deck UVs (per triangle), the barrier line's points (per point), the lane lines of the paint (per road and way).
+  - the road model's lane heights (`builtRoadModel`, per lane; the road model's cache at load gains too).
+  - the paint drape (`MeshBuilder::drapeOnMesh`, in runs of triangles, each run its own mesh, appended in order before the weld).
+- **The blocks, the deck field, the rails and the kerb line** are made beside the meshes (`cityProductsFromResult`). The blocks are one island-wide polygon union, a minute, that cannot be split without changing it.
+
+**Two additions to the job system** (`src/job_system.h`, for every user):
+- `parallelRows(n, f, perTask)`: `perTask = 1` hands out one item per task. The default batches n/(8 x threads) items per task, and in a loop over roads one batch holding two long ones was the whole loop's tail (20 s on the island's band cuts).
+- `bothAtOnce(beside, here)`: runs `beside` as one task on the pool while the caller runs `here`, and returns when both are done. An exception from either comes out after both have finished.
+
+**Checked:**
+- island_8_nature, whole bake (`--force`): **8:42 against about 17 minutes** (city 337 s against 867 s after step 1; lots 183 s). Every one of its 28,041 sections is byte-identical to the baseline bundle baked before steps 1 to 3 but `city/e0/report`, whose difference is its timings alone (equal with `seconds`, `timings` and the summary's seconds taken out).
+- island_8_nature, `rt_bake --rebuild city`, on the same machine the same evening: before 16:22 wall and 119 % of a core; after 5:47 (the last binary but one) and about 410 %. During the layer heights, the deck UVs and the band cuts all 24 threads run.
+- river_town, the whole bake: 1:06 → 0:43; sections byte-identical but the report's timings.
+- lanes_tests 158 of 158.
+
+**Measured again: the footprints (the investigation's step 4).** They are now 162 of the city stage's 337 s, about half, and most of that is no longer a loop. On the island:
+- the merged lane outline is unioned twice (before the closing and after the fillets): about 60 s;
+- the closing (an offset out and back in, over the whole island): about 50 s;
+- the fillets decided again because an earlier one grew a nearby lane: about 30 s;
+- the bodies (another two offsets): about 10 s.
+
+They are single polygon operations over the whole island. An index cannot speed them up, and splitting them changes the polygons Clipper returns (vertex order, start points), so the bundle would not stay byte-identical. That is the investigation's step 7 (city tiles), a design decision. What is left for step 4 as written (index the fillet loop) is the 30 s of fillets decided again, and that is not worth an index.
+
+**What is left:**
+- The rest of the city stage is the surfaces (41 s: the triangulation's single big CDT, the deck welds), the meshes' serial parts (slab sides, girders, platforms, the weld after the drape), and writing the cells.
+- The walk area is unioned one footway at a time (`layWalks`, about 10 s): one union of them all is faster but may order the polygon's points differently.
+- Memory:
+  - The city stage's own peak rose from 10.7 to 13.2 GB. The drape's runs each hold their own pieces until they are appended.
+  - The lots stage alone (`--rebuild lots`) is unchanged: 29.3 GB process peak, 3:06, byte-identical.
+  - The whole bake in one process peaks at 32.5 GB in the lots stage (its manifest: `grownRssGb` 29.8 against 26.7 alone). The 3 GB is memory the city stage no longer uses but the process has not handed back. The likely cause is the worker threads' own malloc heaps. Whether a whole bake held it before this change was not measured. A `malloc_trim` between the producers would be the first thing to try.
+- Checked again outside the helper that did the work: river_town baked by the unmodified binary and by this one, 1,571 sections, every one identical but `city/e0/report` (the same size; its timings); 1:06 -> 0:37.

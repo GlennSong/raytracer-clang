@@ -8,6 +8,7 @@
 #include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
+#include "../../../../../job_system.h"   // bothAtOnce: the blocks and deck field beside the meshes (ADR-0288)
 
 #include <algorithm>
 #include <chrono>
@@ -328,15 +329,27 @@ static CurbBandAudit bandsFromResult(const Result& r) {
 }
 
 CityProducts cityProductsFromResult(const Result& r, double renderCell, bool withInvariants) {
-    CityProducts p; p.cell = renderCell; const auto t0 = std::chrono::steady_clock::now();
+    CityProducts p; p.cell = renderCell;
     if (r.hasTerrain) { p.hasTerrain = true; p.ground.x0 = r.terrain.x0; p.ground.y0 = r.terrain.y0; p.ground.res = r.terrain.res; p.ground.nx = r.terrain.nx; p.ground.ny = r.terrain.ny; p.ground.z = r.terrain.z; }
-    p.holes = pavementHoles(r, 2000.0);
-    p.deck = deckFromResult(r);
-    p.rails = railTracks(r);
-    p.bands = bandsFromResult(r);
-    const double tHolesAndDeck = secondsSince(t0); const auto t1 = std::chrono::steady_clock::now();
+    // THE BLOCKS, THE DECK FIELD, THE RAILS AND THE KERB LINE BESIDE THE MESHES (#317 step 2): one task on the shared pool
+    // while this thread builds the meshes. Both only read the build, and each writes its own fields of `p`; the holes are
+    // one island-wide polygon union (a minute on the island) that cannot be split without changing it.
+    double tHolesAndDeck = 0, tMeshes = 0;
     size_t triangles = 0, bytes = 0; nlohmann::json materials = nlohmann::json::array();
-    std::vector<NamedMesh> named = buildMeshes(r); const double tMeshes = secondsSince(t1); const auto t2 = std::chrono::steady_clock::now();
+    std::vector<NamedMesh> named;
+    bothAtOnce([&r, &p, &tHolesAndDeck] {
+        const auto tb = std::chrono::steady_clock::now();
+        p.holes = pavementHoles(r, 2000.0);
+        p.deck = deckFromResult(r);
+        p.rails = railTracks(r);
+        p.bands = bandsFromResult(r);
+        tHolesAndDeck = secondsSince(tb);
+    }, [&r, &named, &tMeshes] {
+        const auto t1 = std::chrono::steady_clock::now();
+        named = buildMeshes(r);
+        tMeshes = secondsSince(t1);
+    });
+    const auto t2 = std::chrono::steady_clock::now();
     for (const NamedMesh& nm : named) {
         if (nm.mesh.vertices.empty()) continue;
         const bool paint = nm.name.rfind("paint", 0) == 0; const bool terrain = nm.name == "terrain";

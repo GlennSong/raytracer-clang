@@ -2,6 +2,7 @@
 #include "engine/procgen/city/roads/lanes/lane_expand.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "curve.h"
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 #include <algorithm>
 #include <array>
@@ -240,16 +241,22 @@ double laneHeightFrom(const Lane& l, const RoadLabGraph& g, const Projection& pr
 std::vector<std::pair<int, int>> adjacency(const LaneSet& L, const DeckHeight* H) {
     std::vector<std::pair<int, int>> out; std::vector<std::array<double, 4>> bx(L.lanes.size());
     for (size_t i = 0; i < L.lanes.size(); ++i) { auto& b = bx[i]; b = {1e300, -1e300, 1e300, -1e300}; for (const Vec2& p : L.lanes[i].xy()) { b[0] = std::min(b[0], p.x); b[1] = std::max(b[1], p.x); b[2] = std::min(b[2], p.y); b[3] = std::max(b[3], p.y); } }
-    for (size_t i = 0; i < L.lanes.size(); ++i) for (size_t j = i + 1; j < L.lanes.size(); ++j) {
-        const Lane& a = L.lanes[i]; const Lane& b = L.lanes[j]; double w = (a.width + b.width) / 2; int close = 0; double dots = 0;
-        if (bx[i][0] > bx[j][1] + 2 * w || bx[j][0] > bx[i][1] + 2 * w || bx[i][2] > bx[j][3] + 2 * w || bx[j][2] > bx[i][3] + 2 * w) continue;
-        for (int k = 0; k < 25; ++k) {
-            double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy(), a.s(), f * a.s().back()); Projection pr = H ? H->onLane(static_cast<int>(j), p) : project(b.xy(), b.s(), p);
-            if (std::fabs(pr.distance - w) < 0.25 * w) { ++close; dots += dot(tangentAtStation(a.xy(), a.s(), f * a.s().back()) * static_cast<double>(a.dir), tangentAtStation(b.xy(), b.s(), pr.station) * static_cast<double>(b.dir)); }
+    // each lane's pairs with the lanes after it, on the shared pool (#317 step 2), gathered in lane order: the same list
+    std::vector<std::vector<std::pair<int, int>>> pairsOf(L.lanes.size());
+    parallelRows(static_cast<int>(L.lanes.size()), [&](int row) {
+        const size_t i = static_cast<size_t>(row);
+        for (size_t j = i + 1; j < L.lanes.size(); ++j) {
+            const Lane& a = L.lanes[i]; const Lane& b = L.lanes[j]; double w = (a.width + b.width) / 2; int close = 0; double dots = 0;
+            if (bx[i][0] > bx[j][1] + 2 * w || bx[j][0] > bx[i][1] + 2 * w || bx[i][2] > bx[j][3] + 2 * w || bx[j][2] > bx[i][3] + 2 * w) continue;
+            for (int k = 0; k < 25; ++k) {
+                double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy(), a.s(), f * a.s().back()); Projection pr = H ? H->onLane(static_cast<int>(j), p) : project(b.xy(), b.s(), p);
+                if (std::fabs(pr.distance - w) < 0.25 * w) { ++close; dots += dot(tangentAtStation(a.xy(), a.s(), f * a.s().back()) * static_cast<double>(a.dir), tangentAtStation(b.xy(), b.s(), pr.station) * static_cast<double>(b.dir)); }
+            }
+            if (close * a.s().back() / 25 < 20 || close == 0) continue;
+            if (dots / close > 0.7) pairsOf[i].emplace_back(static_cast<int>(i), static_cast<int>(j));
         }
-        if (close * a.s().back() / 25 < 20 || close == 0) continue;
-        if (dots / close > 0.7) out.emplace_back(static_cast<int>(i), static_cast<int>(j));
-    }
+    });
+    for (const std::vector<std::pair<int, int>>& ps : pairsOf) out.insert(out.end(), ps.begin(), ps.end());
     return out;
 }
 

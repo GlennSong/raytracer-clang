@@ -262,32 +262,6 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         if (cA.shoulder > 0 && cB.shoulder > 0) keep(shoulderMitres, mitrePieces(g, k, g.carriagewayHalfWidth(A), g.carriagewayHalfWidth(B)));
         if (cA.sidewalk > 0 && cB.sidewalk > 0) keep(sidewalkMitres, mitrePieces(g, k, g.sidewalkOuterHalfWidth(A), g.sidewalkOuterHalfWidth(B)));
     }
-    double r = g.rules.closing; out.closingAdded = 0;
-    if (r > 0) {
-        PolySet U = unionAll(out.footprints); PolySet extra = differenceSets(closing(U, r), U);
-        std::vector<Box2> boxes; for (const PolySet& fp : out.footprints) boxes.push_back(fp.empty() ? Box2{} : bounds(fp[0]));
-        for (const Polygon2& piece : extra) {
-            double A = polyArea(piece); if (A < 0.5 || A > 4 * r * r) continue;         // a fillet is a few r²; anything bigger is a median or a block
-            PolySet pieceSet{piece}; PolySet grown = offsetSet(pieceSet, 0.05); Box2 pb = bounds(piece); std::vector<int> touching;
-            for (size_t li = 0; li < out.footprints.size(); ++li) {
-                const Box2& b = boxes[li]; if (b.maxX < pb.minX - 0.2 || b.minX > pb.maxX + 0.2 || b.maxY < pb.minY - 0.2 || b.minY > pb.maxY + 0.2) continue;
-                if (setArea(intersectSets(grown, out.footprints[li])) > 1e-6) touching.push_back(static_cast<int>(li));
-            }
-            if (touching.size() < 2) continue;
-            Vec2 c = centroidOf(piece.outer); bool keep = false; PolySet near = offsetSet(pieceSet, 1.0);
-            for (size_t i = 0; i < touching.size() && !keep; ++i) for (size_t j = i + 1; j < touching.size() && !keep; ++j) {
-                int a = touching[i], b = touching[j]; if (std::fabs(H.own(a, c) - H.own(b, c)) >= g.rules.sameLevelDz) continue;
-                PolySet x = intersectSets(out.footprints[static_cast<size_t>(a)], out.footprints[static_cast<size_t>(b)]);
-                if (!x.empty() && setArea(intersectSets(near, x)) > 1e-6) keep = true;
-            }
-            if (!keep) continue;
-            int owner = touching[0]; double bd = 1e300;
-            for (int li : touching) { double d = H.onLane(li, c).distance; if (d < bd) { bd = d; owner = li; } }
-            out.footprints[static_cast<size_t>(owner)] = unionSets(out.footprints[static_cast<size_t>(owner)], pieceSet); out.closingAdded += A;
-        }
-    }
-    // layers: the median is what lies inside a road's lane envelope but is not lane; shoulders and sidewalks lie outside it
-    out.surface = unionAll(out.footprints);
     std::vector<PolySet> inner, shoulders, sidewalks, medians;
     for (const EdgeSpec& e : g.edges) {
         const RoadClassSpec& c = g.cls(e); if (c.median > 0 && e.laneCount() == 0) medians.push_back(fromRing(spineRing(e.xy, c.median)));
@@ -296,8 +270,60 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         if (c.shoulder > 0) shoulders.push_back(fromRing(spineRing(e.xy, g.carriagewayHalfWidth(e))));
         if (c.sidewalk > 0) sidewalks.push_back(fromRing(spineRing(e.xy, g.sidewalkOuterHalfWidth(e))));
     }
-    PolySet hull = unionAll(inner); std::vector<PolySet> medAll = medians; medAll.push_back(hull);
-    out.median = differenceSets(unionAll(medAll), out.surface);
+    // THE ROADS' HULLS AND MEDIANS ARE UNIONED BESIDE THE CLOSING (#317 step 2). They read only the road file; the closing
+    // and the merged lane outline read only the lanes. So the island-wide unions of the two run at once on the shared pool.
+    PolySet hull, medUnion;
+    bothAtOnce([&] {
+        hull = unionAll(inner); std::vector<PolySet> medAll = medians; medAll.push_back(hull);
+        medUnion = unionAll(medAll);
+    }, [&] {
+        double r = g.rules.closing; out.closingAdded = 0;
+        if (r > 0) {
+            PolySet U = unionAll(out.footprints); PolySet extra = differenceSets(closing(U, r), U);
+            std::vector<Box2> boxes; for (const PolySet& fp : out.footprints) boxes.push_back(fp.empty() ? Box2{} : bounds(fp[0]));
+            // Which lane, if any, takes a piece: read off the footprints of the lanes whose boxes reach it (`near`, the same
+            // list whatever the footprints hold, since the boxes are not updated) -- -1 when it is not a fillet.
+            struct Fillet { double area = 0; int owner = -1; std::vector<int> near; };
+            auto decide = [&](const Polygon2& piece, Fillet& f) {
+                f.owner = -1; f.near.clear();
+                double A = polyArea(piece); f.area = A; if (A < 0.5 || A > 4 * r * r) return;   // a fillet is a few r²; anything bigger is a median or a block
+                PolySet pieceSet{piece}; PolySet grown = offsetSet(pieceSet, 0.05); Box2 pb = bounds(piece); std::vector<int> touching;
+                for (size_t li = 0; li < out.footprints.size(); ++li) {
+                    const Box2& b = boxes[li]; if (b.maxX < pb.minX - 0.2 || b.minX > pb.maxX + 0.2 || b.maxY < pb.minY - 0.2 || b.minY > pb.maxY + 0.2) continue;
+                    f.near.push_back(static_cast<int>(li));
+                    if (setArea(intersectSets(grown, out.footprints[li])) > 1e-6) touching.push_back(static_cast<int>(li));
+                }
+                if (touching.size() < 2) return;
+                Vec2 c = centroidOf(piece.outer); bool keep = false; PolySet nearSet = offsetSet(pieceSet, 1.0);
+                for (size_t i = 0; i < touching.size() && !keep; ++i) for (size_t j = i + 1; j < touching.size() && !keep; ++j) {
+                    int a = touching[i], b = touching[j]; if (std::fabs(H.own(a, c) - H.own(b, c)) >= g.rules.sameLevelDz) continue;
+                    PolySet x = intersectSets(out.footprints[static_cast<size_t>(a)], out.footprints[static_cast<size_t>(b)]);
+                    if (!x.empty() && setArea(intersectSets(nearSet, x)) > 1e-6) keep = true;
+                }
+                if (!keep) return;
+                int owner = touching[0]; double bd = 1e300;
+                for (int li : touching) { double d = H.onLane(li, c).distance; if (d < bd) { bd = d; owner = li; } }
+                f.owner = owner;
+            };
+            // EVERY PIECE DECIDED ON THE SHARED POOL AGAINST THE FOOTPRINTS AS THEY STAND (#317 step 2), then taken in order:
+            // a piece whose nearby lanes an earlier piece has grown is decided again against the grown footprints, so each
+            // decision is the one the piece-by-piece loop made
+            std::vector<Fillet> fillets(extra.size());
+            parallelRows(static_cast<int>(extra.size()), [&](int i) { decide(extra[static_cast<size_t>(i)], fillets[static_cast<size_t>(i)]); });
+            std::vector<char> grownLane(out.footprints.size(), 0);
+            for (size_t k = 0; k < extra.size(); ++k) {
+                Fillet& f = fillets[k];
+                bool stale = false; for (int li : f.near) stale = stale || grownLane[static_cast<size_t>(li)];
+                if (stale) decide(extra[k], f);
+                if (f.owner < 0) continue;
+                out.footprints[static_cast<size_t>(f.owner)] = unionSets(out.footprints[static_cast<size_t>(f.owner)], PolySet{extra[k]}); out.closingAdded += f.area;
+                grownLane[static_cast<size_t>(f.owner)] = 1;
+            }
+        }
+        out.surface = unionAll(out.footprints);
+    });
+    // layers: the median is what lies inside a road's lane envelope but is not lane; shoulders and sidewalks lie outside it
+    out.median = differenceSets(medUnion, out.surface);
     // Traffic islands (Glenn: "places where the roads create a skinny opening and closing"): a hole in the
     // asphalt that is THIN — an opening of 4 m radius removes it entirely — and under 2000 m² is a kerbed
     // grass island, not a block. It joins the median layer (kerb + grass slab) and is taken out of the
@@ -315,11 +341,17 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
             for (size_t ei = 0; ei < g.edges.size(); ++ei) { const EdgeSpec& e = g.edges[ei]; if (e.xy.size() < 2) continue; const double d = H.onRoad(static_cast<int>(ei), c).distance; if (d < bd) { bd = d; best = &e; } }
             return best && (best->isRamp() || g.cls(*best).rank >= 3);
         };
-        for (const Polygon2& sp : out.surface) for (const Ring& h : sp.holes) {
-            const double a = std::fabs(signedArea(h)); if (a < 2.0 || a > 2000.0) continue;
-            if (setArea(offsetSet(fromRing(h), -4.0)) > 1.0 && !inRoadCorridor(h)) continue;   // has a body and is not in a road corridor: a small block, not an island
-            isl.push_back(h);
-        }
+        // (each hole judged on the shared pool, #317 step 2, and the islands listed in hole order)
+        std::vector<const Ring*> holes;
+        for (const Polygon2& sp : out.surface) for (const Ring& h : sp.holes) holes.push_back(&h);
+        std::vector<char> island(holes.size(), 0);
+        parallelRows(static_cast<int>(holes.size()), [&](int i) {
+            const Ring& h = *holes[static_cast<size_t>(i)];
+            const double a = std::fabs(signedArea(h)); if (a < 2.0 || a > 2000.0) return;
+            if (setArea(offsetSet(fromRing(h), -4.0)) > 1.0 && !inRoadCorridor(h)) return;   // has a body and is not in a road corridor: a small block, not an island
+            island[static_cast<size_t>(i)] = 1;
+        });
+        for (size_t i = 0; i < holes.size(); ++i) if (island[i]) isl.push_back(*holes[i]);
         if (!isl.empty()) out.median = unionSets(out.median, unionRings(isl));
     }
     out.median = withBody(out.median, false);   // (before it cuts the shoulders and sidewalks below)
@@ -390,18 +422,26 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         out.shoulder = shoulders.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(unionAll(shoulders), hull), out.surface), out.median);
         out.sidewalk = sidewalks.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(differenceSets(unionAll(sidewalks), hull), out.surface), out.median), out.shoulder);
     } else {
+        // each road's bands cut on the shared pool (#317 step 2): a cut reads the lanes, hulls, shoulders and medians, never
+        // another road's band, and the bands are gathered in road order as before
+        std::vector<PolySet> shOf(g.edges.size()), swOf(g.edges.size());
+        std::vector<char> hasSh(g.edges.size(), 0), hasSw(g.edges.size(), 0);
+        engine::parallelRows(static_cast<int>(g.edges.size()), [&](int row) {
+            const size_t ei = static_cast<size_t>(row);
+            const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) return;
+            const RoadClassSpec& c = g.cls(e);
+            if (c.shoulder > 0) { shOf[ei] = cutAtLevel(mitredBand(ei, g.carriagewayHalfWidth(e), shoulderMitres), static_cast<int>(ei), false); hasSh[ei] = 1; }
+            if (c.sidewalk > 0) { swOf[ei] = cutAtLevel(mitredBand(ei, g.sidewalkOuterHalfWidth(e), sidewalkMitres), static_cast<int>(ei), true); hasSw[ei] = 1; }
+        }, 1);   // (one road a task: a long road's bands take many times a short one's)
         std::vector<PolySet> sh, sw;
         for (size_t ei = 0; ei < g.edges.size(); ++ei) {
-            const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
-            const RoadClassSpec& c = g.cls(e);
-            if (c.shoulder > 0) sh.push_back(cutAtLevel(mitredBand(ei, g.carriagewayHalfWidth(e), shoulderMitres), static_cast<int>(ei), false));
-            if (c.sidewalk > 0) sw.push_back(cutAtLevel(mitredBand(ei, g.sidewalkOuterHalfWidth(e), sidewalkMitres), static_cast<int>(ei), true));
+            if (hasSh[ei]) sh.push_back(std::move(shOf[ei]));
+            if (hasSw[ei]) sw.push_back(std::move(swOf[ei]));
         }
-        out.shoulder = sh.empty() ? PolySet{} : unionAll(sh);
-        out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw);
+        bothAtOnce([&] { out.shoulder = sh.empty() ? PolySet{} : unionAll(sh); }, [&] { out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw); });
     }
-    out.shoulder = withBody(out.shoulder, false);
-    out.sidewalk = withBody(out.sidewalk, true);
+    // (the two layers given their bodies at once: each reads only itself, #317 step 2)
+    bothAtOnce([&] { out.shoulder = withBody(out.shoulder, false); }, [&] { out.sidewalk = withBody(out.sidewalk, true); });
     out.islands.clear(); out.enclosedBlocks = 0;
     for (const Polygon2& p : out.surface) for (const Ring& h : p.holes) { double a = std::fabs(signedArea(h)); if (a > 1.0 && a < 2000.0) out.islands.push_back(a); else if (a >= 2000.0) ++out.enclosedBlocks; }
 }
@@ -584,9 +624,25 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
 
 std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning, const std::vector<double>* band) {
     std::vector<FlatMesh> out; const std::vector<char> want = H.edgeFlags(roads);
-    for (const Polygon2& p : layer) {
-        FlatMesh m = triangulateConstrained(p); if (m.tris.empty() || roads.empty()) continue;
-        for (DeckVertex& v : m.verts) v.z = H.layerHeight(want, roads, v.xy, band);
+    // ON THE SHARED POOL (#317 step 2): every polygon triangulated, then every vertex's height, each its own item (a
+    // sidewalk layer is a few polygons the size of a town, so the vertices, not the polygons, are what spread), then
+    // each polygon's steep triangles dropped -- all of it written per polygon and gathered in polygon order below
+    const size_t np = layer.size();
+    std::vector<FlatMesh> meshes(np);
+    parallelRows(static_cast<int>(np), [&](int i) { if (!roads.empty()) meshes[static_cast<size_t>(i)] = triangulateConstrained(layer[static_cast<size_t>(i)]); }, 1);
+    std::vector<std::pair<uint32_t, uint32_t>> vertexOf;   // (polygon, vertex) of every vertex to lift
+    for (size_t i = 0; i < np; ++i)
+        if (!meshes[i].tris.empty())
+            for (size_t k = 0; k < meshes[i].verts.size(); ++k) vertexOf.emplace_back(static_cast<uint32_t>(i), static_cast<uint32_t>(k));
+    parallelRows(static_cast<int>(vertexOf.size()), [&](int j) {
+        DeckVertex& v = meshes[vertexOf[static_cast<size_t>(j)].first].verts[vertexOf[static_cast<size_t>(j)].second];
+        v.z = H.layerHeight(want, roads, v.xy, band);
+    });
+    std::vector<std::vector<Vec2>> spanningOf(np);
+    std::vector<char> kept(np, 0);
+    parallelRows(static_cast<int>(np), [&](int i) {
+        FlatMesh& m = meshes[static_cast<size_t>(i)]; if (m.tris.empty() || roads.empty()) return;
+        std::vector<Vec2>* spanning = &spanningOf[static_cast<size_t>(i)];
         // a triangle steeper than any road can be (its plane's slope over 0.35, and a quarter metre or more of rise)
         // joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut. The SLOPE, not
         // rise over the longest edge: a sliver 10 m long and a centimetre wide climbing 1.2 m across its width read
@@ -607,9 +663,13 @@ std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, co
             m.tris = std::move(keep); m.boundary.clear(); std::map<std::pair<int, int>, int> count; std::map<std::pair<int, int>, std::pair<int, int>> oriented;
             for (const auto& tri : m.tris) for (int k = 0; k < 3; ++k) { int a = tri[k], b = tri[(k + 1) % 3]; const std::pair<int, int> key{std::min(a, b), std::max(a, b)}; count[key]++; oriented.emplace(key, std::make_pair(a, b)); }
             for (const auto& kv : count) if (kv.second == 1) m.boundary.push_back(oriented[kv.first]);
-            if (m.tris.empty()) continue;
+            if (m.tris.empty()) return;
         }
-        out.push_back(std::move(m));
+        kept[static_cast<size_t>(i)] = 1;
+    });
+    for (size_t i = 0; i < np; ++i) {
+        if (spanning) spanning->insert(spanning->end(), spanningOf[i].begin(), spanningOf[i].end());
+        if (kept[i]) out.push_back(std::move(meshes[i]));
     }
     (void)g; return out;
 }

@@ -3,6 +3,7 @@
 #include "engine/procgen/city/roads/lanes/lane_expand.h"   // ribbonLane: the walks are laid as the lanes are
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/road_model.h"         // plannedRoadModel, ringPairs, towardKerb
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 #include <algorithm>
 #include <cmath>
@@ -156,9 +157,16 @@ void layWalks(Result& r) {
             walkArea = unionSets(walkArea, r.pavement.footprints[li]);
     std::vector<Box2> areaBoxes;
     for (const Polygon2& p : walkArea) areaBoxes.push_back(bounds(p));
-    for (const RingPair& p : ringPairs(m, g)) {
-        if (p.gap != CornerGap::None && p.gap != CornerGap::ApartAtSpread) continue;
-        WalkCorner wc;
+    // each corner found on the shared pool (#317 step 2): its walk line and its record into its own slot; the walks are
+    // laid into the lanes' one curve store and listed in ring-pair order after, as before
+    struct CornerFound { bool used = false, laid = false; WalkCorner wc; std::vector<Vec2> line; std::string id; double width = 0; };
+    const std::vector<RingPair> pairs = ringPairs(m, g);
+    std::vector<CornerFound> found(pairs.size());
+    parallelRows(static_cast<int>(pairs.size()), [&](int row) {
+        const RingPair& p = pairs[static_cast<size_t>(row)]; CornerFound& out = found[static_cast<size_t>(row)];
+        if (p.gap != CornerGap::None && p.gap != CornerGap::ApartAtSpread) return;
+        out.used = true;
+        WalkCorner& wc = out.wc;
         wc.junction = p.junction;
         wc.armA = p.armA;
         wc.armB = p.armB;
@@ -170,8 +178,7 @@ void layWalks(Result& r) {
         if (!armWalk(m, g, p.junction, p.armA, p.kerbA, a) || !armWalk(m, g, p.junction, p.armB, p.kerbB, b)) {
             wc.fault = WalkCornerFault::ArmUnknown;
             wc.why = walkCornerFaultWord(wc.fault);
-            r.walkCorners.push_back(wc);
-            continue;
+            return;
         }
         wc.anchorA = a.anchor;
         wc.anchorB = b.anchor;
@@ -224,21 +231,28 @@ void layWalks(Result& r) {
                 std::snprintf(buf, sizeof buf, "the drawn sidewalks by the two kerb ends are not joined (two pieces)");
             }
             wc.why = buf;
-            r.walkCorners.push_back(wc);
-            continue;
+            return;
         }
         std::vector<Vec2> line = shorterWay(*best, atA, atB);
         // (the two kerb ends one place: where the crosswalks meet at the kerb's corner, a walk of no length joins them)
         if (line.size() < 2) line = {atA.at, atB.at};
-        std::vector<Vec2> tan, nrm;
-        frames(line, tan, nrm);
-        const std::vector<double> zero(line.size(), 0.0);
-        Lane w = ribbonLane(L.curves, J.id + ":" + std::to_string(p.armA) + "-" + std::to_string(p.armB), -1, kCornerKind, std::string(),
-                            std::min(a.width, b.width), +1, line, nrm, zero);
-        w.slot = 0;
-        wc.lane = static_cast<int>(L.walks.size());
-        L.walks.push_back(std::move(w));
-        r.walkCorners.push_back(wc);
+        out.laid = true;
+        out.line = std::move(line);
+        out.id = J.id + ":" + std::to_string(p.armA) + "-" + std::to_string(p.armB);
+        out.width = std::min(a.width, b.width);
+    });
+    for (CornerFound& c : found) {
+        if (!c.used) continue;
+        if (c.laid) {
+            std::vector<Vec2> tan, nrm;
+            frames(c.line, tan, nrm);
+            const std::vector<double> zero(c.line.size(), 0.0);
+            Lane w = ribbonLane(L.curves, c.id, -1, kCornerKind, std::string(), c.width, +1, c.line, nrm, zero);
+            w.slot = 0;
+            c.wc.lane = static_cast<int>(L.walks.size());
+            L.walks.push_back(std::move(w));
+        }
+        r.walkCorners.push_back(c.wc);
     }
 }
 

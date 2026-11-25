@@ -7,6 +7,7 @@
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
 #include "engine/procgen/city/roads/lanes/walk_lanes.h"   // layWalks: the walks for people on foot (ADR-0465)
 #include "engine/procgen/city/rail_track.h"   // kPlatformGap: piers keep off the platforms
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 #include <algorithm>
 #include <chrono>
@@ -247,17 +248,28 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // A pier never stands on another road (Glenn: "the pillars that hold up the freeway intersect with
     // the road"): its 2.6 m footprint is tested against every OTHER road's pavement; a blocked station
     // slides along the span, up to half a bay either way, and a bay with no clear station gets no pier.
+    // (7, moved up: the lane footprints prepared for point tests, once -- the piers ask them too. Nothing after this changes
+    // a footprint.)
+    {
+        const auto tj = std::chrono::steady_clock::now();
+        r.lookup = std::make_shared<const LaneLookup>(r.pavement);
+        r.timings["lane lookup"] = secondsSince(tj);
+    }
+    // each lane's first footprint polygon's box, once (it was measured again for every lane at every pier station)
+    std::vector<Box2> firstBox(r.lanes.lanes.size());
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li)
+        if (!r.pavement.footprints[li].empty()) firstBox[li] = ::engine::roads::lanes::bounds(r.pavement.footprints[li][0]);
     auto onOtherRoad = [&](const EdgeSpec& own, const Vec2& p) {
         const int ownIdx = g.index.at(own.id);
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
             const Lane& l = r.lanes.lanes[li]; if (l.road() == ownIdx || r.pavement.footprints[li].empty()) continue;
-            const PolySet& fp = r.pavement.footprints[li]; const Box2 b = ::engine::roads::lanes::bounds(fp[0]);
+            const PreparedSet& fp = r.lookup->footprint[li]; const Box2& b = firstBox[li];
             // the pier's square (2.6 m, deck_mesh.cpp) and 1.5 m of clearance round it -- the other road's
             // shoulder is not in its lane footprints, and a pier tested at its centre +-1.5 m stood half on the
             // island pass's edge line: a car driving the pass pulled up against it
             constexpr double kReach = 1.3 + 1.5;
             if (p.x < b.minX - kReach || p.x > b.maxX + kReach || p.y < b.minY - kReach || p.y > b.maxY + kReach) continue;
-            for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (contains(fp, p + Vec2(dx, dy))) return true;
+            for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (fp.contains(p + Vec2(dx, dy))) return true;
         }
         // ...nor on a station's platforms: the track's footprint stops at its rails, the platforms stand beyond it
         for (const EdgeSpec& t : g.edges) {
@@ -270,7 +282,14 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         return false;
     };
     int piersMoved = 0, piersDropped = 0;
-    for (const EdgeSpec* e : g.paved()) {
+    // each paved road's piers on the shared pool (#317 step 2): a road reads only the built pavement, and its piers,
+    // counts and length on structure are its own, gathered in road order below
+    struct RoadPiers { std::vector<Pier> piers; int moved = 0, dropped = 0; double onStruct = 0; };
+    const std::vector<const EdgeSpec*> pavedRoads = g.paved();
+    std::vector<RoadPiers> piersOf(pavedRoads.size());
+    parallelRows(static_cast<int>(pavedRoads.size()), [&](int row) {
+        const EdgeSpec* e = pavedRoads[static_cast<size_t>(row)]; RoadPiers& out = piersOf[static_cast<size_t>(row)];
+        int& piersMoved = out.moved; int& piersDropped = out.dropped;
         double onStruct = 0, next = 0; const RoadClassSpec& c = g.cls(*e);
         for (size_t i = 0; i < e->s.size(); ++i) {
             // structure is judged and the pier topped from the DECK the road actually gets (partner blends can
@@ -285,10 +304,16 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                         const size_t kk = static_cast<size_t>(k); if (r.heights->deckRoad(static_cast<int>(g.index.at(e->id)), e->xy[kk]) - e->t[kk] <= R.bridgeH) continue; if (!onOtherRoad(*e, e->xy[kk])) { at = kk; ok = true; ++piersMoved; break; } }
                 }
             }
-            if (ok) r.piers.push_back({g.index.at(e->id), e->xy[at], e->t[at] - 1.0, r.heights->deckRoad(static_cast<int>(g.index.at(e->id)), e->xy[at]) - c.thick}); else ++piersDropped;
+            if (ok) out.piers.push_back({g.index.at(e->id), e->xy[at], e->t[at] - 1.0, r.heights->deckRoad(static_cast<int>(g.index.at(e->id)), e->xy[at]) - c.thick}); else ++piersDropped;
             next = e->s[i] + R.pierSpacing;
         }
-        r.bridgeLen[e->id] = onStruct;
+        out.onStruct = onStruct;
+    }, 1);   // (one road a task: a viaduct has hundreds of piers, a street none)
+    for (size_t k = 0; k < pavedRoads.size(); ++k) {
+        const RoadPiers& rp2 = piersOf[k];
+        r.piers.insert(r.piers.end(), rp2.piers.begin(), rp2.piers.end());
+        piersMoved += rp2.moved; piersDropped += rp2.dropped;
+        r.bridgeLen[pavedRoads[k]->id] = rp2.onStruct;
     }
     if (piersMoved || piersDropped) std::fprintf(stderr, "lanelab: piers moved off roads %d, bays left without a pier %d\n", piersMoved, piersDropped);
     r.adjacent = adjacency(r.lanes, r.heights.get());
@@ -305,12 +330,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         r.timings["terrain.vsDeck"] = secondsSince(tv);
     }
     r.timings["terrain"] = secondsSince(t1);
-    // 7. the lane footprints prepared for point tests, once, for the mesher and the lane level
-    {
-        const auto tj = std::chrono::steady_clock::now();
-        r.lookup = std::make_shared<const LaneLookup>(r.pavement);
-        r.timings["lane lookup"] = secondsSince(tj);
-    }
+    // 7. the lane footprints prepared for point tests, once, for the mesher and the lane level: made before the piers (above)
     // 8. the walks for people on foot (ADR-0465): laid into the same centre lines, from the drawn pavement; nothing is drawn
     // from them (walk_lanes.h)
     {

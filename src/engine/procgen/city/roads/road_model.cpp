@@ -15,6 +15,7 @@
 #include "engine/procgen/city/polygon.h"                       // pointInPolygon, interiorPoint: the regions' outlines
 #include "engine/asset_root.h"                                 // assetPath: the attachment kinds' file
 #include "check.h"
+#include "job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include "log.h"
 
 #include <nlohmann/json.hpp>
@@ -828,6 +829,15 @@ RoadModel builtRoadModel(const Result& r) {
             L.atEnd = L.dir > 0 ? atTo : atFrom;
         }
     };
+    // each lane's drawn deck height at its points, on the shared pool (#317 step 2): a lane writes only its own list, and
+    // the lists are laid into the model's one array in lane order below
+    std::vector<std::vector<double>> deckOf(r.lanes.lanes.size());
+    if (r.heights)
+        parallelRows(static_cast<int>(r.lanes.lanes.size()), [&](int row) {
+            const Span<Vec2> xy = r.lanes.lanes[static_cast<std::size_t>(row)].xy();
+            std::vector<double>& z = deckOf[static_cast<std::size_t>(row)]; z.resize(xy.size());
+            for (std::size_t k = 0; k < xy.size(); ++k) z[k] = r.heights->deck(row, xy[k]);
+        });
     for (std::size_t li = 0; li < r.lanes.lanes.size(); ++li) {
         const Lane& l = r.lanes.lanes[li];
         CHECK(l.curves == r.lanes.curves);   // every lane of a build is laid into the build's one object (expand)
@@ -839,7 +849,7 @@ RoadModel builtRoadModel(const Result& r) {
         if (e) i0 = static_cast<std::size_t>(std::lower_bound(e->s.begin(), e->s.end(), l.spineFrom) - e->s.begin());
         const Span<Vec2> xy = l.xy();
         for (std::size_t k = 0; k < xy.size(); ++k) {
-            m.heights[l.curve.first + k] = r.heights ? r.heights->deck(static_cast<int>(li), xy[k]) : 0.0;
+            m.heights[l.curve.first + k] = r.heights ? deckOf[li][k] : 0.0;
             m.spineStations[l.curve.first + k] = e && i0 + k < e->s.size() ? e->s[i0 + k] : kNotStated;
         }
         placeOnStreets(L, e);

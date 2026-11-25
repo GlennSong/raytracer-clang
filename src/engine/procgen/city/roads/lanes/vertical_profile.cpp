@@ -1,5 +1,6 @@
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 #include <algorithm>
 #include <cmath>
@@ -171,8 +172,12 @@ double nodeConsistency(RoadLabGraph& g, double tol, double maxDz) {
 
 double nodeMismatch(const RoadLabGraph& g, double tol, double maxDz, NodeMismatchWhere* where) {
     std::vector<const EdgeSpec*> thr; for (const EdgeSpec& e : g.edges) if (!e.isRamp() && e.z.size() > 1) thr.push_back(&e);
-    double worst = 0;
-    for (const EdgeSpec* e : thr) for (int k = 0; k < 2; ++k) {
+    // each road end on the shared pool (#317 step 2): its own worst and where, then the ends in order, the first strictly
+    // worse kept -- the serial loop's answer (the first place the largest mismatch was met)
+    struct EndWorst { double worst = 0; NodeMismatchWhere where; };
+    std::vector<EndWorst> ends(thr.size() * 2);
+    parallelRows(static_cast<int>(ends.size()), [&](int row) {
+        const EdgeSpec* e = thr[static_cast<size_t>(row) / 2]; const int k = row % 2; EndWorst& out = ends[static_cast<size_t>(row)];
         Vec2 p = k == 0 ? e->xy.front() : e->xy.back(); double own = k == 0 ? e->z.front() : e->z.back();
         for (const EdgeSpec* h : thr) {
             if (h == e) continue; Projection pr = project(h->xy, h->s, p); if (pr.distance > tol) continue;
@@ -181,9 +186,12 @@ double nodeMismatch(const RoadLabGraph& g, double tol, double maxDz, NodeMismatc
                 const CrossingSpec* c = g.declaresCrossings ? g.declaredCrossing(e->id, h->id, p) : nullptr;
                 if (c ? c->kind == "bridge" : dz >= maxDz) continue;
             }
-            if (dz > worst) { worst = dz; if (where) { where->at = p; where->a = e->id; where->b = h->id; where->atEnd = atEnd; } }
+            if (dz > out.worst) { out.worst = dz; out.where.at = p; out.where.a = e->id; out.where.b = h->id; out.where.atEnd = atEnd; }
         }
-    }
+    });
+    double worst = 0;
+    for (const EndWorst& w : ends)
+        if (w.worst > worst) { worst = w.worst; if (where) *where = w.where; }
     return worst;
 }
 
@@ -274,58 +282,64 @@ std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
     for (std::size_t i = 0; i < g.edges.size(); ++i) if (g.edges[i].z.size() > 1 && g.edges[i].laneCount() > 0) thr.push_back(i);
     std::vector<Bounds> box; box.reserve(thr.size()); for (std::size_t i : thr) box.push_back(boundsOf(g.edges[i].xy));
     std::vector<CrossingMeet> out;
-    for (size_t i = 0; i < thr.size(); ++i) for (size_t j = i + 1; j < thr.size(); ++j) {
-        const EdgeSpec& a = g.edges[thr[i]]; const EdgeSpec& b = g.edges[thr[j]];
-        if (!near(box[i], box[j], g.hw(a) + g.hw(b) + 1.0)) continue;
-        if (a.isRamp() && b.isRamp()) continue;
-        if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;
-        if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
-        std::vector<Vec2> meet = crossings(a.xy, b.xy);
-        const std::size_t crossed = meet.size();
-        for (int side = 0; side < 2; ++side) {
-            const EdgeSpec& e = side ? b : a;
-            const EdgeSpec& o = side ? a : b;
-            for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
-                const Projection pr = project(o.xy, o.s, q);
-                if (pr.distance > g.hw(o) + g.hw(e)) continue;
-                if (pr.distance <= g.rules.endpointTol) continue;
-                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) continue;
-                bool dup = false;
-                for (const Vec2& m : meet) if (distance(m, q) < 1.0) dup = true;
-                if (!dup) meet.push_back(q);
-            }
-        }
-        const bool streets = !a.isRamp() && !b.isRamp() && !g.cls(a).limitedAccess && !g.cls(b).limitedAccess;
-        for (std::size_t mi = 0; mi < meet.size(); ++mi) {
-            const Vec2& p = meet[mi];
-            const double aEnd = std::min(distance(a.xy.front(), p), distance(a.xy.back(), p));
-            const double bEnd = std::min(distance(b.xy.front(), p), distance(b.xy.back(), p));
-            if (aEnd < g.rules.endpointTol && bEnd < g.rules.endpointTol) continue;          // a shared node
-            const bool aWins = a.isRamp() ? true : b.isRamp() ? false : std::make_pair(g.cls(a).rank, -g.index.at(a.id)) >= std::make_pair(g.cls(b).rank, -g.index.at(b.id));
-            CrossingMeet m;
-            m.hi = aWins ? thr[i] : thr[j];
-            m.lo = aWins ? thr[j] : thr[i];
-            m.p = p;
-            m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
-            m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
-            m.ramp = a.isRamp() || b.isRamp();
-            m.tee = streets && mi >= crossed;   // an END under the other's band, not a crossing of centrelines
-            m.sep = (mi < crossed || anyTrack(g, a, b)) && separates(g, a, b);
-            // AS PLANNED: the graph's own kind for this crossing, when it declares one -- a bridge with its named road
-            // over, or a level meeting (ADR-0215)
-            if (const CrossingSpec* c = g.declaredCrossing(a.id, b.id, p)) {
-                m.declared = true;
-                m.sep = c->kind == "bridge";
-                m.level = !m.sep;
-                if (m.sep && !c->over.empty() && g.edges[m.hi].id != c->over) {
-                    std::swap(m.hi, m.lo);
-                    m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
-                    m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
+    // each road's meets with the roads after it on the shared pool (#317 step 2), gathered in road order: the same list
+    std::vector<std::vector<CrossingMeet>> meetsOf(thr.size());
+    parallelRows(static_cast<int>(thr.size()), [&](int row) {
+        const size_t i = static_cast<size_t>(row);
+        for (size_t j = i + 1; j < thr.size(); ++j) {
+            const EdgeSpec& a = g.edges[thr[i]]; const EdgeSpec& b = g.edges[thr[j]];
+            if (!near(box[i], box[j], g.hw(a) + g.hw(b) + 1.0)) continue;
+            if (a.isRamp() && b.isRamp()) continue;
+            if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;
+            if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
+            std::vector<Vec2> meet = crossings(a.xy, b.xy);
+            const std::size_t crossed = meet.size();
+            for (int side = 0; side < 2; ++side) {
+                const EdgeSpec& e = side ? b : a;
+                const EdgeSpec& o = side ? a : b;
+                for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
+                    const Projection pr = project(o.xy, o.s, q);
+                    if (pr.distance > g.hw(o) + g.hw(e)) continue;
+                    if (pr.distance <= g.rules.endpointTol) continue;
+                    if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= g.rules.endpointTol) continue;
+                    bool dup = false;
+                    for (const Vec2& m : meet) if (distance(m, q) < 1.0) dup = true;
+                    if (!dup) meet.push_back(q);
                 }
             }
-            out.push_back(m);
+            const bool streets = !a.isRamp() && !b.isRamp() && !g.cls(a).limitedAccess && !g.cls(b).limitedAccess;
+            for (std::size_t mi = 0; mi < meet.size(); ++mi) {
+                const Vec2& p = meet[mi];
+                const double aEnd = std::min(distance(a.xy.front(), p), distance(a.xy.back(), p));
+                const double bEnd = std::min(distance(b.xy.front(), p), distance(b.xy.back(), p));
+                if (aEnd < g.rules.endpointTol && bEnd < g.rules.endpointTol) continue;          // a shared node
+                const bool aWins = a.isRamp() ? true : b.isRamp() ? false : std::make_pair(g.cls(a).rank, -g.index.at(a.id)) >= std::make_pair(g.cls(b).rank, -g.index.at(b.id));
+                CrossingMeet m;
+                m.hi = aWins ? thr[i] : thr[j];
+                m.lo = aWins ? thr[j] : thr[i];
+                m.p = p;
+                m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
+                m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
+                m.ramp = a.isRamp() || b.isRamp();
+                m.tee = streets && mi >= crossed;   // an END under the other's band, not a crossing of centrelines
+                m.sep = (mi < crossed || anyTrack(g, a, b)) && separates(g, a, b);
+                // AS PLANNED: the graph's own kind for this crossing, when it declares one -- a bridge with its named road
+                // over, or a level meeting (ADR-0215)
+                if (const CrossingSpec* c = g.declaredCrossing(a.id, b.id, p)) {
+                    m.declared = true;
+                    m.sep = c->kind == "bridge";
+                    m.level = !m.sep;
+                    if (m.sep && !c->over.empty() && g.edges[m.hi].id != c->over) {
+                        std::swap(m.hi, m.lo);
+                        m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
+                        m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
+                    }
+                }
+                meetsOf[i].push_back(m);
+            }
         }
-    }
+    }, 1);
+    for (const std::vector<CrossingMeet>& ms : meetsOf) out.insert(out.end(), ms.begin(), ms.end());
     return out;
 }
 
@@ -352,14 +366,14 @@ void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain) {
     e.s = stations(e.xy); e.t.resize(e.xy.size()); for (size_t i = 0; i < e.xy.size(); ++i) e.t[i] = terrain(e.xy[i].x, e.xy[i].y);
     size_t n = e.s.size(); std::vector<double> zA(n), zB(n); int i0 = e.anchorIdx[0], i1 = e.anchorIdx[1]; double hwR = g.hw(e);
     if (A) {
-        for (size_t i = 0; i < n; ++i) zA[i] = projectZ(*A, e.xy[i]);
+        parallelRows(static_cast<int>(n), [&](int i) { zA[static_cast<size_t>(i)] = projectZ(*A, e.xy[static_cast<size_t>(i)]); });   // (each point its own: #317 step 2)
         if (i0 < 0) {   // departure = the end of the INITIAL contiguous run within reach of the host (a ramp may cross its host again later)
             i0 = 0; double th = g.hw(*A) + hwR + 1.0;
             for (size_t i = 0; i < n; ++i) { if (project(A->xy, A->s, e.xy[i]).distance <= th) i0 = static_cast<int>(i); else break; }
         }
     } else { for (size_t i = 0; i < n; ++i) zA[i] = e.t.front(); i0 = 0; }
     if (B) {
-        for (size_t i = 0; i < n; ++i) zB[i] = projectZ(*B, e.xy[i]);
+        parallelRows(static_cast<int>(n), [&](int i) { zB[static_cast<size_t>(i)] = projectZ(*B, e.xy[static_cast<size_t>(i)]); });
         if (i1 < 0) {   // arrival = the start of the FINAL contiguous run within reach of the host
             i1 = static_cast<int>(n) - 1; double th = g.hw(*B) + hwR + 1.0;
             for (size_t i = n; i-- > 0;) { if (project(B->xy, B->s, e.xy[i]).distance <= th) i1 = static_cast<int>(i); else break; }
@@ -422,16 +436,21 @@ std::vector<std::string> undeclaredCrossings(const RoadLabGraph& g, const std::v
     auto add = [&](const std::string& n) { if (std::find(out.begin(), out.end(), n) == out.end()) out.push_back(n); };
     for (const CrossingMeet& m : meets) if (!m.declared) add(name(g.edges[m.hi].id, g.edges[m.lo].id, m.p));
     // and an end ON another road's centreline away from its ends (nodeConsistency's tee: crossingMeets leaves those to it)
-    for (const EdgeSpec& e : g.edges) {
-        if (e.isRamp() || e.xy.size() < 2) continue;
+    // (each road's ends against every other road on the shared pool, #317 step 2: its names into its own list, added in
+    // road order below, so the list and its order are the serial loop's)
+    std::vector<std::vector<std::string>> foundOf(g.edges.size());
+    parallelRows(static_cast<int>(g.edges.size()), [&](int row) {
+        const EdgeSpec& e = g.edges[static_cast<size_t>(row)];
+        if (e.isRamp() || e.xy.size() < 2) return;
         for (const Vec2& q : {e.xy.front(), e.xy.back()})
             for (const EdgeSpec& h : g.edges) {
                 if (&h == &e || h.isRamp() || h.xy.size() < 2) continue;
                 if (project(h.xy, h.s, q).distance > g.rules.endpointTol) continue;
                 if (std::min(distance(h.xy.front(), q), distance(h.xy.back(), q)) <= g.rules.endpointTol) continue;   // a shared node
-                if (!g.declaredCrossing(e.id, h.id, q)) add(name(e.id, h.id, q));
+                if (!g.declaredCrossing(e.id, h.id, q)) foundOf[static_cast<size_t>(row)].push_back(name(e.id, h.id, q));
             }
-    }
+    });
+    for (const std::vector<std::string>& found : foundOf) for (const std::string& n : found) add(n);
     return out;
 }
 

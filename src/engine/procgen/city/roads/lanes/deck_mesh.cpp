@@ -12,6 +12,7 @@
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/rail_track.h"
 #include "rt_math.h"
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 #include <algorithm>
 #include <cstdlib>
@@ -1004,18 +1005,27 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
     std::vector<std::pair<const char*, std::size_t>> concreteBy;
     auto mark = [&](const char* stage) { if (deckStats) concreteBy.push_back({stage, concrete.indices.size() / 3}); };
     mark("start");
-    for (const Surface& s : r.pavement.decks) {
-        std::vector<std::array<float, 6>> uv(s.tris.size());
-        for (size_t ti = 0; ti < s.tris.size(); ++ti) {
-            const Lane& owner = L.lanes[static_cast<size_t>(s.triOwner[ti])];
-            for (int k = 0; k < 3; ++k) {
-                const DeckVertex& v = s.verts[static_cast<size_t>(s.tris[ti][static_cast<size_t>(k)])];
-                const Projection pr = r.heights ? r.heights->onLane(s.triOwner[ti], v.xy) : project(owner.xy(), owner.s(), v.xy);
-                Vec2 q = pointAt(owner.xy(), owner.s(), pr.station); Vec2 t = tangentAtStation(owner.xy(), owner.s(), pr.station);
-                double lateral = cross(t, v.xy - q);
-                uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
-            }
+    // every deck triangle's lane-local UVs on the shared pool (#317 step 2): each triangle writes only its own six floats
+    std::vector<std::vector<std::array<float, 6>>> deckUv(r.pavement.decks.size());
+    std::vector<std::pair<uint32_t, uint32_t>> deckTri;   // (deck, triangle) of every deck triangle
+    for (size_t si = 0; si < r.pavement.decks.size(); ++si) {
+        deckUv[si].resize(r.pavement.decks[si].tris.size());
+        for (size_t ti = 0; ti < r.pavement.decks[si].tris.size(); ++ti) deckTri.emplace_back(static_cast<uint32_t>(si), static_cast<uint32_t>(ti));
+    }
+    parallelRows(static_cast<int>(deckTri.size()), [&](int row) {
+        const Surface& s = r.pavement.decks[deckTri[static_cast<size_t>(row)].first]; const size_t ti = deckTri[static_cast<size_t>(row)].second;
+        std::array<float, 6>& uv = deckUv[deckTri[static_cast<size_t>(row)].first][ti];
+        const Lane& owner = L.lanes[static_cast<size_t>(s.triOwner[ti])];
+        for (int k = 0; k < 3; ++k) {
+            const DeckVertex& v = s.verts[static_cast<size_t>(s.tris[ti][static_cast<size_t>(k)])];
+            const Projection pr = r.heights ? r.heights->onLane(s.triOwner[ti], v.xy) : project(owner.xy(), owner.s(), v.xy);
+            Vec2 q = pointAt(owner.xy(), owner.s(), pr.station); Vec2 t = tangentAtStation(owner.xy(), owner.s(), pr.station);
+            double lateral = cross(t, v.xy - q);
+            uv[static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
         }
+    });
+    for (size_t si = 0; si < r.pavement.decks.size(); ++si) {
+        const Surface& s = r.pavement.decks[si]; const std::vector<std::array<float, 6>>& uv = deckUv[si];
         // a deck all of whose lanes are track is a ballast bed, not asphalt
         bool track = !s.triOwner.empty(), foot = !s.triOwner.empty();
         for (int o : s.triOwner) if (!trackLane(r, o)) { track = false; break; }
@@ -1110,7 +1120,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
     // a point on a street lane inside one of the stated junctions' areas along its road
     auto inSpan = [&](const Lane& l, const Vec2& p) {
         auto it = boxes.find(l.road()); if (it == boxes.end()) return false;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.road())]; const double st = project(e.xy, e.s, p).station;
+        const double st = H.onRoad(l.road(), p).station;   // (exactly project() on the road's line, by its index: ADR-0498)
         for (const JunctionSpan& sp : it->second) if (st >= sp.s0 - 0.5 && st <= sp.s1 + 0.5) return true;
         return false;
     };
@@ -1211,7 +1221,14 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
     // median (by its forward lane), else an edge line.
     struct LineRun { std::vector<Vec2> pts; std::vector<double> z; };
     std::vector<LineRun> lineRuns;   // one per plan.lines entry: what is drawn for it
-    for (const std::pair<const std::pair<int, int>, std::vector<size_t>>& kv : sameWay) {
+    // each road and way on the shared pool (#317 step 2): its lines into its own lists, gathered in the map's order below
+    std::vector<const std::pair<const std::pair<int, int>, std::vector<size_t>>*> wayList;
+    for (const std::pair<const std::pair<int, int>, std::vector<size_t>>& kv : sameWay) wayList.push_back(&kv);
+    std::vector<std::vector<PaintedLine>> linesOf(wayList.size());
+    std::vector<std::vector<LineRun>> runsOf(wayList.size());
+    parallelRows(static_cast<int>(wayList.size()), [&](int wi) {
+        const std::pair<const std::pair<int, int>, std::vector<size_t>>& kv = *wayList[static_cast<size_t>(wi)];
+        std::vector<PaintedLine>& linesHere = linesOf[static_cast<size_t>(wi)]; std::vector<LineRun>& runsHere = runsOf[static_cast<size_t>(wi)];
         const int parent = kv.first.first, dir = kv.first.second;
         const EdgeSpec& e = g.edges[static_cast<size_t>(parent)];
         const double roadLength = e.s.back();
@@ -1247,8 +1264,8 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                 bool open = false;
                 auto close = [&]() {
                     if (open && run.kind != PaintedLineKind::None) {
-                        plan.lines.push_back(run);
-                        lineRuns.push_back(std::move(drawn));
+                        linesHere.push_back(run);
+                        runsHere.push_back(std::move(drawn));
                     }
                     drawn = LineRun();
                     open = false;
@@ -1313,6 +1330,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
                 close();
             }
         }
+    }, 1);
+    for (size_t wi = 0; wi < wayList.size(); ++wi) {
+        plan.lines.insert(plan.lines.end(), linesOf[wi].begin(), linesOf[wi].end());
+        for (LineRun& d : runsOf[wi]) lineRuns.push_back(std::move(d));
     }
     for (size_t k = 0; k < plan.lines.size(); ++k) {
         const LineRun& d = lineRuns[k];
@@ -1667,7 +1688,9 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
         const size_t n = pts.size();
         // Per point: which deck lane owns it, its height, what the edge faces, and so what to build.
         std::vector<int> lane(n, -1); std::vector<double> z(n, 0.0); std::vector<EdgeRole> role(n, EdgeRole::Seam); std::vector<BarrierSpec> spec(n);
-        for (size_t i = 0; i < n; ++i) {
+        // each point on the shared pool (#317 step 2): it writes only its own lane, height, role and spec
+        parallelRows(static_cast<int>(n), [&](int row) {
+            const size_t i = static_cast<size_t>(row);
             const Vec2 t = normalize(pts[(i + 1) % n] - pts[(i + n - 1) % n]); const Vec2 nrm(t.y, -t.x);
             // the pavement is on one side; "beyond" is the other
             // (in across the shoulder, to its lane: a shoulder is up to a ramp's 2.5 m)
@@ -1676,7 +1699,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
                 if ((inLane = deckLaneAt(pts[i] - nrm * in)) >= 0) { sign = -1.0; break; }
                 if ((inLane = deckLaneAt(pts[i] + nrm * in)) >= 0) { sign = +1.0; break; }
             }
-            if (inLane < 0) continue;                                   // no deck lane either side: not our line
+            if (inLane < 0) return;                                     // no deck lane either side: not our line
             lane[i] = inLane; z[i] = r.heights->deck(inLane, pts[i]);
             const Vec2 outward = nrm * -sign;
             // what lies beyond, walking out
@@ -1710,7 +1733,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
             spec[i] = barrierFor(r.graph.cls(me), role[i]);
             if (spec[i].kind != BarrierKind::None && spec[i].minDrop > 0.0 && z[i] - groundAt(pts[i] + outward * 5.0) < spec[i].minDrop)
                 spec[i] = BarrierSpec{};   // nowhere to fall here: no rail
-        }
+        });
         // census over the ring
         for (size_t i = 0; i < n; ++i) {
             const double seg = distance(pts[i], pts[(i + 1) % n]); bandM += seg;

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -85,12 +86,28 @@ JobSystem& sharedJobs();
 // Rows [0, n) across the shared pool, each exactly once, in no particular order: `f(row)` must write only its own
 // row's data (ADR-0002: the scheduler never changes results). The calling thread helps, so a row loop inside another
 // parallel loop cannot deadlock. Rows are batched so a pass over 16 k short rows is not 16 k queue round trips.
+// `perTask` > 0 sets the batch instead: 1 for a few thousand rows of very uneven cost (one road of a city can take a
+// hundred times another), where a batch holding two of the slow ones is the whole loop's tail (#317 step 2).
 template <class F>
-void parallelRows(int n, F&& f) {
+void parallelRows(int n, F&& f, std::size_t perTask = 0) {
     if (n <= 0) return;
     JobSystem& jobs = sharedJobs();
-    const std::size_t per = std::max<std::size_t>(1, static_cast<std::size_t>(n) / (8 * (jobs.workerCount() + 1)));
+    const std::size_t per = perTask > 0 ? perTask : std::max<std::size_t>(1, static_cast<std::size_t>(n) / (8 * (jobs.workerCount() + 1)));
     jobs.parallelFor(0, static_cast<std::size_t>(n), [&f](std::size_t r) { f(static_cast<int>(r)); }, per);
+}
+
+// TWO INDEPENDENT JOBS AT ONCE: `beside` as one task on the shared pool while the calling thread runs `here`, returning
+// when both are done (#317 step 2: an island-wide polygon union beside another). They must not write anything the other
+// reads (ADR-0002). An exception from either comes out of this call, after both have finished -- `here`'s first.
+template <class A, class B>
+void bothAtOnce(A&& beside, B&& here) {
+    JobSystem& jobs = sharedJobs();
+    std::atomic<int> done{0};
+    std::exception_ptr besideFailed;
+    jobs.run([&beside, &besideFailed] { try { beside(); } catch (...) { besideFailed = std::current_exception(); } }, &done);
+    try { here(); } catch (...) { jobs.wait(&done); throw; }
+    jobs.wait(&done);
+    if (besideFailed) std::rethrow_exception(besideFailed);
 }
 
 }  // namespace engine

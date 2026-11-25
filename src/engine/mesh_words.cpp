@@ -3,6 +3,7 @@
 // normal it is given.
 #include "mesh_builder.h"
 #include "../hash.h"
+#include "../job_system.h"   // parallelRows: the drape in runs on the shared pool (ADR-0288)
 #include "procgen/city/triangulate.h"
 
 #include <algorithm>
@@ -328,140 +329,151 @@ RenderMesh MeshBuilder::drapeOnMesh(const RenderMesh& flat, const std::vector<st
             for (long j = drapeCellOf(u.lo.y); j <= drapeCellOf(u.hi.y); ++j) grid[drapeKey(i, j)].push_back(id);
         under.push_back(u);
     }
-    std::vector<uint32_t> seenBy(under.size(), UINT32_MAX);   // which flat triangle last listed each surface triangle
-    std::vector<uint32_t> cands;
-    std::vector<std::pair<double, uint32_t>> ranked;
-    std::vector<Poly2> taken, pieces, next;   // taken: the pieces kept so far, over surface triangles takenBy
-    std::vector<uint32_t> takenBy;
-    for (std::size_t t = 0; t + 2 < flat.indices.size(); t += 3) {
-        const Vertex& A = flat.vertices[flat.indices[t]];
-        const Vertex& B = flat.vertices[flat.indices[t + 1]];
-        const Vertex& C = flat.vertices[flat.indices[t + 2]];
-        const Vec2 pa(A.position.x, A.position.z), pb(B.position.x, B.position.z), pc(C.position.x, C.position.z);
-        const double det = cross(pb - pa, pc - pa);
-        if (std::fabs(det) < kDrapeNoPlan2) continue;   // standing on edge: nothing flat to lay down
-        // the side the flat triangle faces (its front, mesh_builder.h): the pieces face the same way
-        const double side = cross(C.position - A.position, B.position - A.position).y >= 0 ? 1.0 : -1.0;
-        // where a plan point falls in the flat triangle (its weights on A, B, C): what every attribute is read through
-        auto weights = [&](const Vec2& q, double& wa, double& wb, double& wc) {
-            wb = cross(q - pa, pc - pa) / det;
-            wc = cross(pb - pa, q - pa) / det;
-            wa = 1.0 - wb - wc;
-        };
-        auto flatHeight = [&](const Vec2& q) {
-            double wa = 0, wb = 0, wc = 0;
-            weights(q, wa, wb, wc);
-            return wa * A.position.y + wb * B.position.y + wc * C.position.y;
-        };
-        Poly2 tri{pa, pb, pc};
-        if (det < 0) std::swap(tri[1], tri[2]);   // counter-clockwise, as the pieces cut from it stay
-        Vec2 lo, hi;
-        bounds(tri, lo, hi);
-        // the surface triangles near it, nearest in height (at its middle) first
-        cands.clear();
-        const uint32_t tag = static_cast<uint32_t>(t / 3);
-        for (long i = drapeCellOf(lo.x); i <= drapeCellOf(hi.x); ++i)
-            for (long j = drapeCellOf(lo.y); j <= drapeCellOf(hi.y); ++j) {
-                std::unordered_map<long long, std::vector<uint32_t>>::const_iterator it = grid.find(drapeKey(i, j));
-                if (it == grid.end()) continue;
-                for (uint32_t id : it->second)
-                    if (seenBy[id] != tag && boxesMeet(lo, hi, under[id].lo, under[id].hi)) {
-                        seenBy[id] = tag;
-                        cands.push_back(id);
-                    }
-            }
-        const Vec2 mid = (pa + pb + pc) * (1.0 / 3.0);
-        const double midH = flatHeight(mid);
-        ranked.clear();
-        for (uint32_t id : cands) ranked.push_back({std::fabs(under[id].heightAt(mid) - midH), id});
-        std::sort(ranked.begin(), ranked.end());
-        // each surface triangle in turn takes the part of the flat triangle over it that no nearer one took
-        taken.clear();
-        takenBy.clear();
-        for (const std::pair<double, uint32_t>& rk : ranked) {
-            const DrapeUnder& U = under[rk.second];
-            const Poly2 over = clipToConvex(tri, U.p, 3);
-            if (over.empty()) continue;
-            pieces.assign(1, over);
-            for (const Poly2& hole : taken) {
-                Vec2 hlo, hhi;
-                bounds(hole, hlo, hhi);
-                next.clear();
-                for (const Poly2& piece : pieces) {
-                    Vec2 plo, phi;
-                    bounds(piece, plo, phi);
-                    if (!boxesMeet(plo, phi, hlo, hhi) || clipToConvex(piece, hole.data(), hole.size()).empty()) {
-                        next.push_back(piece);   // they do not overlap: kept whole (cutting it along the hole's edges would only shred it)
-                        continue;
-                    }
-                    subtractConvex(piece, hole, next);
+    // EACH FLAT TRIANGLE IS DRAPED ON ITS OWN (it reads only the surface), so the triangles go to the shared pool in runs
+    // (#317 step 2): each run into its own mesh with its own scratch, the runs appended in triangle order -- the same
+    // vertices and triangles, in the same order, as one pass over them all
+    const std::size_t nTris = flat.indices.size() / 3;
+    const std::size_t nRuns = std::min<std::size_t>(nTris, 8 * (static_cast<std::size_t>(sharedJobs().workerCount()) + 1));
+    std::vector<RenderMesh> runs(nRuns);
+    parallelRows(static_cast<int>(nRuns), [&](int run) {
+        RenderMesh& part = runs[static_cast<std::size_t>(run)];
+        std::vector<uint32_t> seenBy(under.size(), UINT32_MAX);   // which flat triangle last listed each surface triangle
+        std::vector<uint32_t> cands;
+        std::vector<std::pair<double, uint32_t>> ranked;
+        std::vector<Poly2> taken, pieces, next;   // taken: the pieces kept so far, over surface triangles takenBy
+        std::vector<uint32_t> takenBy;
+        const std::size_t first = nTris * static_cast<std::size_t>(run) / nRuns, last = nTris * (static_cast<std::size_t>(run) + 1) / nRuns;
+        for (std::size_t t = first * 3; t < last * 3 && t + 2 < flat.indices.size(); t += 3) {
+            const Vertex& A = flat.vertices[flat.indices[t]];
+            const Vertex& B = flat.vertices[flat.indices[t + 1]];
+            const Vertex& C = flat.vertices[flat.indices[t + 2]];
+            const Vec2 pa(A.position.x, A.position.z), pb(B.position.x, B.position.z), pc(C.position.x, C.position.z);
+            const double det = cross(pb - pa, pc - pa);
+            if (std::fabs(det) < kDrapeNoPlan2) continue;   // standing on edge: nothing flat to lay down
+            // the side the flat triangle faces (its front, mesh_builder.h): the pieces face the same way
+            const double side = cross(C.position - A.position, B.position - A.position).y >= 0 ? 1.0 : -1.0;
+            // where a plan point falls in the flat triangle (its weights on A, B, C): what every attribute is read through
+            auto weights = [&](const Vec2& q, double& wa, double& wb, double& wc) {
+                wb = cross(q - pa, pc - pa) / det;
+                wc = cross(pb - pa, q - pa) / det;
+                wa = 1.0 - wb - wc;
+            };
+            auto flatHeight = [&](const Vec2& q) {
+                double wa = 0, wb = 0, wc = 0;
+                weights(q, wa, wb, wc);
+                return wa * A.position.y + wb * B.position.y + wc * C.position.y;
+            };
+            Poly2 tri{pa, pb, pc};
+            if (det < 0) std::swap(tri[1], tri[2]);   // counter-clockwise, as the pieces cut from it stay
+            Vec2 lo, hi;
+            bounds(tri, lo, hi);
+            // the surface triangles near it, nearest in height (at its middle) first
+            cands.clear();
+            const uint32_t tag = static_cast<uint32_t>(t / 3);
+            for (long i = drapeCellOf(lo.x); i <= drapeCellOf(hi.x); ++i)
+                for (long j = drapeCellOf(lo.y); j <= drapeCellOf(hi.y); ++j) {
+                    std::unordered_map<long long, std::vector<uint32_t>>::const_iterator it = grid.find(drapeKey(i, j));
+                    if (it == grid.end()) continue;
+                    for (uint32_t id : it->second)
+                        if (seenBy[id] != tag && boxesMeet(lo, hi, under[id].lo, under[id].hi)) {
+                            seenBy[id] = tag;
+                            cands.push_back(id);
+                        }
                 }
-                pieces.swap(next);
-                if (pieces.empty()) break;
-            }
-            for (const Poly2& piece : pieces) {
-                if (piece.size() < 3 || area(piece) < kDrapeSliver) continue;
-                const Vec2 at = centroid(piece);
-                if (std::fabs(U.heightAt(at) - flatHeight(at)) > reach) continue;   // another level's surface
-                taken.push_back(piece);
-                takenBy.push_back(rk.second);
-            }
-        }
-        if (taken.empty()) continue;
-        // a vertex of the drape at plan point q, `lift` over surface height h, its attributes read from the flat triangle
-        auto put = [&](const Vec2& q, double h, const Vec3& n) {
-            double wa = 0, wb = 0, wc = 0;
-            weights(q, wa, wb, wc);
-            const uint32_t vi = vertex(out, Vec3(q.x, h + lift, q.y), n, A.color * wa + B.color * wb + C.color * wc);
-            Vertex& v = out.vertices[vi];
-            v.u = static_cast<float>(wa * A.u + wb * B.u + wc * C.u);
-            v.v = static_cast<float>(wa * A.v + wb * B.v + wc * C.v);
-            v.tangent = A.tangent * wa + B.tangent * wb + C.tangent * wc;
-            return vi;
-        };
-        // KEPT WHOLE when the surface does not fold under it: the triangle fully covered, and every corner of every
-        // piece within `flush` of the plane through the surface at the triangle's own corners. (Between the corners of
-        // the pieces the gap runs straight, so that bounds it everywhere.) A flat road keeps its paint's triangles.
-        double coveredArea = 0;
-        for (const Poly2& piece : taken) coveredArea += area(piece);
-        double cornerH[3] = {0, 0, 0};
-        bool whole = std::fabs(coveredArea - 0.5 * std::fabs(det)) <= kDrapeWholeShare * 0.5 * std::fabs(det);
-        const Vec2 corner[3] = {pa, pb, pc};
-        for (int k = 0; k < 3 && whole; ++k) {
-            whole = false;
-            for (std::size_t pi = 0; pi < taken.size() && !whole; ++pi)
-                for (const Vec2& q : taken[pi])
-                    if ((q - corner[k]).lengthSquared() < kDrapeNoPlan2) {
-                        cornerH[k] = under[takenBy[pi]].heightAt(corner[k]);
-                        whole = true;
-                        break;
+            const Vec2 mid = (pa + pb + pc) * (1.0 / 3.0);
+            const double midH = flatHeight(mid);
+            ranked.clear();
+            for (uint32_t id : cands) ranked.push_back({std::fabs(under[id].heightAt(mid) - midH), id});
+            std::sort(ranked.begin(), ranked.end());
+            // each surface triangle in turn takes the part of the flat triangle over it that no nearer one took
+            taken.clear();
+            takenBy.clear();
+            for (const std::pair<double, uint32_t>& rk : ranked) {
+                const DrapeUnder& U = under[rk.second];
+                const Poly2 over = clipToConvex(tri, U.p, 3);
+                if (over.empty()) continue;
+                pieces.assign(1, over);
+                for (const Poly2& hole : taken) {
+                    Vec2 hlo, hhi;
+                    bounds(hole, hlo, hhi);
+                    next.clear();
+                    for (const Poly2& piece : pieces) {
+                        Vec2 plo, phi;
+                        bounds(piece, plo, phi);
+                        if (!boxesMeet(plo, phi, hlo, hhi) || clipToConvex(piece, hole.data(), hole.size()).empty()) {
+                            next.push_back(piece);   // they do not overlap: kept whole (cutting it along the hole's edges would only shred it)
+                            continue;
+                        }
+                        subtractConvex(piece, hole, next);
                     }
+                    pieces.swap(next);
+                    if (pieces.empty()) break;
+                }
+                for (const Poly2& piece : pieces) {
+                    if (piece.size() < 3 || area(piece) < kDrapeSliver) continue;
+                    const Vec2 at = centroid(piece);
+                    if (std::fabs(U.heightAt(at) - flatHeight(at)) > reach) continue;   // another level's surface
+                    taken.push_back(piece);
+                    takenBy.push_back(rk.second);
+                }
+            }
+            if (taken.empty()) continue;
+            // a vertex of the drape at plan point q, `lift` over surface height h, its attributes read from the flat triangle
+            auto put = [&](const Vec2& q, double h, const Vec3& n) {
+                double wa = 0, wb = 0, wc = 0;
+                weights(q, wa, wb, wc);
+                const uint32_t vi = vertex(part, Vec3(q.x, h + lift, q.y), n, A.color * wa + B.color * wb + C.color * wc);
+                Vertex& v = part.vertices[vi];
+                v.u = static_cast<float>(wa * A.u + wb * B.u + wc * C.u);
+                v.v = static_cast<float>(wa * A.v + wb * B.v + wc * C.v);
+                v.tangent = A.tangent * wa + B.tangent * wb + C.tangent * wc;
+                return vi;
+            };
+            // KEPT WHOLE when the surface does not fold under it: the triangle fully covered, and every corner of every
+            // piece within `flush` of the plane through the surface at the triangle's own corners. (Between the corners of
+            // the pieces the gap runs straight, so that bounds it everywhere.) A flat road keeps its paint's triangles.
+            double coveredArea = 0;
+            for (const Poly2& piece : taken) coveredArea += area(piece);
+            double cornerH[3] = {0, 0, 0};
+            bool whole = std::fabs(coveredArea - 0.5 * std::fabs(det)) <= kDrapeWholeShare * 0.5 * std::fabs(det);
+            const Vec2 corner[3] = {pa, pb, pc};
+            for (int k = 0; k < 3 && whole; ++k) {
+                whole = false;
+                for (std::size_t pi = 0; pi < taken.size() && !whole; ++pi)
+                    for (const Vec2& q : taken[pi])
+                        if ((q - corner[k]).lengthSquared() < kDrapeNoPlan2) {
+                            cornerH[k] = under[takenBy[pi]].heightAt(corner[k]);
+                            whole = true;
+                            break;
+                        }
+            }
+            auto cornerPlane = [&](const Vec2& q) {
+                double wa = 0, wb = 0, wc = 0;
+                weights(q, wa, wb, wc);
+                return wa * cornerH[0] + wb * cornerH[1] + wc * cornerH[2];
+            };
+            for (std::size_t pi = 0; pi < taken.size() && whole; ++pi)
+                for (const Vec2& q : taken[pi])
+                    if (std::fabs(under[takenBy[pi]].heightAt(q) - cornerPlane(q)) > flush) { whole = false; break; }
+            if (whole) {
+                const Vec3 a3(pa.x, cornerH[0], pa.y), b3(pb.x, cornerH[1], pb.y), c3(pc.x, cornerH[2], pc.y);
+                Vec3 n = cross(c3 - a3, b3 - a3);
+                if (n.y * side < 0) n = n * -1.0;
+                const uint32_t ia = put(pa, cornerH[0], n), ib = put(pb, cornerH[1], n), ic = put(pc, cornerH[2], n);
+                triFacing(part, ia, ib, ic, n);
+                continue;
+            }
+            for (std::size_t pi = 0; pi < taken.size(); ++pi) {
+                const DrapeUnder& U = under[takenBy[pi]];
+                const Vec3 n = U.up * side;
+                const uint32_t base = static_cast<uint32_t>(part.vertices.size());
+                for (const Vec2& q : taken[pi]) put(q, U.heightAt(q), n);
+                for (std::size_t k = 1; k + 1 < taken[pi].size(); ++k)
+                    triFacing(part, base, base + static_cast<uint32_t>(k), base + static_cast<uint32_t>(k + 1), n);
+            }
         }
-        auto cornerPlane = [&](const Vec2& q) {
-            double wa = 0, wb = 0, wc = 0;
-            weights(q, wa, wb, wc);
-            return wa * cornerH[0] + wb * cornerH[1] + wc * cornerH[2];
-        };
-        for (std::size_t pi = 0; pi < taken.size() && whole; ++pi)
-            for (const Vec2& q : taken[pi])
-                if (std::fabs(under[takenBy[pi]].heightAt(q) - cornerPlane(q)) > flush) { whole = false; break; }
-        if (whole) {
-            const Vec3 a3(pa.x, cornerH[0], pa.y), b3(pb.x, cornerH[1], pb.y), c3(pc.x, cornerH[2], pc.y);
-            Vec3 n = cross(c3 - a3, b3 - a3);
-            if (n.y * side < 0) n = n * -1.0;
-            const uint32_t ia = put(pa, cornerH[0], n), ib = put(pb, cornerH[1], n), ic = put(pc, cornerH[2], n);
-            triFacing(out, ia, ib, ic, n);
-            continue;
-        }
-        for (std::size_t pi = 0; pi < taken.size(); ++pi) {
-            const DrapeUnder& U = under[takenBy[pi]];
-            const Vec3 n = U.up * side;
-            const uint32_t base = static_cast<uint32_t>(out.vertices.size());
-            for (const Vec2& q : taken[pi]) put(q, U.heightAt(q), n);
-            for (std::size_t k = 1; k + 1 < taken[pi].size(); ++k)
-                triFacing(out, base, base + static_cast<uint32_t>(k), base + static_cast<uint32_t>(k + 1), n);
-        }
-    }
+    }, 1);
+    for (const RenderMesh& part : runs) append(out, part);
     return weld(out);   // every piece was given its own corners: the ones neighbours share become one
 }
 
