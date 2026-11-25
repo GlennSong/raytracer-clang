@@ -25090,3 +25090,24 @@ They are single polygon operations over the whole island. An index cannot speed 
 - lanes_tests 158 of 158; run_tests lane cases 33 of 33.
 
 **What is left:** the model now finishes well inside the meshes (about 87 s), so the products phase is set by the meshes. The longest stretch on one core in the city bake is now the pavement's footprints (about 108 s: `unionAll`, `closing` and the global union in `buildFootprints`, single-threaded Clipper work), ahead of the surfaces (40 s, mostly parallel already). That union is the next target.
+
+## ADR-0520 — Copies of a prefab can be drawn in batches, with no entity for each copy (#315, step 10 part a; 2026-11-25)
+
+**Why:** a stamped prefab is one entity, one more for each thing it draws, and a body for each collision shape. A fridge is 23 entities and a stocked drinks fridge 566. Three storeys of an office tower with the prefab list on stood 354 prefabs. Most copies of a thing are only ever looked at, so the city cannot be furnished with prefabs at that price.
+
+**Words:** a *placed copy* is one prefab at one place in one pose (the values of its moving parts). A *batch copy* is a placed copy with no entity of its own. A *holder* is whoever owns a set of copies and lets them all go at once: a building's interior while it is streamed in, later a tile of the city. A *group* is one mesh drawn many times in one call, a transform for each time (the engine's `InstanceGroup`, which the furniture kit and the forest already use).
+
+**What happens:**
+- **`batchPrefab` adds a copy to a holder** (`src/engine/prefab_batch.{h,cpp}`). Each thing the prefab's model draws becomes one transform in a group that every copy of that model in the holder shares. A group is made the first time a copy needs it. Fifty fridges are the same 15 groups as one.
+- **The same model and the same pose record as a stamped copy.** The transforms come from `modelDraws`, the walk a stamped copy's pieces come from, in the same order, and the groups use the same mesh names, so both draw from one upload. A copy's far shape is a group of its own with its band of distances.
+- **`poseBatchCopy` puts a copy in a pose; `showBatchCopy` takes one out of the picture and puts it back.** A copy taken out keeps its place in its groups and draws nothing. That is what waking a copy will use (part c).
+- **`releaseBatches` lets a holder's groups go.**
+- Nothing places batch copies yet. The interiors and the levels still stamp every prefab in full, so nothing looks or costs different after this commit.
+
+**Measured:**
+- A fridge stamped is 23 entities; fifty in batches are 15 entities in all (15 groups, 750 transforms), where fifty stamped would be 1,150.
+- A batch copy is within 3e-16 m of where the stamped copy's pieces are, at rest and with its door open 110 degrees (test `copies_drawn_in_batches_share_groups_and_stand_where_stamped_copies_do`).
+- The yardstick for this work is `python3 tools/prefab_yardstick.py`: the island from the player's start in Saltwood, present sync off, a fixed camera at noon, 45 s to settle, the frame ledger over 30 s. **Before any of step 10:** frame avg 28.51 ms, p95 41.62 ms, max 51.84 ms (update 2.39, fixed 19.61, render 6.46); GPU buffers 3,523 MB, textures 1,711 MB; no prefab is stamped at the start. Later parts are measured against this line.
+- run_tests: the batch case, the prefab cases 9 of 9, the furniture cases 12 of 12.
+
+**What is left (parts b and c, then the ports):** a batch copy cannot be used or walked into. Part b gives a copy at rest its offers and its collision from the model and the copy's place, without entities. Part c wakes a copy into a stamped prefab when someone uses it and puts it back when it has been still. A level of detail is chosen for each transform by its own distance, so the parts of one copy may change level a metre apart; a stamped copy changes all at once.

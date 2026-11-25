@@ -16,8 +16,6 @@
 
 namespace engine {
 
-namespace {
-
 DrawClass drawClassNamed(const std::string& name) {
     for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c) {
         const char* known = drawClassName(static_cast<DrawClass>(c));
@@ -25,8 +23,6 @@ DrawClass drawClassNamed(const std::string& name) {
     }
     return DrawClass::Furniture;
 }
-
-}  // namespace
 
 Entity stampPrefab(World& world, ModelDresser* dresser, const Prefab& prefab, const Transform& at, const std::string& levelDir, std::string* error,
                    ModelStore* storeOrNull, const std::string& models) {

@@ -4,6 +4,7 @@
 #include "../src/engine/audio/sfx.h"
 #include "../src/engine/components.h"
 #include "../src/engine/model_motion.h"
+#include "../src/engine/prefab_batch.h"
 #include "../src/engine/prefab_stamp.h"
 #include "../src/engine/prefab_use.h"
 #include "../src/engine/procgen/furniture_kit.h"
@@ -495,6 +496,79 @@ TEST_CASE(what_stands_on_a_desk_rises_with_it_whether_a_copy_in_a_batch_or_a_thi
     CHECK(setModelTarget(world, e, "top", 0.0, 0));
     CHECK((world.get<Transform>(mug)->position - (mugAt.position + Vec3(0, rise, 0))).length() < 1e-9);
     CHECK(g->transforms[1].transformPoint(Vec3(0, 0, 0)).y < onDesk.position.y + rise - 0.1);          // the copy went down
+}
+
+// COPIES DRAWN IN BATCHES (#315 step 10, part a; prefab_batch.h): a copy with no entity of its own is one transform
+// in a group for each thing its model draws; every copy of a model shares the groups; a batch copy stands exactly
+// where a stamped copy's pieces stand, at rest and in a pose; one taken out of the picture comes back where it was.
+TEST_CASE(copies_drawn_in_batches_share_groups_and_stand_where_stamped_copies_do) {
+    World world;
+    ModelStore store;
+    Prefab fridge;
+    CHECK(findPrefab("fridge", fridge));
+    const std::size_t before = world.entityCount();
+    Transform at;
+    at.position = Vec3(4, 0.05, -7);
+    at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), 0.6);
+    const Entity full = stampPrefab(world, nullptr, fridge, at, std::string(), nullptr, &store);
+    CHECK(full.valid());
+    if (!full.valid()) return;
+    const std::size_t stampedCost = world.entityCount() - before;
+    const std::size_t pieces = world.get<ModelInstance>(full)->pieces.size();
+
+    const Entity holder = world.create();
+    const std::size_t mark = world.entityCount();
+    const uint32_t a = batchPrefab(world, holder, nullptr, fridge, at, std::string(), nullptr, &store);
+    CHECK(a == 0);
+    const BatchCount one = countBatches(world, holder);
+    CHECK(one.copies == 1 && one.transforms == pieces && one.groups >= 1 && one.groups <= pieces);
+    const std::size_t groupCost = world.entityCount() - mark;
+    Transform there = at;
+    there.position = Vec3(-20, 3.1, 12);
+    for (int i = 0; i < 49; ++i) { there.position.x += 1.0; CHECK(batchPrefab(world, holder, nullptr, fridge, there, std::string(), nullptr, &store) == static_cast<uint32_t>(i + 1)); }
+    const BatchCount fifty = countBatches(world, holder);
+    CHECK(fifty.copies == 50 && fifty.groups == one.groups && fifty.transforms == 50 * pieces);
+    CHECK(world.entityCount() - mark == groupCost);          // forty-nine more copies: not one more entity
+    std::printf("    [batch] a fridge stamped: %zu entities; 50 in batches: %zu entities (%zu groups, %zu transforms)\n", stampedCost,
+                groupCost, fifty.groups, fifty.transforms);
+    CHECK(groupCost * 10 < stampedCost * 50);                // fifty stamped would be fifty times one's entities
+
+    // where the first batch copy draws each thing is where the stamped copy's piece is
+    auto same = [&](const char* when) {
+        const PrefabBatches* b = world.get<PrefabBatches>(holder);
+        const ModelInstance* mi = world.get<ModelInstance>(full);
+        Real worst = 0;
+        for (std::size_t i = 0; i < mi->pieces.size(); ++i) {
+            const Transform* piece = world.get<Transform>(mi->pieces[i]);
+            const InstanceGroup* g = world.get<InstanceGroup>(b->groups[b->copies[0].draws[i].first].entity);
+            const Mat4& m = g->transforms[b->copies[0].draws[i].second];
+            const Mat4 want = piece->matrix();
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 4; ++c) worst = std::max(worst, std::fabs(m.m[r][c] - want.m[r][c]));
+        }
+        std::printf("    [batch] %s: a batch copy is within %.2g of the stamped copy's pieces\n", when, static_cast<double>(worst));
+        return worst < 1e-6;
+    };
+    CHECK(same("at rest"));
+    // ...and in a pose: the fridge's door open 110 degrees, both ways of serving the copy given the same pose
+    CHECK(setModelTarget(world, full, "fridge_door", 110 * kDeg, 0));
+    advanceModelMotion(world, full, 1.0);
+    poseModelPieces(world, full);
+    poseBatchCopy(world, holder, a, world.get<ModelInstance>(full)->pose);
+    CHECK(same("with its door open"));
+    // taken out of the picture it draws nothing, and comes back where its pose has it
+    showBatchCopy(world, holder, a, false);
+    {
+        const PrefabBatches* b = world.get<PrefabBatches>(holder);
+        const InstanceGroup* g = world.get<InstanceGroup>(b->groups[b->copies[0].draws[0].first].entity);
+        const Mat4& m = g->transforms[b->copies[0].draws[0].second];
+        CHECK(m.m[0][0] == 0 && m.m[1][1] == 0 && m.m[2][2] == 0);
+    }
+    showBatchCopy(world, holder, a, true);
+    CHECK(same("shown again"));
+    releaseBatches(world, holder);
+    CHECK(world.entityCount() == mark);
+    CHECK(!world.has<PrefabBatches>(holder));
 }
 
 TEST_CASE(a_prefab_is_a_piece_the_floor_planner_can_place) {

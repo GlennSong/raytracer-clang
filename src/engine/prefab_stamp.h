@@ -31,6 +31,10 @@ namespace engine {
 
 class ModelDresser;
 
+// A prefab's draw class by its name (Prefab::drawClass); furniture when the name is not one. Shared with the copies
+// drawn in batches (prefab_batch.h), so both ways of serving a copy are drawn as far.
+DrawClass drawClassNamed(const std::string& name);
+
 // One entity of `prefab` at `at` (its position and orientation; a scale is not carried). `dresser` gives the pieces
 // their meshes and materials; null makes the pieces without anything to draw (a headless test, a server). Returns
 // an invalid entity with `error` when the prefab's model cannot be had. A prefab straight from a recipe
