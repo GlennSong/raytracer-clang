@@ -2806,6 +2806,19 @@ TEST_CASE(lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache) {
     CHECK(!rebuilt.fromCache && rebuilt.saved);
     CHECK(cacheFileBytes(first.path) == bytes);
 
+    // SAVED FROM A ROAD BUILD ALREADY MADE (the city bake's, ADR-0506): under the same key, to the same bytes, and read
+    // by the next obtain with no road build; with the file there, it is left alone
+    fs::remove(first.path, ec);
+    {
+        const std::unique_ptr<Result> built = build(loadCityGraph(cityEntities(in.level).front()));
+        const LevelBuiltRoads fromBake = saveLevelRoadModelFrom(in, *built, dir, &opts);
+        CHECK(fromBake.saved && !fromBake.fromCache && fromBake.key == first.key && fromBake.path == first.path);
+        CHECK(cacheFileBytes(first.path) == bytes);
+        const LevelBuiltRoads read = obtainLevelRoadModel(in, dir, &opts);
+        CHECK(read.fromCache && read.roadSeconds == 0);
+        CHECK(saveLevelRoadModelFrom(in, *built, dir, &opts).fromCache);
+    }
+
     // damaged in the middle of the graph, or cut short: refused (a note says why), built again, written over
     for (int damage = 0; damage < 2; ++damage) {
         std::vector<char> bad = bytes;

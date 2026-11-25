@@ -5,6 +5,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #include "engine/procgen/city/roads/lanes/road_layout.h"   // stripLayoutText: the road model's layout keys nothing
+#include "engine/procgen/city/roads/lanes/road_model_cache.h"   // saveLevelRoadModelFrom: the road model from this build (ADR-0506)
 #include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
@@ -146,8 +147,27 @@ public:
             if (!report(e.ordinal, 0.80, "meshes", summary(*result).substr(0, summary(*result).find('\n')))) { rep.ok = false; rep.error = "cancelled"; return rep; }
             const auto tp = std::chrono::steady_clock::now();
             static const bool check = std::getenv("RT_CITY_CHECK") != nullptr;   // rt_bake --check: run the invariant sweep into the report
-            CityProducts p = cityProductsFromResult(*result, cell, check);
+            // THE LEVEL'S ROAD MODEL FROM THIS VERY BUILD (ADR-0506), beside the meshes (both only read the build), saved
+            // where obtainLevelRoadModel reads it: the lots bake after this asked for it and, finding none after a road
+            // edit, built the whole road again (about three minutes on the island) to log the paths that do not land;
+            // the first load does the same
+            CityProducts p;
+            LevelBuiltRoads m;
+            double modelSeconds = 0;
+            const bool first = e.ordinal == ents.front().ordinal;
+            bothAtOnce([&] {
+                if (!first) return;
+                const auto tm = std::chrono::steady_clock::now();
+                m = saveLevelRoadModelFrom(in, *result, levelRoadModelCacheDir());
+                modelSeconds = secondsSince(tm);
+            }, [&] { p = cityProductsFromResult(*result, cell, check); });
             const double packSeconds = secondsSince(tp);
+            if (first) {
+                rep.timings["e" + std::to_string(e.ordinal) + ".roadModel"] = modelSeconds;
+                for (const std::string& n : m.notes) LOG_WARN << "[city] the road model: " << n;
+                if (!m.error.empty()) LOG_WARN << "[city] the road model is not saved: " << m.error;
+                else if (m.saved) LOG_INFO << "[city] the road model saved (" << m.path << ") in " << modelSeconds << " s";
+            }
             if (!report(e.ordinal, 0.95, "write", std::to_string(p.cells.size()) + " cell meshes")) { rep.ok = false; rep.error = "cancelled"; return rep; }
             writeCityProducts(out, e.ordinal, p);
             const nlohmann::json stageTimes = p.report.value("timings", nlohmann::json::object());   // a named object: items() on a temporary iterates nothing

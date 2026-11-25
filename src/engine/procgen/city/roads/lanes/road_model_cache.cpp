@@ -279,6 +279,8 @@ std::shared_ptr<RoadModel> plannedCity(const CityEntity& city, std::vector<std::
     }
 }
 
+uint64_t firstCityModelKey(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::vector<CityEntity>& cities);
+void modelFromBuild(const Result& roads, const LaneGraphOptions& opts, LevelBuiltRoads& out);
 // The first city's built model into `out.model`, from the cache or built and saved; or `out.error`.
 void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::string& cacheDir,
                      const std::vector<CityEntity>& cities, const std::chrono::steady_clock::time_point& t0,
@@ -306,6 +308,27 @@ LevelBuiltRoads obtainLevelRoadModel(const bundle::LevelInputs& in, const std::s
     return out;
 }
 
+LevelBuiltRoads saveLevelRoadModelFrom(const bundle::LevelInputs& in, const Result& roads, const std::string& cacheDir,
+                                       const LaneGraphOptions* vehicles) {
+    LevelBuiltRoads out;
+    const std::vector<CityEntity> cities = cityEntities(in.level);
+    if (cities.empty() || cacheDir.empty()) return out;
+    out.vehicles = vehicles ? *vehicles : levelVehicles(in, &out.notes);
+    out.key = firstCityModelKey(in, out.vehicles, cities);
+    out.path = roadModelCachePath(cacheDir, out.key);
+    std::error_code ec;
+    if (fs::exists(out.path, ec)) {   // (there already: a load or an earlier bake made it from these same roads)
+        RoadModel read;
+        std::string why;
+        if (readRoadModelCache(out.path, out.key, read, out.summary, &why)) { out.fromCache = true; return out; }
+    }
+    std::string refusal;
+    std::vector<std::string> unread;
+    if (plannedCity(cities.front(), unread, &refusal) && !refusal.empty()) { out.error = refusal; return out; }
+    modelFromBuild(roads, out.vehicles, out);
+    return out;
+}
+
 std::vector<std::shared_ptr<RoadModel>> levelPlannedRoadModels(const bundle::LevelInputs& in, std::vector<std::string>* notes) {
     std::vector<std::shared_ptr<RoadModel>> out;
     std::vector<std::string> said;
@@ -316,6 +339,53 @@ std::vector<std::shared_ptr<RoadModel>> levelPlannedRoadModels(const bundle::Lev
 
 namespace {
 
+// The first city's model's key: the roads' key, and the first city's control plan (the roads' key no longer sees it:
+// keyedRoadFileText, ADR-0421)
+uint64_t firstCityModelKey(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::vector<CityEntity>& cities) {
+    nlohmann::json spec;
+    if (cities.front().inlineGraph) spec = cities.front().block;
+    else {
+        std::ifstream gf(cities.front().graphPath);
+        try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
+    }
+    // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the tables the
+    // turns are stated by (ADR-0426), the kerb parking spaces are laid by (ADR-0439) and the dead ends are joined by
+    // (ADR-0464); and the bus lines the model holds (busLinesKey: the lane level does not read them, so they ride in
+    // beside its facts, not in them)
+    return roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec) ^ (busLinesKey(spec) * 0x9E3779B97F4A7C15ull),
+                             roadModelTablesHash(laneTurnRules().hash, kerbParkingRules().hash, pathUsers().hash), opts);
+}
+
+// THE BUILT MODEL of a road build, its lane level with it (ADR-0429), into `out.model`, and saved at `out.path` when its
+// lane level passes its check
+void modelFromBuild(const Result& roads, const LaneGraphOptions& opts, LevelBuiltRoads& out) {
+    const std::chrono::steady_clock::time_point tg = std::chrono::steady_clock::now();
+    LaneGraphBuild built;
+    std::shared_ptr<RoadModel> model = std::make_shared<RoadModel>(assembleRoadModel(roads, opts, &built));
+    out.graphSeconds = secondsSince(tg);
+    if (!built.error.empty()) {
+        out.error = built.error;
+        return;
+    }
+    out.summary = summarizeLaneGraph(model->laneLevel, built);
+    // A lane level that fails its own check would be refused by the reader on every later load and rebuilt each time: say
+    // so now, and drive on it (the check is about the file as much as the graph).
+    const std::vector<std::string> problems = validate(model->laneLevel);
+    if (!problems.empty())
+        out.notes.push_back("the lane graph built fails its check (" + std::to_string(problems.size()) +
+                            " problems, the first: " + problems.front() + "); it is not saved");
+    out.model = std::move(model);
+    if (!out.path.empty() && problems.empty()) {
+        std::string why;
+        if (writeRoadModelCache(out.path, out.key, *out.model, out.summary, &why)) {
+            out.saved = true;
+            bundle::noteCacheUse(out.path, kRoadModelCacheKind);
+        } else {
+            out.notes.push_back(why);
+        }
+    }
+}
+
 void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts, const std::string& cacheDir,
                      const std::vector<CityEntity>& cities, const std::chrono::steady_clock::time_point& t0,
                      LevelBuiltRoads& out) {
@@ -323,21 +393,7 @@ void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts
         out.notes.push_back("city " + std::to_string(cities[i].ordinal) + " (" +
                             (cities[i].inlineGraph ? std::string("an inline graph") : cities[i].graphPath) +
                             ") has no lane graph: the driving model drives the first city only");
-    // The roads' key, and the first city's control plan (the roads' key no longer sees it: keyedRoadFileText, ADR-0421)
-    {
-        nlohmann::json spec;
-        if (cities.front().inlineGraph) spec = cities.front().block;
-        else {
-            std::ifstream gf(cities.front().graphPath);
-            try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
-        }
-        // the layout and the lane rules the lane level reads by id (the roads' key leaves them out), and the tables the
-        // turns are stated by (ADR-0426), the kerb parking spaces are laid by (ADR-0439) and the dead ends are joined by
-        // (ADR-0464); and the bus lines the model holds (busLinesKey: the lane level does not read them, so they ride in
-        // beside its facts, not in them)
-        out.key = roadModelCacheKey(levelRoadsKey(in), laneLevelKey(spec) ^ (busLinesKey(spec) * 0x9E3779B97F4A7C15ull),
-                                    roadModelTablesHash(laneTurnRules().hash, kerbParkingRules().hash, pathUsers().hash), opts);
-    }
+    out.key = firstCityModelKey(in, opts, cities);
 
     if (!cacheDir.empty()) {
         out.path = roadModelCachePath(cacheDir, out.key);
@@ -376,33 +432,7 @@ void obtainFirstCity(const bundle::LevelInputs& in, const LaneGraphOptions& opts
         return;
     }
     out.roadSeconds = secondsSince(t0);
-    const std::chrono::steady_clock::time_point tg = std::chrono::steady_clock::now();
-    // THE BUILT MODEL of this build, its lane level with it (ADR-0429)
-    LaneGraphBuild built;
-    std::shared_ptr<RoadModel> model = std::make_shared<RoadModel>(assembleRoadModel(*roads, opts, &built));
-    roads.reset();
-    out.graphSeconds = secondsSince(tg);
-    if (!built.error.empty()) {
-        out.error = built.error;
-        return;
-    }
-    out.summary = summarizeLaneGraph(model->laneLevel, built);
-    // A lane level that fails its own check would be refused by the reader on every later load and rebuilt each time: say
-    // so now, and drive on it (the check is about the file as much as the graph).
-    const std::vector<std::string> problems = validate(model->laneLevel);
-    if (!problems.empty())
-        out.notes.push_back("the lane graph built fails its check (" + std::to_string(problems.size()) +
-                            " problems, the first: " + problems.front() + "); it is not saved");
-    out.model = std::move(model);
-    if (!out.path.empty() && problems.empty()) {
-        std::string why;
-        if (writeRoadModelCache(out.path, out.key, *out.model, out.summary, &why)) {
-            out.saved = true;
-            bundle::noteCacheUse(out.path, kRoadModelCacheKind);
-        } else {
-            out.notes.push_back(why);
-        }
-    }
+    modelFromBuild(*roads, opts, out);
 }
 
 }  // namespace

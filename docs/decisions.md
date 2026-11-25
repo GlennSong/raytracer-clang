@@ -25041,3 +25041,28 @@ They are single polygon operations over the whole island. An index cannot speed 
 
 **Found, not done (the night under the physical sky):** at 22:00 the facades and the sky are black (no stars: ADR-0369's owed list), the lit windows are much brighter than under the classic sky, and for a few seconds after a jump in the hour the frame is nearly black and the glass still reflects the day (the eye adapts and the probes relight over several frames). The classic sky's night is the better picture today.
 
+
+## ADR-0506 — The city bake saves the level's road model from its own road build; the lots bake reads it (#317, step 7a; 2026-11-25)
+
+**Why:** after a road edit the lots bake asked for the level's road model (`obtainLevelRoadModel`), found none saved for the new road file, and built the whole road network a second time to make one: about five minutes on the island, only to log the lots' paths that do not land on it. The city bake had just made that very road build.
+
+**Words:** the *road model* is the level's one description of its roads (road_model.h), with its lane level; it is saved under a key of the road file and the tables it reads (`cache/roadmodel/<key>.roadmodel`), and the loader, the lots bake and the tracer read it from there.
+
+**What happens:**
+- **The city bake makes the model from its own road build** (`saveLevelRoadModelFrom`, road_model_cache.h) and saves it under the key `obtainLevelRoadModel` reads, unless it is there already. It runs beside the meshes and the blocks, which only read the same build.
+- `obtainLevelRoadModel` and it share one key (`firstCityModelKey`) and one way from a build to a saved model (`modelFromBuild`): one road model, made one way.
+- The lots bake, and the first load after the bake, read the saved model instead of building the roads again.
+
+**Measured** (island_8_nature, scratch copy, one street bent 3 m, the road model not yet saved for it):
+
+| | Before | After |
+|---|---|---|
+| The whole rebake | 10:10 | 6:10 |
+| City stage | 273 s | 336 s (the model, 144 s, beside its meshes) |
+| Lots stage | 336 s | 33 s |
+
+- river_town, the same kind of edit: city 26 + lots 58 s → city 57 + lots 6 s.
+- Every section is identical to a bake by the binary before this change (river_town), apart from the city report's timings.
+- A new check in `lanes_a_level_lane_graph_is_built_once_then_read_from_its_cache`: the model saved from a build already made has the same key and the same bytes as one `obtainLevelRoadModel` builds, and the next obtain reads it with no road build. lanes_tests 159 of 159.
+
+**What is left:** the model's assembly (144 s on the island, on one core for most of it) now sets the end of the city bake's products: the meshes (83 s) and the blocks (52 s) finish before it.
