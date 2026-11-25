@@ -29,6 +29,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <unordered_map>
 
 using namespace engine;
 
@@ -602,8 +603,8 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     }
     const citysim::CityBrainCounts& c = b.counts();
     const uint64_t hash = crowdtest::crowdHash(b, sim, lc.world);
-    std::printf("    [far] at the end: arrivals %llu, errors %llu, refused %llu; final state hash %016llx\n",
-                static_cast<unsigned long long>(b.machine()->counts().arrivals),
+    std::printf("    [far] at the end: the most far %d; arrivals %llu, errors %llu, refused %llu; final state hash %016llx\n",
+                mostFar, static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused), static_cast<unsigned long long>(hash));
     CHECK(c.dayArrivedShut == 0u);
@@ -624,11 +625,14 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // work 1521 -> 1520; 0xd898a2ec3bb6bbe9 -> 0xe2c8701064b9badc. The brain 1.05 -> 0.53 ms a tick.
     // (ADR-0499, the old sim's people gone: lowered 3070 -> 3068, raised 569 -> 571, far visits 2887 -> 2878; set out
     // 2820 -> 2812, arrived 2292 -> 2283, at work 1520 -> 1519; 0xe2c8701064b9badc -> 0xba9eaef6e5933eb5)
+    // (ADR-0503/0504, every lot regrown from its own outline and per tile, so the town's homes and people moved: the most
+    // far 2719 -> 2967; lowered 3068 -> 3234, raised 571 -> 684, far visits 2878 -> 3040; set out 2812 -> 2819, arrived
+    // 2283 -> 2321, at work 1519 -> 1523; 0xba9eaef6e5933eb5 -> 0x13aced87fe819df6)
     if (kFarMinutes == 15) {
-        CHECK(mostFar == 2719);
-        CHECK(c.lowered == 3068u && c.raised == 571u && c.farVisits == 2878u);
-        CHECK(c.daySetOut == 2812u && c.dayArrivals == 2283u && c.dayToWork == 1519u);
-        CHECK(hash == 0xba9eaef6e5933eb5ull);
+        CHECK(mostFar == 2967);
+        CHECK(c.lowered == 3234u && c.raised == 684u && c.farVisits == 3040u);
+        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2321u && c.dayToWork == 1523u);
+        CHECK(hash == 0x13aced87fe819df6ull);
     }
 }
 
@@ -661,6 +665,20 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
                 static_cast<unsigned long long>(b.machine()->counts().refused));
+    // WHO IS INSIDE EACH PLACE (ADR-0508): the brain's answer the interiors draw from. Staff at their posts: people at
+    // their own work place, at work, indoors there.
+    std::unordered_map<citysim::PlaceId, citysim::PlaceInside> inside;
+    b.insidePlaces(inside);
+    int insidePeople = 0, insideStaff = 0, placesStaffed = 0;
+    for (const std::pair<const citysim::PlaceId, citysim::PlaceInside>& q : inside) {
+        insidePeople += q.second.people;
+        insideStaff += q.second.staff;
+        placesStaffed += q.second.staff > 0 ? 1 : 0;
+    }
+    std::printf("    [no-driving] inside: %d people in %zu places; %d staff at work in %d places\n", insidePeople, inside.size(),
+                insideStaff, placesStaffed);
+    CHECK(insidePeople > 1000);
+    CHECK(insideStaff > 500 && placesStaffed > 50);
     CHECK(b.residentCount() > 5000);
     CHECK(b.cars().empty());
     CHECK(c.tripsBegun == 0u);
@@ -672,6 +690,8 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
     // (ADR-0496; its time in the state caught up in one sum on waking, not tick by tick, so a stay ends a tick either
     // way): 2569 set out, 2100 arrived, 1433 at work, 2117 arrivals; the brain 0.84 -> 0.41 ms a tick.
     // (ADR-0499, the old sim's people gone: set out 2569 -> 2567, arrived 2100 -> 2095, arrivals 2117 -> 2112)
-    CHECK(c.daySetOut == 2567u && c.dayArrivals == 2095u && c.dayToWork == 1433u);
-    CHECK(b.machine()->counts().arrivals == 2112u);
+    // (ADR-0503/0504, every lot regrown: set out 2567 -> 2584, arrived 2095 -> 2040, at work 1433 -> 1369, arrivals
+    // 2112 -> 2053)
+    CHECK(c.daySetOut == 2584u && c.dayArrivals == 2040u && c.dayToWork == 1369u);
+    CHECK(b.machine()->counts().arrivals == 2053u);
 }

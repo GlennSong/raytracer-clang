@@ -73,6 +73,17 @@ engine::CityMarker placeMarkerSpec(const Place& p, PlaceId id, const engine::Roa
 
 std::string placeMarkerName(PlaceId id) { return "place_" + std::to_string(id); }
 
+PlaceId placeOfMarkerName(const std::string& name) {
+    static const std::string kPrefix = "place_";
+    if (name.size() <= kPrefix.size() || name.compare(0, kPrefix.size(), kPrefix) != 0) return kNoPlace;
+    PlaceId id = 0;
+    for (std::size_t i = kPrefix.size(); i < name.size(); ++i) {
+        if (name[i] < '0' || name[i] > '9') return kNoPlace;
+        id = id * 10 + static_cast<PlaceId>(name[i] - '0');
+    }
+    return id;
+}
+
 bool brainPeopleFromHouseholds(const CitySim& sim, const PlaceMap& places, const engine::RoadModel& model, int most,
                                const BrainPlaceUsable& usable, const BrainCarSpaces& spaces, uint32_t seed,
                                BrainPeople& out, std::string* why) {

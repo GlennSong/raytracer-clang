@@ -7,6 +7,7 @@
 #include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
+#include "city_brain.h"    // PlaceInside: who is in each place (ADR-0508)
 #include "../../engine/control/city_requests.h"
 #include "../../engine/control/control_commands.h"
 #include "../../engine/player/seat_geometry.h"   // SeatGeometry (a rider astride)
@@ -578,6 +579,7 @@ private:
     void dealOpenSigns(engine::World& world, engine::Vec3 cam);
     int parkingTick_ = 0;   // (traffic? telemetry every 60 frames, the open signs every 30)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
+    std::unordered_map<PlaceId, PlaceInside> insideByPlace_;          // who is in each place, the brain's answer (ADR-0508)
     int indoorDrawn_ = 0;
 public:
     int indoorDrawn() const { return indoorDrawn_; }

@@ -76,6 +76,8 @@ using BrainCarSpaces = std::function<std::vector<engine::KerbSpace>(const engine
 // place becomes a marker: here for homes, and in the brain for wherever a day goes (CityBrain, ADR-0491).
 engine::CityMarker placeMarkerSpec(const Place& p, PlaceId id, const engine::RoadModel& model);
 std::string placeMarkerName(PlaceId id);
+// ...and back: the place a marker of that name stands for (kNoPlace: a marker of no place, a lab level's own).
+PlaceId placeOfMarkerName(const std::string& name);
 
 // MAKE THE BRAIN'S PEOPLE from `sim`'s households (its plan and agents, after assignPlaces) in `places`, on `model`,
 // at most `most` people, seeded by `seed`. False, with the reason in `why`, when people.lua has no `people.brain`.
