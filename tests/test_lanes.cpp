@@ -507,7 +507,7 @@ TEST_CASE(lot_citysim_the_lot_pass_reads_only_what_its_key_hashes) {
     }
     std::printf("    [lot citysim] %d levels' blocks read; %d read a field the key does not hash%s%s\n", levels, refused,
                 refused ? ": " : "", firstRefusal.c_str());
-    CHECK(levels >= 20);
+    CHECK(levels >= 15);   // (the committed levels with a citysim block: 17 on 2026-11-25; 20 counted three untracked ones)
     CHECK(refused == 0);
     // a field no list names is refused, so the check above can fail
     bool threw = false;
