@@ -24847,3 +24847,76 @@ They are single polygon operations over the whole island. An index cannot speed 
   - The lots stage alone (`--rebuild lots`) is unchanged: 29.3 GB process peak, 3:06, byte-identical.
   - The whole bake in one process peaks at 32.5 GB in the lots stage (its manifest: `grownRssGb` 29.8 against 26.7 alone). The 3 GB is memory the city stage no longer uses but the process has not handed back. The likely cause is the worker threads' own malloc heaps. Whether a whole bake held it before this change was not measured. A `malloc_trim` between the producers would be the first thing to try.
 - Checked again outside the helper that did the work: river_town baked by the unmodified binary and by this one, 1,571 sections, every one identical but `city/e0/report` (the same size; its timings); 1:06 -> 0:37.
+
+## ADR-0502 — The lots bake grows its lots on the shared pool and adds them in lot order (#317, step 5; 2026-11-24)
+
+**Why:** after steps 1 to 3 the island's lots stage took about 3 minutes, all on one core (stack samples every 10 s: one thread running from the first lot to the last section written). Its lots were grown one after another (PASS C), its walkways' ends were found one path at a time, and its render cells were encoded one at a time. The investigation's step 5 was to grow the lots in parallel with the output unchanged, and to hold less memory if that could be had too (docs/bake-performance-investigation.md).
+
+**Words:**
+- *PASS C* is the loop in `growLotBuildings` that grows every lot from its block's plan, after the blocks are parcelled (PASS A), graded and given their landmarks (PASS B).
+- a lot's *own sets* are where it puts what it makes: its building records, its parts (one mesh per material), its flat (far) parts, its grades, its ledger (`LotPlanDebug`) and its tallies.
+- *added in lot order*: the own sets of lot 1, then lot 2, and so on, are appended to the pass's. Appending lot by lot gives the same vertices in the same order as growing into the pass's sets directly.
+
+**What was shared (the audit, before any change):**
+- The style book's Lua state (`style_book.lua`): every building's look was a call into one Lua state. It now takes a lock per look-up. A look-up only reads the book, so the order the lots take the lock in changes nothing.
+- The other catalogs are loaded once, behind a lock or a once-flag, and only read while growing:
+  - the building uses (`building_uses.lua`) and the floor-use names;
+  - the trades (`trades.lua`);
+  - the mass models (`sculpted_01.glb`, the mesh-mass cache);
+  - the furniture pieces;
+  - the furniture library and floor programs (loaded by the viewer, not the bake).
+
+  A floor-use name's number depends on which building asked first, but only the name is used, and it is never written to the bundle.
+- The road look-up (`LotRoads`), the district map, the ground samplers and the terrain they read hold nothing they change. Every lot's dice are its own (`mix(block seed, lot index)`), and there is no global random generator on this path.
+- What PASS C wrote outside its lot:
+  - the pass's building list, parts, flat parts, grades and attached-building ledger (indices into the list and the parts);
+  - the ledger's counts and lists;
+  - nine log tallies, counted by helper functions defined before PASS C;
+  - the foundation helper, which wrote the pass's parts directly.
+- What PASS C read that earlier lots made, the order-dependent part:
+  - the malls placed so far (one mall in 1.5 km: `mallNear`, and a mall that does not fit taking itself off the list);
+  - a paseo's passages read off the shop buildings grown before it;
+  - a campus quad's doors read off the halls grown before it;
+  - the ledger's "keep the first four" lists (big boxes, attached buildings), a cap and not a decision.
+
+**What happens:**
+- **PASS C grows each lot into its own sets on the shared pool** (`growLot`, `GrowInto`).
+  - The lots are handed out in lot order, a window of 16 per thread ahead of the one being added.
+  - This thread adds them in lot order, a run of ready lots at a time, each material's mesh on the pool. The attached ledger's indices are moved by what stood before.
+  - The tallies go to the growing lot's own set through `tally()`, a per-thread pointer. The foundation helper is given the part sets to write to.
+- **A lot that would read what earlier lots made is grown again in its turn.** In the pool it stops and says so (`again`): one that rolls or keeps a mall, a paseo, or a campus or dorm quad. It is then grown on the pass's own sets, after every lot before it, exactly as the one-by-one loop grew it. They are few: malls are 1.5 km apart, and a town has at most a handful of paseos and one campus (not counted).
+- **The walkways' ends** (`stateLotPathsOn`) are found per path on the pool, and the doors onto paths per lot. Each states only its own ends; the counts are summed.
+- **The cells are encoded on the pool** (`writeLotResult`). A material's chunks are still made one at a time. Every 48 chunks, or every 256 MB of them, they are encoded at once and added to the bundle in the order they were made.
+- **Memory held in check:**
+  - the pass's part meshes grow by half again instead of doubling (the island's biggest is 6.6 GiB, and a doubling briefly held it three times over);
+  - the memory the growing freed is handed back (`malloc_trim`) before the write.
+- **`rt_bake --threads N` now sizes the shared pool too** (`RT_JOB_THREADS`, read when the pool is made). Before, it only set the road surfaces' threads, so a bake could not be checked on one thread.
+
+**Measured** (island_8_nature, `rt_bake --rebuild lots`, the step-2 bundle as input):
+
+| | Before | After |
+|---|---|---|
+| Wall time | 3:06 | 1:30 |
+| Lots stage (manifest) | 183 s | 88 s |
+| grow / write | 114 s / 66 s | 57 s / 27 s |
+| CPU | ~100 % | 320 % |
+| Process peak | 29.3 GB | 30.0 GB |
+| Same, `--threads 1` | | 3:20, 28.5 GB |
+
+**Checked:**
+- Every one of the island's 28,041 sections is byte-identical to the step-2 bundle, the lots report included. The same holds with `--threads 1`.
+- river_town, `--rebuild lots`: all 1,571 sections identical at full threads and at `--threads 1` (11.8 s before, 7.8 s after).
+- run_tests, filtered to the lot pass with 25 filters (lot, landmark, parcel, party, plaza, walkway, paved, plate, pads, district, alley, skyline, zone, freeway and others): 108 case runs, some cases under more than one filter, all pass.
+- lanes_tests `lot`: 7 of 7.
+
+**Not done, and why:**
+- **No 1 km tiles.** The investigation proposed giving each block to the tile holding its centre and growing tiles. Byte-identity needs only that every lot is added in lot order. Lots handed out in that same order keep the fewest grown lots waiting. Tiles would make the adding wait on the slowest tile and hold every other tile's parts meanwhile. Tiles pay off once a tile can be skipped, which is step 6 (stable block ids and per-tile keys, a design decision).
+- **The peak is not lower (+0.7 GB at full threads, -0.8 GB on one thread).** The grown parts themselves (203 million vertices) are still held as one island-wide mesh per material until every lot is grown, for three reasons:
+  - the party-wall pass cuts a regrown building's first growth out of those meshes and appends its regrowth at their end;
+  - the writer cuts each mesh into cells in that final order;
+  - and a cell takes from many blocks.
+
+  Holding one tile's parts at a time would mean writing a cell's chunk as soon as every block in it is grown and party-walled, with the regrowths placed where they now land. That keeps the bytes in principle. But it rewrites the party-wall pass and the cell writer around tiles, and it is worth doing together with step 6. The extra 0.7 GB at full threads is lots waiting to be added and the threads' own heaps.
+- What is left on one core: parcelling and grading (PASS A, about 15 s), the party-wall pass (about 10 s), making each material's cell chunks (the encoding is on the pool), and the mall, paseo and quad lots grown again.
+- Checked again outside the helper that did the work: river_town by the pre-step-5 binary, by this one, and by this one with `--threads 1`: 1,571 sections, every one identical but `city/e0/report` (its timings).
+- Not tiles, as the investigation's step 5 had it: lots are handed out and added in lot order instead, which keeps the fewest finished lots waiting. Tiles pay off once a tile can be skipped (step 6, which needs Glenn's decision on block ids). The peak memory did not come down (29.3 -> 30.0 GB): every part stays in one island-wide mesh per material until the party walls are cut and the cells written; lowering it means rewriting those around tiles.

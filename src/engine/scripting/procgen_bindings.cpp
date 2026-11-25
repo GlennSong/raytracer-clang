@@ -50,6 +50,7 @@
 #include "../../renderer/renderer.h"   // RenderMesh
 #include "../../rt_math.h"
 
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 #include "../procgen/polymesh.h"
@@ -372,7 +373,11 @@ makeStyleBook(ScriptVM& vm, const std::string& code, std::string* error) {
     }
     const int ref = luaL_ref(L, LUA_REGISTRYINDEX);   // pops + pins the table
     ScriptVM* vmp = &vm;
-    return [vmp, ref](const std::string& recipe, BuildingParams& p) {
+    // ONE LOOK-UP AT A TIME: the lots grow on the shared pool (#317 step 5) and a Lua state is one thread's. Each look-up
+    // only reads the book, so the order they take the lock in changes nothing.
+    std::shared_ptr<std::mutex> mu = std::make_shared<std::mutex>();
+    return [vmp, ref, mu](const std::string& recipe, BuildingParams& p) {
+        std::lock_guard<std::mutex> lock(*mu);
         lua_State* L2 = luaState(*vmp);
         lua_rawgeti(L2, LUA_REGISTRYINDEX, ref);
         lua_getfield(L2, -1, recipe.c_str());

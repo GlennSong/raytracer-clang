@@ -57,7 +57,7 @@ int usage() {
         "  --glb-split cell   also write cells/<cx>_<cz>.glb + index.json (one file per render cell)\n"
         "  --force      rebuild even when the keys match\n"
         "  --rebuild    rebuild these producers only; the others are copied forward from the bundle there when current\n"
-        "  --threads N  worker threads for the builders (default: every hardware thread)\n"
+        "  --threads N  threads for the builders and the shared job pool (default: every hardware thread)\n"
         "  --require    exit 1 instead of building when the bundle is missing or stale\n"
         "  --check      also run the city's invariant sweep into the report (minutes on metro)\n");
     return 2;
@@ -355,7 +355,10 @@ int main(int argc, char** argv) {
         else if (a == "--glb-split" && i + 1 < argc) { if (std::string(argv[++i]) != "cell") return usage(); split = true; }
         else if (a == "--force") req.force = true;
         else if (a == "--rebuild" && i + 1 < argc) { std::string list = argv[++i]; size_t p; while ((p = list.find(',')) != std::string::npos) { req.rebuild.push_back(list.substr(0, p)); list.erase(0, p + 1); } if (!list.empty()) req.rebuild.push_back(list); }
-        else if (a == "--threads" && i + 1 < argc) req.threads = static_cast<unsigned>(std::max(0, std::atoi(argv[++i])));
+        else if (a == "--threads" && i + 1 < argc) {
+            req.threads = static_cast<unsigned>(std::max(0, std::atoi(argv[++i])));
+            if (req.threads > 0) setenv("RT_JOB_THREADS", std::to_string(req.threads).c_str(), 1);   // the shared pool too (job_system.h)
+        }
         else if (a == "--require") require = true;
         else if (a == "--check") setenv("RT_CITY_CHECK", "1", 1);   // run the lab's invariant sweep into the report (slow on metro)
         else return usage();

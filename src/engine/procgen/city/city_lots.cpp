@@ -22,8 +22,13 @@
 #include "../furniture_kit.h"   // Piece: outdoor library furniture (M2)
 #include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
+#include "../../../job_system.h"   // sharedJobs: PASS C grows the lots on the shared pool (#317 step 5)
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <condition_variable>
+#include <exception>
+#include <mutex>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -2132,6 +2137,13 @@ private:
 // A door on a path (its foot within kDoorOnPathReach of one, and kDoorFarFromStreet or more past the street's pavement)
 // states that walkway and the metres along it instead of a street; every other door states its street (ADR-0474).
 // Counted for the log: what each end landed on, and the paths that cross a carriageway (drawn as before, and said).
+// one path's counts added to the pass's
+static void addPathCounts(LotPathCounts& into, const LotPathCounts& c) {
+    into.walkways += c.walkways; into.dropped += c.dropped; into.onWalkway += c.onWalkway; into.onStreet += c.onStreet;
+    into.deadEnds += c.deadEnds; into.insideJunction += c.insideJunction; into.crossCarriageway += c.crossCarriageway;
+    into.doorsOnWalkway += c.doorsOnWalkway; into.heldToKerbEnd += c.heldToKerbEnd; into.pastKerbEnd += c.pastKerbEnd;
+}
+
 static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoads& roads, const std::function<Real(Real, Real)>& ground) {
     constexpr Real kShortestPath = 0.5;       // a path shorter than this is no path (as the street map dropped them)
     constexpr Real kPathEndsMeet = 0.8;       // two ends this near are one meeting point
@@ -2170,7 +2182,12 @@ static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoa
         off = near.dist;
         return st[i][near.seg] + (st[i][near.seg + 1] - st[i][near.seg]) * near.t;
     };
-    for (std::size_t i = 0; i < all.size(); ++i) {
+    // EACH PATH'S ENDS ON THE SHARED POOL (#317 step 5): a path states only its own two ends (from the other paths' lines
+    // and ids, set above, and the roads), and its counts are summed after
+    std::vector<LotPathCounts> countsOf(all.size());
+    parallelRows(static_cast<int>(all.size()), [&](int row) {
+        const std::size_t i = static_cast<std::size_t>(row);
+        LotPathCounts& n = countsOf[i];
         ModelWalkway& W = pathOf(all[i]);
         for (int e = 0; e < 2; ++e) {
             const Vec2 q = e == 0 ? W.line.front() : W.line.back();
@@ -2228,10 +2245,13 @@ static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoa
         for (Real t = kCrossStep; t < length - kCrossStep && !crosses; t += kCrossStep)
             crosses = roads.onOrWithin(pointAtStation(W.line.data(), st[i].data(), W.line.size(), t), 0);
         n.crossCarriageway += crosses ? 1 : 0;
-    }
+    });
+    for (const LotPathCounts& c : countsOf) addPathCounts(n, c);
     n.walkways = static_cast<int>(all.size());
-    // the doors that open onto a path
-    for (LotBuilding& lb : out)
+    // the doors that open onto a path (each lot's doors on the pool: a door states only its own frontage)
+    std::vector<int> doorsOn(out.size(), 0);
+    parallelRows(static_cast<int>(out.size()), [&](int row) {
+        LotBuilding& lb = out[static_cast<std::size_t>(row)];
         for (BuildingUnit& u : lb.units)
             for (DoorSpec& d : u.doors) {
                 if (strictlyBefore(roads.shortOfPavement(d.foot), kDoorFarFromStreet, kSamePoint)) continue;
@@ -2246,8 +2266,10 @@ static LotPathCounts stateLotPathsOn(std::vector<LotBuilding>& out, const LotRoa
                 d.frontage = StatedFrontage();
                 d.frontage.walkway = on->id;
                 d.frontage.along = at;
-                ++n.doorsOnWalkway;
+                ++doorsOn[static_cast<std::size_t>(row)];
             }
+    });
+    for (int c : doorsOn) n.doorsOnWalkway += c;
     return n;
 }
 
@@ -3340,6 +3362,40 @@ TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff
     return makeFlattenPad(std::move(poly), lb.groundY, falloff);
 }
 
+namespace {
+// A lot's own ledger (grown on the pool, PASS C) added to the pass's, as if it had counted into it: every count summed,
+// every list appended -- the two the log keeps only the first four of, to four (#317 step 5).
+void addPlanDebug(LotPlanDebug& into, const LotPlanDebug& d) {
+    into.wholeBlocks += d.wholeBlocks;
+    into.blocks.insert(into.blocks.end(), d.blocks.begin(), d.blocks.end());
+    into.lots.insert(into.lots.end(), d.lots.begin(), d.lots.end());
+    into.alleys.insert(into.alleys.end(), d.alleys.begin(), d.alleys.end());
+    into.rejChance += d.rejChance; into.rejSliver += d.rejSliver; into.rejAspect += d.rejAspect; into.rejFill += d.rejFill;
+    into.attachedSites += d.attachedSites; into.attachedBuilt += d.attachedBuilt; into.partyTopped += d.partyTopped;
+    for (const Vec2& a : d.attachedAt) if (into.attachedAt.size() < 4) into.attachedAt.push_back(a);
+    into.bigBoxBlocks += d.bigBoxBlocks; into.mallBlocks += d.mallBlocks;
+    into.mallAt.insert(into.mallAt.end(), d.mallAt.begin(), d.mallAt.end());
+    into.paseoBlocks += d.paseoBlocks;
+    into.paseoAt.insert(into.paseoAt.end(), d.paseoAt.begin(), d.paseoAt.end());
+    into.nightlifeBuildings += d.nightlifeBuildings; into.towerVenues += d.towerVenues;
+    into.campusBlocks += d.campusBlocks; into.sportsBlocks += d.sportsBlocks; into.dormBlocks += d.dormBlocks;
+    into.campusAt.insert(into.campusAt.end(), d.campusAt.begin(), d.campusAt.end());
+    into.campusWhat.insert(into.campusWhat.end(), d.campusWhat.begin(), d.campusWhat.end());
+    for (const Vec2& a : d.bigBoxAt) if (into.bigBoxAt.size() < 4) into.bigBoxAt.push_back(a);
+    into.depotBlocks += d.depotBlocks;
+    into.depotAt.insert(into.depotAt.end(), d.depotAt.begin(), d.depotAt.end());
+    into.rejPlan += d.rejPlan; into.rejClear += d.rejClear; into.rejBox += d.rejBox; into.rejFrontage += d.rejFrontage;
+    into.bisectedBlocks += d.bisectedBlocks;
+    into.pEdgeShort += d.pEdgeShort; into.pShallow += d.pShallow; into.pMitered += d.pMitered; into.pOverlap += d.pOverlap;
+    into.pNotStreet += d.pNotStreet; into.pEscaped += d.pEscaped; into.pTiny += d.pTiny; into.pThin += d.pThin;
+    into.pPlaced += d.pPlaced; into.pClips += d.pClips; into.pLeftOverlapping += d.pLeftOverlapping;
+    into.pSameEdge += d.pSameEdge; into.pAtInsert += d.pAtInsert; into.pConcave += d.pConcave; into.pClipFailed += d.pClipFailed;
+    into.rejRelief += d.rejRelief;
+    into.openCarParks += d.openCarParks; into.openPlaygrounds += d.openPlaygrounds; into.openGardens += d.openGardens;
+    into.openParks += d.openParks;
+}
+}  // namespace
+
 std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const LotParams& pIn, LotPlanDebug* debug,
                                           std::vector<RenderMesh>* outParts,
@@ -3440,17 +3496,32 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // parcel that runs into the street grows its trees there while its facade
     // politely stops at the kerb. Prune any spot inside a carriageway; a lot
     // keeps whatever spots are genuinely on its own ground.
-    int treeSpotsPruned = 0;
+    // THE PASS'S TALLIES (the build-end log's ledger): one set for the pass, and while a lot grows on the shared pool
+    // (PASS C, #317 step 5) its own set, added to the pass's in lot order. Every helper below counts into tally().
+    struct GrowTally {
+        int treeSpotsPruned = 0, padsStillInRoad = 0, padsChecked = 0, padsOnCarriageway = 0;
+        int underFwCount = 0, sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0, pavedLots = 0;
+        std::vector<Vec2> rejectedPadAt;   // WHERE the road-locked pads were
+        void add(const GrowTally& o) {
+            treeSpotsPruned += o.treeSpotsPruned; padsStillInRoad += o.padsStillInRoad; padsChecked += o.padsChecked;
+            padsOnCarriageway += o.padsOnCarriageway; underFwCount += o.underFwCount; sitesRectified += o.sitesRectified;
+            sitesNoRect += o.sitesNoRect; sitesRectUnfit += o.sitesRectUnfit; pavedLots += o.pavedLots;
+            rejectedPadAt.insert(rejectedPadAt.end(), o.rejectedPadAt.begin(), o.rejectedPadAt.end());
+        }
+    };
+    GrowTally passTally;
+    static thread_local GrowTally* tallyHere = nullptr;   // the growing lot's own, on this thread; none: the pass's
+    auto tally = [&passTally]() -> GrowTally& { return tallyHere ? *tallyHere : passTally; };
     // MEASURED, not assumed: pads that come back from pushPolyClearOfRoads
     // still covering carriageway. The relaxation pushes to width/2 +
     // roadClearance (4.6 m) but VERIFIES at width/2 + 0.3, and when up to
     // 20%% of vertices still fail it DELETES them and returns the rest --
     // and a polygon missing the vertex that poked into a street can still
     // span it, because the edge across the gap is never re-tested.
-    int padsStillInRoad = 0, padsChecked = 0;
-    int padsOnCarriageway = 0;   // the STRICT question: on the asphalt itself
+
+    // (padsOnCarriageway: the STRICT question, on the asphalt itself)
     int lotsInCarriageway = 0;   // PARCELS that reach into a lane
-    std::vector<Vec2> rejectedPadAt;   // WHERE the road-locked pads were
+
     auto pruneTreeSpotsIntoRoad = [&](std::vector<Vec3>& spots) {
         if (!lotRoads.known() || spots.empty()) return;
         const std::size_t before = spots.size();
@@ -3459,7 +3530,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                        return !lotRoads.clearOf(Vec2(sp.x, sp.z));
                                    }),
                     spots.end());
-        treeSpotsPruned += static_cast<int>(before - spots.size());
+        tally().treeSpotsPruned += static_cast<int>(before - spots.size());
     };
     // (The frontage gate asks LotRoads::surfaceDistance: a lot whose whole footprint sits farther than the
     // frontage bound from every road surface goes GREEN instead of building — stage 4 of the city contract
@@ -3529,17 +3600,17 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     auto onCarriageway = [&](const Vec2& c) { return lotRoads.onOrWithin(c, 0); };
     auto padCoversRoad = [&](const Poly2& pad) {
         if (pad.size() < 3) return false;
-        ++padsChecked;
+        ++tally().padsChecked;
         for (const Vec2& v : pad)
-            if (!lotRoads.clearOf(v)) { ++padsStillInRoad; return true; }
-        if (!lotRoads.clearOf(centroid(pad))) { ++padsStillInRoad; return true; }
+            if (!lotRoads.clearOf(v)) { ++tally().padsStillInRoad; return true; }
+        if (!lotRoads.clearOf(centroid(pad))) { ++tally().padsStillInRoad; return true; }
         // Edge midpoints: the case a deleted vertex leaves behind.
         bool near = false;
         for (std::size_t i = 0; i < pad.size(); ++i) {
             const Vec2 m = (pad[i] + pad[(i + 1) % pad.size()]) * 0.5;
             if (!lotRoads.clearOf(m)) { near = true; break; }
         }
-        if (near) ++padsStillInRoad;
+        if (near) ++tally().padsStillInRoad;
         return near;
     };
     // Same sampling, strict predicate: ring, centroid and edge midpoints (the
@@ -3556,7 +3627,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if (pad.size() < 3) return pad;
         auto hit = [&](const Vec2& c) { return lotRoads.onOrWithin(c, 0); };
         const Vec2 c0 = centroid(pad);
-        if (hit(c0)) { rejectedPadAt.push_back(c0); return Poly2{}; }
+        if (hit(c0)) { tally().rejectedPadAt.push_back(c0); return Poly2{}; }
         for (std::size_t i2 = 0; i2 < pad.size(); ++i2) {
             const Vec2& A = pad[i2];
             const Vec2& B = pad[(i2 + 1) % pad.size()];
@@ -3564,7 +3635,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const int steps = std::max(1, static_cast<int>(len / 2.0));
             for (int k2 = 0; k2 <= steps; ++k2)
                 if (hit(A + (B - A) * (static_cast<Real>(k2) / steps))) {
-                    rejectedPadAt.push_back(c0);
+                    tally().rejectedPadAt.push_back(c0);
                     return Poly2{};
                 }
         }
@@ -3572,11 +3643,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     };
     auto padOnCarriageway = [&](const Poly2& pad) {
         if (pad.size() < 3) return false;
-        for (const Vec2& v : pad) if (onCarriageway(v)) { ++padsOnCarriageway; return true; }
-        if (onCarriageway(centroid(pad))) { ++padsOnCarriageway; return true; }
+        for (const Vec2& v : pad) if (onCarriageway(v)) { ++tally().padsOnCarriageway; return true; }
+        if (onCarriageway(centroid(pad))) { ++tally().padsOnCarriageway; return true; }
         for (std::size_t i = 0; i < pad.size(); ++i)
             if (onCarriageway((pad[i] + pad[(i + 1) % pad.size()]) * 0.5)) {
-                ++padsOnCarriageway; return true;
+                ++tally().padsOnCarriageway; return true;
             }
         return false;
     };
@@ -3585,8 +3656,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // SHADOW (set by the loader). A point within that shadow can't host a normal
     // building (it would clip the elevated structure) — the lot pass turns it
     // into deck-fitting open space instead (see PASS C).
-    int underFwCount = 0;
-    int sitesRectified = 0, sitesNoRect = 0, sitesRectUnfit = 0, pavedLots = 0;   // site-plan ledger (M1)
+    // (counted in tally().underFwCount)
+    // (the site-plan ledger, M1: tally().sitesRectified, sitesNoRect, sitesRectUnfit, pavedLots)
     // TERRAIN base for a plan: the LOWEST ground under its vertices so the
     // downhill corner never floats, embedded slightly on real slopes so the
     // uphill side beds in instead of hovering behind a knife-edge gap.
@@ -3670,8 +3741,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // LOD0 and, when grown, the LOD1 flat twin — because a foundation that
     // exists only up close is a building that floats at a distance (the
     // census's mechanism 4).
-    auto emitFoundation = [&](const Poly2& plIn, Real planeY, Real topY) {
-        if (!outParts || plIn.size() < 3 || !p.ground) return;
+    // (into the part sets it is given: the pass's, or a growing lot's own -- PASS C)
+    auto emitFoundation = [&](std::vector<RenderMesh>* intoParts, std::vector<RenderMesh>* intoFlat, const Poly2& plIn, Real planeY, Real topY) {
+        if (!intoParts || plIn.size() < 3 || !p.ground) return;
         Poly2 pl = plIn;
         // ensureCCW, NOT `if (area(pl) < 0) reverse`: area() is |signedArea|,
         // so that guard can never fire — and roughly half the plan sources
@@ -3736,8 +3808,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                       Vec3(0, 1, 0), col);
             }
         };
-        emitInto(outParts);
-        emitInto(outFlatParts);   // the LOD1 twin stands on the same concrete
+        emitInto(intoParts);
+        emitInto(intoFlat);   // the LOD1 twin stands on the same concrete
     };
     if (outParts) {
         outParts->assign(kLotPartSlots, RenderMesh{});   // base + draped slots
@@ -5037,7 +5109,34 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     };
 
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
-    for (const LotCand& cand : cands) {
+    // ON THE SHARED POOL (#317 step 5). A lot grows from its own block's plan and the ground, roads and catalogs every lot
+    // reads, so the lots grow at once, each into its own sets (GrowInto): its records, parts, flat parts, grades, ledger
+    // and tallies. They are then added to the pass's in lot order -- the same records and the same meshes, vertex for
+    // vertex, as growing them one after another. A lot that needs what earlier lots made (the malls placed so far, a
+    // paseo's shops, a quad's halls) says so (`again`) and is grown again in its turn, on the pass's own sets.
+    struct GrowInto {
+        std::vector<LotBuilding>* out = nullptr;
+        std::vector<RenderMesh>* parts = nullptr;
+        std::vector<RenderMesh>* flatParts = nullptr;
+        std::vector<TerrainFlatten>* grade = nullptr;
+        LotPlanDebug* dbg = nullptr;
+        std::vector<Attached>* attached = nullptr;
+        bool alone = false;   // grown beside the other lots: it may not read what they made
+        bool again = false;   // ...and it needed to: grown again in lot order
+    };
+    auto growLot = [&](const LotCand& cand, GrowInto& into) {
+        std::vector<LotBuilding>& out = *into.out;
+        std::vector<RenderMesh>* const outParts = into.parts;
+        std::vector<RenderMesh>* const outFlatParts = into.flatParts;
+        std::vector<TerrainFlatten>* const outGrade = into.grade;
+        LotPlanDebug* const dbg = into.dbg;
+        std::vector<Attached>& attached = *into.attached;
+        // the malls placed so far (ONE MALL IN kMallSpacing): known only in lot order
+        auto mallNear = [&](const Vec2& at) {
+            if (into.alone) { into.again = true; return false; }
+            for (const Vec2& c0 : dbg->mallAt) if ((c0 - at).length() < kMallSpacing) return true;
+            return false;
+        };
         {
             const BlockInfo& bf = binfos[cand.block];
             const ParcelParams& pp = bf.pp;
@@ -5166,7 +5265,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                      lot.district);
                     }
                     emitGreen(/*natural=*/false, /*street=*/false);
-                    continue;
+                    return;
                 }
             }
             // UNDER A FREEWAY DECK: a normal building would clip the elevated
@@ -5211,15 +5310,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         } else {                 // paved parking / utility yard
                             sculptUnderPad(u, u.pad, p.ground, s, /*utility=*/kind == 2);
                         }
-                        ++underFwCount;
+                        ++tally().underFwCount;
                         out.push_back(std::move(u));
-                        continue;
+                        return;
                     }
                 }
             }
             if (cand.landmark < 0 && !lot.wholeBlock && !lot.campus && rng.next() > buildChance) {
                 dbg->rejChance++;
-                emitGreen(); continue;   // plaza / gap (landmarks always build)
+                emitGreen(); return;   // plaza / gap (landmarks always build)
             }
 
             // RELIEF gate (device: buildings "floating off the ground" on the
@@ -5240,7 +5339,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 sampleG(centroid(lot.footprint));
                 if (hi - lo > p.maxPadRelief) {
                     dbg->rejRelief++;
-                    emitGreen(/*natural=*/true); continue;
+                    emitGreen(/*natural=*/true); return;
                 }
             }
 
@@ -5259,7 +5358,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     ? std::min(p.minShort, p.minShortUrban) : p.minShort;
             if (shortSide < minShort) {                                         // sliver
                 dbg->rejSliver++;
-                emitGreen(); continue;
+                emitGreen(); return;
             }
             // A rescued site is the sub-rectangle the building actually
             // takes; recompute the derived frame from it.
@@ -5320,9 +5419,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     rectified = true;
                     break;
                 }
-                if (rectified) ++sitesRectified;
-                else if (anyRect) ++sitesRectUnfit;
-                else ++sitesNoRect;
+                if (rectified) ++tally().sitesRectified;
+                else if (anyRect) ++tally().sitesRectUnfit;
+                else ++tally().sitesNoRect;
                 if (!rectified && std::getenv("RT_SITE_DEBUG")) {
                     const OBB2 lo = orientedBoundingBox(lot.footprint);
                     std::printf("[site-fail] %s at (%.0f, %.0f) area %.0f obb %.1fx%.1f n %zu frontage (%.2f, %.2f) minShort %.1f %s\n",
@@ -5388,7 +5487,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
                 if (!rescued) {
                     dbg->rejAspect++;
-                    emitGreen(); continue;
+                    emitGreen(); return;
                 }
             }
             // How much of its oriented box the lot actually fills. PLAN massing
@@ -5418,7 +5517,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     fill = 1.0;
                 } else {
                     dbg->rejFill++;
-                    emitGreen(); continue;
+                    emitGreen(); return;
                 }
             }
 
@@ -5597,7 +5696,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 } else
                     LOG_ERROR << "[citylots] citysim.recipe '" << recipeHere << "' is not an architect recipe";
             }
-            if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall) dbg->mallAt.push_back(b.site);   // (the recipe it grows)
+            if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall) {   // (the recipe it grows)
+                if (into.alone) { into.again = true; return; }   // (the malls are placed in lot order)
+                dbg->mallAt.push_back(b.site);
+            }
+            if (into.again) return;
             // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high
             // street's eating and drinking, and -- round each town's NIGHTLIFE STRIP -- low-rise buildings of bars,
             // restaurants and clubs (Glenn: "these all don't need to be located on skyscrapers").
@@ -5630,15 +5733,16 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.color = colorFor(b.type);
             if (lot.carPark || rec.name == "car_park") {   // a car park: the open lots' (sculptCarPark), its way in a street
                 emitGreen(false, true, 0);
-                continue;
+                return;
             }
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
                                   // lift so park edges tuck below the asphalt
                 b.pad = pushPolyClearOfRoads(lot.footprint); b.pad = padClearOrEmpty(b.pad);
                 (void)padCoversRoad(b.pad); (void)padOnCarriageway(b.pad);
-                if (b.pad.empty()) continue;   // road-locked sliver: no park
+                if (b.pad.empty()) return;   // road-locked sliver: no park
                 if (rec.name == "paseo") {
+                    if (into.alone) { into.again = true; return; }   // (it reads the shops grown before it)
                     // its passages: the gaps between the shop buildings already grown along it
                     const OBB2 ob = orientedBoundingBox(b.pad);
                     const int la = ob.longAxis();
@@ -5683,6 +5787,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                    nullptr, p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                     }
                 } else if (rec.name == "campus_quad" || rec.name == "dorm_courtyard") {
+                    if (into.alone) { into.again = true; return; }   // (it reads the halls grown before it)
                     // the halls round it are grown before it (the quad is the block's last lot): their quad doors
                     std::vector<std::pair<Vec2, Vec2>> hallDoors;
                     const Vec2 qc = centroid(b.pad);
@@ -5719,7 +5824,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (std::getenv("RT_CAMPUS_DEBUG") && lot.campus)
                     std::printf("[campus lot] role %d %s padMesh %zu verts\n", lot.campus, rec.name.c_str(), b.padMesh.vertices.size());
                 out.push_back(std::move(b));
-                continue;
+                return;
             }
             // Grow a REAL building that FITS the lot: its oriented footprint IS the
             // scope — shrunk until it sits inside the lot AND clear of every road
@@ -5730,7 +5835,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             BuildingParams bp = rec.params;   // the architect's recipe
             // Under a high freeway deck: one storey only, so the mass clears the
             // structure (a low outbuilding beneath the viaduct, not a tower).
-            if (ufShort) { bp.floors = 1; b.type = "underfreeway"; ++underFwCount; }
+            if (ufShort) { bp.floors = 1; b.type = "underfreeway"; ++tally().underFwCount; }
             // The STYLE BOOK (Lua data layer) overlays look overrides by
             // recipe name — cladding, windows, colours — before growth.
             if (p.styleHook) p.styleHook(rec.name, bp);
@@ -5860,7 +5965,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     // metro_v2 that is 3 lots of 1,413, which is the right price
                     // for never putting a facade or a collider in a traffic lane.
                     emitGreen(/*natural=*/true);
-                    continue;
+                    return;
                 }
                 planOk = fit;
             }
@@ -6083,6 +6188,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         parkingPoly.clear();
                         parkingBack.clear();
                         const Vec2 at = centroid(lot.footprint);
+                        if (into.alone) { into.again = true; return; }   // (the malls are placed in lot order)
                         for (std::size_t mi = 0; mi < dbg->mallAt.size(); ++mi)
                             if ((dbg->mallAt[mi] - at).length() < 1e-6) {
                                 dbg->mallAt.erase(dbg->mallAt.begin() + static_cast<std::ptrdiff_t>(mi));
@@ -6114,7 +6220,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // A STORE WITH NO LOT IS NOT A STORE: the box fallback filled the whole block with a parking-less box,
             // seated at the block's lowest corner (Glenn: "a massive sunken building"). A block whose site cannot take
             // the store and its parking stays open ground.
-            if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty() && !(bp.bigBox == 6 && planOk)) continue;
+            if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty() && !(bp.bigBox == 6 && planOk)) return;
             // THE PAGODA stands on the square inscribed in its lot's rectangle (pagodaPlan, ADR-0270), its tiers and
             // eaves grown by the plan grammar like any other building. A lot with no rectangle to hold one stays open.
             if (planOk && rec.massing == BuildingRecipe::Massing::Pagoda) {
@@ -6275,7 +6381,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     } else {
                         cx = courtyard ? courtyardWings(box, bp, wingDepth, floors) : bundledTubes(box, bp, nx, ny, floors);
                     }
-                    if (cx.cells.empty()) { dbg->rejPlan++; emitGreen(); continue; }
+                    if (cx.cells.empty()) { dbg->rejPlan++; emitGreen(); return; }
                     // ONE CROWN PER BUNDLE (ADR-0179): the tallest tube wears the top; the others' decks stay bare, as
                     // a courtyard block crowns its tallest wing and a ring none
                     if (!courtyard && !ring && !twins && !mall) {
@@ -6308,10 +6414,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     b.depth = dep;
                     b.yaw = std::atan2(u.y, u.x);
                     b.plan = box;
-                    emitFoundation(b.plan, b.groundY, b.baseY);
+                    emitFoundation(outParts, outFlatParts, b.plan, b.groundY, b.baseY);
                     pruneTreeSpotsIntoRoad(b.treeSpots);
                     out.push_back(std::move(b));
-                    continue;
+                    return;
                 }
             }
             // ROWHOUSES (device: "town homes ... packed side by side"): the
@@ -6388,10 +6494,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                               sb.center + u * (len * 0.5) - v * (dep * 0.5),
                               sb.center + u * (len * 0.5) + v * (dep * 0.5),
                               sb.center - u * (len * 0.5) + v * (dep * 0.5)};
-                    emitFoundation(b.plan, b.groundY, b.baseY);
+                    emitFoundation(outParts, outFlatParts, b.plan, b.groundY, b.baseY);
                     pruneTreeSpotsIntoRoad(b.treeSpots);
                     out.push_back(std::move(b));
-                    continue;
+                    return;
                 }
                 // Too short/shallow for a terrace: build as one plan building.
             }
@@ -6410,7 +6516,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     shortSide, 4 * area(plan) / std::max(per, Real(1e-6)));
                 if (effShort < 5.5) {
                     dbg->rejPlan++;
-                    emitGreen(); continue;
+                    emitGreen(); return;
                 }
                 const Real qq = effShort / std::max(shortSide, Real(1e-6));
                 if (qq < 0.8 && plazaPoly.size() < 3 && parkingPoly.size() < 3)
@@ -6584,7 +6690,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         std::printf("[plaza-at] %s at (%.1f, %.1f) plaza %.0f m2 floors %d\n", rec.name.c_str(),
                                     b.site.x, b.site.y, area(plazaPoly), bp.floors);
                 }
-                ++pavedLots;
+                ++tally().pavedLots;
             }
             // Entrance steps meet the REAL ground (Glenn's foundation-block
             // design): sample the ground at the entrance-edge middle, 2 m
@@ -6627,7 +6733,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // park/green flatten skip doesn't apply), then dressed with
             // stairs, fencing, fountain, planters, benches. No storeys grown.
             if (rec.massing == BuildingRecipe::Massing::Plaza) {
-                if (!planOk) { emitGreen(); continue; }
+                if (!planOk) { emitGreen(); return; }
                 b.plan = plan;               // pad flatten + walkable prism
                 OBB2 pb = orientedBoundingBox(plan);
                 b.site = pb.center;
@@ -6644,7 +6750,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                          << ") area " << static_cast<int>(area(plan)) << " m2";
                 pruneTreeSpotsIntoRoad(b.treeSpots);
                 out.push_back(std::move(b));
-                continue;
+                return;
             }
             if (paved) bp.entranceSteps = false;   // a downtown door is flush with the paving
             if (p.ground && !paved && !bp.entranceSteps && bp.portico == 0 &&
@@ -6778,9 +6884,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // take a shrink-fit box from the old box grammar, growBuilding, retired.)
                 dbg->rejBox++;
                 emitGreen();
-                continue;
+                return;
             }
-            if (bm.parts.empty()) continue;
+            if (bm.parts.empty()) return;
             const std::size_t unitAt = b.units.size();
             collectUnit(b, b.plan, bp, b.baseY, bm);
             if (planOk && bp.partyWalls > 0) {
@@ -6791,7 +6897,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 mergeParts(outFlatParts, bmFlat);
             }
             b.height = bm.height > 0 ? bm.height : 8.0;
-            if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);   // the plate is the foundation of a paved lot
+            if (!paved) emitFoundation(outParts, outFlatParts, b.plan, b.groundY, b.baseY);   // the plate is the foundation of a paved lot
             else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
             if (paved && plazaPoly.size() >= 3)
                 sculptForecourt(b, plazaPoly, siteFrameOf, b.paveY,
@@ -6981,6 +7087,138 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             pruneTreeSpotsIntoRoad(b.treeSpots);
             out.push_back(std::move(b));
         }
+    };
+    {
+        // The lots handed to the pool in order, a window of them at a time (so few grown lots wait to be added), and
+        // added here, on this thread, in order.
+        struct Grown {
+            GrowInto into;
+            std::vector<LotBuilding> out;
+            std::vector<RenderMesh> parts, flatParts;
+            std::vector<TerrainFlatten> grade;
+            LotPlanDebug dbg;
+            std::vector<Attached> attached;
+            GrowTally tally;
+            std::exception_ptr failed;
+        };
+        struct TallyScope {   // this thread's tallies go to `t` (null: the pass's) until the scope ends
+            GrowTally* saved;
+            explicit TallyScope(GrowTally* t) : saved(tallyHere) { tallyHere = t; }
+            ~TallyScope() { tallyHere = saved; }
+        };
+        const std::size_t nc = cands.size();
+        std::vector<std::unique_ptr<Grown>> grown(nc);
+        std::vector<char> done(nc, 0);
+        std::mutex doneMu;
+        std::condition_variable doneCv;
+        auto growAlone = [&](std::size_t i) {
+            std::unique_ptr<Grown> g = std::make_unique<Grown>();
+            auto slots = [](std::vector<RenderMesh>& m) {
+                m.assign(kLotPartSlots, RenderMesh{});
+                for (std::size_t k = 0; k < m.size(); ++k) m[k].materialIndex = static_cast<int>(baseSlot(k));
+            };
+            if (outParts) slots(g->parts);
+            if (outFlatParts) slots(g->flatParts);
+            g->into.out = &g->out;
+            g->into.parts = outParts ? &g->parts : nullptr;
+            g->into.flatParts = outFlatParts ? &g->flatParts : nullptr;
+            g->into.grade = outGrade ? &g->grade : nullptr;
+            g->into.dbg = &g->dbg;
+            g->into.attached = &g->attached;
+            g->into.alone = true;
+            try {
+                TallyScope scope(&g->tally);
+                growLot(cands[i], g->into);
+            } catch (...) { g->failed = std::current_exception(); }
+            {
+                std::lock_guard<std::mutex> lock(doneMu);
+                grown[i] = std::move(g);
+                done[i] = 1;
+            }
+            doneCv.notify_all();
+        };
+        // A RUN OF GROWN LOTS ADDED TO THE PASS'S SETS, in lot order: their records, their parts (each material's mesh on
+        // the pool: one mesh per task, the lots' pieces appended in order), the attached ledger's indices into those
+        // meshes moved by what stood before, their grades, ledgers and tallies.
+        auto addGrown = [&](std::vector<std::unique_ptr<Grown>>& run) {
+            auto addParts = [&](std::vector<RenderMesh>* into, std::vector<RenderMesh> Grown::*piece, std::vector<PartRun> Attached::*runsOf) {
+                if (!into) return;
+                std::vector<std::size_t> vb(into->size()), ib(into->size());   // where the next lot's pieces start
+                for (std::size_t k = 0; k < into->size(); ++k) { vb[k] = (*into)[k].vertices.size(); ib[k] = (*into)[k].indices.size(); }
+                for (std::unique_ptr<Grown>& g : run) {
+                    for (Attached& at : g->attached)
+                        for (PartRun& r : at.*runsOf) {
+                            const std::size_t k = static_cast<std::size_t>(r.mi);
+                            r.v0 += vb[k]; r.v1 += vb[k]; r.i0 += ib[k]; r.i1 += ib[k];
+                        }
+                    for (std::size_t k = 0; k < into->size(); ++k) { vb[k] += ((*g).*piece)[k].vertices.size(); ib[k] += ((*g).*piece)[k].indices.size(); }
+                }
+                parallelRows(static_cast<int>(into->size()), [&](int k) {
+                    RenderMesh& m = (*into)[static_cast<std::size_t>(k)];
+                    // grown by half again, not doubled (a mesh of the island's parts is gigabytes, and a doubling holds
+                    // the old buffer and one twice its size at once); still geometric, so a few copies in all
+                    auto grow = [](auto& v, std::size_t need) { if (need > v.capacity()) v.reserve(std::max(need, v.capacity() + v.capacity() / 2)); };
+                    grow(m.vertices, vb[static_cast<std::size_t>(k)]);
+                    grow(m.indices, ib[static_cast<std::size_t>(k)]);
+                    for (std::unique_ptr<Grown>& g : run) {
+                        RenderMesh& part = ((*g).*piece)[static_cast<std::size_t>(k)];
+                        MeshBuilder::append(m, part);
+                        part = RenderMesh();   // (freed as soon as it is added)
+                    }
+                }, 1);
+            };
+            addParts(outParts, &Grown::parts, &Attached::runs);
+            addParts(outFlatParts, &Grown::flatParts, &Attached::flatRuns);
+            for (std::unique_ptr<Grown>& g : run) {
+                for (Attached& at : g->attached) { at.outAt += out.size(); attached.push_back(std::move(at)); }
+                for (LotBuilding& lb : g->out) out.push_back(std::move(lb));
+                if (outGrade) outGrade->insert(outGrade->end(), g->grade.begin(), g->grade.end());
+                addPlanDebug(*dbg, g->dbg);
+                passTally.add(g->tally);
+            }
+            run.clear();
+        };
+        JobSystem& jobs = sharedJobs();
+        const std::size_t window = 16 * (static_cast<std::size_t>(jobs.workerCount()) + 1);   // lots handed out, not yet added
+        std::size_t handed = 0;
+        std::atomic<int> running{0};
+        std::vector<std::unique_ptr<Grown>> run;
+        for (std::size_t i = 0; i < nc;) {
+            for (; handed < std::min(nc, i + window); ++handed) {
+                const std::size_t k = handed;
+                jobs.run([&growAlone, k] { growAlone(k); }, &running);
+            }
+            {
+                std::unique_lock<std::mutex> lock(doneMu);
+                doneCv.wait(lock, [&] { return done[i] != 0; });
+            }
+            std::unique_ptr<Grown> g = std::move(grown[i]);
+            if (g->failed) { jobs.wait(&running); std::rethrow_exception(g->failed); }
+            if (g->into.again) {
+                // grown again in its turn, on the pass's own sets, as the serial pass grew it
+                GrowInto pass;
+                pass.out = &out; pass.parts = outParts; pass.flatParts = outFlatParts; pass.grade = outGrade;
+                pass.dbg = dbg; pass.attached = &attached;
+                TallyScope scope(nullptr);
+                growLot(cands[i], pass);
+                ++i;
+                continue;
+            }
+            // this lot and the grown ones after it that are ready (none needing its turn), added together
+            run.push_back(std::move(g));
+            ++i;
+            while (i < nc && run.size() < window) {
+                {
+                    std::lock_guard<std::mutex> lock(doneMu);
+                    if (!done[i]) break;
+                }
+                if (grown[i]->failed || grown[i]->into.again) break;
+                run.push_back(std::move(grown[i]));
+                ++i;
+            }
+            addGrown(run);
+        }
+        jobs.wait(&running);
     }
     // PARTY WALLS STOP AT THE NEIGHBOUR'S ROOF (Glenn's grey glass towers, 2026-10-23): PASS C grows a lot before
     // its neighbour, so every party wall went up blank to the roof, and a tower against a walk-up showed a whole
@@ -7108,15 +7346,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (std::size_t mi = 0; mi < dropFlat.size(); ++mi) cut((*outFlatParts)[mi], dropFlat[mi]);
         dbg->partyTopped = topped;
     }
-    if (underFwCount > 0)
-        LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
+    if (tally().underFwCount > 0)
+        LOG_INFO << "[citylots] under-freeway lots: " << tally().underFwCount
                  << " re-zoned to fit beneath the deck (open space / parking / "
                     "utility / short building)";
-    LOG_INFO << "[citylots] site plans: " << sitesRectified
+    LOG_INFO << "[citylots] site plans: " << tally().sitesRectified
              << " lots rectified to a frontage-aligned rectangle; kept their lot shape: "
-             << sitesNoRect << " (no rectangle of minShort in the lot), "
-             << sitesRectUnfit << " (rectangle found but a corner or edge was on a road)"
-             << "; " << pavedLots << " urban lots paved at the sidewalk datum";
+             << tally().sitesNoRect << " (no rectangle of minShort in the lot), "
+             << tally().sitesRectUnfit << " (rectangle found but a corner or edge was on a road)"
+             << "; " << tally().pavedLots << " urban lots paved at the sidewalk datum";
     // The DENSITY line (Glenn's "why did lots fail" dial): one glance says how
     // much of the parcelled city actually built and where the rest went.
     {
@@ -7168,10 +7406,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << dbg->rejChance << ", sliver " << dbg->rejSliver
                  << ", aspect " << dbg->rejAspect << ", fill " << dbg->rejFill
                  << ", plan " << dbg->rejPlan << ", clear " << dbg->rejClear
-                 << " | tree spots pruned from carriageways " << treeSpotsPruned
-                 << " | pads still covering road " << padsStillInRoad
-                 << " (ON THE CARRIAGEWAY " << padsOnCarriageway << ")"
-                 << " of " << padsChecked
+                 << " | tree spots pruned from carriageways " << tally().treeSpotsPruned
+                 << " | pads still covering road " << tally().padsStillInRoad
+                 << " (ON THE CARRIAGEWAY " << tally().padsOnCarriageway << ")"
+                 << " of " << tally().padsChecked
                  << ", box " << dbg->rejBox << ", frontage "
                  << dbg->rejFrontage << ", relief " << dbg->rejRelief
                  << " | alleys " << dbg->alleys.size()
@@ -7180,9 +7418,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                  << " | " << dbg->bisectedBlocks
                  << " blocks BLIND-BISECTED (no street reference)"
                  << " | lots dropped for reaching into a lane " << lotsInCarriageway;
-    for (std::size_t k = 0; k < rejectedPadAt.size(); ++k)
+    for (std::size_t k = 0; k < tally().rejectedPadAt.size(); ++k)
         LOG_INFO << "[citylots] road-locked lot " << k << " REMOVED at ("
-                 << rejectedPadAt[k].x << ", " << rejectedPadAt[k].y
+                 << tally().rejectedPadAt[k].x << ", " << tally().rejectedPadAt[k].y
                  << ") -- this ground is street again";
     LOG_INFO << "[citylots] frontage walk: placed " << dbg->pPlaced
              << " lots; freeway/ramp edges (no frontage) " << dbg->pNotStreet

@@ -16,6 +16,9 @@
 #include <chrono>
 #include <fstream>
 #include <map>
+#ifdef __GLIBC__
+#include <malloc.h>   // malloc_trim
+#endif
 #include <memory>
 #include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <algorithm>
@@ -175,6 +178,11 @@ public:
         nlohmann::json counts;
         NetLotResult r = growLotsForLevel(in, city, &counts);
         rep.timings["grow"] = secondsSince(tg);
+#ifdef __GLIBC__
+        // the memory the growing freed, handed back before writing: the pool's threads each keep their own heap, and
+        // what a lot grown on one of them freed stays in it otherwise (#317 step 5)
+        malloc_trim(0);
+#endif
         double rss = 0, peak = 0;
         memoryNow(rss, peak);
         rep.timings["grownRssGb"] = rss;

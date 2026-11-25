@@ -2,6 +2,7 @@
 #include "profile.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace engine {
 
@@ -133,7 +134,13 @@ JobSystem& sharedJobs() {
 #ifdef __EMSCRIPTEN__
     static JobSystem jobs(0);
 #else
-    static JobSystem jobs;
+    // RT_JOB_THREADS=N: the pool runs on N threads in all, the caller's among them (1: no workers, every job inline),
+    // set before the pool's first use -- rt_bake --threads sets it, so a bake can be checked on one thread (#317 step 5)
+    static JobSystem jobs([] {
+        const char* e = std::getenv("RT_JOB_THREADS");
+        const int n = e ? std::atoi(e) : 0;
+        return n > 0 ? static_cast<unsigned>(n - 1) : JobSystem::AUTO;
+    }());
 #endif
     return jobs;
 }

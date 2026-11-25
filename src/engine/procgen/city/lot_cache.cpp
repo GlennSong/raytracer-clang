@@ -1,6 +1,7 @@
 #include "engine/procgen/city/lot_cache.h"
 
 #include "engine/mesh_builder.h"
+#include "job_system.h"   // parallelRows: the cell chunks encoded on the shared pool (#317 step 5)
 #include <set>
 
 #include "engine/bundle/codecs.h"
@@ -260,15 +261,35 @@ void writeLotResult(bundle::BundleWriter& w, const std::string& prefix, const Ne
         for (size_t i = 0; i < res.flatParts.size(); ++i) { if (res.flatParts[i].vertices.empty()) continue; BinWriter b; putPart(b, res.flatParts[i]); w.add(prefix + "flat/" + std::to_string(i), b.bytes); }
     } else {
         // Per render cell: a bundle cell IS a render cell, so a chunk is what the loader would have made at load.
+        // (a material's chunks made one at a time, #317: all of them at once were a second copy of it; and encoded a few
+        // dozen at once on the shared pool, step 5, then added in the order they were made)
+        const std::size_t batch = 2 * (static_cast<std::size_t>(sharedJobs().workerCount()) + 1);
+        constexpr std::size_t kBatchBytes = std::size_t(256) << 20;   // ...or this many bytes of chunks, whichever is first
+        std::vector<MeshBuilder::CellChunk> chunks;
+        std::size_t chunkBytes = 0;
+        std::vector<std::vector<uint8_t>> encoded;
         auto writeParts = [&](const std::vector<RenderMesh>& parts, const char* kind) {
             for (size_t i = 0; i < parts.size(); ++i) {
                 if (parts[i].vertices.empty()) continue;
-                // (one chunk at a time, #317: all of a material's chunks at once were a second copy of it)
+                auto flush = [&]() {
+                    encoded.assign(chunks.size(), std::vector<uint8_t>());
+                    parallelRows(static_cast<int>(chunks.size()), [&](int k) {
+                        BinWriter b; putPart(b, chunks[static_cast<size_t>(k)].mesh); encoded[static_cast<size_t>(k)] = std::move(b.bytes);
+                    }, 1);
+                    for (size_t k = 0; k < chunks.size(); ++k)
+                        w.add(cellPrefix(prefix, chunks[k].cx, chunks[k].cz) + kind + "/" + std::to_string(i), encoded[k]);
+                    chunks.clear();
+                    encoded.clear();
+                    chunkBytes = 0;
+                };
                 MeshBuilder::forEachCellChunk(parts[i], cell, [&](MeshBuilder::CellChunk& c) {
                     if (c.mesh.vertices.empty()) return;
                     c.mesh.materialIndex = parts[i].materialIndex; cells.insert({c.cx, c.cz});
-                    BinWriter b; putPart(b, c.mesh); w.add(cellPrefix(prefix, c.cx, c.cz) + kind + "/" + std::to_string(i), b.bytes);
+                    chunkBytes += c.mesh.vertices.size() * sizeof(Vertex) + c.mesh.indices.size() * sizeof(uint32_t);
+                    chunks.push_back(std::move(c));
+                    if (chunks.size() >= batch || chunkBytes >= kBatchBytes) flush();
                 });
+                flush();
             }
         };
         writeParts(res.parts, "parts"); writeParts(res.flatParts, "flat");
