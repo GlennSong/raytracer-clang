@@ -25107,3 +25107,11 @@ They are single polygon operations over the whole island. An index cannot speed 
 **Re-pinned** (ADR-0503/0504 regrew every lot, which moved the town's homes and people; those two cases had not been re-pinned then):
 - `..._without_the_driving_...`: set out 2567 → 2584, arrived 2095 → 2040, at work 1433 → 1369, arrivals 2112 → 2053.
 - `level_river_town_far_people_keep_their_day`: the most far 2719 → 2967; lowered 3068 → 3234, raised 571 → 684, far visits 2878 → 3040; set out 2812 → 2819, arrived 2283 → 2321, at work 1519 → 1523; hash `0xba9eaef6e5933eb5` → `0x13aced87fe819df6`. Its end line now prints the most far.
+
+## ADR-0509 — A resting person sleeps while the clock stands too (2026-11-25)
+
+**Why:** a resting person's day is read only when their next event is due (ADR-0496): they sleep until `hoursUntilRestEvent`. One case stayed awake: when the sim's clock stood (`hoursPerSecond` 0, which is what holding the sky does, `daynight hold` or the Debug window's Pause), every resting person was read again every tick. On the island that is about 100,000 rest reads a tick. Measured in the viewer from the player's start with the sky held: 14.6 ms a fixed step, and 3.8 steps a frame to keep up, so 57 ms of every frame was the sim. A held sky is also remembered in settings.json (`daynight.paused`), so a viewer could start that way.
+
+**What happens:** a resting person with nothing due sleeps whether or not the clock runs. While it stands, nothing they wait for can come. When it runs again, or jumps past their hour (`setClock`), their gate opens as before. `hoursUntilRestEvent` reads only game hours, not the clock's rate.
+
+**Checked (island_8_nature viewer, player start, RT_DUMP_STATS):** sky held: 14.6 → 8.5 ms a step, 3.8 → 1.1 steps a frame. Sky running: 7.6 ms a step, 1.0 a frame. City unit cases 39 of 39; brain_lab 13 of 13.

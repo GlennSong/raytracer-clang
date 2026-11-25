@@ -221,6 +221,9 @@ struct CityBrainCost {
     // ...and inside them: trips planned (the machine's) and set out by a day (the days'; the place chosen), in all
     double planMs = 0, setOutMs = 0;
     uint64_t plans = 0;
+    // ...and how many people's days were read (past their gate), of them on their way to a place, and rests read for
+    // their next event (CitySim::restEvents), in all
+    uint64_t dayReads = 0, goToReads = 0, restReads = 0;
     std::string describe() const;
 };
 

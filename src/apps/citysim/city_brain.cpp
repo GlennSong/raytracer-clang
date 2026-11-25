@@ -1545,6 +1545,7 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
     const GoalState& s = t.state(a.goal);
     const brain::AgentBrain& b = machine->agent(who);
     if (s.action == GoalAction::GoTo) {
+        ++cost.goToReads;
         // (a far person on their way: nothing changes for them but when the brain visits them; their day is not read
         // until then -- tickMachine opens the gate)
         struct GateAfter {
@@ -1621,12 +1622,15 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
         a.goalHours += dtHours;
     }
     if (total < p.dayRetryAt) return;
+    ++cost.restReads;
     GoalEvent events[CitySim::kRestEvents];
     const int n = sim.restEvents(a, s, events);
     for (int e = 0; e < n; ++e)
         if (fireDay(who, events[e])) return;
-    // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME (CitySim::hoursUntilRestEvent, the sim's own reckoning)
-    if (sim.hoursPerSecond() <= 0) return;   // (the clock stands: read again each tick)
+    // NOTHING FIRED, AND NOTHING CAN UNTIL A KNOWN TIME (CitySim::hoursUntilRestEvent, the sim's own reckoning). With the
+    // clock standing (a held sky) they sleep too: nothing they wait for can come while it stands, and they wake when it
+    // runs or jumps past their hour. (They were read every tick instead: on the island with the sky held, 100k rests a
+    // tick, the brain 4x dearer.)
     const Real until = sim.hoursUntilRestEvent(a, s);
     p.dayAsleep = true;
     p.daySleptAt = total;
@@ -2190,6 +2194,7 @@ void CityBrain::tick(Real dt) {
         if (im.people[who].setOutTick == im.tickNumber) continue;   // (set out by the queue this tick)
         // (not to be read before its gate: asleep in a rest, or far on their way, ADR-0496 -- the island's 100k)
         if (total < im.dayGateOf[who]) continue;
+        ++im.cost.dayReads;
         im.tickChoice(who);
         im.tickDay(who);
         im.tickRoleDay(who, dtHours);
@@ -2228,7 +2233,9 @@ std::string CityBrainCost::describe() const {
     return fmt("%.3f ms a tick", ms / n) + " (worst " + fmt("%.3f", worstMs) + "): walks " + fmt("%.3f", walksMs / n) +
            ", machine " + fmt("%.3f", machineMs / n) + " (planning " + fmt("%.3f", planMs / n) + ", " +
            fmt("%.0f plans", static_cast<double>(plans)) + "), days " + fmt("%.3f", daysMs / n) + " (setting out " +
-           fmt("%.3f", setOutMs / n) + "), the rest " + fmt("%.3f", (ms - walksMs - machineMs - daysMs) / n);
+           fmt("%.3f", setOutMs / n) + "; " + fmt("%.0f", static_cast<double>(dayReads) / n) + " days read a tick, " +
+           fmt("%.0f", static_cast<double>(goToReads) / n) + " on their way, " + fmt("%.0f", static_cast<double>(restReads) / n) +
+           " rests read), the rest " + fmt("%.3f", (ms - walksMs - machineMs - daysMs) / n);
 }
 
 void CityBrain::insidePlaces(std::unordered_map<PlaceId, PlaceInside>& out) const {
