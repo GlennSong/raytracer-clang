@@ -1,3 +1,4 @@
+#include "engine/procgen/city/roads/lanes/deck_height.h"   // DeckHeight::onLane (adjacency)
 #include "engine/procgen/city/roads/lanes/lane_expand.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "curve.h"
@@ -226,18 +227,24 @@ LaneSet expand(RoadLabGraph& g) {
 }
 
 double laneHeightAt(const Lane& l, const RoadLabGraph& g, const Vec2& p) {
-    if (l.isConnector()) { Projection pr = project(l.xy(), l.s(), p); double u = l.s().back() > 1e-9 ? pr.station / l.s().back() : 0.0; return (1 - u) * l.z0 + u * l.z1; }
-    const EdgeSpec& e = g.edges[static_cast<size_t>(l.road())]; Projection pr = project(e.xy, e.s, p); return interp(e.s, e.z, pr.station);
+    if (l.isConnector()) return laneHeightFrom(l, g, project(l.xy(), l.s(), p));
+    const EdgeSpec& e = g.edges[static_cast<size_t>(l.road())];
+    return laneHeightFrom(l, g, project(e.xy, e.s, p));
 }
 
-std::vector<std::pair<int, int>> adjacency(const LaneSet& L) {
+double laneHeightFrom(const Lane& l, const RoadLabGraph& g, const Projection& pr) {
+    if (l.isConnector()) { double u = l.s().back() > 1e-9 ? pr.station / l.s().back() : 0.0; return (1 - u) * l.z0 + u * l.z1; }
+    const EdgeSpec& e = g.edges[static_cast<size_t>(l.road())]; return interp(e.s, e.z, pr.station);
+}
+
+std::vector<std::pair<int, int>> adjacency(const LaneSet& L, const DeckHeight* H) {
     std::vector<std::pair<int, int>> out; std::vector<std::array<double, 4>> bx(L.lanes.size());
     for (size_t i = 0; i < L.lanes.size(); ++i) { auto& b = bx[i]; b = {1e300, -1e300, 1e300, -1e300}; for (const Vec2& p : L.lanes[i].xy()) { b[0] = std::min(b[0], p.x); b[1] = std::max(b[1], p.x); b[2] = std::min(b[2], p.y); b[3] = std::max(b[3], p.y); } }
     for (size_t i = 0; i < L.lanes.size(); ++i) for (size_t j = i + 1; j < L.lanes.size(); ++j) {
         const Lane& a = L.lanes[i]; const Lane& b = L.lanes[j]; double w = (a.width + b.width) / 2; int close = 0; double dots = 0;
         if (bx[i][0] > bx[j][1] + 2 * w || bx[j][0] > bx[i][1] + 2 * w || bx[i][2] > bx[j][3] + 2 * w || bx[j][2] > bx[i][3] + 2 * w) continue;
         for (int k = 0; k < 25; ++k) {
-            double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy(), a.s(), f * a.s().back()); Projection pr = project(b.xy(), b.s(), p);
+            double f = 0.02 + 0.96 * k / 24; Vec2 p = pointAt(a.xy(), a.s(), f * a.s().back()); Projection pr = H ? H->onLane(static_cast<int>(j), p) : project(b.xy(), b.s(), p);
             if (std::fabs(pr.distance - w) < 0.25 * w) { ++close; dots += dot(tangentAtStation(a.xy(), a.s(), f * a.s().back()) * static_cast<double>(a.dir), tangentAtStation(b.xy(), b.s(), pr.station) * static_cast<double>(b.dir)); }
         }
         if (close * a.s().back() / 25 < 20 || close == 0) continue;

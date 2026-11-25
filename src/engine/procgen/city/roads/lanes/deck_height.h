@@ -27,6 +27,10 @@ public:
 
     double own(int lane, const Vec2& p) const;
     double deck(int lane, const Vec2& p) const;
+    // WHERE p IS ALONG A LANE, OR ALONG A ROAD'S LINE: exactly project() (#317), answered by the grid over that line (its
+    // nearest cells, not every segment of a road kilometres long) -- the bake's most asked question, millions of times.
+    Projection onLane(int lane, const Vec2& p) const;
+    Projection onRoad(int edge, const Vec2& p) const;
     // A road's envelope (sidewalks, shoulders) blends like its lanes do: the union of their partners.
     double ownRoad(int edge, const Vec2& p) const;
     double deckRoad(int edge, const Vec2& p) const;

@@ -730,7 +730,7 @@ int junctionCrossRank(const Result& r, const LaneLookup& look, size_t li, const 
         const Box2& b = look.box[oj];
         if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY || !look.footprint[oj].contains(p)) continue;
         if (std::fabs(H.deck(static_cast<int>(oj), p) - zl) > kJunctionSameLevel) continue;
-        Projection pr = project(o.xy(), o.s(), p);
+        Projection pr = H.onLane(static_cast<int>(oj), p);
         if (std::fabs(dot(t, tangentAtStation(o.xy(), o.s(), pr.station))) > parallelCos) continue;
         best = std::max(best, r.graph.cls(r.graph.edges[static_cast<size_t>(o.road())]).rank);
         if (crossEdges) crossEdges->push_back(o.road());
@@ -1009,7 +1009,8 @@ std::vector<NamedMesh> buildMeshes(const Result& r, RoadPaint* paint) {
         for (size_t ti = 0; ti < s.tris.size(); ++ti) {
             const Lane& owner = L.lanes[static_cast<size_t>(s.triOwner[ti])];
             for (int k = 0; k < 3; ++k) {
-                const DeckVertex& v = s.verts[static_cast<size_t>(s.tris[ti][static_cast<size_t>(k)])]; Projection pr = project(owner.xy(), owner.s(), v.xy);
+                const DeckVertex& v = s.verts[static_cast<size_t>(s.tris[ti][static_cast<size_t>(k)])];
+                const Projection pr = r.heights ? r.heights->onLane(s.triOwner[ti], v.xy) : project(owner.xy(), owner.s(), v.xy);
                 Vec2 q = pointAt(owner.xy(), owner.s(), pr.station); Vec2 t = tangentAtStation(owner.xy(), owner.s(), pr.station);
                 double lateral = cross(t, v.xy - q);
                 uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);

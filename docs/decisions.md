@@ -24685,3 +24685,31 @@ The crowd test now also checks that no bus stands in the road away from a stop f
 - The peak is in growing, not writing. Once grown, the stage holds 26.7 GiB, and its peak is 1.2 GiB over that.
 
 **Not done, and why:** what is left is the parts themselves. 203 million vertices of 104 bytes are held as 70 island-wide meshes until every lot is grown, because a render cell's chunk takes from many lots. Holding less needs growing and writing a tile at a time, which is the report's step 5: medium–high risk, with Lua and model caches made safe across threads and every order-dependent choice moved into the plan. That is for Glenn to decide. The city stage's time (about 39 of the island's 57 minutes, nearly all on one core) is the report's steps 1 and 2: indexing the slow questions, then the thread pool.
+
+## ADR-0498 — The city bake asks "where along this line" of an index, not every segment (#317, step 1; 2026-11-24)
+
+**Why:** the island's city stage took about 39 minutes, nearly all on one core. Most of it was one question asked millions of times: where along a road's or a lane's line is this point (`project()`)? Each answer read the whole line, kilometres of points, though only the few segments near the point could be the answer (docs/bake-performance-investigation.md, step 1).
+
+**Words:** a *run* is 16 consecutive segments of a line; its *box* is the smallest axis-aligned rectangle round them. No point of a run can be nearer than its box.
+
+**What happens:**
+- **`SegmentGrid::project`** (the index `DeckHeight` already built over every lane and road line) answers `project()` exactly: the nearest segment, the lowest on a tie, by the same arithmetic, with the caller's stations. It reads the runs nearest box first and stops when the next box is farther than the nearest found. A box at exactly that distance is still read, so ties come out as the scan's.
+  - A first version searched the grid's cells outward from the point. It was quick beside the line and much slower than the scan far from it, and a layer's vertex is asked of every road of its layer, far ones too. Replaced before it was kept.
+- **`DeckHeight::onLane` / `onRoad`** project by those indexes. Their users:
+  - the heights (`own`, `ownRoad`, the nearest road): `laneHeightAt`'s formula is now `laneHeightFrom(lane, graph, projection)`, one formula for both;
+  - the footprints' owner and median tests;
+  - the deck vertices' frames;
+  - the junction-rank lane test;
+  - `adjacency`, which takes the `DeckHeight` when there is one.
+- **The triangulation's inside test** (`triangulateConstrained`) prepares the polygon once (`PreparedSet`, its edges binned by y). `contains()` made the whole ring a Clipper path again for every triangle, and a sidewalk layer is one polygon the size of a city.
+- **`rt_bake --section <bundle> <name>`** writes one section's bytes, to see what a `--sections` difference is.
+
+**Checked:**
+- New unit cases: the index's answer is the scan's, bit for bit, on 24,000 points (half far outside the line, with repeated points, tiny segments and exact ties); a prepared set answers as `contains()` on 14,544 points (vertices, edge midpoints and holes).
+- island_8_nature, `rt_bake --rebuild city`: **the city stage 39 min → 14.5 min** (its road build 673 → 368 s; footprints 423 → 179 s), peak 10.7 GB.
+- Every section is byte-identical to the baseline bundle but one: `city/e0/report`, whose difference is its timings alone (equal with `seconds` and `timings` taken out).
+- lanes_tests (road model included) 158 of 158.
+
+**The whole island now:** city about 14.5 min plus lots about 2.8 min (ADR-0497), against about 57 min this afternoon.
+
+**What is left:** stack samples of the new run put about a quarter in projections (now many cheap ones), a quarter in the footprints' polygon unions, and an eighth in `distanceToLane`'s point-in-polygon. Next is the report's step 2: the thread pool in the loops whose items are already independent.

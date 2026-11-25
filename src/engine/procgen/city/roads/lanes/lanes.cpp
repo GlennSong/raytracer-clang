@@ -291,7 +291,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         r.bridgeLen[e->id] = onStruct;
     }
     if (piersMoved || piersDropped) std::fprintf(stderr, "lanelab: piers moved off roads %d, bays left without a pier %d\n", piersMoved, piersDropped);
-    r.adjacent = adjacency(r.lanes);
+    r.adjacent = adjacency(r.lanes, r.heights.get());
     // 6. terrain
     if (r.hasTerrain) {
         const auto tb = std::chrono::steady_clock::now();

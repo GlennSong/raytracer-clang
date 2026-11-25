@@ -44,6 +44,7 @@ int usage() {
         "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--rebuild a,b] [--threads N] [--require]\n"
         "       rt_bake --inspect <bundle-dir>\n"
         "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
+        "       rt_bake --section <bundle-dir> <name>   one section's bytes, to stdout (what a --sections difference is)\n"
         "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root, and with the default root\n"
         "                                                     stale cache/terrain, cache/population and cache/roadmodel files (and old cache/lanegraph ones);\n"
@@ -95,6 +96,16 @@ int inspect(const std::string& dir) {
 }
 // EVERY SECTION with its size and content hash, sorted by name: `diff` two of these and a refactor that should change
 // nothing is proved to (or the sections it did change are named).
+// ONE SECTION'S BYTES, to stdout: when two bakes' section lists differ (`--sections`), what the difference is.
+int sectionBytes(const std::string& dir, const std::string& name) {
+    std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
+    if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
+    const Bundle::View v = b->section(name);
+    if (v.empty()) { std::fprintf(stderr, "rt_bake: no section %s\n", name.c_str()); return 1; }
+    std::fwrite(v.data, 1, v.size, stdout);
+    return 0;
+}
+
 int sections(const std::string& dir) {
     std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
     if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
@@ -291,6 +302,7 @@ int main(int argc, char** argv) {
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
     if (std::strcmp(argv[1], "--sections") == 0) { if (argc < 3) return usage(); return sections(argv[2]); }
+    if (std::strcmp(argv[1], "--section") == 0) { if (argc < 4) return usage(); return sectionBytes(argv[2], argv[3]); }
     if (std::strcmp(argv[1], "--audit") == 0) { if (argc < 3) return usage(); return audit(argv[2]); }
     if (std::strcmp(argv[1], "--status") == 0) {
         if (argc < 3) return usage();

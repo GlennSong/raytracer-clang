@@ -124,8 +124,26 @@ double DeckHeight::alongSeam(int edge, int partner, double s, double* fromEnd) c
     return -1.0;
 }
 
-double DeckHeight::own(int lane, const Vec2& p) const { return laneHeightAt(L_.lanes[static_cast<size_t>(lane)], g_, p); }
-double DeckHeight::ownRoad(int edge, const Vec2& p) const { return projectZ(g_.edges[static_cast<size_t>(edge)], p); }
+double DeckHeight::own(int lane, const Vec2& p) const {
+    const Lane& l = L_.lanes[static_cast<size_t>(lane)];
+    return laneHeightFrom(l, g_, l.isConnector() ? onLane(lane, p) : onRoad(l.road(), p));   // (laneHeightAt, by the grids)
+}
+double DeckHeight::ownRoad(int edge, const Vec2& p) const {
+    const EdgeSpec& e = g_.edges[static_cast<size_t>(edge)];
+    return interp(e.s, e.z, onRoad(edge, p).station);   // (projectZ, by the road's grid)
+}
+
+Projection DeckHeight::onLane(int lane, const Vec2& p) const {
+    const Lane& l = L_.lanes[static_cast<size_t>(lane)];
+    const SegmentGrid* grid = static_cast<size_t>(lane) < grids_.size() ? grids_[static_cast<size_t>(lane)].get() : nullptr;
+    return grid ? grid->project(l.xy(), l.s(), p) : project(l.xy(), l.s(), p);
+}
+
+Projection DeckHeight::onRoad(int edge, const Vec2& p) const {
+    const EdgeSpec& e = g_.edges[static_cast<size_t>(edge)];
+    const SegmentGrid* grid = static_cast<size_t>(edge) < edgeGrids_.size() ? edgeGrids_[static_cast<size_t>(edge)].get() : nullptr;
+    return grid ? grid->project(e.xy, e.s, p) : project(e.xy, e.s, p);
+}
 
 void DeckHeight::setFootprints(const std::vector<std::vector<Ring>>& outers, const std::vector<std::vector<Ring>>& holes) {
     boundaries_.assign(L_.lanes.size(), {});
@@ -203,7 +221,7 @@ double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<
     }
     const int li = nearestLane(want, p); if (li >= 0) return deck(li, p);
     int best = roads.empty() ? -1 : roads[0]; double bd = 1e300;
-    for (int e : roads) { const EdgeSpec& E = g_.edges[static_cast<size_t>(e)]; const double d = project(E.xy, E.s, p).distance; if (d < bd) { bd = d; best = e; } }
+    for (int e : roads) { const double d = onRoad(e, p).distance; if (d < bd) { bd = d; best = e; } }
     return best >= 0 ? ownRoad(best, p) : 0.0;
 }
 

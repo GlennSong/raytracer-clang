@@ -51,12 +51,22 @@ public:
     // Distance from p to the polyline if <= radius, else +infinity; optional nearest station.
     // `side` (optional): cross(segment direction, p - a) of the nearest segment (> 0 = p on its left).
     double distanceWithin(const Vec2& p, double radius, double* station = nullptr, double* side = nullptr) const;
+    // THE SCAN'S OWN ANSWER, QUICKER (#317): exactly project(xy, s, p) -- the nearest segment, the lowest on a tie, by
+    // the same arithmetic -- where `xy` is the line this grid was built over and `s` the caller's stations along it. The
+    // line's segments are taken in runs of kRun, each with its box; the runs are read nearest box first, until the next
+    // box is farther than the nearest found (a ring search of the cells was quick beside the line and slow far off it,
+    // and a layer's vertex is asked of every road of its layer). A line of fewer than two points, or not the one this was
+    // built over, is scanned.
+    Projection project(Span<Vec2> xy, Span<double> s, const Vec2& p) const;
 private:
     std::vector<Vec2> pts_;
     std::vector<double> s_;
     double cell_ = 8, x0_ = 0, y0_ = 0; int nx_ = 0, ny_ = 0;
     std::vector<std::vector<int>> cells_;
     int cellIndex(int i, int j) const { return j * nx_ + i; }
+    static constexpr size_t kRun = 16;
+    struct Run { double x0, y0, x1, y1; };
+    std::vector<Run> runs_;
 };
 
 }  // namespace roads::lanes

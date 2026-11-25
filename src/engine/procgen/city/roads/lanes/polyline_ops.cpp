@@ -89,6 +89,14 @@ std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>&
 
 SegmentGrid::SegmentGrid(Span<Vec2> xy, double cell) : pts_(xy.begin(), xy.end()), cell_(cell) {
     if (xy.size() < 2) return;
+    // the runs of kRun segments and their boxes, for project()
+    for (size_t first = 0; first + 1 < xy.size(); first += kRun) {
+        Run r{1e300, 1e300, -1e300, -1e300};
+        for (size_t i = first; i <= std::min(first + kRun, xy.size() - 1); ++i) {
+            r.x0 = std::min(r.x0, xy[i].x); r.y0 = std::min(r.y0, xy[i].y); r.x1 = std::max(r.x1, xy[i].x); r.y1 = std::max(r.y1, xy[i].y);
+        }
+        runs_.push_back(r);
+    }
     s_.assign(xy.size(), 0.0); for (size_t i = 1; i < xy.size(); ++i) s_[i] = s_[i-1] + distance(xy[i-1], xy[i]);
     double x1 = -1e300, y1 = -1e300; x0_ = y0_ = 1e300;
     for (const Vec2& p : xy) { x0_ = std::min(x0_, p.x); y0_ = std::min(y0_, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
@@ -115,6 +123,39 @@ double SegmentGrid::distanceWithin(const Vec2& p, double radius, double* station
         }
     }
     return best <= radius ? best : std::numeric_limits<double>::infinity();
+}
+
+Projection SegmentGrid::project(Span<Vec2> xy, Span<double> s, const Vec2& p) const {
+    if (pts_.size() < 2 || xy.size() != pts_.size() || s.size() != xy.size() || runs_.empty() || !std::isfinite(p.x) || !std::isfinite(p.y) ||
+        !(xy[0].x == pts_[0].x && xy[0].y == pts_[0].y) || !(xy[xy.size() - 1].x == pts_.back().x && xy[xy.size() - 1].y == pts_.back().y))
+        return lanes::project(xy, s, p);
+    // THE RUNS NEAREST FIRST: each run's box's distance from p is the least any of its segments can be
+    thread_local std::vector<std::pair<double, uint32_t>> order;
+    order.clear();
+    for (uint32_t r = 0; r < runs_.size(); ++r) {
+        const Run& run = runs_[r];
+        const double dx = p.x < run.x0 ? run.x0 - p.x : p.x > run.x1 ? p.x - run.x1 : 0.0;
+        const double dy = p.y < run.y0 ? run.y0 - p.y : p.y > run.y1 ? p.y - run.y1 : 0.0;
+        order.emplace_back(std::sqrt(dx * dx + dy * dy), r);
+    }
+    std::sort(order.begin(), order.end());
+    Projection best;
+    best.distance = std::numeric_limits<double>::infinity();
+    bool found = false;
+    for (const std::pair<double, uint32_t>& o : order) {
+        // (a run whose box is exactly the best distance off may still hold a lower segment that ties: it is read)
+        if (found && o.first > best.distance) break;
+        const size_t first = static_cast<size_t>(o.second) * kRun, last = std::min(first + kRun, xy.size() - 1);
+        for (size_t i = first; i < last; ++i) {
+            Real t = 0;
+            const double dist = distance(closestOnSegment(p, xy[i], xy[i + 1], &t, 1e-18), p);   // (project's own arithmetic)
+            if (!found || dist < best.distance || (dist == best.distance && i < best.segment)) {
+                found = true;
+                best.distance = dist; best.segment = i; best.t = t; best.station = s[i] + (s[i + 1] - s[i]) * t;
+            }
+        }
+    }
+    return best;
 }
 
 }  // namespace roads::lanes

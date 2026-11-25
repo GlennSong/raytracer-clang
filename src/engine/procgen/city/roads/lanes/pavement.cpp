@@ -95,9 +95,12 @@ FlatMesh triangulateConstrained(const Polygon2& poly) {
     std::vector<Vec2> pts; std::vector<std::pair<int, int>> edges; densify(poly.outer, pts, edges); for (const Ring& h : poly.holes) densify(h, pts, edges);
     Triangulation t = constrainedTriangulation(pts, edges); FlatMesh m; m.verts.reserve(t.verts.size());
     for (const Vec2& v : t.verts) m.verts.push_back({v, 0.0});
+    // (the polygon prepared once, its edges binned by y, #317: contains() made the whole ring a Clipper path again for
+    // every triangle, and a sidewalk layer is one polygon the size of a city)
+    const PreparedSet inside(PolySet{poly});
     for (auto tri : t.tris) {
         const Vec2 &A = t.verts[static_cast<size_t>(tri[0])], &B = t.verts[static_cast<size_t>(tri[1])], &C = t.verts[static_cast<size_t>(tri[2])];
-        if (!contains(poly, (A + B + C) / 3.0)) continue;
+        if (!inside.contains((A + B + C) / 3.0)) continue;
         if (cross(B - A, C - A) < 0) std::swap(tri[1], tri[2]);   // counter-clockwise, so the interior is on each edge's left
         m.tris.push_back(tri);
     }
@@ -245,7 +248,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
             for (size_t li = 0; li < L.lanes.size(); ++li) {
                 const Lane& l = L.lanes[li];
                 if (l.isConnector() || l.road() != road || out.footprints[li].empty()) continue;
-                const double d = project(l.xy(), l.s(), c).distance;
+                const double d = H.onLane(static_cast<int>(li), c).distance;
                 if (d < bd) { bd = d; owner = static_cast<int>(li); }
             }
             if (owner >= 0) out.footprints[static_cast<size_t>(owner)] = unionSets(out.footprints[static_cast<size_t>(owner)], fromRing(piece));
@@ -279,7 +282,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
             }
             if (!keep) continue;
             int owner = touching[0]; double bd = 1e300;
-            for (int li : touching) { double d = project(L.lanes[static_cast<size_t>(li)].xy(), L.lanes[static_cast<size_t>(li)].s(), c).distance; if (d < bd) { bd = d; owner = li; } }
+            for (int li : touching) { double d = H.onLane(li, c).distance; if (d < bd) { bd = d; owner = li; } }
             out.footprints[static_cast<size_t>(owner)] = unionSets(out.footprints[static_cast<size_t>(owner)], pieceSet); out.closingAdded += A;
         }
     }
@@ -309,7 +312,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         auto inRoadCorridor = [&](const Ring& h) {
             Vec2 c; for (const Vec2& q : h) c += q; c = c / static_cast<double>(h.size());
             const EdgeSpec* best = nullptr; double bd = 1e300;
-            for (const EdgeSpec& e : g.edges) { if (e.xy.size() < 2) continue; const double d = project(e.xy, e.s, c).distance; if (d < bd) { bd = d; best = &e; } }
+            for (size_t ei = 0; ei < g.edges.size(); ++ei) { const EdgeSpec& e = g.edges[ei]; if (e.xy.size() < 2) continue; const double d = H.onRoad(static_cast<int>(ei), c).distance; if (d < bd) { bd = d; best = &e; } }
             return best && (best->isRamp() || g.cls(*best).rank >= 3);
         };
         for (const Polygon2& sp : out.surface) for (const Ring& h : sp.holes) {
@@ -351,7 +354,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         for (const Cutter& c : hullCuts) {
             if (!overlaps(c.box, qb)) continue;
             const EdgeSpec& e = g.edges[static_cast<size_t>(c.edge)];
-            const double d = project(e.xy, e.s, q).distance; if (d < best) { best = d; h = H.ownRoad(c.edge, q); }
+            const double d = H.onRoad(c.edge, q).distance; if (d < best) { best = d; h = H.ownRoad(c.edge, q); }
         }
         return h;
     };

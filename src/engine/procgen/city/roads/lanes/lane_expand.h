@@ -8,6 +8,7 @@
 // authored approach + [auxiliary + death]. Connectors are Hermite lanes from a lane's end to
 // a point on another lane. Adjacency is derived from proximity, never authored.
 
+#include "engine/procgen/city/roads/lanes/polyline_ops.h"   // Projection
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
 #include <map>
 #include <memory>
@@ -80,10 +81,15 @@ double anchorStation(const EdgeSpec& host, const RampAnchor& a);
 LaneSlot anchorSlot(const RoadLabGraph& g, const EdgeSpec& host, const std::string& side);
 
 // Same travel direction and centrelines about one lane width apart over >= 20 m.
-std::vector<std::pair<int, int>> adjacency(const LaneSet& L);
+// (`H`, when given: each lane's projection answered by its grid, exactly as the scan, #317)
+class DeckHeight;
+std::vector<std::pair<int, int>> adjacency(const LaneSet& L, const DeckHeight* H = nullptr);
 
 // Height of a lane at plan points, from its parent's profile (or a connector's end blend).
 double laneHeightAt(const Lane& l, const RoadLabGraph& g, const Vec2& p);
+// ...from the point's projection already made: onto the lane itself for a connector, onto its road's line otherwise (what
+// laneHeightAt projects onto). The one formula: DeckHeight projects by its grids and hands the projection here (#317).
+double laneHeightFrom(const Lane& l, const RoadLabGraph& g, const Projection& pr);
 
 }  // namespace roads::lanes
 }  // namespace engine

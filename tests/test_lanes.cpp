@@ -3868,3 +3868,87 @@ TEST_CASE(lanes_the_sidewalk_lies_outside_the_shoulder) {
     std::printf("    sidewalk %.1f m2 (two 2 m strips of 200 m: 800)\n", area);
     CHECK(area > 780.0 && area < 840.0);
 }
+
+// THE GRID'S PROJECTION IS THE SCAN'S (#317): SegmentGrid::project gives exactly what project() gives -- the same
+// segment (the lowest on a tie), the same t, station and distance, bit for bit -- for points on the line, beside it, far
+// off it in every direction, and for lines with repeated points, tiny segments and exact ties (a zigzag whose two arms
+// are the same distance from the middle).
+TEST_CASE(lanes_segment_grid_projects_exactly_as_the_scan) {
+    uint32_t state = 12345;
+    const auto rnd = [&]() { state = state * 1664525u + 1013904223u; return static_cast<double>(state >> 8) / 16777216.0; };
+    int compared = 0, mismatched = 0, outside = 0;
+    for (int line = 0; line < 60; ++line) {
+        std::vector<Vec2> xy;
+        Vec2 at(rnd() * 400 - 200, rnd() * 400 - 200);
+        const int n = 2 + static_cast<int>(rnd() * 300);
+        double heading = rnd() * 6.283;
+        for (int k = 0; k < n; ++k) {
+            xy.push_back(at);
+            if (k % 17 == 5) xy.push_back(at);                                       // a repeated point
+            if (k % 23 == 7) xy.push_back(at + Vec2(1e-7, 0));                        // a tiny segment
+            heading += (rnd() - 0.5) * (line % 3 == 0 ? 2.5 : 0.4);
+            at = at + Vec2(std::cos(heading), std::sin(heading)) * (0.5 + rnd() * 30);
+        }
+        if (line % 7 == 0) xy = {Vec2(-10, 0), Vec2(0, 10), Vec2(10, 0)};          // two arms, equally far from (0, 0)
+        std::vector<double> s(xy.size(), 0.0);
+        for (size_t i = 1; i < xy.size(); ++i) s[i] = s[i - 1] + (xy[i] - xy[i - 1]).length();
+        const SegmentGrid grid(xy, line % 2 ? 8.0 : 3.0);
+        for (int q = 0; q < 400; ++q) {
+            Vec2 p;
+            if (q % 4 == 0) p = xy[static_cast<size_t>(rnd() * (xy.size() - 1))];                 // on a point
+            else if (q % 4 == 1) p = xy[static_cast<size_t>(rnd() * (xy.size() - 1))] + Vec2(rnd() * 6 - 3, rnd() * 6 - 3);
+            else p = Vec2(rnd() * 2000 - 1000, rnd() * 2000 - 1000);                                // anywhere, far off too
+            if (q == 0) p = Vec2(0, 0);
+            const Projection a = project(xy, s, p), b = grid.project(xy, s, p);
+            ++compared;
+            if (std::fabs(p.x) > 600 || std::fabs(p.y) > 600) ++outside;
+            if (a.segment != b.segment || a.t != b.t || a.station != b.station || a.distance != b.distance) {
+                if (++mismatched <= 5)
+                    std::printf("    [grid] line %d point (%.3f, %.3f): scan seg %zu t %.17g d %.17g; grid seg %zu t %.17g d %.17g\n", line,
+                                p.x, p.y, a.segment, a.t, a.distance, b.segment, b.t, b.distance);
+            }
+        }
+    }
+    std::printf("    [grid] %d points compared (%d far outside), %d differ\n", compared, outside, mismatched);
+    CHECK(compared > 20000);
+    CHECK(mismatched == 0);
+}
+
+// A PREPARED SET ANSWERS AS contains() DOES (#317: the triangulation's inside test uses it): for polygons with holes, at
+// random points, on their vertices and on their edges' midpoints (the boundary counts as inside).
+TEST_CASE(lanes_prepared_set_contains_exactly_as_contains) {
+    uint32_t state = 777;
+    const auto rnd = [&]() { state = state * 1664525u + 1013904223u; return static_cast<double>(state >> 8) / 16777216.0; };
+    int compared = 0, differ = 0;
+    for (int shape = 0; shape < 40; ++shape) {
+        Polygon2 poly;
+        const int n = 3 + static_cast<int>(rnd() * 60);
+        const Vec2 c(rnd() * 200 - 100, rnd() * 200 - 100);
+        for (int k = 0; k < n; ++k) {
+            const double a = 6.283185307 * k / n, r = 20 + rnd() * 40;
+            poly.outer.push_back(c + Vec2(std::cos(a), std::sin(a)) * r);
+        }
+        if (shape % 2 == 0) {
+            Ring h;
+            for (int k = 0; k < 6; ++k) { const double a = -6.283185307 * k / 6; h.push_back(c + Vec2(std::cos(a), std::sin(a)) * 8.0); }
+            poly.holes.push_back(h);
+        }
+        const PreparedSet prep(PolySet{poly});
+        std::vector<Vec2> probes;
+        for (int q = 0; q < 300; ++q) probes.push_back(c + Vec2(rnd() * 140 - 70, rnd() * 140 - 70));
+        for (std::size_t k = 0; k < poly.outer.size(); ++k) {
+            probes.push_back(poly.outer[k]);
+            probes.push_back((poly.outer[k] + poly.outer[(k + 1) % poly.outer.size()]) * 0.5);
+        }
+        for (const Ring& h : poly.holes) for (const Vec2& v : h) probes.push_back(v);
+        for (const Vec2& p : probes) {
+            ++compared;
+            if (contains(poly, p) != prep.contains(p) && ++differ <= 5)
+                std::printf("    [prepared] shape %d at (%.6f, %.6f): contains %d, prepared %d\n", shape, p.x, p.y, contains(poly, p) ? 1 : 0,
+                            prep.contains(p) ? 1 : 0);
+        }
+    }
+    std::printf("    [prepared] %d points compared, %d differ\n", compared, differ);
+    CHECK(compared > 10000);
+    CHECK(differ == 0);
+}
