@@ -34,6 +34,8 @@ return {
   playground_roundabout = { recipe = "playground_roundabout" },
   playground_slide = { recipe = "playground_slide" },
   playground_slide_tall = { recipe = "playground_slide", args = { height = 2.2, paint = "orange" } },
+  playground_climbing_frame = { recipe = "playground_climbing_frame" },
+  playground_sandpit = { recipe = "playground_sandpit" },
   -- furniture and street pieces with moving parts (model_kit.lua): each a model of its own, built from the furniture
   -- kit's shape words so it matches what the interiors place
   office_chair_adjustable = { recipe = "swivel_chair" },

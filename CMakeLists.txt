@@ -505,6 +505,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/fleet_lua.cpp      # a level's fleet as the engine reads it: slots, sizes, what the roads are checked against (ADR-0435)
         src/engine/scripting/carry_items.cpp
         src/engine/scripting/trades_lua.cpp
+        src/engine/scripting/open_lots_lua.cpp
         src/engine/scripting/lights_lua.cpp
         src/engine/scripting/clouds_lua.cpp
         src/engine/scripting/street_props_spec.cpp

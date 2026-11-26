@@ -326,12 +326,25 @@ void PrefabUseSystem::batches(FrameContext& ctx, Entity player, const Vec3& pos)
     for (Entity e : sleep)
         if (world.alive(e)) sleepBatchCopy(world, e, removeBody);
 
+}
+
+// The two bodies of each holder (its copies' shapes that never move, and those on parts at rest): made when stale,
+// and for a holder that says so (bodiesWithin) only while the player is near it.
+void PrefabUseSystem::batchBodies(FrameContext& ctx, const Vec3& pos) {
     if (physics_ == nullptr) return;
-    world.each<PrefabBatches>([&](Entity, PrefabBatches& b) {
+    ctx.world.each<PrefabBatches>([&](Entity, PrefabBatches& b) {
+        const bool wanted = b.bodiesWithin <= 0 || b.near(pos, b.bodiesWithin);
+        const bool kept = b.bodiesWithin <= 0 || b.near(pos, b.bodiesWithin * Real(1.25));
         for (int moving = 0; moving < 2; ++moving) {
             bool& stale = moving ? b.restingStale : b.fixedStale;
             PhysicsBodyId& body = moving ? b.restingBody : b.fixedBody;
-            if (!stale) continue;
+            if (body != INVALID_PHYSICS_BODY && !kept) {   // (the player has left: made again when they are back)
+                physics_->physicsWorld().removeBody(body);
+                body = INVALID_PHYSICS_BODY;
+                stale = true;
+                continue;
+            }
+            if (!stale || !wanted) continue;
             stale = false;
             if (body != INVALID_PHYSICS_BODY) physics_->physicsWorld().removeBody(body);
             body = INVALID_PHYSICS_BODY;
@@ -354,7 +367,9 @@ void PrefabUseSystem::update(FrameContext& ctx) {
         pos = t.position;
         if (const CharacterController* cc = ctx.world.get<CharacterController>(e)) feetDrop = cc->halfHeight + cc->radius;
     });
-    if (!player.valid() || ctx.world.has<InVehicle>(player) || ctx.world.has<Passenger>(player)) return;
+    if (!player.valid()) return;
+    batchBodies(ctx, pos);   // (driving too: a car meets a swing)
+    if (ctx.world.has<InVehicle>(player) || ctx.world.has<Passenger>(player)) return;
     const Vec3 feet = pos - Vec3(0, feetDrop, 0);
 
     batches(ctx, player, pos);

@@ -66,6 +66,10 @@ return {
   playground_slide_tall = { model = "playground_slide_tall", physics = { body = "static" },
     uses = { { at = "slide_start", say = "sit", sit = true },
              { at = "slide_end", say = "sit", sit = true } } },
+  playground_climbing_frame = { model = "playground_climbing_frame", physics = { body = "static" },
+    uses = { { at = "seat_*", say = "sit", sit = true } } },
+  playground_sandpit = { model = "playground_sandpit", physics = { body = "static" },
+    uses = { { at = "seat_*", say = "sit", sit = true } } },
   -- furniture and street pieces with moving parts (models.lua, model_kit.lua). Each has a still prefab, solid where
   -- its model's shapes say, and an `_in_use` one whose script moves it as people using it would (model_moves.lua),
   -- until prefabs carry interactions and people do. The clock always runs, and a turning barber's pole is the pole.

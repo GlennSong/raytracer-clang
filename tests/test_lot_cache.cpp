@@ -61,6 +61,11 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     LotBuilding a; a.site = Vec2(10, -20); a.width = 12.5; a.depth = 8.25; a.height = 17; a.yaw = 0.7; a.type = "shop"; a.block = 3; a.district = "oldtown"; a.recipe = "corner_shop"; a.baseY = 4.5; a.groundY = 4.25;
     a.plan = {Vec2(0, 0), Vec2(12, 0), Vec2(12, 8), Vec2(0, 8)}; a.color = Vec3(0.3, 0.2, 0.1); a.pad = {Vec2(-1, -1), Vec2(13, -1), Vec2(13, 9), Vec2(-1, 9)};
     a.padMesh = MeshBuilder::box(Vec3(3, 0.2, 2)); a.padMesh.vertices[0].color = Vec3(0.9, 0.1, 0.1);   // a varying vertex colour survives
+    {   // a kit piece and a prefab placed outdoors (OutdoorPiece::prefab, format 9)
+        OutdoorPiece kitPiece; kitPiece.piece = 7; kitPiece.variant = 24; kitPiece.at = Vec2(3, 4); kitPiece.yaw = 0.5; kitPiece.y = 0.04; kitPiece.draped = true;
+        OutdoorPiece prefabPiece; prefabPiece.prefab = "playground_swing"; prefabPiece.at = Vec2(-2, 9); prefabPiece.yaw = -1.25; prefabPiece.y = 0.04; prefabPiece.draped = true;
+        a.furniture = {kitPiece, prefabPiece};
+    }
     a.treeSpots = {Vec3(1, 2, 3), Vec3(4, 5, 6)}; a.fenceSegs = {{Vec2(0, 0), Vec2(5, 0)}, {Vec2(5, 0), Vec2(5, 5)}};
     a.sealed = {{Vec2(0, 0), Vec2(2, 0), Vec2(2, 1)}};
     {   // its paths as walkways (format 7): every field, both ends of each kind
@@ -103,6 +108,8 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK(x.padMesh.vertices.size() == a.padMesh.vertices.size() && x.padMesh.indices == a.padMesh.indices);
         CHECK_APPROX(x.padMesh.vertices[0].color.x, 0.9, 1e-6); CHECK_APPROX(x.padMesh.vertices[3].position.x, static_cast<float>(a.padMesh.vertices[3].position.x), 0.0);
         CHECK(x.treeSpots.size() == 2 && x.treeSpots[1].z == 6 && x.fenceSegs.size() == 2 && x.fenceSegs[1].second.y == 5);
+        CHECK(x.furniture.size() == 2 && x.furniture[0].prefab.empty() && x.furniture[0].piece == 7 && x.furniture[0].variant == 24 && x.furniture[0].draped);
+        CHECK(x.furniture.size() == 2 && x.furniture[1].prefab == "playground_swing" && x.furniture[1].at.y == 9 && x.furniture[1].yaw == -1.25);
         CHECK(x.sealed.size() == 1 && x.sealed[0].size() == 3 && x.sealed[0][2].y == 1);
         CHECK(x.walkways.size() == 2);
         if (x.walkways.size() == 2) {

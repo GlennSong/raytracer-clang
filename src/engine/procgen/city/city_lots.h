@@ -39,7 +39,11 @@ namespace engine {
 // A kit piece placed OUTDOORS (furniture_kit.h Piece). `yaw` turns the piece's +z (its front) to world
 // (sin yaw, 0, cos yaw); `y` is its floor -- world height, or above the finished ground when `draped` (parks lie on
 // the terrain, which is only known once it is graded).
+// Or a PREFAB placed outdoors (#315, ADR-0524): `prefab` names it (prefabs.lua) and `piece` and `variant` are unused.
+// `at` is then the prefab's own origin, and `yaw` turns its +z as it does a kit piece's. The level loader stands it as
+// a copy in its ground tile's batches (prefab_batch.h).
 struct OutdoorPiece {
+    std::string prefab;
     uint8_t piece = 0;
     uint32_t variant = 0;
     Vec2 at{0, 0};
@@ -53,6 +57,21 @@ Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y);
 uint32_t posHash(const Vec2& p);
 // An outdoor library piece at `at` (its back's centre), its front facing `face`; the variant's wood from `h`.
 OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face, Real y, bool draped);
+// A prefab at `at` (its origin), its +z facing `face` and then turned `turnDeg` anticlockwise from above.
+OutdoorPiece outdoorPrefab(const std::string& prefab, const Vec2& at, const Vec2& face, Real turnDeg, Real y, bool draped);
+
+// WHAT STANDS ON AN OPEN LOT (open_lots.lua, #315): the prefabs a playground chooses from and the room each needs.
+// The lot pass reads only this -- never a prefab's model -- so this file is what a re-bake follows.
+struct OpenLotPiece {
+    std::string prefab;
+    Real along = 4, deep = 4;   // metres along the street and back from it
+    Real turn = 0;              // degrees from facing the gate
+};
+struct OpenLotBook {
+    std::vector<OpenLotPiece> playground;
+};
+const OpenLotBook& openLotBook();          // open_lots.lua's once read (a scripting build), else empty
+void setOpenLotBook(const OpenLotBook& book);
 
 struct DoorSpec {
     Vec2 foot;

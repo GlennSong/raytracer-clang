@@ -123,7 +123,7 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPoly(w, lb.plan); putVec3(w, lb.color); putPoly(w, lb.pad);
         bundle::putPackedMesh(w, bundle::packMesh(lb.padMesh, "pad", lb.color, 0u, 1.0f, 0.0));
         w.put<uint32_t>(static_cast<uint32_t>(lb.treeSpots.size())); for (const Vec3& t : lb.treeSpots) putVec3(w, t);
-        w.put<uint32_t>(static_cast<uint32_t>(lb.furniture.size())); for (const OutdoorPiece& f : lb.furniture) { w.put<uint8_t>(f.piece); w.put<uint32_t>(f.variant); putVec2(w, f.at); w.put<double>(f.yaw); w.put<double>(f.y); putBool(w, f.draped); }
+        w.put<uint32_t>(static_cast<uint32_t>(lb.furniture.size())); for (const OutdoorPiece& f : lb.furniture) { w.putStr(f.prefab); w.put<uint8_t>(f.piece); w.put<uint32_t>(f.variant); putVec2(w, f.at); w.put<double>(f.yaw); w.put<double>(f.y); putBool(w, f.draped); }
         w.put<uint32_t>(static_cast<uint32_t>(lb.fenceSegs.size())); for (const auto& f : lb.fenceSegs) { putVec2(w, f.first); putVec2(w, f.second); }
         w.put<uint32_t>(static_cast<uint32_t>(lb.units.size()));
         for (const BuildingUnit& u : lb.units) {
@@ -161,7 +161,7 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         if (!getPoly(r, lb.plan) || !getVec3(r, lb.color) || !getPoly(r, lb.pad)) return false;
         bundle::PackedMesh pm; if (!bundle::getPackedMesh(r, pm)) return false; lb.padMesh = bundle::unpackMesh(pm);
         uint32_t nt = 0; if (!r.get(nt)) return false; lb.treeSpots.resize(nt); for (Vec3& t : lb.treeSpots) if (!getVec3(r, t)) return false;
-        uint32_t nfu = 0; if (!r.get(nfu)) return false; lb.furniture.resize(nfu); for (OutdoorPiece& f : lb.furniture) if (!r.get(f.piece) || !r.get(f.variant) || !getVec2(r, f.at) || !r.get(f.yaw) || !r.get(f.y) || !getBool(r, f.draped)) return false;
+        uint32_t nfu = 0; if (!r.get(nfu)) return false; lb.furniture.resize(nfu); for (OutdoorPiece& f : lb.furniture) if (!r.getStr(f.prefab) || !r.get(f.piece) || !r.get(f.variant) || !getVec2(r, f.at) || !r.get(f.yaw) || !r.get(f.y) || !getBool(r, f.draped)) return false;
         uint32_t nf = 0; if (!r.get(nf)) return false; lb.fenceSegs.resize(nf); for (auto& f : lb.fenceSegs) if (!getVec2(r, f.first) || !getVec2(r, f.second)) return false;
         uint32_t nu = 0; if (!r.get(nu)) return false; lb.units.resize(nu);
         for (BuildingUnit& u : lb.units) {

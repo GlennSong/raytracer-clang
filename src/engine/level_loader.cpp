@@ -6711,8 +6711,45 @@ bool LevelLoader::load(const std::string& path,
 #endif
                 const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
                 std::map<std::pair<long, long>, std::vector<engine::PlacedPiece>> cells;
+                // THE PREFABS a lot places (OutdoorPiece::prefab; #315, ADR-0524): each a copy in the batches of the
+                // 256 m ground tile it stands on (prefab_batch.h). A tile's copies are solid only while the player is
+                // near it (PrefabBatches::bodiesWithin), so a city's thousands cost no bodies far away.
+                std::map<std::pair<long, long>, Entity> prefabTiles;
+                std::map<std::string, std::pair<bool, engine::Prefab>> prefabLines;
+                const std::shared_ptr<ModelDresser> outdoorDresser = std::make_shared<ModelDresser>(renderer, assets);
+                std::size_t prefabsStood = 0;
                 auto place = [&](const engine::OutdoorPiece& op) {
                     const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
+                    if (!op.prefab.empty()) {
+#ifdef RT_ENABLE_SCRIPTING
+                        std::map<std::string, std::pair<bool, engine::Prefab>>::iterator line = prefabLines.find(op.prefab);
+                        if (line == prefabLines.end()) {
+                            std::pair<bool, engine::Prefab> found;
+                            std::string why;
+                            found.first = engine::findPrefab(op.prefab, found.second, levelDir, &why);
+                            if (!found.first) LOG_WARN << "[furniture] a lot's prefab '" << op.prefab << "': " << why << " (none are stood)";
+                            line = prefabLines.emplace(op.prefab, std::move(found)).first;
+                        }
+                        if (!line->second.first) return;
+                        const std::pair<long, long> tile{static_cast<long>(std::floor(op.at.x / 256.0)), static_cast<long>(std::floor(op.at.y / 256.0))};
+                        std::map<std::pair<long, long>, Entity>::iterator holder = prefabTiles.find(tile);
+                        if (holder == prefabTiles.end()) {
+                            const Entity e = world.create();
+                            engine::PrefabBatches held;
+                            held.dresser = outdoorDresser;
+                            held.bodiesWithin = 60;
+                            world.add<engine::PrefabBatches>(e, std::move(held));
+                            holder = prefabTiles.emplace(tile, e).first;
+                        }
+                        Transform at;
+                        at.position = Vec3(op.at.x, fy, op.at.y);
+                        at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), op.yaw);
+                        std::string why;
+                        if (engine::batchPrefab(world, holder->second, outdoorDresser.get(), line->second.second, at, levelDir, &why) != engine::kNoBatchCopy) ++prefabsStood;
+                        else LOG_WARN << "[furniture] a lot's prefab '" << op.prefab << "': " << why;
+#endif
+                        return;
+                    }
                     engine::PlacedPiece pp;
                     pp.piece = op.piece;
                     pp.variant = op.variant;
@@ -6739,6 +6776,13 @@ bool LevelLoader::load(const std::string& path,
                         world.add<engine::Interactables>(ie, std::move(set));
                     }
                     pieces += list.size();
+                }
+                if (prefabsStood > 0) {
+                    Vec3 first;
+                    if (const engine::PrefabBatches* b = world.get<engine::PrefabBatches>(prefabTiles.begin()->second))
+                        if (!b->copies.empty()) first = b->copies.front().at.position;
+                    LOG_INFO << "[furniture] outdoor prefabs: " << prefabsStood << " copies in " << prefabTiles.size()
+                             << " ground tiles; one at " << first.x << " " << first.y << " " << first.z;
                 }
                 if (pieces > 0) {
                     Mat4 m0 = cells.begin()->second.front().xform;

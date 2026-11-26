@@ -1526,6 +1526,27 @@ TEST_CASE(lots_that_do_not_build_get_a_use) {
     LotPlanDebug edge;
     const std::vector<LotBuilding> res = grow(Vec2(5000, 5000), edge);   // downtown far away: all residential
     int greens = 0, uses = 0, treesOnPlay = 0, unfurnished = 0;
+    // A PLAYGROUND'S EQUIPMENT is prefabs from open_lots.lua (#315, ADR-0524): at least two, each one the book
+    // lists, each inside the fence, no two in the same place
+    std::set<std::string> listed;
+    for (const OpenLotPiece& p : openLotBook().playground) listed.insert(p.prefab);
+    CHECK(listed.size() >= 5);
+    int equipment = 0, strays = 0, unknown = 0, stacked = 0;
+    for (const LotBuilding& lb : res) {
+        if (lb.recipe != "playground" || lb.sealed.empty()) continue;
+        std::vector<Vec2> stood;
+        for (const OutdoorPiece& op : lb.furniture) {
+            if (op.prefab.empty()) continue;
+            ++equipment;
+            unknown += listed.count(op.prefab) == 0;
+            strays += !pointInPolygon(lb.sealed.front(), op.at);
+            for (const Vec2& other : stood) stacked += (other - op.at).length() < 2.0;
+            stood.push_back(op.at);
+        }
+        CHECK(stood.size() >= 2);
+    }
+    std::printf("    [open lots] playgrounds stand %d prefabs\n", equipment);
+    CHECK(equipment > 0 && strays == 0 && unknown == 0 && stacked == 0);
     for (const LotBuilding& lb : res) {
         if (lb.type == "green") { ++greens; continue; }
         if (lb.recipe != "playground" && lb.recipe != "community_garden" && lb.recipe != "pocket_park") continue;

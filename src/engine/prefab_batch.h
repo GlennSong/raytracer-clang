@@ -81,6 +81,10 @@ struct PrefabBatches {
     // something by itself or under someone: set as copies are added and used, never cleared, so the holders that
     // have neither are skipped without a look at their copies
     bool mayLight = false, mayStir = false;
+    // > 0: its copies are solid only while the player is within this many metres of the ball round them (and for a
+    // quarter as far again once they are, so the bodies do not flicker at the edge). 0: always. For the holders a
+    // city has thousands of (a ground tile's props); a building's interior is only there near the player anyway.
+    Real bodiesWithin = 0;
     // What dresses a copy that wakes (shared with whoever made the copies).
     std::shared_ptr<ModelDresser> dresser;
     // THE COLLISION of the copies at rest: two bodies the holder's owner makes from batchCollisionTriangles and

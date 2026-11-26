@@ -25268,3 +25268,30 @@ The first load grows the tree models: 271 s once. The frame was about 75 fps, th
 - `near_tier_in_the_crowd_follows_the_player` (not re-pinned after ADR-0503/0504 either; the two are not told apart): the most near 16 → 15, in 28 → 27, out 13 → 12; hash `0x7caa9eaebc49437d` → `0xa9d0a7f101cf1cd2`.
 
 **Still failing, filed before:** the bus that stands 192.3 s at a red light (#344: the same every run with this build, so not chance), the near tier's hit checks and its car with no way past (#336), and river_town's grades (#337).
+
+## ADR-0524 — What stands on an open lot is prefabs, placed by name (#315, the park port, part 1: playgrounds; 2026-11-25)
+
+**Why:** a playground's swings, slide, climbing frame, seesaw and sandpit were boxes the lot pass sculpted straight into the lot's baked mesh. Nobody could use them, and the same things existed as prefabs with seats that swing and a roundabout that turns. #315 makes the prefab the one.
+
+**Words:** the *lot pass* is the bake step that decides what stands on every lot. An *open lot* is one with no building: a park, playground, garden or car park. A *batch copy* is a prefab drawn without an entity of its own (ADR-0520). A *ground tile* here is a 256 m square of the map.
+
+**What happens:**
+- **A lot can place a prefab by name.** `OutdoorPiece` (a thing a lot places outdoors) gained `prefab`. With it set, the piece is that prefab at that point, turned that way; without it, it is a furniture-kit piece as before. This is saved in the lots bake (`kLotsFormatVersion` 9).
+- **`open_lots.lua` says what a playground chooses from**: each prefab, the room it needs along the street and back from it, and how it is turned. The lot pass reads only this file, never a prefab's model, and the file is part of the lots bake key, so editing it re-bakes.
+- **The lot pass places the equipment** in the same rows as before, as many as the rectangle takes, in a shuffled order. The sculpted boxes are deleted.
+- **The level loader stands each one as a batch copy** held by its 256 m ground tile.
+- **A tile's copies are solid only near the player** (`PrefabBatches::bodiesWithin`, 60 m here; kept until 75 m). A city has thousands of these, and their collision bodies far away would be memory for nothing. A building's interior holder is unchanged: it only exists near the player anyway. The bodies are made while driving too, so a car meets a swing.
+- **Two new models:** `playground_climbing_frame` and `playground_sandpit`. The roundabout joins the set.
+
+**Lots tag:** `2026-11-25.3`, with Glenn's OK given directly on 2026-11-25. Every level re-bakes its lots once.
+
+**Seen in the game** (river_town, from a playground's gate): sandpit, seesaw, climbing frame, slide and swings standing on the rubber inside the fence.
+
+**What is left:**
+- **Benches, picnic tables and the rest of a lot's kit furniture are still kit pieces** (13,085 on the island). Part 2 ports them; the seats the city's people use (`ActivitySpots`) must then come from the copies' seat markers, agreed with the agent brain session first.
+- **Gardens, park fountains, the quad and the sports field** are still sculpted. Parts 3 on.
+- **On a slope a piece stands at the ground height under its own middle**, upright, so a wide piece (the sandpit) is part buried on one side. The old sculpted pieces followed the slope instead. A playground lot wants a level pad.
+- **Not checked in the game:** walking into the equipment (the streamed bodies), and using a swing in a city playground.
+- `src/engine/playground.h` (the movement lab's swings and monkey bars for the player) is a second playground system. It is not touched here.
+- `RT_OPENLOT_DEBUG=1` prints each playground's gate and the way to look in.
+

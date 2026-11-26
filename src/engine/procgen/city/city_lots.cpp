@@ -1,4 +1,7 @@
 #include "city_lots.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "../../scripting/open_lots_lua.h"   // ensureOpenLotsLoaded: open_lots.lua, once
+#endif
 #include "polyline.h"   // distToSegment
 #include "implicit.h"   // simplifyLoop: a curved lot's outline for its open frame
 #include "../../../proc_rng.h"
@@ -75,6 +78,27 @@ OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face
     o.y = y;
     o.draped = draped;
     return o;
+}
+
+OutdoorPiece outdoorPrefab(const std::string& prefab, const Vec2& at, const Vec2& face, Real turnDeg, Real y, bool draped) {
+    OutdoorPiece o;
+    o.prefab = prefab;
+    o.at = at;
+    o.yaw = std::atan2(face.x, face.y) + turnDeg * (3.14159265358979323846 / 180.0);
+    o.y = y;
+    o.draped = draped;
+    return o;
+}
+
+namespace {
+OpenLotBook& openLotBookStore() { static OpenLotBook book; return book; }
+}  // namespace
+void setOpenLotBook(const OpenLotBook& book) { openLotBookStore() = book; }
+const OpenLotBook& openLotBook() {
+#ifdef RT_ENABLE_SCRIPTING
+    ensureOpenLotsLoaded();
+#endif
+    return openLotBookStore();
 }
 
 namespace {
@@ -1600,90 +1624,25 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     addPath(g, f.W(gx, f.y0), f.W(gx, f.y0 + D * 0.5), 1.8, kFootwayKind, false);
     BuildingMesh kit;
     openFence(g, kit, f, gx, 1.8, 0);
-    // the equipment, in bright powder-coated colours, in slots along the rectangle behind a strip for the benches
-    const Vec3 paint[4] = {{0.80, 0.18, 0.12}, {0.95, 0.72, 0.10}, {0.12, 0.40, 0.75}, {0.15, 0.55, 0.25}};
-    const Vec3 steel(0.55, 0.57, 0.60), timber(0.42, 0.30, 0.18);
-    auto box = [&](Real x, Real y, Real h, Real sx, Real sy, Real sh, PartId part, const Vec3& col) {
-        emitBox(kit, Scope::inFrame(f, x, y, h, Vec3(sx, sh, sy)), part, col);
-    };
-    // a bar between two frame points at heights (the swing's A-frame legs, the slide's chute)
-    auto bar = [&](Real xa, Real ya, Real ha, Real xb, Real yb, Real hb, Real t, PartId part, const Vec3& col) {
-        const Vec3 A = f.P(xa, ya, ha), B = f.P(xb, yb, hb);
-        Vec3 d = B - A;
-        const Real L = d.length();
-        if (L < 1e-3) return;
-        d = d / L;
-        Vec3 side = cross(d, up);
-        if (side.length() < 1e-3) side = u3;
-        side = normalize(side);
-        const Vec3 n = cross(side, d);
-        emitBox(kit, Scope{A - side * (t * 0.5) - n * (t * 0.5), {d, n, side}, Vec3(L, t, t)}, part, col);
-    };
-    std::vector<int> items = {0, 1, 2, 3, 4};   // swings, slide, climbing frame, seesaw, sandpit
+    // THE EQUIPMENT: prefabs from open_lots.lua (#315, ADR-0524), each in its own space along the rectangle behind a
+    // strip for the benches, in rows along the street with a second row behind on a deep lot. The loader stands
+    // them: a swing swings, a roundabout turns.
+    const std::vector<OpenLotPiece>& book = openLotBook().playground;
+    std::vector<int> items(book.size());
+    for (std::size_t i = 0; i < items.size(); ++i) items[i] = static_cast<int>(i);
     for (std::size_t i = items.size(); i > 1; --i) std::swap(items[i - 1], items[static_cast<std::size_t>(rng.next() * i) % i]);
     const Real by0 = f.y0 + 2.1;   // the benches' strip by the gate
-    Real cursor = f.x0 + 1.2, rowY = by0, rowDeep = 0;   // laid in rows along the street, a second row behind on a deep lot
+    Real cursor = f.x0 + 1.2, rowY = by0, rowDeep = 0;
     int placed = 0;
     std::vector<std::pair<Vec2, Vec2>> slots;   // what went where (frame), for the trees
     for (int it : items) {
-        const Real need = it == 0 ? 6.0 : it == 1 ? 6.4 : it == 2 ? 4.6 : it == 3 ? 4.6 : 4.0;
-        const Real deep = it == 0 ? 5.0 : it == 1 ? 6.0 : it == 2 ? 4.0 : it == 3 ? 2.4 : 4.0;
+        const OpenLotPiece& piece = book[static_cast<std::size_t>(it)];
+        const Real need = piece.along, deep = piece.deep;
         if (cursor + need > f.x1 - 0.8 && rowDeep > 0) { rowY += rowDeep + 1.4; cursor = f.x0 + 1.2; rowDeep = 0; }
         if (cursor + need > f.x1 - 0.8 || rowY + deep > f.y1 - 0.6) continue;
         const Real x = cursor, y = rowY;
-        const Vec3 col = paint[(placed + static_cast<int>(rng.next() * 4)) % 4];
-        if (it == 0) {   // SWINGS: two A-frames, a beam, two seats on chains, a mat under each
-            const Real bx0 = x + 0.5, bx1 = x + need - 0.5, cyy = y + deep * 0.5;
-            for (Real ex : {bx0, bx1}) {
-                bar(ex, cyy - 1.2, 0, ex, cyy, 2.5, 0.09, PartId::Metal, col);
-                bar(ex, cyy + 1.2, 0, ex, cyy, 2.5, 0.09, PartId::Metal, col);
-            }
-            bar(bx0, cyy, 2.5, bx1, cyy, 2.5, 0.11, PartId::Metal, col);
-            for (Real sx : {bx0 + (bx1 - bx0) * 0.3, bx0 + (bx1 - bx0) * 0.7}) {
-                for (Real dx : {Real(-0.22), Real(0.22)}) bar(sx + dx, cyy, 2.45, sx + dx, cyy, 0.55, 0.02, PartId::Metal, steel);
-                box(sx - 0.25, cyy - 0.12, 0.5, 0.5, 0.24, 0.05, PartId::Furniture, Vec3(0.08, 0.08, 0.09));
-                quad(sx - 0.7, cyy - 2.0, sx + 0.7, cyy + 2.0, 0.055, rubber2);
-            }
-        } else if (it == 1) {   // SLIDE TOWER: four posts, a deck at 1.5 m, a roof, a ladder, a chute down
-            const Real tx = x + 0.4, ty = y + deep * 0.5 - 0.8;
-            for (Real dx : {Real(0), Real(1.5)})
-                for (Real dy : {Real(0), Real(1.5)}) box(tx + dx, ty + dy, 0, 0.12, 0.12, 2.9, PartId::Metal, col);
-            box(tx, ty, 1.45, 1.62, 1.62, 0.08, PartId::Wood, timber);
-            box(tx - 0.1, ty - 0.1, 2.9, 1.82, 1.82, 0.12, PartId::Trim, paint[(placed + 1) % 4]);
-            box(tx - 0.05, ty + 1.5, 1.53, 1.6, 0.05, 0.6, PartId::Metal, col);   // the guard
-            for (int r = 0; r < 5; ++r) box(tx + 0.4, ty - 0.55 - 0.02, 0.3 * (r + 1), 0.7, 0.05, 0.05, PartId::Metal, steel);   // ladder
-            for (Real dx : {Real(0.38), Real(1.12)}) bar(tx + dx, ty - 0.6, 0, tx + dx, ty, 1.5, 0.06, PartId::Metal, steel);
-            bar(tx + 1.62, ty + 0.4, 1.45, tx + 5.6, ty + 0.4, 0.3, 0.06, PartId::Metal, steel);   // the chute's rails
-            bar(tx + 1.62, ty + 1.2, 1.45, tx + 5.6, ty + 1.2, 0.3, 0.06, PartId::Metal, steel);
-            {
-                RenderMesh chute;   // the bed, polished steel
-                MeshBuilder::emitQuad(chute, f.P(tx + 1.62, ty + 0.42, 1.42), f.P(tx + 1.62, ty + 1.18, 1.42),
-                                      f.P(tx + 5.6, ty + 1.18, 0.27), f.P(tx + 5.6, ty + 0.42, 0.27), up, Vec3(0.75, 0.76, 0.78));
-                MeshBuilder::emitQuad(chute, f.P(tx + 5.6, ty + 0.42, 0.27), f.P(tx + 5.6, ty + 1.18, 0.27),
-                                      f.P(tx + 1.62, ty + 1.18, 1.42), f.P(tx + 1.62, ty + 0.42, 1.42), up * -1.0, Vec3(0.75, 0.76, 0.78));
-                MeshBuilder::append((*outParts)[drapedSlot(PartId::Metal)], chute);
-            }
-        } else if (it == 2) {   // CLIMBING FRAME: a lattice cube of bars
-            const Real cx0 = x + 0.3, cy0 = y;
-            for (int i = 0; i <= 3; ++i)
-                for (int j = 0; j <= 3; ++j) box(cx0 + i * 1.3 - 0.04, cy0 + j * 1.3 - 0.04, 0, 0.08, 0.08, 2.4, PartId::Metal, col);
-            for (int lv = 1; lv <= 3; ++lv)
-                for (int i = 0; i <= 3; ++i) {
-                    box(cx0 + i * 1.3 - 0.03, cy0, lv * 0.8, 0.06, 3.9, 0.06, PartId::Metal, steel);
-                    box(cx0, cy0 + i * 1.3 - 0.03, lv * 0.8, 3.9, 0.06, 0.06, PartId::Metal, steel);
-                }
-        } else if (it == 3) {   // SEESAW: a pivot, a plank tipped one way, two handles
-            const Real cx = x + need * 0.5, cyy = y + deep * 0.5;
-            box(cx - 0.2, cyy - 0.3, 0, 0.4, 0.6, 0.45, PartId::Metal, steel);
-            bar(cx - 1.9, cyy, 0.18, cx + 1.9, cyy, 0.78, 0.22, PartId::Metal, col);
-            for (Real dx : {Real(-1.5), Real(1.5)}) bar(cx + dx, cyy, 0.48 + dx * 0.16, cx + dx, cyy, 0.9 + dx * 0.16, 0.04, PartId::Metal, steel);
-        } else {   // SANDPIT: a timber kerb and the sand
-            box(x, y, 0, 4.0, 0.2, 0.3, PartId::Wood, timber);
-            box(x, y + 3.8, 0, 4.0, 0.2, 0.3, PartId::Wood, timber);
-            box(x, y, 0, 0.2, 4.0, 0.3, PartId::Wood, timber);
-            box(x + 3.8, y, 0, 0.2, 4.0, 0.3, PartId::Wood, timber);
-            quad(x + 0.2, y + 0.2, x + 3.8, y + 3.8, 0.2, Vec3(0.72, 0.62, 0.42));
-        }
+        // (it faces the gate: back down the lot toward the street)
+        g.furniture.push_back(outdoorPrefab(piece.prefab, f.W(x + need * 0.5, y + deep * 0.5), f.v * -1.0, piece.turn, 0.04, true));
         slots.push_back({Vec2(x, y), Vec2(x + need, y + deep)});
         cursor += need + 1.4;
         rowDeep = std::max(rowDeep, deep);
@@ -1717,7 +1676,8 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     g.padMesh = std::move(m);
     g.color = Vec3(1, 1, 1);
     if (std::getenv("RT_OPENLOT_DEBUG"))
-        std::printf("[openlot] playground %.0f x %.0f at %.0f %.0f: %d pieces\n", W, D, f.origin.x, f.origin.y, placed);
+        std::printf("[openlot] playground %.0f x %.0f at %.0f %.0f: %d pieces; its gate at %.1f %.1f, looking in along %.2f %.2f\n", W, D,
+                    f.origin.x, f.origin.y, placed, f.W(gx, f.y0).x, f.W(gx, f.y0).y, f.v.x, f.v.y);
     return true;
 }
 
