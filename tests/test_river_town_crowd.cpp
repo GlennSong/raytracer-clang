@@ -37,6 +37,7 @@ namespace {
 
 constexpr Real kStep = 1.0 / 60.0;   // the viewer's fixed step, and the sim's tick
 constexpr int kRiverMinutes = 30;    // the stretch of the day the test runs: everybody's first trip out and most back
+constexpr Real kEveryoneNear = 1.0e6;   // m: a near ring wider than any town
 
 // The process's resident memory, MB (Linux /proc; 0 where there is none).
 double residentMb() {
@@ -72,6 +73,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     World& world = lc.world;
     const int minutes = std::getenv("RT_CROWD_MINUTES") ? std::atoi(std::getenv("RT_CROWD_MINUTES")) : kRiverMinutes;
     const double mbLoaded = residentMb();
+    // EVERYONE NEAR (ADR-0517): the town's near-driving case, every car driven by the driving. The level's player start
+    // is the tier centre; a ring wider than the town keeps everyone in it (far drives are `..._far_people_...`'s)
+    sim.pedPromoteRadius = kEveryoneNear;
+    sim.pedDemoteRadius = kEveryoneNear;
 
     // WHAT THE TOWN AND THE CROWD ARE
     int households = 0;
@@ -472,30 +477,36 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // 3364 -> 3362, arrived 3042 -> 3054, at work 1764 -> 1767, no way 32 -> 33, plans with no way 156 -> 157; bus calls
     // 157 -> 189, and the bus check passes again (the longest stand 104.1 s, bus 12: fewer cars in its way, #344 not
     // fixed). The brain 0.306 ms a tick.
+    // RE-PINNED when this case was made the town's near-driving case again, everyone near (ADR-0517: a near ring wider
+    // than the town, kEveryoneNear; far drives are the far case's): the most on the road 51 -> 131 (still minute 6);
+    // trips by car 63 -> 166, parked 58 -> 156, arrivals 3078 -> 2947; set out 3362 -> 3289, arrived 3054 -> 2923, at
+    // work 1767 -> 1764, no way 33 -> 32, plans with no way 157 -> 156; bus calls 189 -> 178 (the bus check passes:
+    // bus 9, 87.2 s); one resident rode a bus (riders' waits, boardings, got off 0 -> 1; the residents' waits and rides
+    // 0 -> 1). The brain 0.396 ms a tick (everyone stepped near).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 5107);
         CHECK(households == 2716);
         CHECK(b.cars().size() == 851u);
         CHECK(withCar == 1280);
         CHECK(homeMarkers == 280u);
-        CHECK(mostOnRoad == 51);
+        CHECK(mostOnRoad == 131);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 63u);
-        CHECK(b.counts().parkedReports == 58u);
+        CHECK(b.counts().tripsBegun == 166u);
+        CHECK(b.counts().parkedReports == 156u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3078u);
+        CHECK(b.machine()->counts().arrivals == 2947u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3362u);
-        CHECK(b.counts().dayArrivals == 3054u);
-        CHECK(b.counts().dayToWork == 1767u);
+        CHECK(b.counts().daySetOut == 3289u);
+        CHECK(b.counts().dayArrivals == 2923u);
+        CHECK(b.counts().dayToWork == 1764u);
         CHECK(b.counts().dayNowhere == 4u);
-        CHECK(b.counts().dayNoWay == 33u);
-        CHECK(b.machine()->counts().noPlans == 157u);
+        CHECK(b.counts().dayNoWay == 32u);
+        CHECK(b.machine()->counts().noPlans == 156u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -568,13 +579,13 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x758473badca5cd6d -> 0x04c8e169c079ad4e (ADR-0512: seats, tracks and groups used): the counts above
         // 0x04c8e169c079ad4e -> 0x30c0a4fc1d5cd66d (ADR-0524: the open lots' prefabs): the counts above
         // 0x30c0a4fc1d5cd66d -> 0x0225f04032f23112 (ADR-0514: the near player's people set out first): the counts above
-        CHECK(hash == 0xa7bd755c5a38f0fbull);
+        CHECK(hash == 0xb9992bc45228fc52ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
         // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333; 147 -> 160, ADR-0491: bus 4 stood there instead)
         // (160 -> 182, ADR-0493: nobody stands in junction 62's turn now that the old sim walks nobody, #333)
-        CHECK(sim.drivingHost().counts().busCalls == 189u);   // (157 -> 189, ADR-0516: most drivers far)   // (184 -> 157, ADR-0514: bus 6 stood, #344)   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
+        CHECK(sim.drivingHost().counts().busCalls == 178u);   // (189 -> 178, ADR-0517: everyone near)   // (157 -> 189, ADR-0516: most drivers far)   // (184 -> 157, ADR-0514: bus 6 stood, #344)   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         // (FAILING from ADR-0490 to ADR-0491, the sim's own walkers standing in junction 62's turn, #333; passes since
@@ -591,8 +602,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             // (ADR-0512: one resident rode, got off 0 -> 1, rides 0 -> 1 -- with no boarding or wait counted: a ride
             // begun far and ended near counts only its end, #345)
             // (ADR-0514: the rider gone again, got off 1 -> 0, rides 1 -> 0)
-            CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 0u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 0u && b.counts().busRides == 0u);
+            // (ADR-0517, everyone near: one rider, waits, boardings and got off 0 -> 1; the residents' waits and rides 0 -> 1)
+            CHECK(rc.waits == 1u && rc.boardings == 1u && rc.alightings == 1u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 1u && b.counts().busRides == 1u);
             // (the check that some of the sim's own walkers rode too went with them, ADR-0499: every rider is the brain's)
         }
     }
@@ -634,7 +646,10 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
                 awayDrawn += lc.world.has<citysim::CityCarPose>(e) ? 1 : 0;
                 awayNotDriving += far && b.stateName(holder) == "driving" ? 0 : 1;
             }
-            farOnRoad += far && lc.world.has<citysim::CityCarOnLane>(e) ? 1 : 0;
+            // (on a leg by car: a far person's wreck waits on the road for the tow, as a near one's does)
+            const std::string st = holder >= 0 ? b.stateName(holder) : std::string();
+            const bool carLeg = st == "pulling_out" || st == "driving" || st == "parking";
+            farOnRoad += far && carLeg && lc.world.has<citysim::CityCarOnLane>(e) ? 1 : 0;
         });
         mostAway = std::max(mostAway, away);
         std::printf("    [far] %2d min: %s\n", minute, b.attentionText().c_str());
@@ -645,9 +660,11 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
                     minute, b.farCount(), b.residentCount(), c.lowered, c.raised, static_cast<unsigned long long>(c.farVisits),
                     c.daySetOut, c.dayArrivals, c.dayNowhere, c.dayNoWay, c.dayArrivedShut, c.dayToWork, c.dayToWorkOffShift,
                     b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs);
-        std::printf("    [far] %2d min: cars away %d | far drives set off %u, stood in their space %u, given up %u | away and drawn "
-                    "%d, away and not a far driver's %d, a far driver's on the road %d\n",
-                    minute, away, c.drivenByClock, c.farParked, c.awayLeft, awayDrawn, awayNotDriving, farOnRoad);
+        std::printf("    [far] %2d min: cars away %d | far drives set off %u, stood in their space %u, given up %u | lowered "
+                    "driving %u (on the road %u) | away and drawn %d, away and not a far driver's %d, a far driver's on the "
+                    "road %d\n",
+                    minute, away, c.drivenByClock, c.farParked, c.awayLeft, c.loweredDriving, c.loweredOnRoad, awayDrawn,
+                    awayNotDriving, farOnRoad);
     }
     const citysim::CityBrainCounts& c = b.counts();
     const uint64_t hash = crowdtest::crowdHash(b, sim, lc.world);
@@ -694,12 +711,17 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // drives set off, all 100 stood in their space, at most 35 cars away at once. The most far 2974 -> 3079; lowered 3362
     // -> 3368, raised 821 -> 800, far visits 2793 -> 3183; set out 2698 -> 2701, arrived 2241 -> 2266, at work 1536 ->
     // 1553; 0xed5196eb8d59851e -> 0xc4e98d0fb2c1609d. The brain 0.477 -> 0.382 ms a tick.)
+    // (ADR-0517, a near driver is lowered like anyone, the car taken off the road: 23 lowered at the wheel, all 23 on the
+    // road. Lowered 3368 -> 3382, raised 800 -> 804, far visits 3183 -> 3214; arrived 2266 -> 2270, at work 1553 ->
+    // 1557; far drives 100 -> 123 and stood in their space 100 -> 123 (the 23 lowered among them);
+    // 0xc4e98d0fb2c1609d -> 0x25af8cabba676dcc.)
     if (kFarMinutes == 15) {
         CHECK(mostFar == 3079);
-        CHECK(c.lowered == 3368u && c.raised == 800u && c.farVisits == 3183u);
-        CHECK(c.daySetOut == 2701u && c.dayArrivals == 2266u && c.dayToWork == 1553u);
-        CHECK(c.drivenByClock == 100u && c.farParked == 100u && c.awayLeft == 0u);
-        CHECK(hash == 0xc4e98d0fb2c1609dull);
+        CHECK(c.lowered == 3382u && c.raised == 804u && c.farVisits == 3214u);
+        CHECK(c.daySetOut == 2701u && c.dayArrivals == 2270u && c.dayToWork == 1557u);
+        CHECK(c.drivenByClock == 123u && c.farParked == 123u && c.awayLeft == 0u);
+        CHECK(c.loweredDriving == 23u && c.loweredOnRoad == 23u);
+        CHECK(hash == 0x25af8cabba676dccull);
     }
 }
 

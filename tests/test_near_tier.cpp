@@ -1234,7 +1234,8 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     CHECK(c.intoPhysics == 21u);
     CHECK(c.intoLane == 11u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xaede09446c72904full);
+    // (ADR-0517, drivers lowered like anyone: the same counts, 0xaede09446c72904f -> 0x12420e766d0aab9e)
+    CHECK(hash == 0x12420e766d0aab9eull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

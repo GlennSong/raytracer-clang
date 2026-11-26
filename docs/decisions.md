@@ -25435,3 +25435,30 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Open for Glenn:** `..._crowd_drives_...` was the town's near-driving stress case (135 cars on the road at once). With drivers far it now drives 63 trips, not 178. It could keep everyone near (no tier centre) to stay a driving stress case, and leave far drives to `..._far_people_...`.
 
 **Next:** part 2, a near driver who goes far takes the car off the road; part 3, a far driver raised mid-drive has the car put part-way along its route.
+
+## ADR-0517 — A driver is lowered like anyone: their car leaves the road and the clock drives the rest of the leg (step 4e, part 2; 2026-11-26)
+
+**Words:** *lowered* is a near person becoming far (beyond the near ring round the player, ADR-0493); *raised* is the reverse. A car *on the road* is one the driving library has (it drives it, or it stands in a lane).
+
+**Why:** after ADR-0516 a far person's drive moves their car, but anyone sitting in a car was still kept near, wherever they were: a near drive could not be lowered, because the car would have been left standing undriven in its lane.
+
+**What happens:**
+- **Lowered while driving:** leaving the driving state as `Lowered` now tells the world the clock drives from here (`World::carDrivenByClock`, ADR-0516). The car's trip is ended where it is, it is taken off the road (or out of its space, if it was still waiting for room to set off), and it is away. The rest of the leg runs on the clock from the state's planned end, as the machine already did; the car stands in the leg's space when far parking begins. Counted: `loweredDriving`, of them `loweredOnRoad`.
+- **Lowered while pulling out or parking:** the car is in a kerb space either way (pulling out: its own, as before; parking: the leg's, taken as parking began) and stays there, still theirs.
+- **A far person sits in no car:** a person lowered at the wheel is taken out of its seat as their far body is placed (`placeFarBody`). The car stays theirs.
+- **`detailWanted`:** being in a car no longer keeps anyone near. Only a director's hold does. `brain? attention` now counts the near people in a car instead of giving it as a reason.
+- **A car left in a lane stays on the road** when pulling out of it is given up or lowered. It used to be taken off the road there, standing in the lane where other cars drove through it.
+- **river_town's crowd case is the near-driving case again:** its near ring is set wider than the town (`kEveryoneNear`), so every car is driven by the driving, at about the scale it had before ADR-0516 (131 on the road at once). Far drives, lowering and raising are tested by `..._far_people_...`.
+
+**Checked (`..._far_people_...`, 15 minutes):** 23 drivers lowered at the wheel, all 23 on the road, every car taken off it. Every minute: no car away is drawn, every car away is a far person's who is driving, and no far person on a leg by car has their car on the road. Errors 0, refused 0. 123 far drives, all 123 stood in their space.
+
+**Also run:** brain_lab 13 of 13, brain_tests 24 of 24, the unit suite 1,575 of 1,575.
+
+**Measured:** `..._far_people_...` the brain 0.382 → 0.449 ms a tick (one run each; 23 more drives lowered, and the drivers who were held near now go far and come back). `..._crowd_drives_...` everyone near: the brain 0.396 ms a tick, the driving 0.593 ms, the whole step 4.27 ms (it steps every person near; not comparable with ADR-0516's 0.306, where most were far).
+
+**Re-pinned:**
+- `..._far_people_...`: lowered 3368 → 3382, raised 800 → 804, far visits 3183 → 3214; arrived 2266 → 2270, at work 1553 → 1557; far drives 100 → 123 and stood in their space 100 → 123; hash `0xc4e98d0fb2c1609d` → `0x25af8cabba676dcc`. New pins: 23 lowered at the wheel, 23 on the road.
+- `..._crowd_drives_...`, everyone near (against ADR-0516's numbers): the most on the road 51 → 131 (minute 6); trips by car 63 → 166, parked 58 → 156, arrivals 3078 → 2947; set out 3362 → 3289, arrived 3054 → 2923, at work 1767 → 1764, no way 33 → 32, plans with no way 157 → 156; bus calls 189 → 178 (the bus check passes, bus 9 87.2 s; #344 not fixed); one resident rode a bus (riders' waits, boardings, got off 0 → 1; residents' waits, rides 0 → 1); hash `0xa7bd755c5a38f0fb` → `0xb9992bc45228fc52`.
+- `near_tier_in_the_crowd_follows_the_player`: the same counts; hash `0xaede09446c72904f` → `0x12420e766d0aab9e` (its hit checks still fail, #336).
+
+**Next:** part 3, a far driver raised mid-drive has the car put part-way along its route (until then a far driver whose car is away stays far until the drive ends).

@@ -214,6 +214,8 @@ struct CityBrainCounts {
     uint32_t drivenByClock = 0;   // times a far driver set off and their car went away (CityCarPhase::Away)
     uint32_t farParked = 0;       // ...and stood again in the space the drive ended at
     uint32_t awayLeft = 0;        // ...or the drive was given up and it stood in the free space nearest the driver
+    // ADR-0517: a near driver lowered (driving, or waiting to set off): the car went away, of them on the road
+    uint32_t loweredDriving = 0, loweredOnRoad = 0;
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.

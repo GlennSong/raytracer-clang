@@ -2,6 +2,8 @@
 
 #include "brain.h"
 
+#include "../../../engine/procgen/city/roads/lane_graph.h"   // engine::PathPoint (World::carOnLane)
+
 namespace citysim {
 namespace brain {
 
@@ -70,9 +72,12 @@ void pullOutExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     if (why == ExitWhy::Done) return;
     const CarRef car = carOf(a);
     PlaceRef standing;
+    engine::PathPoint lane;
     // it never left its space: back off the lane it goes, and, unless the person is only no longer watched, it is
-    // given up
-    if (ctx.skillsRun && ctx.drive && ctx.world->carStanding(car, standing)) ctx.drive->park(car, standing);
+    // given up. (One an earlier trip left in a lane stays there, on the road: taken off it there, it stood in the lane
+    // where nothing drove round it.)
+    if (ctx.skillsRun && ctx.drive && ctx.world->carStanding(car, standing) && !ctx.world->carOnLane(car, lane))
+        ctx.drive->park(car, standing);
     if (why != ExitWhy::Lowered) ctx.world->releaseCar(car, ctx.agent);
 }
 
@@ -121,9 +126,15 @@ void driveStep(StepContext& ctx, AgentBrain& a) {
 }
 void driveExit(StepContext& ctx, AgentBrain& a, ExitWhy why) {
     if (why == ExitWhy::Done) return;
+    if (why == ExitWhy::Lowered) {
+        // no longer watched (ADR-0517): the clock drives the rest of the leg, and the car is away with it -- off the
+        // road (its trip ended there), or out of its space if it had not set off yet
+        ctx.world->carDrivenByClock(carOf(a), ctx.agent);
+        return;
+    }
     if (ctx.skillsRun && ctx.drive) ctx.drive->endTrip(carOf(a));
     // the plan is dropped or the person interrupted: they get out where the car is and leave it there
-    if (why != ExitWhy::Lowered) ctx.world->leaveCar(carOf(a), ctx.agent);
+    ctx.world->leaveCar(carOf(a), ctx.agent);
 }
 
 // ---- PARKING: the car is in the kerb lane beside its space. The space is taken if it is still free, and the way's end

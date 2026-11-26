@@ -765,7 +765,13 @@ struct CityBrain::Impl::LabWorld : brain::World {
     }
     void carDrivenByClock(CarRef ref, AgentId who) override {
         const Car c = im.car(ref);
-        if (c.valid() && im.keptOf(c).heldBy == who && im.keptOf(c).phase != CarPhase::Away) im.sendAway(c);
+        if (!c.valid() || im.keptOf(c).heldBy != who || im.keptOf(c).phase == CarPhase::Away) return;
+        // (still near: they are being lowered mid-drive, ADR-0517)
+        if (who < im.people.size() && im.people[who].level != brain::Detail::Far) {
+            ++im.counts.loweredDriving;
+            if (im.onRoad(c)) ++im.counts.loweredOnRoad;
+        }
+        im.sendAway(c);
     }
     void parkCar(CarRef ref, AgentId who, PlaceRef space) override {
         const Car c = im.car(ref);
@@ -1369,11 +1375,12 @@ int CityBrain::Impl::markerForNode(int node) {
 }
 
 // THE LEVEL A PERSON SHOULD RUN AT (ADR-0493). Near: within the promote radius of the player, or someone the brain cannot
-// yet run far -- anyone in a car (a near drive is not yet lowered), or held by a director. Far: beyond the demote radius,
-// or a far driver whose car is away (ADR-0516: a car is not yet put part-way along its route). Between: as they are.
+// yet run far -- anyone held by a director. Far: beyond the demote radius, or a far driver whose car is away (ADR-0516: a
+// car is not yet put part-way along its route). Between: as they are. A driver is lowered and raised like anyone
+// (ADR-0517: lowered, their car leaves the road and the clock drives the rest of the leg).
 brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
     const Person& p = people[who];
-    if (p.heldByDirector || sim.agents_[static_cast<std::size_t>(p.agent)].inCar >= 0) return brain::Detail::Near;
+    if (p.heldByDirector) return brain::Detail::Near;
     if (p.level == brain::Detail::Far && drivingAway(who)) return brain::Detail::Far;
     // (a far walker the crowd draws is where the crowd has them, on their route: judged by the straight line between
     // the leg's ends instead, a walk whose line passes inside the ring and whose route does not raised and lowered its
@@ -1472,6 +1479,13 @@ void CityBrain::Impl::placeFarBody(AgentId who, bool justLowered) {
     Person& p = people[who];
     Agent& a = agentOf(who);
     const brain::AgentBrain& b = machine->agent(who);
+    // A FAR PERSON SITS IN NO CAR (ADR-0517): lowered at the wheel, they leave its seat (the car stays theirs, away or
+    // in its space); the clock has them from here
+    if (a.inCar >= 0) {
+        const Car c = carNumbered(a.inCar);
+        if (c.valid()) unseat(p.agent, c, a.pos);
+        a.inCar = -1;
+    }
     // (on a walk the crowd is drawing already, the body is left where the walk began: the crowd moves them; just
     // lowered part-way along a walk, they are where their near walk had got to, and the crowd goes on from there)
     const bool sameWalk = a.farWalk && p.farWalkSince == b.stateEntered && b.travelling();
@@ -2299,13 +2313,13 @@ std::string CityBrain::attentionText() const {
         if (p.level == brain::Detail::Far) { ++far; continue; }
         const Agent& a = im.sim.agents_[static_cast<std::size_t>(p.agent)];
         if (p.heldByDirector) ++held;
-        else if (a.inCar >= 0) ++car;
         else if ((a.pos - c).length() < im.sim.pedPromoteRadius) ++inRing;
         else ++between;
+        car += a.inCar >= 0 ? 1 : 0;
     }
     return std::to_string(far) + " far; near: " + std::to_string(inRing) + " within " + fmt("%.0f m", im.sim.pedPromoteRadius) +
-           ", " + std::to_string(between) + " not yet lowered, " + std::to_string(car) + " in a car, " +
-           std::to_string(held) + " held by a director";
+           ", " + std::to_string(between) + " not yet lowered, " + std::to_string(held) + " held by a director; " +
+           std::to_string(car) + " of the near in a car";
 }
 
 std::string CityBrainCost::describe() const {
