@@ -547,6 +547,7 @@ struct CityBrain::Impl {
     // is), or, failing that, a step to its side clear of the lanes.
     Vec2 outOf(Car c) const;
     void writeCarPose(Car c, Vec2 pos, Vec2 heading);
+    void standAt(Car c, Vec2 pos, Vec2 heading);
     void haltWalker(AgentId who);
     void tickWalks(Real dt);
     void tickCars();
@@ -575,7 +576,6 @@ struct CityBrain::Impl {
     std::deque<AgentId> nearSetOutQueue;
     uint64_t tickNumber = 0;   // people whose day has a trip to begin, waiting for a turn (first come first served)
     brain::Detail detailWanted(AgentId who) const;
-    bool carLegAhead(AgentId who) const;
     void placeFarBody(AgentId who, bool justLowered = false);
     void farWalkDrawn(AgentId who);
     void raiseBody(AgentId who);
@@ -588,6 +588,12 @@ struct CityBrain::Impl {
     void tickChoice(AgentId who);
     void parkInSpace(Car c, PlaceRef space);
     void towAway(Car c);
+    // THE FAR CAR TIER (ADR-0516): the car leaves its space (and the road) while the clock drives it; it stands again
+    // in the free kerb space nearest `at` (true), or, none near, at `at`, stranded (false)
+    void sendAway(Car c);
+    bool standInSpaceNear(Car c, Vec2 at);
+    // `who` is far and drives a car that is away: they stay far until it can be put on their route (step 3)
+    bool drivingAway(AgentId who) const;
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
     void outsiderTook(Car c, bool lost);
@@ -710,8 +716,9 @@ struct CityBrain::Impl::LabWorld : brain::World {
         const Car c = im.car(ref);
         if (!c.valid()) return false;
         const CityCarKept& k = im.keptOf(c);
-        // (a car an outsider has stands nowhere a resident could take it from; nor does one left where no lane is)
-        if (!k.standing.valid() || k.heldBy == kOutsider || k.stranded) return false;
+        // (a car an outsider has stands nowhere a resident could take it from; nor does one left where no lane is, nor
+        // one away with its far driver)
+        if (!k.standing.valid() || k.heldBy == kOutsider || k.stranded || k.phase == CarPhase::Away) return false;
         out = k.standing;
         return true;
     }
@@ -742,6 +749,12 @@ struct CityBrain::Impl::LabWorld : brain::World {
         if (!c.valid() || im.keptOf(c).heldBy != who) return;
         // on the road it stays where it is, placed and undriven, and stands at a place of its own
         if (im.onRoad(c)) im.keptOf(c).standing = im.pointPlace(im.carPos(c));
+        // AWAY WITH ITS FAR DRIVER (ADR-0516), who gives the drive up: it stands in the free kerb space nearest where the
+        // clock has them (asked before the state is left), or, none near, there, stranded
+        if (im.keptOf(c).phase == CarPhase::Away) {
+            im.standInSpaceNear(c, im.machine->whereIs(who, im.now()));
+            ++im.counts.awayLeft;
+        }
         im.getOut(who, c);
         CityCarKept& k = im.keptOf(c);
         k.heldBy = brain::kNoAgent;
@@ -749,6 +762,10 @@ struct CityBrain::Impl::LabWorld : brain::World {
         k.phase = CarPhase::Standing;
         im.held.erase(who);   // (a space they were driving to is free again)
         im.tellHousehold(c, who);
+    }
+    void carDrivenByClock(CarRef ref, AgentId who) override {
+        const Car c = im.car(ref);
+        if (c.valid() && im.keptOf(c).heldBy == who && im.keptOf(c).phase != CarPhase::Away) im.sendAway(c);
     }
     void parkCar(CarRef ref, AgentId who, PlaceRef space) override {
         const Car c = im.car(ref);
@@ -1130,6 +1147,12 @@ void CityBrain::Impl::writeCarPose(Car c, Vec2 pos, Vec2 heading) {
     keptOf(c).spaceFront = driving::PathPoint();   // (moved by hand: not where the driving left it)
 }
 
+// ...PUT DOWN THERE: drawn from there this tick too (its PrevTransform with it), not slid there from where it was.
+void CityBrain::Impl::standAt(Car c, Vec2 pos, Vec2 heading) {
+    writeCarPose(c, pos, heading);
+    if (engine::PrevTransform* prev = ecs->get<engine::PrevTransform>(c)) prev->value = poseOf(c);
+}
+
 // The space is the car's: it leaves the driving where the driving left it. Its trip ended there: the driving drove it
 // in on its curve across (Driving::beginTrip's pullInOffset) and it came to rest in the space, its front within the
 // arrival distance of the space's own place; it stays exactly there, and pulls out from there (CityCarKept::spaceFront).
@@ -1139,6 +1162,17 @@ void CityBrain::Impl::parkInSpace(Car c, PlaceRef space) {
     engine::KerbSpacePose pose;
     Vec2 kerbward;
     if (!spacePose(space, pose, kerbward)) return;
+    CityCarKept& kept = keptOf(c);
+    if (kept.phase == CarPhase::Away) {
+        // A FAR DRIVE ENDS (ADR-0516): the car the clock drove stands in the space, where a car in it stands, and is
+        // drawn again from there (no slide from where it last stood)
+        standAt(c, pose.at, pose.facing);
+        kept.phase = CarPhase::Standing;
+        kept.standing = space;
+        ++counts.farParked;
+        ++counts.parkedInSpace;
+        return;
+    }
     const driving::CarId id = idOf(c);
     driving::PathPoint front;
     bool pulledIn = false;
@@ -1174,26 +1208,63 @@ void CityBrain::Impl::towAway(Car c) {
     k.phase = CarPhase::Standing;
     k.tripWanted = false;
     k.spaceFront = driving::PathPoint();
+    if (standInSpaceNear(c, carPos(c))) ++counts.towed;
+    tellHousehold(c, brain::kNoAgent);
+}
+
+// THE CAR STANDS IN THE FREE KERB SPACE NEAREST `at` (a wreck towed; a car away with its far driver, who gave the drive
+// up): where a car in that space stands. None near: it stands at `at`, stranded (nobody can drive it from there). Its
+// phase is Standing either way.
+bool CityBrain::Impl::standInSpaceNear(Car c, Vec2 at) {
+    CityCarKept& k = keptOf(c);
+    k.phase = CarPhase::Standing;
     const uint32_t number = numberOf(c);
     CarRef ref;
     ref.id = number;
-    for (const PlaceRef space : spaces->spacesNear(carPos(c), kSpaceReach, kSpacesLookedAt)) {
+    for (const PlaceRef space : spaces->spacesNear(at, kSpaceReach, kSpacesLookedAt)) {
         if (!spaceFree(space, ref, brain::kNoAgent)) continue;
         engine::KerbSpacePose pose;
         Vec2 kerbward;
         if (!spacePose(space, pose, kerbward)) continue;
         leaveEverySpace(c);
         occupant[space.id] = number;
-        writeCarPose(c, pose.at, pose.facing);
+        standAt(c, pose.at, pose.facing);
         k.standing = space;
         k.stranded = false;
-        ++counts.towed;
-        tellHousehold(c, brain::kNoAgent);
-        return;
+        return true;
     }
-    k.standing = pointPlace(carPos(c));
+    standAt(c, at, carFacing(c));
+    k.standing = pointPlace(at);
     k.stranded = true;
-    tellHousehold(c, brain::kNoAgent);
+    return false;
+}
+
+// AWAY (ADR-0516): its far driver has set off and the clock drives it. It leaves its kerb space (free for another car
+// from now) and, left in a lane by an earlier trip, the road; nothing draws it or sees it until it stands again.
+void CityBrain::Impl::sendAway(Car c) {
+    const driving::CarId id = idOf(c);
+    if (d && d->car(id)) {
+        CarRef ref;
+        ref.id = id.index;
+        skill->endTrip(ref);
+        d->removeCar(id);
+        syncLane(c);
+    }
+    leaveEverySpace(c);
+    CityCarKept& k = keptOf(c);
+    k.phase = CarPhase::Away;
+    k.tripWanted = false;
+    k.stranded = false;
+    k.spaceFront = driving::PathPoint();
+    ++counts.drivenByClock;
+}
+
+bool CityBrain::Impl::drivingAway(AgentId who) const {
+    const brain::AgentBrain& b = machine->agent(who);
+    CarRef ref;
+    ref.id = b.car;
+    const Car c = car(ref);
+    return c.valid() && keptOf(c).heldBy == who && keptOf(c).phase == CarPhase::Away;
 }
 
 void CityBrain::Impl::tickCars() {
@@ -1298,12 +1369,12 @@ int CityBrain::Impl::markerForNode(int node) {
 }
 
 // THE LEVEL A PERSON SHOULD RUN AT (ADR-0493). Near: within the promote radius of the player, or someone the brain cannot
-// yet run far -- anyone in a car or with a car leg in their plan (the far car tier is not built: a car must be in the
-// driving to move), or held by a director. Far: beyond the demote radius. Between: as they are.
+// yet run far -- anyone in a car (a near drive is not yet lowered), or held by a director. Far: beyond the demote radius,
+// or a far driver whose car is away (ADR-0516: a car is not yet put part-way along its route). Between: as they are.
 brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
     const Person& p = people[who];
     if (p.heldByDirector || sim.agents_[static_cast<std::size_t>(p.agent)].inCar >= 0) return brain::Detail::Near;
-    if (carLegAhead(who)) return brain::Detail::Near;
+    if (p.level == brain::Detail::Far && drivingAway(who)) return brain::Detail::Far;
     // (a far walker the crowd draws is where the crowd has them, on their route: judged by the straight line between
     // the leg's ends instead, a walk whose line passes inside the ring and whose route does not raised and lowered its
     // walker over and over)
@@ -1313,19 +1384,6 @@ brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
     if (away < sim.pedPromoteRadius) return brain::Detail::Near;
     if (away > sim.pedDemoteRadius) return brain::Detail::Far;
     return p.level;
-}
-
-// A LEG BY CAR still ahead in their plan (the leg under way or a later one): its way begins in a state the drive skill
-// carries out (brain.lua: pulling_out).
-bool CityBrain::Impl::carLegAhead(AgentId who) const {
-    const brain::AgentBrain& b = machine->agent(who);
-    for (int leg = b.legNow; leg < b.legCount; ++leg) {
-        const brain::WayId w = b.legWay(leg);
-        if (w < table.ways.size() && table.ways[w].begins < table.states.size() &&
-            table.states[table.ways[w].begins].skill == "drive")
-            return true;
-    }
-    return false;
 }
 
 // A FAR PERSON'S BODY: where the brain says they are. On a leg they are not drawn (the sim's `indoors`: a far traveller
@@ -1516,14 +1574,6 @@ void CityBrain::Impl::tickMachine() {
         machine->step(who, brain::Detail::Far);
         dayGateOf[who] = 0;
         ++counts.farVisits;
-        if (carLegAhead(who)) {
-            // a plan by car: raised at once (the far car tier is not built; the car must be driven)
-            raiseBody(who);
-            machine->step(who, brain::Detail::Near);
-            setLevel(who, brain::Detail::Near);
-            ++counts.raised;
-            continue;
-        }
         placeFarBody(who);
         dueOf[who] = machine->nextAttention(who);
         showBody(who);
@@ -1842,8 +1892,8 @@ void CityBrain::Impl::outsiderLeft(Car c) {
 }
 
 std::string CityBrain::Impl::carLine(Car c) const {
-    static const char* const kPhase[] = {"standing", "waiting in its space for the kerb lane to be clear",
-                                         "sliding out of its space", "on the road", "sliding into its space"};
+    static const char* const kPhase[] = {"standing", "waiting in its space for the kerb lane to be clear", "on the road",
+                                         "away, its far driver's drive run by the clock"};
     const CityCarLink& link = linkOf(c);
     const CityCarKept& k = keptOf(c);
     std::string s = "the car of household " +
@@ -1856,7 +1906,7 @@ std::string CityBrain::Impl::carLine(Car c) const {
     }
     s += std::string("is ") + kPhase[static_cast<int>(k.phase)] +
          (k.phase == CarPhase::OnRoad && !aboard(c) ? " (left there)" : "") + ", " +
-         (onRoad(c) && isSpace(k.standing) ? "last in " : isPoint(k.standing) ? "left at " : "in ") + placeName(k.standing);
+         ((onRoad(c) || k.phase == CarPhase::Away) && isSpace(k.standing) ? "last in " : isPoint(k.standing) ? "left at " : "in ") + placeName(k.standing);
     if (k.stranded) s += ", off the road: nobody can drive it from there";
     if (k.heldBy < people.size()) s += ", " + people[k.heldBy].name + " has it";
     else s += ", free";
@@ -2249,12 +2299,12 @@ std::string CityBrain::attentionText() const {
         if (p.level == brain::Detail::Far) { ++far; continue; }
         const Agent& a = im.sim.agents_[static_cast<std::size_t>(p.agent)];
         if (p.heldByDirector) ++held;
-        else if (a.inCar >= 0 || im.carLegAhead(who)) ++car;
+        else if (a.inCar >= 0) ++car;
         else if ((a.pos - c).length() < im.sim.pedPromoteRadius) ++inRing;
         else ++between;
     }
     return std::to_string(far) + " far; near: " + std::to_string(inRing) + " within " + fmt("%.0f m", im.sim.pedPromoteRadius) +
-           ", " + std::to_string(between) + " not yet lowered, " + std::to_string(car) + " in a car or with a car leg ahead, " +
+           ", " + std::to_string(between) + " not yet lowered, " + std::to_string(car) + " in a car, " +
            std::to_string(held) + " held by a director";
 }
 
@@ -2289,6 +2339,11 @@ int CityBrain::farCount() const {
     int n = 0;
     for (const Impl::Person& p : impl_->people) n += p.level == brain::Detail::Far ? 1 : 0;
     return n;
+}
+
+bool CityBrain::residentFar(int who) const {
+    return who >= 0 && static_cast<std::size_t>(who) < impl_->people.size() &&
+           impl_->people[static_cast<std::size_t>(who)].level == brain::Detail::Far;
 }
 
 int CityBrain::markerNamed(const std::string& name) const {

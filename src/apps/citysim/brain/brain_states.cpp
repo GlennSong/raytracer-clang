@@ -92,7 +92,11 @@ BrainTime driveLasts(const StepContext& ctx, const AgentBrain& a) {
     return leg > fixed ? leg - fixed : 0;
 }
 EventId driveFrom(StepContext& ctx, AgentBrain& a, Real fractionDone) {
-    if (!ctx.skillsRun) return kNoId;   // far: nobody drives; the clock stands for the drive
+    if (!ctx.skillsRun) {
+        // far: nobody drives; the clock stands for the drive, and the car is away with it (ADR-0516)
+        ctx.world->carDrivenByClock(carOf(a), ctx.agent);
+        return kNoId;
+    }
     if (!ctx.drive) return raised(ctx, a, 0);
     const CarRef car = carOf(a);
     PlaceRef from = ctx.machine->legStartPlace(a);

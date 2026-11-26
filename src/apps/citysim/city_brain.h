@@ -210,6 +210,10 @@ struct CityBrainCounts {
     uint32_t lowered = 0, raised = 0;   // times a person went far, and came near again
     uint64_t farVisits = 0;             // far people visited because their clock was due
     uint32_t staleWalks = 0;            // walks that finished after their walker had stopped walking (logged, not reported)
+    // ADR-0516: the far car tier
+    uint32_t drivenByClock = 0;   // times a far driver set off and their car went away (CityCarPhase::Away)
+    uint32_t farParked = 0;       // ...and stood again in the space the drive ended at
+    uint32_t awayLeft = 0;        // ...or the drive was given up and it stood in the free space nearest the driver
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.
@@ -328,6 +332,8 @@ public:
     const CityBrainCost& cost() const;
     // How many people are far now (ADR-0493).
     int farCount() const;
+    // Whether resident `who` is far now (the clock runs their day; ADR-0493).
+    bool residentFar(int who) const;
     // Who is inside each place now, by place (ADR-0508): the brain's own answer, one scan of its people.
     void insidePlaces(std::unordered_map<PlaceId, PlaceInside>& out) const;
     // Who is far, and why each near person is near (`brain? attention`).

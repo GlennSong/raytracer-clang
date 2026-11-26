@@ -25407,3 +25407,31 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Next (agreed with Glenn):**
 - Hamlets as places: a small settlement with its own outline where roads face again, even a pass; the easiest first is the pass running through it, as in the mountain-towns lab (ADR-0324), and later one off the road on its own spur.
 - The road file's per-edge `lots_range` (stated, read today only by kerb parking) is the lot pass's to read then.
+
+## ADR-0516 — A far person's drive moves their household car: it is away while the clock drives it, and stands in the space the drive ends at (step 4e, part 1; 2026-11-26)
+
+**Words:** a person is *near* when the brain steps them in full and their skills (walking, driving) move a body, and *far* when the brain's clock stands for what they do (ADR-0493). A *kerb space* is a parking place beside a street's kerb lane. *The far car tier* is the brain driving far people's cars.
+
+**Why:** the brain already drove far people on the clock (brain_states.cpp: "far: the clock stands for the drive"), but their car did not move: it stood in its old space for the whole drive and then jumped into the new one as parking began. So the brain kept anyone with a car leg ahead of them near (`detailWanted`, and a far visit raised them at once), wherever they were. That is why the island has no driving: every driver would be near.
+
+**What happens:**
+- **The car is away:** when a far person sets off (the driving state entered far), the world is told (`World::carDrivenByClock`, a new call with a do-nothing default). The city's world takes the car out of its kerb space (free for another car from then) and, if an earlier trip left it in a lane, off the road. Its phase is the new `CityCarPhase::Away`. A car away is nowhere (`carNowhere`): not drawn, not a physics box, not seen by `carsNear`, not offered to anyone (`carStanding` says no).
+- **It stands again where the drive ends:** as far parking begins, the car takes the leg's space as before (`takeSpace`); an away car is put where a car in that space stands, its drawn-from pose with it (`standAt`: no slide from where it last stood). Counted as `farParked`.
+- **A drive given up:** the person leaving the car while it is away (a new plan, a held state) puts it in the free kerb space nearest where the clock has them, or, none near, there, stranded. The same code a towed wreck uses (`standInSpaceNear`, out of `towAway`). Counted as `awayLeft`.
+- **Who is kept near:** a car leg ahead no longer keeps anyone near, and a far visit no longer raises a driver. Kept near still: anyone in a car (a near drive is lowered in part 2), and anyone a director holds. For now a far driver whose car is away stays far until the drive ends (putting the car part-way along its route when they are raised is part 3).
+- `carLegAhead` is deleted (nothing else read it). The car's line for `brain?` named the wrong phase for a car on the road (its table still had the two slide phases removed earlier); fixed, and it names "away".
+
+**Checked (river_town, `..._far_people_...`, the player standing in the busy part of town for 15 minutes):** 100 far drives set off and all 100 stood in their destination space; at most 35 cars away at once. Every minute: no car away is drawn, every car away is a far person's who is driving, and no far person's car is on the road (new checks). Errors 0, refused 0. The brain 0.477 → 0.382 ms a tick (fewer people kept near).
+
+**Also run:** brain_lab 13 of 13, brain_tests 24 of 24, the unit suite 1,575 of 1,575.
+
+**Measured (`..._crowd_drives_...`, 30 minutes):** the brain 0.320 → 0.306 ms a tick (worst 5.98 → 5.61), the driving 0.500 → 0.307 ms, the whole step 3.22 → 3.09 ms.
+
+**Re-pinned:**
+- `..._far_people_...`: the most far 2974 → 3079; lowered 3362 → 3368, raised 821 → 800, far visits 2793 → 3183; set out 2698 → 2701, arrived 2241 → 2266, at work 1536 → 1553; hash `0xed5196eb8d59851e` → `0xc4e98d0fb2c1609d`. New pins: 100 far drives, 100 stood in their space, 0 given up.
+- `..._crowd_drives_...`: this case's tier centre is the level's player start, so most of the town's drivers now drive far. The most on the road 135 → 51 (still minute 6); trips by car 178 → 63, parked 163 → 58, arrivals 3066 → 3078; set out 3364 → 3362, arrived 3042 → 3054, at work 1764 → 1767, no way 32 → 33, plans with no way 156 → 157; hash `0x0225f04032f23112` → `0xa7bd755c5a38f0fb`; bus calls 157 → 189. The bus check (#344) passes again (bus 12, 104.1 s), only because fewer cars are in the way.
+- `near_tier_in_the_crowd_follows_the_player`: the most near 15 at minute 12 → 10 at minute 7, into physics 27 → 21, back 12 → 11, hash `0xa9d0a7f101cf1cd2` → `0xaede09446c72904f`. Its hit checks still fail (#336).
+
+**Open for Glenn:** `..._crowd_drives_...` was the town's near-driving stress case (135 cars on the road at once). With drivers far it now drives 63 trips, not 178. It could keep everyone near (no tier centre) to stay a driving stress case, and leave far drives to `..._far_people_...`.
+
+**Next:** part 2, a near driver who goes far takes the car off the road; part 3, a far driver raised mid-drive has the car put part-way along its route.

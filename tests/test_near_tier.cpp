@@ -1226,12 +1226,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // And again after every lot was regrown (ADR-0503/0504, not re-pinned then) and river_town took the island's trees
     // and grass (ADR-0511), the two not told apart: 16 -> 15 at minute 12, in 28 -> 27, out 13 -> 12,
     // 0x7caa9eaebc49437d -> 0xa9d0a7f101cf1cd2; contacts 0 (#336 is not fixed).
-    CHECK(mostNear == 15);
-    CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 27u);
-    CHECK(c.intoLane == 12u);
+    // And again when a far person's drive moves their car and a car leg ahead no longer keeps a driver near (ADR-0516:
+    // fewer of the town's cars on the road round the player): 15 at minute 12 -> 10 at minute 7, in 27 -> 21, out 12 ->
+    // 11, 0xa9d0a7f101cf1cd2 -> 0xaede09446c72904f; contacts 0 (the hit checks above still fail, #336).
+    CHECK(mostNear == 10);
+    CHECK(mostNearAt == 7);
+    CHECK(c.intoPhysics == 21u);
+    CHECK(c.intoLane == 11u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0xa9d0a7f101cf1cd2ull);
+    CHECK(hash == 0xaede09446c72904full);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

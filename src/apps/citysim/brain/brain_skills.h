@@ -140,6 +140,13 @@ public:
     virtual void leaveCar(CarRef car, AgentId who) = 0;
     // `who` leaves it in `space`, free.
     virtual void parkCar(CarRef car, AgentId who, PlaceRef space) = 0;
+    // DRIVEN BY THE CLOCK (ADR-0516): `who`, far, sets off in it, and the clock stands for the drive. A world whose cars
+    // are things in it takes the car out of its space (and off the road) until the drive ends: in the leg's space when
+    // the car takes it (takeSpace), or wherever `who` leaves it (leaveCar). The default: nothing happens to it.
+    virtual void carDrivenByClock(CarRef car, AgentId who) {
+        (void)car;
+        (void)who;
+    }
 
     // TRIP ENDS. The nearest kerb parking space to a door that `car` could be left in this moment (false: none near).
     virtual bool spaceNear(PlaceRef door, CarRef car, PlaceRef& out) const = 0;

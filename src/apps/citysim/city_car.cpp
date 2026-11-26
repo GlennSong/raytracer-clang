@@ -28,6 +28,7 @@ void carTickBegins(engine::World& world) {
 }
 
 bool carNowhere(engine::World& world, engine::Entity e) {
+    if (const CityCarKept* kept = world.get<CityCarKept>(e); kept && kept->phase == CityCarPhase::Away) return true;
     return world.has<CityCarRoams>(e) && !world.has<CityCarOnLane>(e) && !world.has<engine::Vehicle>(e);
 }
 

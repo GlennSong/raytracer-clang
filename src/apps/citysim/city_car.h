@@ -56,7 +56,8 @@
 // city decides for them: the hand-over (DrivingHost) puts each down on the road and, every time it arrives, sends it
 // on another trip, its picks hashed from the level's seed and the car's number, which is also the person number its
 // trips are driven as. It has no kerb space, so while the driving does not have it (no room was found to put it down
-// yet) it is nowhere: not drawn and not seen (carNowhere).
+// yet) it is nowhere: not drawn and not seen (carNowhere). So is a household's car while its far driver has it away
+// (CityCarKept, CityCarPhase::Away, ADR-0516).
 //
 // EVERY SYSTEM THAT LOOKS FOR CARS asks carsNear: the old sim's driven cars and these, in one list.
 
@@ -100,6 +101,11 @@ enum class CityCarPhase : uint8_t {
     Standing,         // in a kerb space, or left standing in a lane
     WaitingForRoom,   // in its space, its driver aboard, waiting for the kerb lane to be clear
     OnRoad,           // the driving's (pulling out of its space and into one included: on the driving's curve)
+    // DRIVEN BY THE CLOCK (ADR-0516): its holder is far and on a leg by car, so the brain's clock stands for the drive.
+    // It is in no kerb space (the one it left is free) and not on the road: nowhere, not drawn and not seen
+    // (carNowhere). It stands again when the drive ends: in the leg's space as parking begins, or, the drive given up,
+    // in the free space nearest where the clock had it.
+    Away,
 };
 struct CityCarKept {
     brain::PlaceRef standing;                 // where it stands, or last stood (not valid: an outsider has it)
@@ -161,7 +167,8 @@ struct CityBusRuns {
 // body -- and hands it back if it was one.
 struct CityCarCarriesPlayer {};
 
-// A car that drives round for ever which the driving does not have (no lane component, no physics car): nowhere.
+// NOWHERE: not drawn and not seen. A car that drives round for ever which the driving does not have (no lane component,
+// no physics car), or a household's car its far driver has away (CityCarPhase::Away).
 bool carNowhere(engine::World& world, engine::Entity e);
 // The car entity numbered `id` (CityCarBody::id), whoever's it is; none when there is no such car.
 engine::Entity carEntityNumbered(engine::World& world, uint32_t id);
