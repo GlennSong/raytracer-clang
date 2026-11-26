@@ -202,6 +202,7 @@ struct CityBrainCounts {
     uint32_t dayArrivals = 0;      // ...that arrived
     uint32_t dayNowhere = 0;       // GoTo states with nowhere to go: no place picked, or no street beside it (NoRoute)
     uint32_t dayNoWay = 0;         // trips the brain found no way for (NoRoute)
+    uint32_t daySpots = 0;         // arrivals onto the pick's seat, track or group (ADR-0512)
     uint32_t dayArrivedShut = 0;   // arrivals at a venue not open at that hour
     uint32_t dayToWork = 0;        // arrivals at their job's place
     uint32_t dayToWorkOffShift = 0;   // ...outside their work window (late, or after it)
@@ -220,6 +221,7 @@ struct CityBrainCost {
     double walksMs = 0, machineMs = 0, daysMs = 0;
     // ...and inside them: trips planned (the machine's) and set out by a day (the days'; the place chosen), in all
     double planMs = 0, setOutMs = 0;
+    double worstPlanMs = 0, worstSetOutMs = 0;   // ...and the dearest one of each
     uint64_t plans = 0;
     // ...and how many people's days were read (past their gate), of them on their way to a place, and rests read for
     // their next event (CitySim::restEvents), in all

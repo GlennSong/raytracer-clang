@@ -71,6 +71,8 @@ brain = {
     { name = "be_at", arrive = "indoors" },
     -- at a place with no building to go into (a marker beside a street, ADR-0441): there, they stand outside
     { name = "be_outside_at", arrive = "standing" },
+    { name = "use_spot", arrive = "using_spot" },        -- a seat, a lawn, a track their day picked (ADR-0512)
+    { name = "join_group", arrive = "group_activity" },  -- a group their day picked: a kickabout, a lawn group
   },
 
   events = {
@@ -158,8 +160,10 @@ brain = {
     { name = "no_way", label = "no way there, waiting to try again", group = "at_place", ends = "clock",
       clock = "try_again", seconds = 60,
       on = { try_again = "replan_afresh", things_changed = "replan_afresh", new_intent = "replan" } },
-    { name = "using_spot", label = "using a spot", group = "at_place" },       -- NOT BUILT: sit, lie, lean
-    { name = "group_activity", label = "in a group activity", group = "at_place" },   -- NOT BUILT
+    -- ON A SPOT OR IN A GROUP (ADR-0512): seen; the body walks onto the seat, the track or the group's area and is held
+    -- there (CitySim::stepSpots); the day says how long, a group's end ends it
+    { name = "using_spot", label = "using a spot", group = "at_place", on = { new_intent = "replan" } },
+    { name = "group_activity", label = "in a group activity", group = "at_place", on = { new_intent = "replan" } },
     { name = "working_post", label = "working a post", group = "at_place" },     -- NOT BUILT
 
     -- RESTING (NOT BUILT)

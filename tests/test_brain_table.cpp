@@ -93,7 +93,8 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     // (22 states and 22 events since ADR-0443: `no_way`, a person with no way there who tries again; its clock's
     // `try_again`; and `things_changed`, sent when something a person plans with changes)
     // (24 events since ADR-0484: `boarded` and `alighted`, the ride skill's reports)
-    CHECK(table.states.size() == 22u && table.events.size() == 24u && table.intents.size() == 2u);
+    // (4 intents since ADR-0512: `use_spot` and `join_group`, a seat or a group a day picked)
+    CHECK(table.states.size() == 22u && table.events.size() == 24u && table.intents.size() == 4u);
     CHECK(table.intents[0].name == "be_at" && table.intents[1].name == "be_outside_at");
     CHECK(table.states[table.intents[1].arrive].name == "standing");
     CHECK(table.on[table.state("parking")][table.event("space_taken")].verb == Verb::Go);
@@ -101,9 +102,10 @@ TEST_CASE(brain_shipped_data_reads_compiles_and_binds) {
     std::string built, notBuilt;
     for (const StateRow& s : table.states) (s.fns.built ? built : notBuilt) += s.name + " ";
     // (`waiting` and `riding` built since ADR-0484: the bus)
-    CHECK(built == "walking on_small_wheels pulling_out driving parking waiting riding indoors standing no_way knocked_down "
-                   "stuck crashed possessed released ");
-    CHECK(notBuilt == "boarding alighting hailing using_spot group_activity working_post asleep ");
+    // (`using_spot` and `group_activity` built since ADR-0512: seats, tracks and groups)
+    CHECK(built == "walking on_small_wheels pulling_out driving parking waiting riding indoors standing no_way using_spot "
+                   "group_activity knocked_down stuck crashed possessed released ");
+    CHECK(notBuilt == "boarding alighting hailing working_post asleep ");
     CHECK(table.states[table.start].name == "indoors" && table.states[table.noPlan].name == "no_way");
     // ADR-0443: a person with no way there waits a minute (the data's `seconds`) and plans again with every way allowed;
     // they plan again at once when something they plan with changes; everyone else ignores that

@@ -219,6 +219,9 @@ void registerBehaviours(BehaviourSet& set) {
     const StateFns waits{};
     set.add("indoors", waits);
     set.add("standing", waits);
+    // on a seat or a track, in a group (ADR-0512): waiting, as at a place; the body is the sim's (CitySim::stepSpots)
+    set.add("using_spot", waits);
+    set.add("group_activity", waits);
     // wanting to be somewhere with no way there (ADR-0443): the data says how long they wait before trying again
     // (`seconds`) and what makes them try sooner
     set.add("no_way", waits);
@@ -277,8 +280,7 @@ void registerBehaviours(BehaviourSet& set) {
     set.add("released", released, {"resume_intent"});
 
     // in the data, not built yet
-    for (const char* name : {"boarding", "alighting", "hailing", "using_spot", "group_activity",
-                             "working_post", "asleep"})
+    for (const char* name : {"boarding", "alighting", "hailing", "working_post", "asleep"})
         set.addNotBuilt(name);
 }
 

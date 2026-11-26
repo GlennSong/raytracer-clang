@@ -25268,3 +25268,36 @@ The first load grows the tree models: 271 s once. The frame was about 75 fps, th
 - `near_tier_in_the_crowd_follows_the_player` (not re-pinned after ADR-0503/0504 either; the two are not told apart): the most near 16 → 15, in 28 → 27, out 13 → 12; hash `0x7caa9eaebc49437d` → `0xa9d0a7f101cf1cd2`.
 
 **Still failing, filed before:** the bus that stands 192.3 s at a red light (#344: the same every run with this build, so not chance), the near tier's hit checks and its car with no way past (#336), and river_town's grades (#337).
+
+## ADR-0512 — The brain's people use seats, tracks and groups again, and visit a park outside (#342, #334; 2026-11-25)
+
+**Why:** ADR-0499 deleted the old sim's seat and session stepping (`stepSeats`, `stepSessions`). It listed "sitting on a seat, group games (kickabouts, lawn groups), joggers' laps" as lost, to be rebuilt on the brain. What survived was the catalogue and the pickers: the activity spots (benches, fountain rims, lawns, jogging loops), the groups and their formations, `pickActivity`, `joinSession`, `memberPlace`, `zonePoint`, and the drawing of a seated or lying body (`restPose`). But the brain let go of the spot its own pick had reserved (`setOut` called `releaseSeat` straight after the pick), and every trip of a day ended `indoors`, out of sight. So a person whose day took them to a park stood hidden at the nearest sidewalk.
+
+**What happens:**
+- **Two built states and two intents** (brain.lua). `using_spot` and `group_activity` were in the table, NOT BUILT; now they are waits, seen, like `standing`. New intents: `use_spot` (arrives in `using_spot`) and `join_group` (in `group_activity`).
+- **The day keeps its pick** (`CityBrain::Impl::setOut`). A person lets go of the seat or group they were at when they next set out, not when they pick a new one.
+  - A trip whose pick holds a seat or a track wants `use_spot`; one whose pick holds a place in a group wants `join_group`.
+  - A trip to a park with neither wants `be_outside_at`: they stand there, seen.
+  - Anything else is their own intent, as before.
+- **Arriving starts the spot** (`CitySim::beginSpotUse`, the old arrival branch).
+  - Near, the body walks onto it.
+  - Far, it is put there at once, with nothing drawn moving, and a far visit no longer moves a body that is on a spot (`placeFarBody`).
+  - A group's player is held until the group ends: their day is read again each game minute, as the old sim's "the session says when it ends".
+- **The body step is back** (`CitySim::stepSpots`, the old `stepSeats`, and `stepSessions`), run each tick over the people out on the street:
+  - walk onto the seat and sit, or onto the track and run it;
+  - in a settled group, go to your place in the formation and hold it; in a roaming one, run from point to point of your zone;
+  - when the group ends, walk back to where you left the path.
+  The old leash (the tether of a planner ghost) is gone: the brain's people have none.
+
+**Checked:**
+- river_town, no driving, 10 minutes: 126 arrivals onto a spot, 68 sitting or lying and 8 in a group at the end (a new check). With driving, at 30 minutes: 58 using a spot, 5 in a group, 231 standing outside.
+- brain_lab 13 of 13; the brain table's case (two more built states, two more intents); island 3 minutes: 0 errors.
+
+**Re-pinned:**
+- `..._without_the_driving_...`: set out 2584 → 2581, arrived 2040 → 2038, arrivals 2053 → 2051.
+- `..._crowd_drives_...`: trips by car 174 → 173, parked 158 → 157, arrivals 3216 → 3225, set out 3523 → 3503, arrived 3190 → 3199, no way 41 → 42, plans with no way 237 → 238; hash `0x758473badca5cd6d` → `0x04c8e169c079ad4e`. One resident rode a bus (rides 0 → 1, got off 0 → 1, with no boarding counted: #345).
+- `..._far_people_...`: raised 685 → 691, far visits 3040 → 3038, arrived 2320 → 2316, at work 1521 → 1520; hash `0xa55a761262714a70` → `0xee640d430795683d`.
+
+**Found, not done:**
+- The island brain's worst tick in 3 minutes rose from 43 to 76–88 ms (the average is the same, 11.5 ms). The cost line now prints the dearest plan and the dearest setting out: the worst plan is 6.8 ms, the worst setting out 58.1 ms (the pick of where to go). That is the next fix.
+- When park benches become prefab copies (#315), a seated person will mark their copy's seat taken (findBatchUse, matched once per spot).

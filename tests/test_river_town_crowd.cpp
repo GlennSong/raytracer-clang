@@ -453,6 +453,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // wild forest round it): trips by car 179 -> 174, parked 163 -> 158, arrivals 3227 -> 3216; set out 3520 -> 3523,
     // arrived 3200 -> 3190, no way 42 -> 41, plans with no way 238 -> 237. The people, homes and cars the same. Bus 11
     // still stands 192.3 s at junction 50 (#344).
+    // RE-PINNED when a day's pick of a seat, a track or a group is used again, and a park is visited outside (ADR-0512;
+    // at 30 minutes 58 people using a spot, 5 in a group, 231 standing outside): trips by car 174 -> 173, parked 158 ->
+    // 157, arrivals 3216 -> 3225; set out 3523 -> 3503, arrived 3190 -> 3199, no way 41 -> 42, plans with no way 237 ->
+    // 238; and one resident rode a bus (the riders' checks below).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 5106);
         CHECK(households == 2715);
@@ -461,22 +465,22 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(homeMarkers == 280u);
         CHECK(mostOnRoad == 137);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 174u);
-        CHECK(b.counts().parkedReports == 158u);
+        CHECK(b.counts().tripsBegun == 173u);
+        CHECK(b.counts().parkedReports == 157u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3216u);
+        CHECK(b.machine()->counts().arrivals == 3225u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3523u);
-        CHECK(b.counts().dayArrivals == 3190u);
+        CHECK(b.counts().daySetOut == 3503u);
+        CHECK(b.counts().dayArrivals == 3199u);
         CHECK(b.counts().dayToWork == 1759u);
         CHECK(b.counts().dayNowhere == 4u);
-        CHECK(b.counts().dayNoWay == 41u);
-        CHECK(b.machine()->counts().noPlans == 237u);
+        CHECK(b.counts().dayNoWay == 42u);
+        CHECK(b.machine()->counts().noPlans == 238u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -546,7 +550,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // above and the buses' below
         // 0xf535cd1ac2925c02 -> 0xb25113df86e3d71d (ADR-0504: the lots grown a tile at a time): the counts above
         // 0xb25113df86e3d71d -> 0x758473badca5cd6d (ADR-0511: the island's trees and grass): the counts above
-        CHECK(hash == 0x758473badca5cd6dull);
+        // 0x758473badca5cd6d -> 0x04c8e169c079ad4e (ADR-0512: seats, tracks and groups used): the counts above
+        CHECK(hash == 0x04c8e169c079ad4eull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
@@ -566,8 +571,10 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             // (ADR-0491: nobody: waits 11 -> 0, boardings 3 -> 0, got off 2 -> 0; the residents' waits 3 -> 0, rides
             // 2 -> 0. The sim's own walkers began 2482 trips, a ride found for each, none beating the walk by
             // kBusBeatsWalk; none of the brain's 218 to work went by bus: #335)
-            CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 0u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 0u && b.counts().busRides == 0u);
+            // (ADR-0512: one resident rode, got off 0 -> 1, rides 0 -> 1 -- with no boarding or wait counted: a ride
+            // begun far and ended near counts only its end, #345)
+            CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 1u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 0u && b.counts().busRides == 1u);
             // (the check that some of the sim's own walkers rode too went with them, ADR-0499: every rider is the brain's)
         }
     }
@@ -635,11 +642,13 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // 2283 -> 2321, at work 1519 -> 1523; 0xba9eaef6e5933eb5 -> 0x13aced87fe819df6)
     // (ADR-0511, the island's trees and grass on river_town: lowered 3234 -> 3233, raised 684 -> 685; arrived 2321 ->
     // 2320, at work 1523 -> 1521; 0x13aced87fe819df6 -> 0xa55a761262714a70)
+    // (ADR-0512, seats, tracks and groups used: raised 685 -> 691, far visits 3040 -> 3038; arrived 2320 -> 2316, at work
+    // 1521 -> 1520; 0xa55a761262714a70 -> 0xee640d430795683d)
     if (kFarMinutes == 15) {
         CHECK(mostFar == 2967);
-        CHECK(c.lowered == 3233u && c.raised == 685u && c.farVisits == 3040u);
-        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2320u && c.dayToWork == 1521u);
-        CHECK(hash == 0xa55a761262714a70ull);
+        CHECK(c.lowered == 3233u && c.raised == 691u && c.farVisits == 3038u);
+        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2316u && c.dayToWork == 1520u);
+        CHECK(hash == 0xee640d430795683dull);
     }
 }
 
@@ -668,6 +677,7 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
                     c.dayToWorkOffShift, b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs);
     }
     const citysim::CityBrainCounts& c = b.counts();
+    std::printf("    [no-driving] the machine's last error: %s\n", b.machine()->lastError());
     std::printf("    [no-driving] %d people, %zu cars; arrivals %llu, errors %llu, refused %llu\n", b.residentCount(), b.cars().size(),
                 static_cast<unsigned long long>(b.machine()->counts().arrivals),
                 static_cast<unsigned long long>(b.machine()->counts().errors),
@@ -686,6 +696,20 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
                 insideStaff, placesStaffed);
     CHECK(insidePeople > 1000);
     CHECK(insideStaff > 500 && placesStaffed > 50);
+    // ON A SEAT, A TRACK OR IN A GROUP (ADR-0512): the day's picks that held one are used -- walked onto, sat on, run
+    // round, played in -- and some are at it at the end
+    int resting = 0, playing = 0, onTheWay = 0;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+        const citysim::Agent& ag = sim.agents()[i];
+        citysim::CitySim::RestPose rp;
+        if (sim.restPose(static_cast<int>(i), rp)) ++resting;
+        if (ag.session >= 0 && ag.seatPhase == 2) ++playing;
+        if (ag.seatPhase == 1) ++onTheWay;
+    }
+    std::printf("    [no-driving] spots: %u arrivals onto one; now %d sitting or lying, %d in a group, %d walking onto one; %zu "
+                "groups\n", c.daySpots, resting, playing, onTheWay, sim.sessions().size());
+    CHECK(c.daySpots > 50u);
+    CHECK(resting + playing > 10);
     CHECK(b.residentCount() > 5000);
     CHECK(b.cars().empty());
     CHECK(c.tripsBegun == 0u);
@@ -699,6 +723,8 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
     // (ADR-0499, the old sim's people gone: set out 2569 -> 2567, arrived 2100 -> 2095, arrivals 2117 -> 2112)
     // (ADR-0503/0504, every lot regrown: set out 2567 -> 2584, arrived 2095 -> 2040, at work 1433 -> 1369, arrivals
     // 2112 -> 2053)
-    CHECK(c.daySetOut == 2584u && c.dayArrivals == 2040u && c.dayToWork == 1369u);
-    CHECK(b.machine()->counts().arrivals == 2053u);
+    // (ADR-0512, a day's pick of a seat, a track or a group used again: set out 2584 -> 2581, arrived 2040 -> 2038,
+    // arrivals 2053 -> 2051)
+    CHECK(c.daySetOut == 2581u && c.dayArrivals == 2038u && c.dayToWork == 1369u);
+    CHECK(b.machine()->counts().arrivals == 2051u);
 }

@@ -139,6 +139,8 @@ struct CityBrain::Impl {
     TravelCatalog travel;
     brain::BehaviourSet behaviours;
     brain::BrainTable table;
+    // the intents a day's trip to a seat, a group or a park wants (brain.lua; -1: the table has none, ADR-0512)
+    int spotIntent = -1, groupIntent = -1, outsideIntent = -1;
     std::vector<BrainMarker> markers;
     std::unique_ptr<brain::RoadPlaces> spaces;
     std::vector<Vec2> points;   // where a car was left in a lane, by the low bits of a point place
@@ -635,7 +637,9 @@ struct CityBrain::Impl::NotingPlanner : brain::Planner {
     bool plan(const brain::PlanAsk& ask, brain::PlanLegs& out) override {
         const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
         const bool ok = inner.plan(ask, out);
-        im.cost.planMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const double planMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        im.cost.planMs += planMs;
+        im.cost.worstPlanMs = std::max(im.cost.worstPlanMs, planMs);
         ++im.cost.plans;
         if (ask.agent < im.people.size()) im.people[ask.agent].reason = ok ? inner.lastReason() : inner.lastError();
         return ok;
@@ -1411,7 +1415,7 @@ void CityBrain::Impl::placeFarBody(AgentId who, bool justLowered) {
     // lowered part-way along a walk, they are where their near walk had got to, and the crowd goes on from there)
     const bool sameWalk = a.farWalk && p.farWalkSince == b.stateEntered && b.travelling();
     const bool walkingOn = justLowered && b.travelling() && table.states[b.state].skill == "walk";
-    if (!sameWalk && !walkingOn) {
+    if (!sameWalk && !walkingOn && a.seatPhase == 0) {   // (one on a seat or in a group stays there, ADR-0512)
         const Vec2 at = machine->whereIs(who, now());
         if ((at - a.pos).length() > engine::kSamePoint) {
             a.pos = at;
@@ -1571,7 +1575,9 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
             p.waitingToSetOut = false;
             const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
             setOut(who, s);
-            cost.setOutMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            const double setOutMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            cost.setOutMs += setOutMs;
+            cost.worstSetOutMs = std::max(cost.worstSetOutMs, setOutMs);
             return;
         }
         const PlaceRef wanted = markerPlace(p.dayMarker, who);
@@ -1594,6 +1600,8 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
             a.outingTo = -1;
             p.atMarker = p.dayMarker;
             fireDay(who, GoalEvent::Arrived);
+            // ON THE PICK'S SEAT, TRACK OR GROUP (ADR-0512): near, they walk onto it; far, they are put on it
+            if (sim.beginSpotUse(a, p.level == brain::Detail::Far)) ++counts.daySpots;
         } else if (b.state == table.noPlan) {
             ++counts.dayNoWay;
             a.outingTo = -1;
@@ -1622,6 +1630,11 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
         a.goalHours += dtHours;
     }
     if (total < p.dayRetryAt) return;
+    // A GROUP'S PLAYER (ADR-0512): the group says when it ends (CitySim::stepSessions); read again in a game minute
+    if (a.session >= 0) {
+        dayGateOf[who] = total + 1.0 / 60.0;
+        return;
+    }
     ++cost.restReads;
     GoalEvent events[CitySim::kRestEvents];
     const int n = sim.restEvents(a, s, events);
@@ -1644,11 +1657,15 @@ void CityBrain::Impl::setOut(AgentId who, const GoalState& s) {
     Agent& a = agentOf(who);
     int marker = -1;
     p.dayVenue = -1;
+    sim.releaseSeat(a);   // (off the seat or out of the group they were at: ADR-0512)
     const int origin = sim.walkPoints_.empty() ? -1 : sim.walkPoints_.nearestNode(a.pos);
     const int picked = origin >= 0 ? sim.choosePickedNode(a, origin, s) : -1;
+    bool outdoors = false;   // the pick is out of doors: a park, a seat, a track, a group's area
     if (picked >= 0) {
-        sim.releaseSeat(a);   // (they stand at the marker: no seat or group of the pick's is theirs)
+        // (the pick's seat or place in a group, if it held one, is theirs from now: they go to it, ADR-0512)
         const int v = a.tripVenue;
+        outdoors = a.tripSeat >= 0 || a.session >= 0 ||
+                   !(v >= 0 && v < static_cast<int>(sim.venues_.size()) && placeIsIndoors(sim.venues_[static_cast<std::size_t>(v)].type));
         if (v >= 0 && v < static_cast<int>(sim.venues_.size()) && sim.venues_[static_cast<std::size_t>(v)].place != kNoPlace) {
             marker = markerForPlace(sim.venues_[static_cast<std::size_t>(v)].place);
             p.dayVenue = v;
@@ -1681,7 +1698,13 @@ void CityBrain::Impl::setOut(AgentId who, const GoalState& s) {
     p.setOutTick = tickNumber;
     p.dayMarker = marker;
     a.activity = s.activity;
-    machine->setIntent(who, p.intentKind, to);
+    // WHAT THEY WANT AT IT (ADR-0512): on the pick's seat or track (use_spot), in its group (join_group), outside at a
+    // park (be_outside_at); else their own intent, indoors at a place
+    brain::IntentKind kind = p.intentKind;
+    if (a.session >= 0 && groupIntent >= 0) kind = static_cast<brain::IntentKind>(groupIntent);
+    else if (a.tripSeat >= 0 && spotIntent >= 0) kind = static_cast<brain::IntentKind>(spotIntent);
+    else if (outdoors && outsideIntent >= 0) kind = static_cast<brain::IntentKind>(outsideIntent);
+    machine->setIntent(who, kind, to);
 }
 
 // The event moves their goal state, when their table has a row for it.
@@ -1900,6 +1923,9 @@ bool CityBrain::start(engine::World& world, const std::vector<engine::CityMarker
 #else
     return refuse("the brain's states and the ways of travelling are Lua files: this build has no scripting");
 #endif
+    im.spotIntent = im.table.intent("use_spot");
+    im.groupIntent = im.table.intent("join_group");
+    im.outsideIntent = im.table.intent("be_outside_at");
     // the events this class posts itself
     const auto eventNamed = [&](const char* name, brain::EventId& into) {
         const int e = im.table.event(name);
@@ -2232,10 +2258,10 @@ std::string CityBrainCost::describe() const {
     const double n = static_cast<double>(std::max<uint64_t>(1, ticks));
     return fmt("%.3f ms a tick", ms / n) + " (worst " + fmt("%.3f", worstMs) + "): walks " + fmt("%.3f", walksMs / n) +
            ", machine " + fmt("%.3f", machineMs / n) + " (planning " + fmt("%.3f", planMs / n) + ", " +
-           fmt("%.0f plans", static_cast<double>(plans)) + "), days " + fmt("%.3f", daysMs / n) + " (setting out " +
+           fmt("%.0f plans", static_cast<double>(plans)) + ", the worst " + fmt("%.1f ms", worstPlanMs) + "), days " + fmt("%.3f", daysMs / n) + " (setting out " +
            fmt("%.3f", setOutMs / n) + "; " + fmt("%.0f", static_cast<double>(dayReads) / n) + " days read a tick, " +
            fmt("%.0f", static_cast<double>(goToReads) / n) + " on their way, " + fmt("%.0f", static_cast<double>(restReads) / n) +
-           " rests read), the rest " + fmt("%.3f", (ms - walksMs - machineMs - daysMs) / n);
+           " rests read; the worst setting out " + fmt("%.1f ms", worstSetOutMs) + "), the rest " + fmt("%.3f", (ms - walksMs - machineMs - daysMs) / n);
 }
 
 void CityBrain::insidePlaces(std::unordered_map<PlaceId, PlaceInside>& out) const {

@@ -1251,6 +1251,9 @@ private:
                     const std::function<int(const Session&)>& freeRole);
     engine::Vec2 zonePoint(const Session& s, int role, uint32_t bits) const;   // a point in that role's zone
     void releaseSeat(Agent& a);
+    bool beginSpotUse(Agent& a, bool far);   // the brain's person at their pick's seat or group (ADR-0512)
+    void stepSpots(Real dt);                 // ...and the bodies on one, each tick
+    void stepSessions();                     // the groups: gathering, under way, ending
     int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     Real commuteSecondsMedian_ = 0;
