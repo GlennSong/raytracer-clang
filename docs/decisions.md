@@ -25301,3 +25301,51 @@ The first load grows the tree models: 271 s once. The frame was about 75 fps, th
 **Found, not done:**
 - The island brain's worst tick in 3 minutes rose from 43 to 76–88 ms (the average is the same, 11.5 ms). The cost line now prints the dearest plan and the dearest setting out: the worst plan is 6.8 ms, the worst setting out 58.1 ms (the pick of where to go). That is the next fix.
 - When park benches become prefab copies (#315), a seated person will mark their copy's seat taken (findBatchUse, matched once per spot).
+
+## ADR-0524 — What stands on an open lot is prefabs, placed by name (#315, the park port, part 1: playgrounds; 2026-11-25)
+
+**Why:** a playground's swings, slide, climbing frame, seesaw and sandpit were boxes the lot pass sculpted straight into the lot's baked mesh. Nobody could use them, and the same things existed as prefabs with seats that swing and a roundabout that turns. #315 makes the prefab the one.
+
+**Words:** the *lot pass* is the bake step that decides what stands on every lot. An *open lot* is one with no building: a park, playground, garden or car park. A *batch copy* is a prefab drawn without an entity of its own (ADR-0520). A *ground tile* here is a 256 m square of the map.
+
+**What happens:**
+- **A lot can place a prefab by name.** `OutdoorPiece` (a thing a lot places outdoors) gained `prefab`. With it set, the piece is that prefab at that point, turned that way; without it, it is a furniture-kit piece as before. This is saved in the lots bake (`kLotsFormatVersion` 9).
+- **`open_lots.lua` says what a playground chooses from**: each prefab, the room it needs along the street and back from it, and how it is turned. The lot pass reads only this file, never a prefab's model, and the file is part of the lots bake key, so editing it re-bakes.
+- **The lot pass places the equipment** in the same rows as before, as many as the rectangle takes, in a shuffled order. The sculpted boxes are deleted.
+- **The level loader stands each one as a batch copy** held by its 256 m ground tile.
+- **A tile's copies are solid only near the player** (`PrefabBatches::bodiesWithin`, 60 m here; kept until 75 m). A city has thousands of these, and their collision bodies far away would be memory for nothing. A building's interior holder is unchanged: it only exists near the player anyway. The bodies are made while driving too, so a car meets a swing.
+- **Two new models:** `playground_climbing_frame` and `playground_sandpit`. The roundabout joins the set.
+
+**Part 2, outdoor furniture (same day):**
+- **Every piece of furniture a lot stands outdoors is a prefab**: benches, plaza benches, bleachers, café tables and chairs, high tables and bar stools, and the beach's loungers, towels and umbrellas. `open_lots.lua` has a `furniture` table: the kit piece's name, the prefab (or a list of them, one taken by where the piece stands, for the beach's colours), and how far the prefab's origin is from its back edge. The lot pass's placement code is unchanged: `outdoorPiece` looks the piece up and returns the prefab placement.
+- **The prefabs with no model of their own are the kit's own pieces** through `prop_models.lua` (`bistro_table`, `high_table`, `sun_lounger`, `beach_towel`, `beach_umbrella`), so they look as they did and use the furniture library's seats.
+- **The loader's own drawing of outdoor kit furniture is deleted**, with its 160 m cells and their `Interactables` sets. A kit piece with no prefab named is not stood, and the loader warns which.
+- **A park bench can be lain along** as well as sat on (a `lie` marker on the model).
+- **The seats the city's people use are unchanged.** The lot pass still states each sit spot itself beside the bench (`sitSpots`), and that list alone feeds the city (`ActivitySpots`).
+- **`findBatchUse(world, point, radius, pose, spot, holder)`** finds the free seat or lying place nearest a point on any holder's copies, so the city can mark the copy's seat taken when someone sits on a stated spot (the agent brain session wires it).
+- **Drawn as far as before:** 150 m, 300 m for a structure (bleachers).
+- **Outdoor furniture is now solid** near the player. The kit's outdoor pieces had no collision at all.
+
+**Measured** (island_8_nature, `tools/prefab_yardstick.py`; old = 0ddcf8bb, run in turn with the new one; the old viewer bakes into its own folder with `RT_BUNDLE_DIR`, because the two have different lots tags and otherwise re-bake each other's lots every run, which spoiled a first set):
+
+| | frame avg (ms) | p95 (ms) | drawing (ms) | GPU buffers |
+|---|---|---|---|---|
+| before | 25.39, 24.41, 25.71, 25.51 | 32.89, 32.57, 33.16, 32.94 | 6.60, 6.55, 6.71, 6.68 | 3,523 MB |
+| parts 1 and 2 | 25.79, 24.43, 25.10 | 33.26, 33.27, 34.13 | 6.89, 6.74, 6.65 | 3,515 MB |
+
+The average is no worse. The p95 reads about half a millisecond higher, inside what one run moves by but worth watching. The island stands 15,504 outdoor copies in 463 ground tiles, as 10,193 draw groups and 103,126 transforms.
+
+**Lots tag:** `2026-11-25.3`, with Glenn's OK given directly on 2026-11-25. Every level re-bakes its lots once.
+
+**Seen in the game** (river_town, from a playground's gate): sandpit, seesaw, climbing frame, slide and swings standing on the rubber inside the fence.
+
+**What is left:**
+- **Gardens, park fountains, the quad and the sports field** are still sculpted. Parts 3 on.
+- **On a slope a piece stands at the ground height under its own middle**, upright, so a wide piece (the sandpit) is part buried on one side. The old sculpted pieces followed the slope instead. A playground lot wants a level pad.
+- **Not checked in the game:** walking into the equipment (the streamed bodies), using a swing in a city playground, and how a bench, a café terrace and a beach look with the prefabs.
+- **Too many draw groups:** 10,193 for the island's outdoor copies (a prefab is several parts at two levels, in every tile it stands in). It measures no worse, but fewer, larger groups for the far level is owed.
+- **A beach umbrella has no body**: the kit's box for it is its whole canopy down to the sand.
+- **A build without scripting stands no outdoor furniture**, as it stands no kerb props: the names come from `open_lots.lua`.
+- `src/engine/playground.h` (the movement lab's swings and monkey bars for the player) is a second playground system. It is not touched here.
+- `RT_OPENLOT_DEBUG=1` prints each playground's gate and the way to look in.
+

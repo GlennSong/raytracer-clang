@@ -735,6 +735,24 @@ TEST_CASE(a_buildings_prefab_seats_take_the_citys_people_in_a_fixed_order) {
     for (const BatchSpot& sp : spots)
         if (sp.pose == 1) CHECK(sp.at.m[1][3] > 0.3 && sp.at.m[1][3] < 0.9);
 
+    // FOUND BY PLACE (findBatchUse: the city knows where a seat is, not which copy it is on): the second chair's seat
+    // from a point beside it; nothing from far off; a place to lie only on the bed
+    {
+        BatchSpot found;
+        Entity where;
+        CHECK(findBatchUse(world, Vec3(2.1, 0.4, 0.1), 1.0, 0, found, where) && where == holder && found.copy == 1 && found.pose == 0);
+        CHECK(!findBatchUse(world, Vec3(40, 0, 40), 1.0, -1, found, where));
+        CHECK(findBatchUse(world, Vec3(0, 0.4, 5), 3.0, 1, found, where) && found.copy == bedCopy && found.pose == 1);
+        // taken, it is no longer found; the next nearest is
+        occupyBatchSpot(world, holder, 1, found.use, false);
+        BatchSpot seat;
+        CHECK(findBatchUse(world, Vec3(2.1, 0.4, 0.1), 1.0, 0, seat, where));
+        occupyBatchSpot(world, holder, seat.copy, seat.use, true);
+        BatchSpot next;
+        CHECK(!findBatchUse(world, Vec3(2.1, 0.4, 0.1), 1.0, 0, next, where));
+        occupyBatchSpot(world, holder, seat.copy, seat.use, false);
+    }
+
     // THE PLANNER (interior_occupants.h): three people by day sit; nobody lies down. The same three seats each time.
     const Interactables none;
     const FurnitureLibrary& lib = FurnitureLibrary::global();

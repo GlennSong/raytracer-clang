@@ -48,7 +48,8 @@ private:
         Real range = 12.0;
     };
     void sounds(FrameContext& ctx);
-    void batches(FrameContext& ctx, Entity player, const Vec3& pos);   // wake, sleep, and the collision of those at rest
+    void batches(FrameContext& ctx, Entity player, const Vec3& pos);
+    void batchBodies(FrameContext& ctx, const Vec3& pos);   // wake, sleep, and the collision of those at rest
     PhysicsSystem* physics_ = nullptr;
     AudioClipHandle clip(FrameContext& ctx, const std::string& name);
     std::map<std::string, Sound> sounds_;

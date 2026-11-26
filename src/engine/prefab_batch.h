@@ -81,6 +81,10 @@ struct PrefabBatches {
     // something by itself or under someone: set as copies are added and used, never cleared, so the holders that
     // have neither are skipped without a look at their copies
     bool mayLight = false, mayStir = false;
+    // > 0: its copies are solid only while the player is within this many metres of the ball round them (and for a
+    // quarter as far again once they are, so the bodies do not flicker at the edge). 0: always. For the holders a
+    // city has thousands of (a ground tile's props); a building's interior is only there near the player anyway.
+    Real bodiesWithin = 0;
     // What dresses a copy that wakes (shared with whoever made the copies).
     std::shared_ptr<ModelDresser> dresser;
     // THE COLLISION of the copies at rest: two bodies the holder's owner makes from batchCollisionTriangles and
@@ -147,6 +151,10 @@ struct BatchSpot {
 // Every spot of a holder that is free, in a fixed order (by copy, then by use), so the same people take the same
 // seats each time. `mine`: spots to count as free although they are taken (the caller's own, from its last plan).
 void batchSpots(World& world, Entity holder, std::vector<BatchSpot>& out, const std::vector<std::pair<uint32_t, uint32_t>>* mine = nullptr);
+// The free spot nearest `point`, within `radius` of it, on any holder's copies: for whoever knows only where a seat
+// is (the city's activity spots, which the lot pass states beside each bench). `pose`: 0 a seat, 1 a place to lie,
+// -1 either. False when there is none. The distance is from the point to the spot's marker.
+bool findBatchUse(World& world, const Vec3& point, Real radius, int pose, BatchSpot& out, Entity& holder);
 // Put someone on a spot, or take them off. A taken seat is not offered to the player. A seat whose use runs or
 // sways makes its copy busy: it wakes and moves while the player is near, and is only a flag when they are not.
 void occupyBatchSpot(World& world, Entity holder, uint32_t copy, uint32_t use, bool taken);

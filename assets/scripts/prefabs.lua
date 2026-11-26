@@ -66,6 +66,10 @@ return {
   playground_slide_tall = { model = "playground_slide_tall", physics = { body = "static" },
     uses = { { at = "slide_start", say = "sit", sit = true },
              { at = "slide_end", say = "sit", sit = true } } },
+  playground_climbing_frame = { model = "playground_climbing_frame", physics = { body = "static" },
+    uses = { { at = "seat_*", say = "sit", sit = true } } },
+  playground_sandpit = { model = "playground_sandpit", physics = { body = "static" },
+    uses = { { at = "seat_*", say = "sit", sit = true } } },
   -- furniture and street pieces with moving parts (models.lua, model_kit.lua). Each has a still prefab, solid where
   -- its model's shapes say, and an `_in_use` one whose script moves it as people using it would (model_moves.lua),
   -- until prefabs carry interactions and people do. The clock always runs, and a turning barber's pole is the pole.
@@ -544,6 +548,19 @@ return {
   tv_unit = { model = "tv_unit", physics = { body = "static" } },
   shelving = { model = "shelving", physics = { body = "static" } },
   bistro_chair = { model = "bistro_chair", physics = { body = "static" } },
+  -- the rest of what a lot stands outdoors (open_lots.lua `furniture`); a towel is nothing to walk into
+  bistro_table = { model = "bistro_table", physics = { body = "static" } },
+  high_table = { model = "high_table", physics = { body = "static" } },
+  -- (an umbrella's kit box is its whole canopy down to the sand, which nobody could walk under: no body)
+  beach_umbrella = { model = "beach_umbrella", physics = { body = "none" } },
+  beach_umbrella_2 = { model = "beach_umbrella_2", physics = { body = "none" } },
+  sun_lounger = { model = "sun_lounger", physics = { body = "static" } },
+  sun_lounger_2 = { model = "sun_lounger_2", physics = { body = "static" } },
+  sun_lounger_3 = { model = "sun_lounger_3", physics = { body = "static" } },
+  beach_towel = { model = "beach_towel", physics = { body = "none" } },
+  beach_towel_2 = { model = "beach_towel_2", physics = { body = "none" } },
+  beach_towel_3 = { model = "beach_towel_3", physics = { body = "none" } },
+  beach_towel_4 = { model = "beach_towel_4", physics = { body = "none" } },
   waiting_seats = { model = "waiting_seats", physics = { body = "static" } },
   booth = { model = "booth", physics = { body = "static" } },
   vanity = { model = "vanity", physics = { body = "static" } },

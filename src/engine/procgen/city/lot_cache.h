@@ -23,7 +23,7 @@
 namespace engine {
 namespace lotcache {
 
-constexpr int kLotsFormatVersion = 8;   // 8: written tile by tile, each tile's records and grades in sections of their own and listed in `tiles` (ADR-0504)   // 7: LotBuilding::walkways, a lot's paths stated as the road model's walkways, replace LotBuilding::walks (ADR-0476)   // 6: LotBuilding::frontage and DoorSpec::frontage, where each fronts (ADR-0474)   // 5: DoorSpec::open (a fire station's open bays)   // 2: grown parts stored per render cell when written with cell > 0; 4: kLotPartSlots (ground-relative draped slots) + ground-relative park/under-deck padMesh
+constexpr int kLotsFormatVersion = 9;   // 9: OutdoorPiece::prefab, a prefab placed on a lot by name (ADR-0524)   // 8: written tile by tile, each tile's records and grades in sections of their own and listed in `tiles` (ADR-0504)   // 7: LotBuilding::walkways, a lot's paths stated as the road model's walkways, replace LotBuilding::walks (ADR-0476)   // 6: LotBuilding::frontage and DoorSpec::frontage, where each fronts (ADR-0474)   // 5: DoorSpec::open (a fire station's open bays)   // 2: grown parts stored per render cell when written with cell > 0; 4: kLotPartSlots (ground-relative draped slots) + ground-relative park/under-deck padMesh
 
 void putBuildingParams(bundle::BinWriter& w, const BuildingParams& p);
 bool getBuildingParams(bundle::BinReader& r, BuildingParams& p);

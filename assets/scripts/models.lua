@@ -34,6 +34,8 @@ return {
   playground_roundabout = { recipe = "playground_roundabout" },
   playground_slide = { recipe = "playground_slide" },
   playground_slide_tall = { recipe = "playground_slide", args = { height = 2.2, paint = "orange" } },
+  playground_climbing_frame = { recipe = "playground_climbing_frame" },
+  playground_sandpit = { recipe = "playground_sandpit" },
   -- furniture and street pieces with moving parts (model_kit.lua): each a model of its own, built from the furniture
   -- kit's shape words so it matches what the interiors place
   office_chair_adjustable = { recipe = "swivel_chair" },
@@ -206,6 +208,18 @@ return {
   tv_unit = { recipe = "prop_models", args = { kind = "furniture", name = "tv_unit" } },
   shelving = { recipe = "prop_models", args = { kind = "furniture", name = "shelving" } },
   bistro_chair = { recipe = "prop_models", args = { kind = "furniture", name = "bistro_chair" } },
+  -- the rest of what a lot stands outdoors (open_lots.lua `furniture`), each the furniture kit's own piece
+  bistro_table = { recipe = "prop_models", args = { kind = "furniture", name = "bistro_table" } },
+  high_table = { recipe = "prop_models", args = { kind = "furniture", name = "high_table" } },
+  beach_umbrella = { recipe = "prop_models", args = { kind = "furniture", name = "beach_umbrella" } },
+  beach_umbrella_2 = { recipe = "prop_models", args = { kind = "furniture", name = "beach_umbrella", variant = 3 } },
+  sun_lounger = { recipe = "prop_models", args = { kind = "furniture", name = "sun_lounger" } },
+  sun_lounger_2 = { recipe = "prop_models", args = { kind = "furniture", name = "sun_lounger", variant = 2 } },
+  sun_lounger_3 = { recipe = "prop_models", args = { kind = "furniture", name = "sun_lounger", variant = 5 } },
+  beach_towel = { recipe = "prop_models", args = { kind = "furniture", name = "beach_towel" } },
+  beach_towel_2 = { recipe = "prop_models", args = { kind = "furniture", name = "beach_towel", variant = 1 } },
+  beach_towel_3 = { recipe = "prop_models", args = { kind = "furniture", name = "beach_towel", variant = 4 } },
+  beach_towel_4 = { recipe = "prop_models", args = { kind = "furniture", name = "beach_towel", variant = 6 } },
   waiting_seats = { recipe = "prop_models", args = { kind = "furniture", name = "waiting_seats" } },
   booth = { recipe = "prop_models", args = { kind = "furniture", name = "booth" } },
   vanity = { recipe = "prop_models", args = { kind = "furniture", name = "vanity" } },

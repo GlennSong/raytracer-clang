@@ -6710,44 +6710,70 @@ bool LevelLoader::load(const std::string& path,
                 engine::ensureFurnitureLibraryLoaded();
 #endif
                 const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
-                std::map<std::pair<long, long>, std::vector<engine::PlacedPiece>> cells;
+                std::map<std::string, int> unnamed;
+                // THE PREFABS a lot places (OutdoorPiece::prefab; #315, ADR-0524): each a copy in the batches of the
+                // 256 m ground tile it stands on (prefab_batch.h). A tile's copies are solid only while the player is
+                // near it (PrefabBatches::bodiesWithin), so a city's thousands cost no bodies far away.
+                std::map<std::pair<long, long>, Entity> prefabTiles;
+                std::map<std::string, std::pair<bool, engine::Prefab>> prefabLines;
+                const std::shared_ptr<ModelDresser> outdoorDresser = std::make_shared<ModelDresser>(renderer, assets);
+                std::size_t prefabsStood = 0;
                 auto place = [&](const engine::OutdoorPiece& op) {
                     const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
-                    engine::PlacedPiece pp;
-                    pp.piece = op.piece;
-                    pp.variant = op.variant;
-                    pp.xform = engine::outdoorPieceXform(op, fy);
-                    cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
-                        .push_back(pp);
+                    if (!op.prefab.empty()) {
+#ifdef RT_ENABLE_SCRIPTING
+                        std::map<std::string, std::pair<bool, engine::Prefab>>::iterator line = prefabLines.find(op.prefab);
+                        if (line == prefabLines.end()) {
+                            std::pair<bool, engine::Prefab> found;
+                            std::string why;
+                            found.first = engine::findPrefab(op.prefab, found.second, levelDir, &why);
+                            if (!found.first) LOG_WARN << "[furniture] a lot's prefab '" << op.prefab << "': " << why << " (none are stood)";
+                            // drawn as far as the kit's outdoor furniture was (150 m), or twice that for a structure
+                            // (a stand of bleachers): without this a bench's far shape is drawn at any distance, and
+                            // the island has thirteen thousand
+                            const Real reach = found.second.drawClass == "structure" ? Real(300) : Real(150);
+                            found.second.drawDistance = found.second.drawDistance > 0 ? std::min(found.second.drawDistance, reach) : reach;
+                            line = prefabLines.emplace(op.prefab, std::move(found)).first;
+                        }
+                        if (!line->second.first) return;
+                        const std::pair<long, long> tile{static_cast<long>(std::floor(op.at.x / 256.0)), static_cast<long>(std::floor(op.at.y / 256.0))};
+                        std::map<std::pair<long, long>, Entity>::iterator holder = prefabTiles.find(tile);
+                        if (holder == prefabTiles.end()) {
+                            const Entity e = world.create();
+                            engine::PrefabBatches held;
+                            held.dresser = outdoorDresser;
+                            held.bodiesWithin = 60;
+                            world.add<engine::PrefabBatches>(e, std::move(held));
+                            holder = prefabTiles.emplace(tile, e).first;
+                        }
+                        Transform at;
+                        at.position = Vec3(op.at.x, fy, op.at.y);
+                        at.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), op.yaw);
+                        std::string why;
+                        if (engine::batchPrefab(world, holder->second, outdoorDresser.get(), line->second.second, at, levelDir, &why) != engine::kNoBatchCopy) ++prefabsStood;
+                        else LOG_WARN << "[furniture] a lot's prefab '" << op.prefab << "': " << why;
+#endif
+                        return;
+                    }
+                    // (a kit piece open_lots.lua names no prefab for: nothing stands there)
+                    ++unnamed[engine::furniturePieceName(static_cast<engine::Piece>(op.piece))];
                 };
                 for (const engine::LotBuilding& lb : grown.lots)
                     for (const engine::OutdoorPiece& op : lb.furniture) place(op);
                 for (const engine::OutdoorPiece& op : beachFurniture) place(op);   // (the beach's loungers)
-                engine::FurnitureDrawCache outdoorDraw;
-                std::size_t pieces = 0, seats = 0;
-                for (const auto& [cell, list] : cells) {
-                    std::vector<Entity> made;
-                    engine::spawnFurnitureGroups(world, assets, &renderer, outdoorDraw, list, Vec3(0.80, 0.78, 0.75), 150.0, made);
-                    engine::Interactables set;
-                    for (const engine::PlacedPiece& pp : list)
-                        if (flib.interactive(static_cast<engine::Piece>(pp.piece)))
-                            set.pieces.push_back({pp.piece, engine::interactXform(flib.find(static_cast<engine::Piece>(pp.piece)), pp.xform, pp.variant), 0, -1, pp.variant});
-                    if (!set.pieces.empty()) {
-                        set.refreshBounds();
-                        seats += set.pieces.size();
-                        Entity ie = world.create();
-                        world.add<engine::Interactables>(ie, std::move(set));
+                for (const std::pair<const std::string, int>& u : unnamed)
+                    LOG_WARN << "[furniture] " << u.second << " '" << u.first << "' a lot placed outdoors have no prefab in open_lots.lua `furniture`: not stood";
+                if (prefabsStood > 0) {
+                    Vec3 first;
+                    if (const engine::PrefabBatches* b = world.get<engine::PrefabBatches>(prefabTiles.begin()->second))
+                        if (!b->copies.empty()) first = b->copies.front().at.position;
+                    engine::BatchCount all;
+                    for (const std::pair<const std::pair<long, long>, Entity>& t : prefabTiles) {
+                        const engine::BatchCount one = engine::countBatches(world, t.second);
+                        all.groups += one.groups; all.transforms += one.transforms;
                     }
-                    pieces += list.size();
-                }
-                if (pieces > 0) {
-                    Mat4 m0 = cells.begin()->second.front().xform;
-                    for (const auto& [cell, list] : cells)   // a café terrace if there is one: the newest kind
-                        for (const engine::PlacedPiece& pp : list)
-                            if (pp.piece == static_cast<uint8_t>(engine::Piece::BistroTable)) m0 = pp.xform;
-                    LOG_INFO << "[furniture] outdoor: " << pieces << " pieces (" << seats << " to sit on) in "
-                             << cells.size() << " cells; one at " << static_cast<int>(m0.m[0][3]) << " "
-                             << static_cast<int>(m0.m[1][3]) << " " << static_cast<int>(m0.m[2][3]);
+                    LOG_INFO << "[furniture] outdoor prefabs: " << prefabsStood << " copies in " << prefabTiles.size()
+                             << " ground tiles (" << all.groups << " groups, " << all.transforms << " transforms); one at " << first.x << " " << first.y << " " << first.z;
                 }
             }
             {   // THE GROWN LOTS by recipe, boxed (ADR-0359): what `frame lot` and `lots?` find
