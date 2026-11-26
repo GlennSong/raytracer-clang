@@ -457,30 +457,35 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // at 30 minutes 58 people using a spot, 5 in a group, 231 standing outside): trips by car 174 -> 173, parked 158 ->
     // 157, arrivals 3216 -> 3225; set out 3523 -> 3503, arrived 3190 -> 3199, no way 41 -> 42, plans with no way 237 ->
     // 238; and one resident rode a bus (the riders' checks below).
+    // RE-PINNED at the merge of the open lots' prefabs (ADR-0524: playgrounds and outdoor furniture placed by name,
+    // lots tag 2026-11-25.3): residents 5106 -> 5107, households 2715 -> 2716, cars 865 -> 851; the most on the road
+    // 137 -> 134; trips by car 173 -> 170, parked 157 -> 158, arrivals 3225 -> 3053; set out 3503 -> 3377, arrived 3199 ->
+    // 3029, at work 1759 -> 1765, no way 42 -> 32, plans with no way 238 -> 156; bus calls 181 -> 184. The bus's long
+    // stand (#344) is gone with this layout.
     if (minutes == kRiverMinutes) {
-        CHECK(b.residentCount() == 5106);
-        CHECK(households == 2715);
-        CHECK(b.cars().size() == 865u);
+        CHECK(b.residentCount() == 5107);
+        CHECK(households == 2716);
+        CHECK(b.cars().size() == 851u);
         CHECK(withCar == 1280);
         CHECK(homeMarkers == 280u);
-        CHECK(mostOnRoad == 137);
+        CHECK(mostOnRoad == 134);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 173u);
-        CHECK(b.counts().parkedReports == 157u);
+        CHECK(b.counts().tripsBegun == 170u);
+        CHECK(b.counts().parkedReports == 158u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3225u);
+        CHECK(b.machine()->counts().arrivals == 3053u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3503u);
-        CHECK(b.counts().dayArrivals == 3199u);
-        CHECK(b.counts().dayToWork == 1759u);
+        CHECK(b.counts().daySetOut == 3377u);
+        CHECK(b.counts().dayArrivals == 3029u);
+        CHECK(b.counts().dayToWork == 1765u);
         CHECK(b.counts().dayNowhere == 4u);
-        CHECK(b.counts().dayNoWay == 42u);
-        CHECK(b.machine()->counts().noPlans == 238u);
+        CHECK(b.counts().dayNoWay == 32u);
+        CHECK(b.machine()->counts().noPlans == 156u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -551,13 +556,14 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0xf535cd1ac2925c02 -> 0xb25113df86e3d71d (ADR-0504: the lots grown a tile at a time): the counts above
         // 0xb25113df86e3d71d -> 0x758473badca5cd6d (ADR-0511: the island's trees and grass): the counts above
         // 0x758473badca5cd6d -> 0x04c8e169c079ad4e (ADR-0512: seats, tracks and groups used): the counts above
-        CHECK(hash == 0x04c8e169c079ad4eull);
+        // 0x04c8e169c079ad4e -> 0x30c0a4fc1d5cd66d (ADR-0524: the open lots' prefabs): the counts above
+        CHECK(hash == 0x30c0a4fc1d5cd66dull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
         // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333; 147 -> 160, ADR-0491: bus 4 stood there instead)
         // (160 -> 182, ADR-0493: nobody stands in junction 62's turn now that the old sim walks nobody, #333)
-        CHECK(sim.drivingHost().counts().busCalls == 181u);   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
+        CHECK(sim.drivingHost().counts().busCalls == 184u);   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         // (FAILING from ADR-0490 to ADR-0491, the sim's own walkers standing in junction 62's turn, #333; passes since
@@ -644,11 +650,14 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // 2320, at work 1523 -> 1521; 0x13aced87fe819df6 -> 0xa55a761262714a70)
     // (ADR-0512, seats, tracks and groups used: raised 685 -> 691, far visits 3040 -> 3038; arrived 2320 -> 2316, at work
     // 1521 -> 1520; 0xa55a761262714a70 -> 0xee640d430795683d)
+    // (ADR-0524, the open lots' prefabs: the most far 2967 -> 2980; lowered 3233 -> 3225, raised 691 -> 667, far visits
+    // 3038 -> 2829; set out 2819 -> 2707, arrived 2316 -> 2230, at work 1520 -> 1536; 0xee640d430795683d ->
+    // 0x7ee7745aadfd10fa)
     if (kFarMinutes == 15) {
-        CHECK(mostFar == 2967);
-        CHECK(c.lowered == 3233u && c.raised == 691u && c.farVisits == 3038u);
-        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2316u && c.dayToWork == 1520u);
-        CHECK(hash == 0xee640d430795683dull);
+        CHECK(mostFar == 2980);
+        CHECK(c.lowered == 3225u && c.raised == 667u && c.farVisits == 2829u);
+        CHECK(c.daySetOut == 2707u && c.dayArrivals == 2230u && c.dayToWork == 1536u);
+        CHECK(hash == 0x7ee7745aadfd10faull);
     }
 }
 
@@ -725,6 +734,8 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
     // 2112 -> 2053)
     // (ADR-0512, a day's pick of a seat, a track or a group used again: set out 2584 -> 2581, arrived 2040 -> 2038,
     // arrivals 2053 -> 2051)
-    CHECK(c.daySetOut == 2581u && c.dayArrivals == 2038u && c.dayToWork == 1369u);
-    CHECK(b.machine()->counts().arrivals == 2051u);
+    // (ADR-0524, the open lots' prefabs: set out 2581 -> 2506, arrived 2038 -> 1981, at work 1369 -> 1373, arrivals
+    // 2051 -> 1993)
+    CHECK(c.daySetOut == 2506u && c.dayArrivals == 1981u && c.dayToWork == 1373u);
+    CHECK(b.machine()->counts().arrivals == 1993u);
 }
