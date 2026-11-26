@@ -1104,6 +1104,25 @@ private:
     int pickFromMenu(Agent& a, int origin, const Menu& m);
     int tryActivity(Agent& a, int origin, int def, int prevVenue, bool countOnly, int* count);
     std::string venueKind(const Venue& v) const;
+    // THE PICKERS' INDEXES (ADR-0513): seats and venues by 256 m cell, and each venue's kind name worked out once, so a
+    // pick reads only what is within its reach. Made when first asked for after the seats or venues change; a query
+    // gives the indexes in ascending order, so a pick sees its candidates in the order the full scan did.
+    struct CellIndex {
+        uint64_t madeFor = ~uint64_t(0);
+        std::unordered_map<int64_t, std::vector<int>> cells;
+    };
+    void withinReach(CellIndex& index, uint64_t version, int count, const std::function<engine::Vec2(int)>& at,
+                     engine::Vec2 here, Real reach, std::vector<int>& out) const;
+    const std::string& venueKindName(int venue) const;
+    mutable CellIndex seatIndex_, venueIndex_, areaIndex_;
+    // the walkways' lines as clearOfWalks samples them (a segment every couple of metres), by 32 m cell (ADR-0513)
+    mutable std::vector<std::pair<engine::Vec2, engine::Vec2>> walkSegs_;
+    mutable std::unordered_map<int64_t, std::vector<int>> walkSegCells_;
+    mutable const void* walkSegsFor_ = nullptr;
+    uint64_t areasVersion_ = 0;
+    mutable std::vector<std::string> venueKindNames_;
+    mutable uint64_t venueKindNamesFor_ = ~uint64_t(0);
+    uint64_t seatsVersion_ = 0, venuesVersion_ = 0;   // (moved on whenever the seats or the venues are made again)
     std::string siteKindOf(const Agent& a) const;   // the kind of site the agent's trip is for (arrival's dwell)
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;

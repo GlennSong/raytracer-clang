@@ -25349,3 +25349,27 @@ The average is no worse. The p95 reads about half a millisecond higher, inside w
 - `src/engine/playground.h` (the movement lab's swings and monkey bars for the player) is a second playground system. It is not touched here.
 - `RT_OPENLOT_DEBUG=1` prints each playground's gate and the way to look in.
 
+
+## ADR-0513 — The day's pickers read only what is within reach: seats, venues, areas, the nearest walk point and the walkways by cell (2026-11-25)
+
+**Why:** ADR-0512's new timings showed one person's setting out could take 58 ms on the island (the brain's worst tick 76–88 ms). A probe put all of it in the pick of where to go (`choosePickedNode`, the outing menu), and inside it:
+- Each menu entry's weight scanned every seat and every venue on the island (`tryActivity` counting), making a new string of every venue's kind as it went. The pick itself scanned them again.
+- A group's lawn, plaza or beach was found by scanning every area (`joinSession`).
+- A new settled group's place was tested clear of the paths by walking every walkway of the island in 2 m steps, for each place tried (`clearOfWalks`): 25 ms a pick.
+- Each setting out also found its nearest walk point by scanning all of them (`WalkPointMap::nearestNode`).
+
+**What happens:** all of these read a grid of cells instead, made when first asked for after the thing changes. The answers are exactly the old ones:
+- **Seats, venues and areas** by 256 m cell (`CitySim::withinReach`). A query gives the indexes in ascending order, so a pick sees its candidates in the order the full scan did, and the same random draws pick the same one. Each venue's kind name is worked out once (`venueKindName`).
+- **The nearest walk point** by 64 m cell (rings outward, strictly beyond the best so far), with ties going to the lower number as the scan's strict `<` did.
+- **The walkways' segments** by 32 m cell, the same 2 m segments as before, built once per road model.
+
+**Checked:** river_town's crowd, far-people and no-driving cases pass unchanged (every count and both hashes); city unit cases 40 of 40; the island made the same 43,815 plans in 3 minutes.
+
+| island, 3 minutes | before | after |
+|---|---|---|
+| brain, average tick | 11.5 ms | 9.9 ms |
+| brain, worst tick | 76–88 ms | 26 ms |
+| setting out, a tick | 2.2 ms | 0.42 ms |
+| worst single setting out | 58 ms | 2.6 ms |
+
+The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms a tick).

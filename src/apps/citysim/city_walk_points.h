@@ -18,6 +18,7 @@
 #include "../../rt_math.h"
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -53,6 +54,7 @@ struct WalkPointMap {
     // Drops the places' points, keeping the street points (before the places are given theirs again).
     void dropPlacePoints() {
         const std::size_t n = static_cast<std::size_t>(streetPoints);
+        ++version_;
         nodes.resize(n);
         at.resize(n);
         along.resize(n);
@@ -62,6 +64,11 @@ struct WalkPointMap {
     int add(const engine::RoadModel& model, const engine::WalkPoint& at, int inPart);
     // The point nearest `p` (-1: none); the `k` nearest, nearest first.
     int nearestNode(Vec2 p) const;
+    // (the points by 64 m cell, for nearestNode: made when first asked for after the points change, ADR-0513)
+    mutable std::unordered_map<int64_t, std::vector<int>> cells_;
+    mutable std::size_t cellsFor_ = ~std::size_t(0);
+    uint64_t version_ = 0;   // (moved on by build, add and dropPlacePoints)
+    mutable uint64_t cellsVersion_ = ~uint64_t(0);
     std::vector<int> nearestNodes(Vec2 p, int k) const;
     // Are points `a` and `b` in one part (each walked to from the other)?
     bool samePart(int a, int b) const {

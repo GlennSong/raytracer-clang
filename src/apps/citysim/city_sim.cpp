@@ -743,6 +743,7 @@ void CitySim::assignPlaces(const PlaceMap& places) {
                         PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Supermarket, PlaceType::Bar, PlaceType::Club})
         for (PlaceId id : places.ofType(t)) jobs.push_back(id);
     venues_.clear();
+    ++venuesVersion_;
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
 
     // THE HOUSEHOLDS (households.h; Glenn, 2026-11-01: "a family would be expressed by like a unit"). The dwellings
@@ -1927,6 +1928,43 @@ std::string CitySim::venueKind(const Venue& v) const {
     return v.kind >= 0 ? placeKinds_.nameOf(v.kind) : placeTypeName(v.type);
 }
 
+const std::string& CitySim::venueKindName(int venue) const {
+    if (venueKindNamesFor_ != venuesVersion_ || venueKindNames_.size() != venues_.size()) {
+        venueKindNames_.clear();
+        venueKindNames_.reserve(venues_.size());
+        for (const Venue& v : venues_) venueKindNames_.push_back(venueKind(v));
+        venueKindNamesFor_ = venuesVersion_;
+    }
+    return venueKindNames_[static_cast<std::size_t>(venue)];
+}
+
+void CitySim::withinReach(CellIndex& index, uint64_t version, int count, const std::function<Vec2(int)>& at, Vec2 here,
+                          Real reach, std::vector<int>& out) const {
+    constexpr Real kCell = 256.0;
+    auto key = [](int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); };
+    if (index.madeFor != version) {
+        index.cells.clear();
+        for (int i = 0; i < count; ++i) {
+            const Vec2 p = at(i);
+            index.cells[key(static_cast<int64_t>(std::floor(p.x / kCell)), static_cast<int64_t>(std::floor(p.y / kCell)))].push_back(i);
+        }
+        index.madeFor = version;
+    }
+    out.clear();
+    const int64_t x0 = static_cast<int64_t>(std::floor((here.x - reach) / kCell)), x1 = static_cast<int64_t>(std::floor((here.x + reach) / kCell));
+    const int64_t z0 = static_cast<int64_t>(std::floor((here.y - reach) / kCell)), z1 = static_cast<int64_t>(std::floor((here.y + reach) / kCell));
+    if ((x1 - x0 + 1) * (z1 - z0 + 1) > static_cast<int64_t>(index.cells.size())) {   // (wider than the town: every one)
+        for (const std::pair<const int64_t, std::vector<int>>& cell : index.cells) out.insert(out.end(), cell.second.begin(), cell.second.end());
+    } else {
+        for (int64_t cx = x0; cx <= x1; ++cx)
+            for (int64_t cz = z0; cz <= z1; ++cz) {
+                const std::unordered_map<int64_t, std::vector<int>>::const_iterator it = index.cells.find(key(cx, cz));
+                if (it != index.cells.end()) out.insert(out.end(), it->second.begin(), it->second.end());
+            }
+    }
+    std::sort(out.begin(), out.end());   // (in index order, as the scan of every one)
+}
+
 static const char* spotSiteKind(SpotKind k) {
     switch (k) {
         case SpotKind::Sit: return "seat";
@@ -1975,8 +2013,11 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
     for (const std::string& k : d.sites)
         if (isAreaSiteKind(k)) {
             if (countOnly) {
-                for (const ActivityArea& ar : areas_)
-                    if (ar.kind == k && (ar.tags & d.tags) == d.tags &&
+                std::vector<int> nearAreas;
+                withinReach(areaIndex_, areasVersion_, static_cast<int>(areas_.size()),
+                            [&](int i) { return areas_[static_cast<std::size_t>(i)].center; }, here, d.distHi, nearAreas);
+                for (int ai : nearAreas)
+                    if (const ActivityArea& ar = areas_[static_cast<std::size_t>(ai)]; ar.kind == k && (ar.tags & d.tags) == d.tags &&
                         (ar.center - here).lengthSquared() <= d.distHi * d.distHi) { if (count) *count += 1; }
                 return -1;
             }
@@ -2001,8 +2042,12 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
         q.nearest = d.nearest > 0 ? d.nearest : 1 << 30;
         if (countOnly) {
             int n = 0;
-            for (const ActivitySpot& sp : seats_)
-                if (sp.occupant < 0 && (q.kinds & spotKindBit(sp.kind)) && (sp.tags & q.tags) == q.tags) {
+            std::vector<int> near;
+            withinReach(seatIndex_, seatsVersion_, static_cast<int>(seats_.size()),
+                        [&](int i) { return seats_[static_cast<std::size_t>(i)].pos; }, here, q.maxDist, near);
+            for (int si : near)
+                if (const ActivitySpot& sp = seats_[static_cast<std::size_t>(si)];
+                    sp.occupant < 0 && (q.kinds & spotKindBit(sp.kind)) && (sp.tags & q.tags) == q.tags) {
                     const Real d2 = (sp.pos - here).lengthSquared();
                     if (d2 >= q.minDist * q.minDist && d2 <= q.maxDist * q.maxDist) ++n;
                 }
@@ -2024,10 +2069,14 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
         bool sideSite = false;
         for (const std::string& k : d.sites) sideSite = sideSite || k == "side_job";
         const int sideTonight = sideSite && sideShiftTonight(a, ss, se) && inWindow(h, ss - 1.0, se) ? a.sideVenue : -1;
-        for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
+        std::vector<int> near;
+        withinReach(venueIndex_, venuesVersion_, static_cast<int>(venues_.size()),
+                    [&](int i) { return walkPoints_.nodes[static_cast<std::size_t>(venues_[static_cast<std::size_t>(i)].node)]; },
+                    here, d.distHi, near);
+        for (int i : near) {
             const Venue& v = venues_[static_cast<std::size_t>(i)];
             if (i == prevVenue || v.node == origin || (i != sideTonight && !v.openAt(h))) continue;
-            const std::string vk = venueKind(v);
+            const std::string& vk = venueKindName(i);
             bool want = i == sideTonight;
             for (const std::string& k : d.sites) want = want || k == vk;
             if (!want) continue;
@@ -2545,6 +2594,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
 // ---- SEATS (the furniture library, M5) ------------------------------------------------------------------------
 void CitySim::setSpots(std::vector<ActivitySpot> seats) {
     seats_.clear();
+    ++seatsVersion_;
     if (walkPoints_.empty()) return;
     // the nearest node a walker can leave by, within 60 m: where a sit starts and ends
     const int n = walkPoints_.nodeCount();
@@ -2602,7 +2652,10 @@ void CitySim::tagSpots() {
 
 int CitySim::pickSpot(Agent& a, Vec2 here, const ActivityQuery& q) {
     std::vector<std::pair<Real, int>> c;
-    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
+    std::vector<int> near;
+    withinReach(seatIndex_, seatsVersion_, static_cast<int>(seats_.size()),
+                [&](int i) { return seats_[static_cast<std::size_t>(i)].pos; }, here, q.maxDist, near);
+    for (int i : near) {
         const ActivitySpot& s = seats_[static_cast<std::size_t>(i)];
         if (s.occupant >= 0 || !(q.kinds & spotKindBit(s.kind)) || (s.tags & q.tags) != q.tags) continue;
         const Real d2 = (s.pos - here).lengthSquared();
@@ -2847,6 +2900,7 @@ void CitySim::setLoops(std::vector<std::vector<Vec2>> loops) {
 
 void CitySim::setAreas(std::vector<ActivityArea> areas) {
     areas_.clear();
+    ++areasVersion_;
     sessions_.clear();
     if (walkPoints_.empty()) return;
     const int n = walkPoints_.streetNodeCount();
@@ -2887,7 +2941,10 @@ Vec2 CitySim::zonePoint(const Session& s, int role, uint32_t bits) const {
 int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, int nearest) {
     const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(di)];
     std::vector<std::pair<Real, int>> cand;
-    for (int i = 0; i < static_cast<int>(areas_.size()); ++i) {
+    std::vector<int> nearAreas;   // (sorted by distance below, then number: the order they are found in does not matter)
+    withinReach(areaIndex_, areasVersion_, static_cast<int>(areas_.size()),
+                [&](int i) { return areas_[static_cast<std::size_t>(i)].center; }, here, distHi, nearAreas);
+    for (int i : nearAreas) {
         const ActivityArea& ar = areas_[static_cast<std::size_t>(i)];
         bool kind = false;
         for (const std::string& k : d.sites) kind = kind || k == ar.kind;
@@ -2957,24 +3014,48 @@ int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, 
 
 // Is `p` at least `r` from every walkway's line (a walk's half width counted in)? The road model's walkways (ADR-0475),
 // as the lane level laid them: each walkway walk's line, a segment every couple of metres.
+// (The segments are made once and kept by 32 m cell, ADR-0513: this scanned every walkway of the island, in 2 m steps,
+// for every place a new group might sit -- 25 ms a pick on the island. The same segments, the same test: the same answer.)
 bool CitySim::clearOfWalks(Vec2 p, Real r) const {
     if (!roads_ || !roads_->built) return true;
     const engine::LaneGraph& g = roads_->laneLevel;
-    const Real reach2 = (r + 1.0) * (r + 1.0);
-    for (uint32_t w = 0; w < g.walks.size(); ++w) {
-        const engine::Walk& k = g.walks[w];
-        if (k.modelWalkway == engine::kNoIndex || !(k.length > 0)) continue;
-        const int steps = std::max(1, static_cast<int>(std::ceil(k.length / 2.0)));
-        Vec2 a = g.pointAt(engine::WalkId(w), 0);
-        for (int i = 1; i <= steps; ++i) {
-            const Vec2 b = g.pointAt(engine::WalkId(w), k.length * static_cast<Real>(i) / static_cast<Real>(steps));
-            const Vec2 ab = b - a;
-            const Real l2 = ab.lengthSquared();
-            const Real t = l2 > 1e-9 ? std::clamp(dot(p - a, ab) / l2, Real(0), Real(1)) : 0;
-            if ((a + ab * t - p).lengthSquared() < reach2) return false;
-            a = b;
+    constexpr Real kCell = 32.0;
+    auto key = [](int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); };
+    if (walkSegsFor_ != static_cast<const void*>(roads_.get())) {
+        walkSegs_.clear();
+        walkSegCells_.clear();
+        for (uint32_t w = 0; w < g.walks.size(); ++w) {
+            const engine::Walk& k = g.walks[w];
+            if (k.modelWalkway == engine::kNoIndex || !(k.length > 0)) continue;
+            const int steps = std::max(1, static_cast<int>(std::ceil(k.length / 2.0)));
+            Vec2 a = g.pointAt(engine::WalkId(w), 0);
+            for (int i = 1; i <= steps; ++i) {
+                const Vec2 b = g.pointAt(engine::WalkId(w), k.length * static_cast<Real>(i) / static_cast<Real>(steps));
+                const int si = static_cast<int>(walkSegs_.size());
+                walkSegs_.push_back({a, b});
+                const int64_t x0 = static_cast<int64_t>(std::floor(std::min(a.x, b.x) / kCell)), x1 = static_cast<int64_t>(std::floor(std::max(a.x, b.x) / kCell));
+                const int64_t z0 = static_cast<int64_t>(std::floor(std::min(a.y, b.y) / kCell)), z1 = static_cast<int64_t>(std::floor(std::max(a.y, b.y) / kCell));
+                for (int64_t cx = x0; cx <= x1; ++cx)
+                    for (int64_t cz = z0; cz <= z1; ++cz) walkSegCells_[key(cx, cz)].push_back(si);
+                a = b;
+            }
         }
+        walkSegsFor_ = static_cast<const void*>(roads_.get());
     }
+    const Real reach = r + 1.0, reach2 = reach * reach;
+    const int64_t x0 = static_cast<int64_t>(std::floor((p.x - reach) / kCell)), x1 = static_cast<int64_t>(std::floor((p.x + reach) / kCell));
+    const int64_t z0 = static_cast<int64_t>(std::floor((p.y - reach) / kCell)), z1 = static_cast<int64_t>(std::floor((p.y + reach) / kCell));
+    for (int64_t cx = x0; cx <= x1; ++cx)
+        for (int64_t cz = z0; cz <= z1; ++cz) {
+            const std::unordered_map<int64_t, std::vector<int>>::const_iterator it = walkSegCells_.find(key(cx, cz));
+            if (it == walkSegCells_.end()) continue;
+            for (int si : it->second) {
+                const Vec2 a = walkSegs_[static_cast<std::size_t>(si)].first, ab = walkSegs_[static_cast<std::size_t>(si)].second - a;
+                const Real l2 = ab.lengthSquared();
+                const Real t = l2 > 1e-9 ? std::clamp(dot(p - a, ab) / l2, Real(0), Real(1)) : 0;
+                if ((a + ab * t - p).lengthSquared() < reach2) return false;
+            }
+        }
     return true;
 }
 
