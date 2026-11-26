@@ -162,6 +162,15 @@ ForestParams forestFromJson(const nlohmann::json& j) {
                     }
             p.regions.push_back(std::move(R));
         }
+    // "within": { "at": [x, z], "radius", "edge" }: the forest only there (ADR-0511)
+    if (j.contains("within") && j["within"].is_object()) {
+        const auto& w = j["within"];
+        p.hasWithin = true;
+        p.within.name = "within";
+        if (w.contains("at") && w["at"].is_array() && w["at"].size() >= 2) { p.within.cx = w["at"][0].get<double>(); p.within.cz = w["at"][1].get<double>(); }
+        p.within.radius = w.value("radius", p.within.radius);
+        p.within.edge = std::max(1.0, w.value("edge", p.within.edge));
+    }
     return p;
 }
 
@@ -175,10 +184,12 @@ const Noise& forestNoise(uint32_t seed) {
 }
 // the part of the density that needs no ground sample: stands and clearings, soil, scree
 double forestPrefilter(const ForestParams& p, const TerrainMaps* maps, double x, double z) {
+    const double inside = forestWithin(p, x, z);
+    if (inside <= 0.0) return 0.0;
     const Noise& nz = forestNoise(p.seed);
     const double stand = 0.5 + 0.5 * nz.fbm2(x / p.standScaleM + 7.7, z / p.standScaleM - 2.9, 4) + 0.08 * nz.noise2(x * 0.03, z * 0.03);
     const double t0 = 1.0 - p.coverage - 0.1;
-    double d = smoothstep(t0, t0 + 0.2, stand);
+    double d = smoothstep(t0, t0 + 0.2, stand) * inside;
     if (d > 0.0 && maps) {
         const TerrainMapSample m = maps->at(x, z);
         d *= smoothstep(0.12, 0.45, m.soil) * (1.0 - smoothstep(0.2, 0.55, m.scree));
@@ -224,6 +235,10 @@ ForestWhy forestWhy(const ForestParams& p, double sea, const GroundCover* cover,
         w.cover = std::max(0.0, 1.0 - 1.6 * (c.rock + c.snow + c.sand));
     }
     return w;
+}
+
+double forestWithin(const ForestParams& p, double x, double z) {
+    return p.hasWithin ? forestRegionAt(p.within, p.seed, x, z) : 1.0;
 }
 
 double forestRegionAt(const ForestRegion& R, uint32_t seed, double x, double z) {
@@ -349,6 +364,8 @@ std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double se
                 const double roll = unit(h ^ 0x51ED27u);
                 if (roll >= L.density) continue;
                 const double x = -half + (i + 0.1 + 0.8 * unit(h)) * L.spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * L.spacing;
+                // (outside the forest's ring, or thinned at its edge: no rock, ADR-0511)
+                if (p.hasWithin && unit(h ^ 0xC1C1u) >= forestWithin(p, x, z)) continue;
                 // the maps first (no ground sample): most of the island is the wrong ground
                 TerrainMapSample m;
                 if (maps) m = maps->at(x, z);

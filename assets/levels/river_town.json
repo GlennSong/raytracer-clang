@@ -1,5 +1,5 @@
 {
- "_comment": "River test bed (ADR-0104): a small town built from assets/city_plans/river_town.json on metro's world with its hydrology on. A river crosses the town to the sea: streets that meet it become bridges or stop at the banks, and blocks stand back from the water.",
+ "_comment": "River test bed (ADR-0104): a small town built from assets/city_plans/river_town.json on metro's world with its hydrology on. A river crosses the town to the sea: streets that meet it become bridges or stop at the banks, and blocks stand back from the water. Its trees, grass and ground cover are island_8_nature's (2026-11-25), so it is a small copy of the island: recipe trees in the city, the wild forest and its rocks, the grass layers; not the island's named pinewood. The forest stands only round the town (terrain.forest.within, ADR-0511).",
  "citysim": {
   "buildChance": 0.9,
   "buildLots": true,
@@ -69,7 +69,8 @@
   "vehicles": "vehicles.lua",
   "wander": false,
   "busCommuteShare": 0.1,
-  "graph": "assets/lanelab/planned/river_town_lanelab.json"
+  "graph": "assets/lanelab/planned/river_town_lanelab.json",
+  "recipeTrees": true
  },
  "dayNight": {
   "dayMinutes": 1440.0,
@@ -163,9 +164,9 @@
   "groundCover": {
    "beachHeight": 3,
    "dirt": [
-    0.12,
-    0.085,
-    0.05
+    0.078,
+    0.056,
+    0.036
    ],
    "dirtPatches": 0.15,
    "grass": [
@@ -184,10 +185,20 @@
     0.14,
     0.12
    ],
-   "rockSlopeDeg": 34,
+   "rockSlopeDeg": 42,
    "seed": 5,
    "snowHeight": 470,
-   "uplandHeight": 90
+   "uplandHeight": 90,
+   "heath": {
+    "color": [
+     0.11,
+     0.045,
+     0.02
+    ],
+    "from": 0.5,
+    "patches": 0.45,
+    "scale": 220
+   }
   },
   "heightScale": 7,
   "material": {
@@ -324,7 +335,295 @@
   "size": 12000,
   "snowLine": 520,
   "tiltX": -0.02,
-  "warp": 0.35
+  "warp": 0.35,
+  "forest": {
+   "recipes": 0.5,
+   "cell": 256,
+   "coverage": 0.42,
+   "far": 7000,
+   "maxSlopeDeg": 40,
+   "near": 150,
+   "nearFade": 40,
+   "rocks": [
+    {
+     "density": 0.9,
+     "draw": 700,
+     "family": "boulder",
+     "ground": "scree",
+     "size": 2.2,
+     "spacing": 7,
+     "stone": "granite",
+     "variants": 5
+    },
+    {
+     "density": 0.8,
+     "draw": 700,
+     "family": "slab",
+     "ground": "scree",
+     "size": 2.8,
+     "spacing": 14,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.7,
+     "draw": 250,
+     "family": "pebbles",
+     "ground": "scree",
+     "size": 1.4,
+     "spacing": 5,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.7,
+     "draw": 1500,
+     "family": "outcrop",
+     "ground": "outcrop",
+     "size": 4.5,
+     "spacing": 30,
+     "stone": "granite",
+     "variants": 4
+    },
+    {
+     "density": 0.35,
+     "draw": 900,
+     "family": "boulder",
+     "ground": "field",
+     "moss": 0.25,
+     "size": 3.2,
+     "spacing": 60,
+     "stone": "granite",
+     "variants": 4
+    },
+    {
+     "density": 0.35,
+     "draw": 400,
+     "family": "boulder",
+     "ground": "field",
+     "size": 1.6,
+     "spacing": 30,
+     "stone": "mossy",
+     "variants": 4
+    },
+    {
+     "density": 0.3,
+     "draw": 700,
+     "family": "slab",
+     "ground": "field",
+     "moss": 0.3,
+     "size": 2.6,
+     "spacing": 70,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.45,
+     "draw": 600,
+     "family": "boulder",
+     "ground": "forest",
+     "moss": 0.85,
+     "size": 3.8,
+     "spacing": 45,
+     "stone": "mossy",
+     "variants": 4
+    },
+    {
+     "density": 0.5,
+     "draw": 300,
+     "family": "boulder",
+     "ground": "forest",
+     "moss": 0.8,
+     "size": 1.6,
+     "spacing": 16,
+     "stone": "mossy",
+     "variants": 4
+    },
+    {
+     "density": 0.4,
+     "draw": 450,
+     "family": "slab",
+     "ground": "forest",
+     "moss": 0.8,
+     "size": 2.8,
+     "spacing": 35,
+     "stone": "mossy",
+     "variants": 3
+    },
+    {
+     "density": 0.35,
+     "draw": 450,
+     "family": "boulder",
+     "ground": "forest",
+     "moss": 0.5,
+     "size": 2.2,
+     "spacing": 40,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.4,
+     "draw": 150,
+     "family": "pebbles",
+     "ground": "forest",
+     "moss": 0.7,
+     "size": 1.0,
+     "spacing": 9,
+     "stone": "mossy",
+     "variants": 3
+    },
+    {
+     "density": 0.55,
+     "draw": 180,
+     "family": "pebbles",
+     "ground": "shore",
+     "size": 1.2,
+     "spacing": 2.5,
+     "stone": "granite",
+     "variants": 4
+    },
+    {
+     "density": 0.7,
+     "draw": 450,
+     "family": "boulder",
+     "ground": "shore",
+     "moss": 0.15,
+     "size": 1.6,
+     "spacing": 3.2,
+     "stone": "granite",
+     "variants": 4
+    },
+    {
+     "density": 0.55,
+     "draw": 700,
+     "family": "boulder",
+     "ground": "shore",
+     "moss": 0.2,
+     "size": 3.0,
+     "spacing": 8,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.5,
+     "draw": 600,
+     "family": "slab",
+     "ground": "shore",
+     "moss": 0.1,
+     "size": 2.4,
+     "spacing": 7,
+     "stone": "granite",
+     "variants": 3
+    },
+    {
+     "density": 0.35,
+     "draw": 600,
+     "family": "boulder",
+     "ground": "beach",
+     "size": 1.8,
+     "spacing": 35,
+     "stone": "sandstone",
+     "variants": 3
+    }
+   ],
+   "seed": 8,
+   "shoreClear": 4,
+   "spacing": 7.5,
+   "species": [
+    {
+     "altHi": 200,
+     "altLo": 0,
+     "kind": "oak",
+     "variants": 3,
+     "weight": 1.0
+    },
+    {
+     "altHi": 300,
+     "altLo": 10,
+     "kind": "maple",
+     "variants": 3,
+     "weight": 0.8
+    },
+    {
+     "altHi": 360,
+     "altLo": 40,
+     "kind": "beech",
+     "variants": 3,
+     "weight": 1.0
+    },
+    {
+     "altHi": 480,
+     "altLo": 60,
+     "kind": "birch",
+     "variants": 3,
+     "weight": 0.45
+    },
+    {
+     "altHi": 520,
+     "altLo": 150,
+     "kind": "aspen",
+     "variants": 2,
+     "weight": 0.35
+    },
+    {
+     "altHi": 250,
+     "altLo": 0,
+     "kind": "willow",
+     "variants": 2,
+     "weight": 0.15,
+     "wet": 1.0
+    },
+    {
+     "altHi": 400,
+     "altLo": 0,
+     "kind": "alder",
+     "variants": 2,
+     "weight": 0.25,
+     "wet": 0.8
+    },
+    {
+     "altHi": 420,
+     "altLo": 0,
+     "kind": "pine",
+     "variants": 3,
+     "weight": 0.5
+    },
+    {
+     "altHi": 720,
+     "altLo": 220,
+     "kind": "spruce",
+     "variants": 3,
+     "weight": 1.2
+    },
+    {
+     "altHi": 720,
+     "altLo": 320,
+     "kind": "fir",
+     "variants": 3,
+     "weight": 1.0
+    },
+    {
+     "altHi": 600,
+     "altLo": 0,
+     "kind": "shrub",
+     "understory": true,
+     "variants": 4,
+     "weight": 1.0
+    }
+   ],
+   "standScale": 650,
+   "treeline": 640,
+   "understoryDensity": 0.3,
+   "understorySpacing": 5.0,
+   "within": {
+    "at": [
+     0,
+     600
+    ],
+    "radius": 1400,
+    "edge": 400
+   }
+  }
  },
  "vegetation": {
   "clearMargin": 4.0,
@@ -401,5 +700,349 @@
   "region": 6000,
   "roughness": 0.04,
   "seaLevel": -32.0
- }
+ },
+ "grass": {
+  "blades": 18,
+  "cardRadius": 320,
+  "cardSpacing": 1.6,
+  "clumpRadius": 0.22,
+  "fadeEnd": 60,
+  "fadeStart": 44,
+  "height": 0.55,
+  "lean": 0.35,
+  "maxSlopeDeg": 32,
+  "nearRadius": 24,
+  "patchiness": 0.35,
+  "radius": 62,
+  "rootColor": [
+   0.018,
+   0.032,
+   0.008
+  ],
+  "seed": 7,
+  "spacing": 0.3,
+  "tipColor": [
+   0.1,
+   0.14,
+   0.03
+  ],
+  "variantTint": 0.18,
+  "width": 0.045
+ },
+ "grassLayers": [
+  {
+   "blades": 14,
+   "cardRadius": 300,
+   "cardSpacing": 1.5,
+   "cards": true,
+   "clumpRadius": 0.32,
+   "cover": "heath",
+   "fadeEnd": 60,
+   "fadeStart": 44,
+   "flowerColors": [
+    [
+     0.32,
+     0.07,
+     0.28
+    ],
+    [
+     0.42,
+     0.1,
+     0.2
+    ],
+    [
+     0.55,
+     0.2,
+     0.05
+    ]
+   ],
+   "flowerSize": 0.025,
+   "flowers": 5,
+   "height": 0.32,
+   "lean": 0.5,
+   "nearRadius": 24,
+   "patchiness": 0,
+   "radius": 60,
+   "rootColor": [
+    0.025,
+    0.012,
+    0.006
+   ],
+   "seed": 81,
+   "spacing": 0.38,
+   "tipColor": [
+    0.16,
+    0.085,
+    0.03
+   ],
+   "variantTint": 0.35,
+   "variants": 5,
+   "width": 0.05
+  },
+  {
+   "blades": 24,
+   "cardRadius": 220,
+   "cardSpacing": 1.8,
+   "clumpRadius": 0.3,
+   "fadeEnd": 55,
+   "fadeStart": 40,
+   "height": 1.05,
+   "lean": 0.45,
+   "nearRadius": 22,
+   "radius": 55,
+   "rootColor": [
+    0.03,
+    0.04,
+    0.012
+   ],
+   "seed": 21,
+   "spacing": 0.55,
+   "tipColor": [
+    0.16,
+    0.16,
+    0.05
+   ],
+   "variantTint": 0.22,
+   "where": "tall",
+   "width": 0.03
+  },
+  {
+   "blades": 16,
+   "cardRadius": 180,
+   "cardSpacing": 1.6,
+   "clumpCut": 0.15,
+   "clumpRadius": 0.25,
+   "clumpScale": 0.07,
+   "fadeEnd": 55,
+   "fadeStart": 40,
+   "height": 2.2,
+   "lean": 0.12,
+   "nearRadius": 22,
+   "radius": 55,
+   "rootColor": [
+    0.03,
+    0.035,
+    0.012
+   ],
+   "seed": 33,
+   "shoreBand": 7,
+   "spacing": 0.6,
+   "tipColor": [
+    0.11,
+    0.12,
+    0.045
+   ],
+   "variantTint": 0.25,
+   "where": "reeds",
+   "width": 0.022
+  },
+  {
+   "blades": 6,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
+   "clumpCut": 0.0,
+   "clumpRadius": 0.28,
+   "clumpScale": 0.02,
+   "fadeEnd": 80,
+   "fadeStart": 60,
+   "flowerColors": [
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.8,
+     0.6,
+     0.04
+    ],
+    [
+     0.3,
+     0.09,
+     0.55
+    ],
+    [
+     0.14,
+     0.24,
+     0.7
+    ],
+    [
+     0.8,
+     0.24,
+     0.38
+    ],
+    [
+     0.7,
+     0.05,
+     0.03
+    ],
+    [
+     0.85,
+     0.32,
+     0.05
+    ]
+   ],
+   "flowerSize": 0.1,
+   "flowers": 10,
+   "height": 0.78,
+   "lean": 0.25,
+   "nearRadius": 30,
+   "radius": 80,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "seed": 51,
+   "spacing": 0.45,
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "variants": 7,
+   "where": "flowers",
+   "width": 0.03
+  },
+  {
+   "blades": 5,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
+   "clumpCut": 0.0,
+   "clumpRadius": 0.28,
+   "clumpScale": 0.02,
+   "fadeEnd": 80,
+   "fadeStart": 60,
+   "flowerColors": [
+    [
+     0.32,
+     0.1,
+     0.6
+    ],
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.82,
+     0.62,
+     0.05
+    ],
+    [
+     0.4,
+     0.14,
+     0.62
+    ]
+   ],
+   "flowerSize": 0.1,
+   "flowers": 12,
+   "height": 0.8,
+   "lean": 0.25,
+   "nearRadius": 30,
+   "radius": 80,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "seed": 61,
+   "spacing": 0.45,
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "variants": 4,
+   "where": "clearing",
+   "width": 0.03
+  },
+  {
+   "blades": 8,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
+   "clumpCut": 0.15,
+   "clumpRadius": 0.28,
+   "clumpScale": 0.08,
+   "fadeEnd": 80,
+   "fadeStart": 60,
+   "flowerColors": [
+    [
+     0.82,
+     0.66,
+     0.05
+    ],
+    [
+     0.45,
+     0.08,
+     0.42
+    ],
+    [
+     0.78,
+     0.76,
+     0.7
+    ]
+   ],
+   "flowerSize": 0.11,
+   "flowers": 6,
+   "height": 1.0,
+   "lean": 0.25,
+   "nearRadius": 30,
+   "petals": 3,
+   "radius": 80,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "seed": 71,
+   "shoreBand": 6,
+   "spacing": 0.8,
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "variants": 3,
+   "where": "shore",
+   "width": 0.03
+  },
+  {
+   "clutter": "stones",
+   "seed": 41,
+   "size": 0.9,
+   "variants": 6,
+   "spacing": 0.75,
+   "nearRadius": 20,
+   "radius": 48,
+   "fadeStart": 28,
+   "fadeEnd": 46,
+   "clumpScale": 0.08,
+   "clumpCut": 0.05,
+   "color": [
+    0.12,
+    0.112,
+    0.098
+   ]
+  },
+  {
+   "clutter": "twigs",
+   "seed": 43,
+   "size": 0.9,
+   "variants": 6,
+   "spacing": 1.1,
+   "nearRadius": 16,
+   "radius": 38,
+   "fadeStart": 22,
+   "fadeEnd": 36,
+   "clumpScale": 0.06,
+   "clumpCut": 0.0
+  }
+ ]
 }

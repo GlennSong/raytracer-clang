@@ -25237,3 +25237,34 @@ No worse: the two overlap. (The baseline of 23.18 ms in ADR-0521 was one run; th
 **What happens:** when the unit has no place to work behind, its staff are drawn like anyone in and take its seats (an office chair at a desk). A unit with a counter is unchanged: staff behind it, any more out the back, customers on the chairs.
 
 **Checked:** a new office check in `shop_staff_stand_behind_their_own_counter_and_nobody_sits_in_a_closed_shop` (three at work, three at their desks, all seated). Unchanged: furniture 12/12, people 8/8, inside 23/23, indoor 2/2, a_buildings_prefab 1/1, physics `a_streamed` 1/1.
+
+## ADR-0511 — river_town takes the island's trees, grass and ground cover, and a forest can be kept to a ring round a town (2026-11-25)
+
+**Why:** Glenn: "can we switch rivertown to use the updated trees and grass so it's a microcosm of island8_nature? That way we're testing all of the latest together." river_town is the quick test town; it had none of the island's flora settings. Then: "I think we could cut some of those trees and rocks down to just things close to the city", and "I do want to have the actual tree types in rivertown."
+
+**What happens:**
+- **river_town.json takes island_8_nature's flora, as data:**
+  - `citysim.recipeTrees` (the city's trees grown from recipes);
+  - `grass` and `grassLayers` (blades, heath, tall grass, reeds, flowers);
+  - `terrain.forest` with all eleven species and the rock layers;
+  - the island's heath, dirt colour and rock slope in `groundCover`, keeping river_town's own mountain and snow heights.
+  The island's named pinewood is left out: it is placed by Saltwood's coordinates.
+- **A forest can be kept to a ring:** `terrain.forest.within = { at: [x, z], radius, edge }` (`ForestParams::within`, `forestWithin`). Trees and rocks stand only inside it, thinning over its edge, ragged as a region's (±25%). Without it, the forest covers the whole ground as before. river_town's ring: centred on the town at (0, 600), 1.4 km, with a 400 m edge, so woods come up to the ring road and run along the river and the beach.
+
+**Measured (river_town viewer):**
+
+| | island flora, whole ground | with the ring |
+|---|---|---|
+| trees | 734,202 | 26,168 |
+| rocks | 94,454 | 1,554 |
+| the forest at load (cached tree models) | 38 s | 33 s |
+| the whole load | 69 s | 65 s |
+
+The first load grows the tree models: 271 s once. The frame was about 75 fps, the sim 5.3 ms a step. Most of the forest's load time is loading the 132 cached models of the eleven species, not placing trees; Glenn chose to keep every species.
+
+**Re-pinned** (the lots' recipe trees and the forest move the town's traffic a little; the people, homes and cars are the same):
+- `level_river_town_crowd_drives_on_the_new_driving`: trips by car 179 → 174, parked 163 → 158, arrivals 3227 → 3216, set out 3520 → 3523, arrived 3200 → 3190, no way 42 → 41, plans with no way 238 → 237; hash `0xb25113df86e3d71d` → `0x758473badca5cd6d`.
+- `level_river_town_far_people_keep_their_day`: lowered 3234 → 3233, raised 684 → 685, arrived 2321 → 2320, at work 1523 → 1521; hash `0x13aced87fe819df6` → `0xa55a761262714a70`.
+- `near_tier_in_the_crowd_follows_the_player` (not re-pinned after ADR-0503/0504 either; the two are not told apart): the most near 16 → 15, in 28 → 27, out 13 → 12; hash `0x7caa9eaebc49437d` → `0xa9d0a7f101cf1cd2`.
+
+**Still failing, filed before:** the bus that stands 192.3 s at a red light (#344: the same every run with this build, so not chance), the near tier's hit checks and its car with no way past (#336), and river_town's grades (#337).

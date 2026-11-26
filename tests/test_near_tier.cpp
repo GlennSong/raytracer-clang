@@ -1223,12 +1223,15 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // And again when the old sim's people went (ADR-0499: the 34 people the brain does not run no longer walk its days):
     // 14 -> 16 at minute 12, in 28 the same, out 15 -> 13, 0xc8ce00bf216e0269 -> 0x7caa9eaebc49437d; contacts 5 -> 0 (chance, as
     // above: #336 is not fixed).
-    CHECK(mostNear == 16);
+    // And again after every lot was regrown (ADR-0503/0504, not re-pinned then) and river_town took the island's trees
+    // and grass (ADR-0511), the two not told apart: 16 -> 15 at minute 12, in 28 -> 27, out 13 -> 12,
+    // 0x7caa9eaebc49437d -> 0xa9d0a7f101cf1cd2; contacts 0 (#336 is not fixed).
+    CHECK(mostNear == 15);
     CHECK(mostNearAt == 12);
-    CHECK(c.intoPhysics == 28u);
-    CHECK(c.intoLane == 13u);
+    CHECK(c.intoPhysics == 27u);
+    CHECK(c.intoLane == 12u);
     CHECK(c.mostOverCap == 0);
-    CHECK(hash == 0x7caa9eaebc49437dull);
+    CHECK(hash == 0xa9d0a7f101cf1cd2ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

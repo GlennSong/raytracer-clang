@@ -87,6 +87,11 @@ struct ForestRegion {
 struct ForestParams {
     std::vector<ForestSpecies> species;
     std::vector<ForestRegion> regions;
+    // WHERE THE FOREST STANDS AT ALL (ADR-0511): trees and rocks only inside this ring, thinning over its edge (a ragged
+    // edge, as a region's). Off (`hasWithin` false): the whole ground, as before. A test town keeps its forest to the
+    // land round it.
+    bool hasWithin = false;
+    ForestRegion within;
     double spacing = 7.5;          // metres between trees in a full stand
     double coverage = 0.55;        // share of the eligible land that is forest
     double standScaleM = 650.0;    // stands and clearings
@@ -116,6 +121,8 @@ struct ForestParams {
 ForestParams forestFromJson(const nlohmann::json& j);
 // how far inside a region a point is: 1 inside, 0 outside, smooth over its ragged edge
 double forestRegionAt(const ForestRegion& r, uint32_t seed, double x, double z);
+// How much of the forest may stand at (x, z): 1 without `within`, else the ring's share there (ADR-0511).
+double forestWithin(const ForestParams& p, double x, double z);
 
 struct ForestTree {
     Vec3 pos;

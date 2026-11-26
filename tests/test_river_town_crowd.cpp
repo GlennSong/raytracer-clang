@@ -448,7 +448,11 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // most on the road 127 -> 137 (still minute 6); trips by car 165 -> 179, parked 155 -> 163, arrivals 3357 -> 3227;
     // set out 3667 -> 3520, arrived 3317 -> 3200, at work 1782 -> 1759, nowhere 4 the same, no way 50 -> 42, plans with
     // no way 178 -> 238. A NEW FAILURE, the buses' check below: bus 11 stood 192.3 s at junction 50's red light
-    // (its far turn), over the 180 s it allows -- not re-pinned, for the driving's owner to judge.
+    // (its far turn), over the 180 s it allows -- not re-pinned, for the driving's owner to judge (#344).
+    // RE-PINNED when river_town took the island's trees, grass and ground cover (ADR-0511: recipe trees in its lots, the
+    // wild forest round it): trips by car 179 -> 174, parked 163 -> 158, arrivals 3227 -> 3216; set out 3520 -> 3523,
+    // arrived 3200 -> 3190, no way 42 -> 41, plans with no way 238 -> 237. The people, homes and cars the same. Bus 11
+    // still stands 192.3 s at junction 50 (#344).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 5106);
         CHECK(households == 2715);
@@ -457,22 +461,22 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         CHECK(homeMarkers == 280u);
         CHECK(mostOnRoad == 137);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 179u);
-        CHECK(b.counts().parkedReports == 163u);
+        CHECK(b.counts().tripsBegun == 174u);
+        CHECK(b.counts().parkedReports == 158u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3227u);
+        CHECK(b.machine()->counts().arrivals == 3216u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3520u);
-        CHECK(b.counts().dayArrivals == 3200u);
+        CHECK(b.counts().daySetOut == 3523u);
+        CHECK(b.counts().dayArrivals == 3190u);
         CHECK(b.counts().dayToWork == 1759u);
         CHECK(b.counts().dayNowhere == 4u);
-        CHECK(b.counts().dayNoWay == 42u);
-        CHECK(b.machine()->counts().noPlans == 238u);
+        CHECK(b.counts().dayNoWay == 41u);
+        CHECK(b.machine()->counts().noPlans == 237u);
         // (failing with lane changes on, 2 spells, #327; none since ADR-0490's people)
         CHECK(sim.drivingHost().measurements().rows().touches.spells == 0u);
         // 0x9757add914fdb773 -> 0x4b8f868f3d5e05e0 (ADR-0458): 27 paths' crossings of 5 crosswalks on sloping junctions
@@ -541,7 +545,8 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0x5ab02c088a376691 -> 0xf535cd1ac2925c02 (ADR-0503: every lot regrown once, seeds from outlines): the counts
         // above and the buses' below
         // 0xf535cd1ac2925c02 -> 0xb25113df86e3d71d (ADR-0504: the lots grown a tile at a time): the counts above
-        CHECK(hash == 0xb25113df86e3d71dull);
+        // 0xb25113df86e3d71d -> 0x758473badca5cd6d (ADR-0511: the island's trees and grass): the counts above
+        CHECK(hash == 0x758473badca5cd6dull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
@@ -628,11 +633,13 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // (ADR-0503/0504, every lot regrown from its own outline and per tile, so the town's homes and people moved: the most
     // far 2719 -> 2967; lowered 3068 -> 3234, raised 571 -> 684, far visits 2878 -> 3040; set out 2812 -> 2819, arrived
     // 2283 -> 2321, at work 1519 -> 1523; 0xba9eaef6e5933eb5 -> 0x13aced87fe819df6)
+    // (ADR-0511, the island's trees and grass on river_town: lowered 3234 -> 3233, raised 684 -> 685; arrived 2321 ->
+    // 2320, at work 1523 -> 1521; 0x13aced87fe819df6 -> 0xa55a761262714a70)
     if (kFarMinutes == 15) {
         CHECK(mostFar == 2967);
-        CHECK(c.lowered == 3234u && c.raised == 684u && c.farVisits == 3040u);
-        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2321u && c.dayToWork == 1523u);
-        CHECK(hash == 0x13aced87fe819df6ull);
+        CHECK(c.lowered == 3233u && c.raised == 685u && c.farVisits == 3040u);
+        CHECK(c.daySetOut == 2819u && c.dayArrivals == 2320u && c.dayToWork == 1521u);
+        CHECK(hash == 0xa55a761262714a70ull);
     }
 }
 
