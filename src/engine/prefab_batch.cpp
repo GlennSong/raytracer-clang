@@ -327,6 +327,33 @@ void batchSpots(World& world, Entity holder, std::vector<BatchSpot>& out, const 
     }
 }
 
+bool findBatchUse(World& world, const Vec3& point, Real radius, int pose, BatchSpot& out, Entity& holder) {
+    std::vector<Entity> near;
+    world.each<PrefabBatches>([&](Entity e, PrefabBatches& b) { if (b.near(point, radius)) near.push_back(e); });
+    Real best = radius;
+    bool found = false;
+    std::vector<BatchSpot> spots;
+    for (Entity e : near) {
+        const PrefabBatches* b = world.get<PrefabBatches>(e);
+        spots.clear();
+        batchSpots(world, e, spots);
+        for (const BatchSpot& sp : spots) {
+            if (pose >= 0 && sp.pose != pose) continue;
+            Vec3 at;
+            Quat turn;
+            const PrefabBatches::Copy& c = b->copies[sp.copy];
+            if (!batchCopyMarker(c, c.uses[sp.use].at, at, turn)) continue;
+            const Real d = (at - point).length();
+            if (d > best) continue;
+            best = d;
+            out = sp;
+            holder = e;
+            found = true;
+        }
+    }
+    return found;
+}
+
 void occupyBatchSpot(World& world, Entity holder, uint32_t copy, uint32_t use, bool taken) {
     PrefabBatches* b = world.get<PrefabBatches>(holder);
     if (b == nullptr || copy >= b->copies.size() || use >= b->copies[copy].uses.size()) return;

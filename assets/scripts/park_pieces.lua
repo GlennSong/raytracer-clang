@@ -43,6 +43,8 @@ elseif a.kind == "bench" then
   end
   local seats = math.max(2, math.floor(L / 0.6))
   for i = 1, seats do m:marker("seat_" .. i, { pos = { -L / 2 + (i - 0.5) * L / seats, 0.46, 0 }, role = "seat", size = 0.45 }) end
+  -- (and one may lie along it: the head at one end, the feet toward the other)
+  m:marker("lie", { pos = { -L / 2 + 0.25, 0.46, 0 }, turn = { 0, 90, 0 }, role = "lie", size = L })
   m:shape("seat", { box = { L, 0.44, 0.45 }, pos = { 0, 0.22, 0 }, friction = 0.9 })
   m:shape("back", { box = { L, 0.45, 0.05 }, pos = { 0, 0.68, -0.28 }, turn = { -14, 0, 0 } })
   kit.far_box(m, m, "wood", { L, 0.04, 0.42 }, { 0, 0.44, 0 }, wood, far)

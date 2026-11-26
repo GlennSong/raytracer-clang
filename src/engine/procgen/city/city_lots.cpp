@@ -69,7 +69,28 @@ uint32_t posHash(const Vec2& p) {
     return h;
 }
 // An outdoor library piece at `at` (its back's centre), its front facing `face`; the variant's wood from `h`.
+namespace {
+OpenLotBook& openLotBookStore() { static OpenLotBook book; return book; }
+}  // namespace
+void setOpenLotBook(const OpenLotBook& book) { openLotBookStore() = book; }
+const OpenLotBook& openLotBook() {
+#ifdef RT_ENABLE_SCRIPTING
+    ensureOpenLotsLoaded();
+#endif
+    return openLotBookStore();
+}
+
 OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face, Real y, bool draped) {
+    {   // the prefab open_lots.lua names for this piece (#315, ADR-0524): the same place, facing the same way
+        const std::map<std::string, OpenLotFurniture>& named = openLotBook().furniture;
+        const std::map<std::string, OpenLotFurniture>::const_iterator it = named.find(furniturePieceName(pc));
+        if (it != named.end() && !it->second.prefabs.empty()) {
+            const Real fl = face.length();
+            const Vec2 out = fl > 1e-9 ? face * (1.0 / fl) : Vec2(0, 1);
+            const std::vector<std::string>& of = it->second.prefabs;
+            return outdoorPrefab(of[(h >> 3) % of.size()], at + out * it->second.back, face, 0, y, draped);
+        }
+    }
     OutdoorPiece o;
     o.piece = static_cast<uint8_t>(pc);
     o.variant = (h % 4u) << 3;   // the wood (furniture_kit.h variant bits 3-4)
@@ -90,16 +111,6 @@ OutdoorPiece outdoorPrefab(const std::string& prefab, const Vec2& at, const Vec2
     return o;
 }
 
-namespace {
-OpenLotBook& openLotBookStore() { static OpenLotBook book; return book; }
-}  // namespace
-void setOpenLotBook(const OpenLotBook& book) { openLotBookStore() = book; }
-const OpenLotBook& openLotBook() {
-#ifdef RT_ENABLE_SCRIPTING
-    ensureOpenLotsLoaded();
-#endif
-    return openLotBookStore();
-}
 
 namespace {
 
@@ -1612,7 +1623,6 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     RenderMesh m;
     auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) { emitPlanRect(m, f, a0, b0, a1, b1, h, col); };
     const Vec3 rubber = rng.next() < 0.5 ? Vec3(0.42, 0.13, 0.09) : Vec3(0.10, 0.22, 0.38);
-    const Vec3 rubber2 = rng.next() < 0.5 ? Vec3(0.12, 0.30, 0.14) : Vec3(0.55, 0.40, 0.08);
     quad(f.x0 + 0.3, f.y0 + 0.3, f.x1 - 0.3, f.y1 - 0.3, 0.04, rubber);
     {
         Poly2 s{f.W(f.x0, f.y0), f.W(f.x1, f.y0), f.W(f.x1, f.y1), f.W(f.x0, f.y1)};

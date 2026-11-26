@@ -1531,12 +1531,16 @@ TEST_CASE(lots_that_do_not_build_get_a_use) {
     std::set<std::string> listed;
     for (const OpenLotPiece& p : openLotBook().playground) listed.insert(p.prefab);
     CHECK(listed.size() >= 5);
-    int equipment = 0, strays = 0, unknown = 0, stacked = 0;
+    std::set<std::string> seating;   // the prefabs that stand for the kit's outdoor furniture (open_lots.lua `furniture`)
+    for (const std::pair<const std::string, OpenLotFurniture>& f : openLotBook().furniture) seating.insert(f.second.prefabs.begin(), f.second.prefabs.end());
+    CHECK(seating.count("park_bench") == 1);
+    int equipment = 0, strays = 0, unknown = 0, stacked = 0, benches = 0;
     for (const LotBuilding& lb : res) {
         if (lb.recipe != "playground" || lb.sealed.empty()) continue;
         std::vector<Vec2> stood;
         for (const OutdoorPiece& op : lb.furniture) {
             if (op.prefab.empty()) continue;
+            if (seating.count(op.prefab)) { ++benches; continue; }   // (the grown-ups' benches by the gate)
             ++equipment;
             unknown += listed.count(op.prefab) == 0;
             strays += !pointInPolygon(lb.sealed.front(), op.at);
@@ -1547,6 +1551,7 @@ TEST_CASE(lots_that_do_not_build_get_a_use) {
     }
     std::printf("    [open lots] playgrounds stand %d prefabs\n", equipment);
     CHECK(equipment > 0 && strays == 0 && unknown == 0 && stacked == 0);
+    CHECK(benches > 0);   // a bench is the park_bench prefab now, not the kit's
     for (const LotBuilding& lb : res) {
         if (lb.type == "green") { ++greens; continue; }
         if (lb.recipe != "playground" && lb.recipe != "community_garden" && lb.recipe != "pocket_park") continue;

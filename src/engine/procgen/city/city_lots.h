@@ -12,6 +12,7 @@
 #include "../terrain.h"      // TerrainFlatten (block grades computed in-pass)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
+#include <map>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -67,8 +68,13 @@ struct OpenLotPiece {
     Real along = 4, deep = 4;   // metres along the street and back from it
     Real turn = 0;              // degrees from facing the gate
 };
+struct OpenLotFurniture {
+    std::vector<std::string> prefabs;   // one of these, by where the piece stands
+    Real back = 0;   // the prefab's origin, this far in front of its back edge
+};
 struct OpenLotBook {
     std::vector<OpenLotPiece> playground;
+    std::map<std::string, OpenLotFurniture> furniture;   // by the kit piece's name (furniturePieceName)
 };
 const OpenLotBook& openLotBook();          // open_lots.lua's once read (a scripting build), else empty
 void setOpenLotBook(const OpenLotBook& book);
