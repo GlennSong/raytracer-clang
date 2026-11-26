@@ -94,6 +94,7 @@ ModelSection sectionOf(const RoadLabGraph& g, const EdgeSpec& e, bool* fits) {
     s.sidewalk = c.sidewalk;
     s.track = c.track;
     s.footway = c.footway;
+    s.frontage = c.frontage;
     s.sidewalkAlong = e.sidewalks[0];   // (the edge's statement; both where it states none: ADR-0464)
     s.sidewalkAgainst = e.sidewalks[1];
     // the kerb parking the road states (its class's, or its own), where it fits (ADR-0418), and where its band lies
@@ -1317,7 +1318,7 @@ RoadFrontage RoadModel::frontageAt(const Vec2& door) const {
     const NearestLine n = nearestLine(
         door, Real(1e30), lines.size(), boxes.data(),
         [&](std::size_t i) { return std::pair<const Vec2*, std::size_t>(linePoints.data() + lines[i].line.first, lines[i].line.count); },
-        [](std::size_t) { return Real(0); }, [&](std::size_t i) { return buildingMayFront(lines[i].section->klass, false); });
+        [](std::size_t) { return Real(0); }, [&](std::size_t i) { return buildingMayFront(lines[i].section->frontage, false); });
     if (n.line < 0) return f;
     const RoadLine& l = lines[static_cast<std::size_t>(n.line)];
     f.street = l.street;
@@ -2263,6 +2264,7 @@ template <class IO, class S> void fields(IO& io, S& s, ModelSection*) {
     s.klass = static_cast<RoadClass>(klass);
     io(s.lanesForward); io(s.lanesBackward); io(s.laneWidth); io(s.medianGap); io(s.median); io(s.shoulder); io(s.sidewalk);
     io(s.parking); io(s.parkingOffset); io(s.track); io(s.footway); io(s.sidewalkAlong); io(s.sidewalkAgainst);
+    io(s.frontage);
 }
 template <class IO, class S> void fields(IO& io, S& s, ModelStreet*) {
     io(s.id); io(s.road); io(s.edge); io(s.from); io(s.to); io(s.junctions); io(s.carriesOn); io(s.section); io(s.speedLimit);

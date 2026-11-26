@@ -138,6 +138,11 @@ struct RoadClassSpec {
     // ramp's, a track's, a footway's and a divider's are not. The class's own row says so ("junction_markings" in a
     // road file's `classes`); no code asks the class's name or rank. A class a file adds starts from the local row: marked.
     bool junctionMarkings = true;
+    // WHETHER BUILDINGS MAY FACE IT (ADR-0515; Glenn, 2026-11-26: "a road in the road graph should have a way to turn off
+    // buildings built along the edges like for a mountain road"): `frontage` ("frontage": "both" | "none" in a class
+    // row). "none": no lot's door, walk or plaza mouth faces it, and the road model answers no door with it -- a freeway,
+    // a ramp, a mountain pass. The one rule's input (road_network.h buildingMayFront); no code asks the class's name.
+    bool frontage = true;
     // WHAT THE BUILDER ONCE ASKED A CLASS'S NAME FOR, stated by its row instead (ADR-0438; assets/data/road_classes.json
     // says what each means):
     //   - `engineClass` ("engine_class"): which of the engine's six driving classes it is (classOf, the one mapping);

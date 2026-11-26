@@ -616,6 +616,9 @@ struct LotRoad {
     Real halfWidth = 0;      // from the centre line to the carriageway's edge (travel lanes and shoulder)
     Real sidewalk = 0;         // the sidewalk's width beyond that edge (0: none)
     RoadClass klass = RoadClass::Local;
+    // Buildings may face it: the road model section's `frontage`, its class's (ADR-0515). A hand-made road's
+    // (lotRoadSegment) is a freeway's or a ramp's "none", any other's "both", as the classes' rows say.
+    bool frontage = true;
     // Carried over the ground on a bridge here: no one's front door (Glenn, 2026-09-30: "assuming the city road
     // is on the ground in front of the house"). The road model does not state this of a street yet, so a level's
     // roads all say false (lotRoadInputs); a hand-made scene may say it.

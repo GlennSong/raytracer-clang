@@ -128,6 +128,7 @@ struct ModelSection {
     Real parking = 0;                          // the kerb parking band's width along each kerb (m); 0: none
     Real parkingOffset = 0;                    // its middle, from the carriageway's middle toward the kerb (m)
     bool track = false, footway = false;
+    bool frontage = true;   // buildings may face it: its class's `frontage` (ADR-0515)
     // WHICH KERBS HAVE THE SIDEWALK (ADR-0464): `sidewalkAlong` the kerb of the traffic running along the spine (+1),
     // `sidewalkAgainst` the other (-1). The road file's edge may state it ("sidewalks": "both" | "along" | "against" |
     // "none"); stated nowhere, both, as before. `sidewalk` is the width of each one there is.

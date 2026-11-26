@@ -34,9 +34,9 @@ Real classSpeed(RoadClass klass);
 // ramp, nor a street carried over the ground on a bridge (`overGround`). Asked by the lot pass when it faces a door
 // (city_lots.cpp LotRoads::mayFront) and by the road model when it is asked where a door fronts the road
 // (roads/road_model.h RoadModel::frontageAt, ADR-0439), so a door is answered the street it was built facing.
-inline bool buildingMayFront(RoadClass klass, bool overGround) {
-    return klass != RoadClass::Freeway && klass != RoadClass::Ramp && !overGround;
-}
+// Since ADR-0515 the road says so itself: its class's `frontage` (road_classes.json: "none" for a freeway, a ramp and a
+// mountain pass), not a list of engine classes here.
+inline bool buildingMayFront(bool frontage, bool overGround) { return frontage && !overGround; }
 // WHERE A PLACE SAYS IT FRONTS (ADR-0474): written once, when the lot pass builds the place, so a reader asks the road
 // model from it with no search (RoadModel::frontageOn, then walkJoinOn). Either a street of the road model by its id,
 // the station (metres along that street's centre line) level with the place and the kerb it is on (`dir` +1: the kerb

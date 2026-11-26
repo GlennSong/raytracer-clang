@@ -1881,7 +1881,7 @@ public:
     // not an accessible road"): a door, its walk and a plaza's mouths reach for city streets, never a freeway or
     // a ramp, nor a street carried over the ground on a bridge. The rule is written once (road_network.h
     // buildingMayFront); the road model answers "where does this door front the road" by it too (ADR-0439).
-    static bool mayFront(const LotRoad& r) { return buildingMayFront(r.klass, r.overGround); }
+    static bool mayFront(const LotRoad& r) { return buildingMayFront(r.frontage, r.overGround); }
     static bool freewayOrRamp(RoadClass k) { return k == RoadClass::Freeway || k == RoadClass::Ramp; }
     // A service lane the lot pass cut through a block: its centre line's two ends and its paved width.
     struct Alley { Vec2 a, b; Real width = 0; };
@@ -3247,6 +3247,7 @@ LotRoad lotRoadSegment(const Vec2& a, const Vec2& b, Real halfWidth, RoadClass k
     r.line = {a, b};
     r.halfWidth = halfWidth;
     r.klass = klass;
+    r.frontage = klass != RoadClass::Freeway && klass != RoadClass::Ramp;   // (as road_classes.json's rows for them)
     r.sidewalk = sidewalk;
     return r;
 }

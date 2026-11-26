@@ -25389,3 +25389,21 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
   - The bus check fails again, worse: bus 6 stood 935.8 s giving way to car 385, whose body is on the crossing point it gives way at. Added to #344, the driving's to fix.
 - `..._far_people_...`: the most far 2980 → 2974; lowered 3225 → 3362, raised 667 → 821, far visits 2829 → 2793; set out 2707 → 2698, arrived 2230 → 2241; hash `0x7ee7745aadfd10fa` → `0xed5196eb8d59851e`.
 - `..._without_the_driving_...`: set out 2506 → 2494, arrived 1981 → 1958, at work 1373 → 1374, arrivals 1993 → 1970.
+
+## ADR-0515 — A road class says whether buildings may face it: no lots along the island's mountain pass and coast roads (2026-11-26)
+
+**Why:** Glenn saw "a ton of buildings all along the mountain road" on island_8_nature: "that road should not have buildings along it". The lot pass takes every hole between the roads as a block and lines each block's edges with lots facing them. The one rule for what a building may face (`buildingMayFront`) excluded only a freeway, a ramp and a bridge, by the engine's lossy class list (the alpha review's P2-18), so a 15 km pass between towns was lined like a street: lot outlines, yard trees, flats and walk-ups 500 m up a mountain. Glenn: "a road in the road graph should have a way to turn off buildings built along the edges like for a mountain road." A weight was weighed and not chosen: a building facing a road is yes or no per road edge, and a weight spreads past what it is meant for. A village's density, kept inside its own outline, is where a weight belongs (the hamlets, next).
+
+**What happens:**
+- **A class row says it:** `frontage` in a class row (assets/data/road_classes.json, or a road file's `classes`): "both" (the default) or "none". Freeway, ramp and mountain rows say "none". A road file's class of the same name builds on the table's row, so every level has it.
+- **The one rule reads it:** `buildingMayFront(frontage, overGround)`. The road model carries it on each section (`ModelSection::frontage`; the model's format 19 → 20). So the lot pass (`LotRoad::frontage`, from the section) and the road model's `frontageAt` (which door faces which road) answer from the same fact. No code asks a class's name or the engine's class for it. A hand-made road (`lotRoadSegment`) keeps a freeway's and a ramp's "none", as their rows say.
+- **Lots tag 2026-11-26.1:** every level's lots re-bake once.
+
+**Checked (island_8_nature):**
+- Lots 17,218 → 15,003, buildings 11,870 → 10,930: the lots that lined `pass8` and the six coast roads (class mountain). The pass, seen from above at (-1051, 3516), stands bare, its viaduct too. The brain's people 113,789 → 113,398 (the homes along the pass gone).
+- Unit suite 1,575 of 1,575; lanes 158 of 158 (the hand-made model in `road_model_25` states its freeway's `frontage`); river_town's pins unchanged (no mountain road there).
+- The class table's case checks each row's `frontage`; the ramp case asks the rule by the row.
+
+**Next (agreed with Glenn):**
+- Hamlets as places: a small settlement with its own outline where roads face again, even a pass; the easiest first is the pass running through it, as in the mountain-towns lab (ADR-0324), and later one off the road on its own spur.
+- The road file's per-edge `lots_range` (stated, read today only by kerb parking) is the lot pass's to read then.

@@ -2190,6 +2190,9 @@ TEST_CASE(road_model_23_the_road_class_table_is_its_data_file_and_no_class_is_as
         CHECK(c.footway == (std::string(x.name) == "footway"));
         CHECK(c.limitedAccess == (std::string(x.name) == "freeway"));
         CHECK(c.defaultBarriers == (std::string(x.name) == "freeway" || std::string(x.name) == "ramp"));
+        // (no building faces a freeway, a ramp or a mountain pass: their rows' "frontage": "none", ADR-0515)
+        const std::string n = x.name;
+        CHECK(c.frontage == !(n == "freeway" || n == "ramp" || n == "mountain"));
     }
     // the barriers the rows state: the mountain road's (none against pavement, a median or a street; a guardrail on a
     // bridge, and at grade only over a 2 m drop), a track's parapet on a bridge, a footway's
@@ -2517,6 +2520,7 @@ TEST_CASE(road_model_25_where_a_door_fronts_the_road_is_asked_of_the_model) {
         s.from = 0;
         s.to = 200;
         s.section.klass = klass;
+        s.section.frontage = klass != RoadClass::Freeway;   // (as a freeway's class row says, "frontage": "none", ADR-0515)
         s.section.lanesForward = s.section.lanesBackward = lanes;
         s.section.laneWidth = laneWidth;
         s.section.sidewalk = sidewalk;
@@ -4848,7 +4852,7 @@ TEST_CASE(road_model_42_the_road_files_fixes_hold) {
             CHECK(e->cls == "ramp");
             CHECK(g.cls(*e).sidewalk == 0.0);
             CHECK(g.cls(*e).defaultBarriers);
-            CHECK(!buildingMayFront(classOf(g, *e), false));
+            CHECK(!buildingMayFront(g.cls(*e).frontage, false));   // (its row: "frontage": "none", ADR-0515)
         }
     }
 

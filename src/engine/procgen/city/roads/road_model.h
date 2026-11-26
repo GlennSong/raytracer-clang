@@ -988,7 +988,7 @@ KerbSpaceCounts kerbSpaceCounts(const RoadModel& m);
 
 // ---- saved and read back ------------------------------------------------------------------------------------------------
 // The layout of the bytes (magic "RMDL"). Bump when a field changes.
-constexpr uint32_t kRoadModelFormat = 19;   // 19: the bus lines (the buses plan, step 1)
+constexpr uint32_t kRoadModelFormat = 20;   // 20: a section says whether buildings may face it (ADR-0515); 19: the bus lines (the buses plan, step 1)
                                             // 18: the walkways; a walk may be a walkway's (LGRF 17, ADR-0475)
                                             // 17: the lane level's walks and their joins (LGRF 16, ADR-0466)
                                             // 16: the walks; a corner's walk and whether it is across a spread junction (ADR-0465)

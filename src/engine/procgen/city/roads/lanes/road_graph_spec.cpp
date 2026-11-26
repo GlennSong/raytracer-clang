@@ -62,6 +62,12 @@ void readRoadClassRow(RoadClassSpec& c, const nlohmann::json& j) {
     if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
     if (j.contains("junction_markings") && j["junction_markings"].is_boolean()) c.junctionMarkings = j["junction_markings"].get<bool>();
     if (j.contains("limited_access") && j["limited_access"].is_boolean()) c.limitedAccess = j["limited_access"].get<bool>();
+    if (j.contains("frontage")) {
+        const std::string f = j["frontage"].is_string() ? j["frontage"].get<std::string>() : std::string();
+        if (f != "both" && f != "none")
+            throw std::runtime_error("road class " + c.name + ": frontage must be \"both\" or \"none\"");
+        c.frontage = f == "both";
+    }
     if (j.contains("default_barriers") && j["default_barriers"].is_boolean()) c.defaultBarriers = j["default_barriers"].get<bool>();
     if (j.contains("plan_colour") && j["plan_colour"].is_string()) c.planColour = j["plan_colour"].get<std::string>();
     if (j.contains("engine_class") && j["engine_class"].is_string()) {
@@ -126,6 +132,7 @@ nlohmann::json classJson(const RoadClassSpec& c) {
     nlohmann::json j = {{"w", c.lanes.w}, {"fwd", c.lanes.fwd}, {"back", c.lanes.back}, {"shoulder", c.shoulder},
                         {"sidewalk", c.sidewalk}, {"g_max", c.gMax}, {"rank", c.rank}, {"thick", c.thick},
                         {"window", c.window}};
+    if (!c.frontage) j["frontage"] = "none";
     if (c.median != 0) j["median"] = c.median;
     if (c.lanes.gap != 0) j["gap"] = c.lanes.gap;
     if (c.lanes.parking != 0) j["parking"] = c.lanes.parking;
