@@ -846,6 +846,50 @@ Remaining remainingFrom(const Route& route, const engine::RoadModel& model, cons
     return out;
 }
 
+bool pointAlong(const Route& route, const LaneGraph& roads, Real metres, PathPoint& out) {
+    if (!route.found) return false;
+    const auto known = [&](PathId p) { return p.valid() && p.index < roads.paths.size(); };
+    Real left = std::max(Real(0), metres);
+    if (route.startConnector.valid()) {
+        if (!known(route.startConnector)) return false;
+        const bool alsoEnd = route.endConnector == route.startConnector && route.legs.empty();
+        const Real end = alsoEnd ? route.to.along : roads.paths[route.startConnector.index].length;
+        const Real here = std::max(Real(0), end - route.from.along);
+        if (left <= here || route.legs.empty()) {
+            out.path = route.startConnector;
+            out.along = std::min(route.from.along + left, end);
+            return true;
+        }
+        left -= here;
+    }
+    for (std::size_t i = 0; i < route.legs.size(); ++i) {
+        const RouteLeg& leg = route.legs[i];
+        if (!known(leg.lane)) return false;
+        const Real start = leg.enterFraction * roads.paths[leg.lane.index].length;
+        const bool last = i + 1 == route.legs.size() && !route.endConnector.valid();
+        if (left <= leg.metres || last) {
+            out.path = leg.lane;
+            out.along = start + std::min(left, leg.metres);
+            return true;
+        }
+        left -= leg.metres;
+        if (i + 1 < route.legs.size() && i < route.turns.size() && route.turns[i].connector.valid()) {
+            const RouteTurn& turn = route.turns[i];
+            if (!known(turn.connector)) return false;
+            if (left <= turn.metres) {
+                out.path = turn.connector;
+                out.along = left;
+                return true;
+            }
+            left -= turn.metres;
+        }
+    }
+    if (!route.endConnector.valid() || !known(route.endConnector)) return false;
+    out.path = route.endConnector;
+    out.along = std::min(left, route.to.along);
+    return true;
+}
+
 uint64_t routeHash(const Route& route) {
     engine::bundle::Fnv h;
     h.pod(static_cast<uint8_t>(route.found));

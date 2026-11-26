@@ -216,6 +216,9 @@ struct CityBrainCounts {
     uint32_t awayLeft = 0;        // ...or the drive was given up and it stood in the free space nearest the driver
     // ADR-0517: a near driver lowered (driving, or waiting to set off): the car went away, of them on the road
     uint32_t loweredDriving = 0, loweredOnRoad = 0;
+    // ADR-0518: a far driver raised mid-drive: their car put part-way along its route, or no room there (they stay far)
+    uint32_t raisedOnRoute = 0, raiseWaited = 0;
+    uint32_t raisedAtStart = 0;   // ...of them put within kAtStartWithin of the space the drive began from (should be none)
 };
 
 // WHAT ITS TICKS COST on the wall clock (reporting only; nothing reads it back): how many, their sum and the worst.

@@ -25462,3 +25462,31 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - `near_tier_in_the_crowd_follows_the_player`: the same counts; hash `0xaede09446c72904f` → `0x12420e766d0aab9e` (its hit checks still fail, #336).
 
 **Next:** part 3, a far driver raised mid-drive has the car put part-way along its route (until then a far driver whose car is away stays far until the drive ends).
+
+## ADR-0518 — A far driver raised mid-drive has their car put that far along its route (step 4e, part 3; 2026-11-26)
+
+**Words:** *raised* is a far person becoming near again as the player comes within the near ring (ADR-0493). *Away* is a car its far driver has, which the clock is driving (ADR-0516). A *route* is the driving's list of lanes and turns from one kerb lane to another (`routeBetween`).
+
+**Why:** after ADR-0516 and ADR-0517 a far driver whose car was away stayed far until the drive ended, even with the player beside them. The drive skill started any drive it was not already driving from the space the car was planned from: a car raised mid-drive would have jumped back to its start.
+
+**What happens:**
+- **The place so far along a route:** `pointAlong(route, roads, metres)` (the engine's router, route.h, beside `remainingFrom`): on the start connector, a leg's own lane at the same share of its length, a turn's connector, or the end connector; past the end, the destination.
+- **The drive skill puts a car part-way along:** `DrivingSkill::placeAlong(car, class, fromSpace, toSpace, fractionDone)` finds the route from the start space's kerb lane to the destination's, takes the point `fractionDone` of its length along, and places the car there standing (`placeCar`), when the lane is clear 3 m ahead and behind (`roomFor`). Otherwise it tries 10 m further on, five times in all. `beginTrip` with `fractionDone` above 0 places the car this way, not at the start space.
+- **Placed first, raised after:** when a far driver with an away car is due to be raised, the city's brain first places the car where the clock has the drive (the share of the driving state's planned time gone). Only when that works is the person raised: the car is on the road from then (`OnRoad`), its pose the driving's (drawn from there, no slide), and the driver gets in where it stands and drives on to the destination. With no room at any try, they stay far and are tried again at their next turn (`raiseWaited`). A drive the clock has already finished needs no car placed: the raise catches them up into parking, where the car takes its space.
+- Raised another way (a hold that steps everyone near at once), the drive skill places the car itself; if it cannot, the drive has no route and is planned again, the car standing in the free space nearest them.
+- The stopgap of ADR-0516 (a far driver whose car was away was kept far) is gone.
+
+**Checked (`..._far_people_...`, 15 minutes):** 144 drivers raised mid-drive, their cars put along their routes, none within 2 m of the space the drive began from (a new check, `raisedAtStart`); 1 waited a turn for room. 83 lowered at the wheel, all on the road, all taken off. Every minute: no car away is drawn, every car away is a far person's who is driving, and no far person on a leg by car has their car on the road. Errors 0, refused 0. The fixed player makes enough raises and lowerings both ways that a separate moving-player case was not needed.
+- New unit case `route_point_along_walks_the_route_from_start_to_destination`: from each tenth of the way along a route, what `remainingFrom` says is left is the rest of it.
+
+**Also run:** brain_lab 13 of 13, brain_tests 24 of 24, driving_tests 202 of 202, the unit suite 1,575 of 1,575. `..._crowd_drives_...` (everyone near) unchanged, passing.
+
+**Measured:** `..._far_people_...` the brain 0.449 → 0.413 ms a tick (worst 6.4); `..._crowd_drives_...` 0.396 → 0.394 ms (no one there is far).
+
+**Re-pinned:**
+- `..._far_people_...`: raised mid-drive 0 → 144, waited for room 0 → 1; lowered at the wheel 23 → 83 (all on the road: the raised drive near and are lowered again as they leave); far drives 123 → 183, stood in their space far 123 → 39 (more drives end near); lowered 3382 → 3442, raised 804 → 879, far visits 3214 → 3089; set out 2701 → 2699, arrived 2270 → 2260, at work 1557 → 1549; hash `0x25af8cabba676dcc` → `0xb54199b8eacdfecb`.
+- `near_tier_in_the_crowd_follows_the_player`: into physics 21 → 29, back 11 → 19 (raised drivers drive on near the player); hash `0x12420e766d0aab9e` → `0xec0bc88842764973`; contacts 0 (its hit checks still fail, #336).
+
+**Filed, not fixed:** #346 a far drive redirected and then raised is placed along the route from the original start to the new end; #347 a car raised mid-drive is put down standing still (the driving has no call to place a moving car).
+
+**Next:** part 4, the island drives (households given cars and kerb spaces, the frame measured with cars on), after Glenn's review.

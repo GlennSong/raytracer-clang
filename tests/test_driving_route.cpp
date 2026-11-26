@@ -209,6 +209,36 @@ TEST_CASE(route_grid_far_corners_fewest_junctions_same_every_run) {
     CHECK_APPROX(r.seconds, r.metres / t.spec.speedLimit, kEps);
 }
 
+// THE PLACE SO FAR ALONG A ROUTE (ADR-0518: where a far driver raised mid-drive has the car put): at 0 the car's own
+// place, at the route's length the destination, past it still the destination, and from every place between, what
+// remains is the rest of the route.
+TEST_CASE(route_point_along_walks_the_route_from_start_to_destination) {
+    const TestRoads t = driving_test::gridRoads(4, 4, specWith(1, DrivesOn::Left));
+    const PathPoint from = at(t.laneLeaving(0, 0, Heading::East, 0), 10);
+    const PathPoint to = at(t.laneArriving(3, 3, Heading::East, 0), 90);
+    const Route r = route(t, from, to);
+    CHECK(r.found);
+    if (!r.found) return;
+    PathPoint p;
+    CHECK(pointAlong(r, t.model.laneLevel, 0, p));
+    CHECK(p.path == from.path);
+    CHECK_APPROX(p.along, from.along, kEps);
+    CHECK(pointAlong(r, t.model.laneLevel, r.metres, p));
+    CHECK(p.path == to.path);
+    CHECK_APPROX(p.along, to.along, kEps);
+    CHECK(pointAlong(r, t.model.laneLevel, r.metres + 50, p));
+    CHECK(p.path == to.path);
+    CHECK_APPROX(p.along, to.along, kEps);
+    for (int k = 1; k < 10; ++k) {
+        const Real metres = r.metres * static_cast<Real>(k) / 10;
+        CHECK(pointAlong(r, t.model.laneLevel, metres, p));
+        const Remaining rest = remainingFrom(r, t.model, p);
+        CHECK(rest.onRoute);
+        CHECK_APPROX(rest.metres, r.metres - metres, kEps);
+    }
+    CHECK(!pointAlong(Route(), t.model.laneLevel, 10, p));
+}
+
 TEST_CASE(route_starting_away_goes_round_never_reverses) {
     const TestRoads t = driving_test::gridRoads(4, 4, specWith(1, DrivesOn::Left));
     // Facing west, toward the corner, with the destination far to the north-east.

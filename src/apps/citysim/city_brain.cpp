@@ -60,6 +60,8 @@ constexpr uint32_t kSpotsByNumber = 8;
 constexpr uint32_t kTestCar = brain::kMaxHandle;
 // WHO HAS A CAR when it is nobody the brain owns: the player, or a walker a director took over (an OUTSIDER).
 constexpr AgentId kOutsider = brain::kNoAgent - 1;
+// m: a car put part-way along its route this near the space its drive began from was put back at the start (ADR-0518)
+constexpr Real kAtStartWithin = 2.0;
 constexpr Real kMillis = 1000.0;
 // A ROLE'S DAY WITH NOWHERE TO GO, OR NO WAY THERE, tries again after this many hours of the sim's clock (ADR-0491):
 // the person stays in the state the table falls back to (home, work) for a quarter of an hour, not a tick.
@@ -594,6 +596,10 @@ struct CityBrain::Impl {
     bool standInSpaceNear(Car c, Vec2 at);
     // `who` is far and drives a car that is away: they stay far until it can be put on their route (step 3)
     bool drivingAway(AgentId who) const;
+    // ...raised: their car is put on the road `fraction` of the way along its route from `from` to `to`'s kerb lanes
+    // (DrivingSkill::placeAlong), standing, its pose the driving's (true); false: no route, or no room
+    bool placeAwayCar(AgentId who);
+    bool putOnRoute(Car c, PlaceRef from, PlaceRef to, Real fraction);
     void shareOutTrace();
     // ---- somebody the brain does not own ------------------------------------------------------------------------------
     void outsiderTook(Car c, bool lost);
@@ -1001,11 +1007,16 @@ struct CityBrain::Impl::LabDrive : brain::DriveSkill {
         driving::PathPoint front;
         return im.fronts->of(c).kerbLane(space, front);
     }
-    bool beginTrip(CarRef ref, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real) override {
+    bool beginTrip(CarRef ref, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) override {
         const Car c = im.car(ref);
         driving::PathPoint to;
         if (!c.valid() || im.keptOf(c).heldBy == kOutsider || !im.fronts->of(c).kerbLane(toSpace, to)) return false;
         CityCarKept& k = im.keptOf(c);
+        // AWAY, ITS DRIVER RAISED MID-DRIVE (ADR-0518): put that far along its route (tickMachine does it before the
+        // raise; one raised another way -- everyone near at once -- is put here), never back in the space it left
+        if (k.phase == CarPhase::Away && !im.putOnRoute(c, fromSpace, toSpace, fractionDone)) return false;
+        // (raised mid-drive, the driver is not in it yet: they get in where it stands)
+        if (k.heldBy < im.people.size() && !im.aboard(c) && !im.getIn(k.heldBy, c)) return false;
         k.tripPerson = person;
         k.tripFrom = fromSpace;
         k.tripTo = toSpace;
@@ -1265,6 +1276,43 @@ void CityBrain::Impl::sendAway(Car c) {
     ++counts.drivenByClock;
 }
 
+bool CityBrain::Impl::placeAwayCar(AgentId who) {
+    const brain::AgentBrain& b = machine->agent(who);
+    const BrainTime t = now();
+    // (the clock has the drive done already: raised, they are caught up into parking, where the car takes its space)
+    if (!b.travelling() || b.stateDue == brain::kNever || b.stateDue <= t || b.stateDue <= b.stateEntered) return true;
+    CarRef ref;
+    ref.id = b.car;
+    const Car c = car(ref);
+    PlaceRef from = machine->legStartPlace(b), to;
+    if (!from.valid()) from = keptOf(c).standing;
+    to.id = b.legEnd[b.legNow];
+    const Real fraction = static_cast<Real>(t - b.stateEntered) / static_cast<Real>(b.stateDue - b.stateEntered);
+    return putOnRoute(c, from, to, fraction);
+}
+
+bool CityBrain::Impl::putOnRoute(Car c, PlaceRef from, PlaceRef to, Real fraction) {
+    CarRef ref;
+    ref.id = numberOf(c);
+    fronts->of(c);
+    if (!skill->placeAlong(ref, bodyOf(c).vehicleClass, from, to, fraction)) return false;
+    syncLane(c);
+    // ITS POSE IS THE DRIVING'S from now: put there, drawn from there (no slide from the space it last stood in)
+    if (const driving::Car* on = d->car(idOf(c))) {
+        const driving::CarPose pose = driving::carPose(*d->roads(), d->vehicleClasses(), d->ruleSet(), *on);
+        const Vec3 mid = (pose.front + pose.rear) * 0.5;
+        standAt(c, Vec2(mid.x, mid.z), Vec2(pose.front.x - pose.rear.x, pose.front.z - pose.rear.z));
+        // (never back where the drive began: counted if it is, as a fault)
+        Vec2 start;
+        if (positionOf(from, start) && (Vec2(mid.x, mid.z) - start).length() < kAtStartWithin) ++counts.raisedAtStart;
+    }
+    CityCarKept& k = keptOf(c);
+    k.phase = CarPhase::OnRoad;
+    k.stranded = false;
+    ++counts.raisedOnRoute;
+    return true;
+}
+
 bool CityBrain::Impl::drivingAway(AgentId who) const {
     const brain::AgentBrain& b = machine->agent(who);
     CarRef ref;
@@ -1375,13 +1423,12 @@ int CityBrain::Impl::markerForNode(int node) {
 }
 
 // THE LEVEL A PERSON SHOULD RUN AT (ADR-0493). Near: within the promote radius of the player, or someone the brain cannot
-// yet run far -- anyone held by a director. Far: beyond the demote radius, or a far driver whose car is away (ADR-0516: a
-// car is not yet put part-way along its route). Between: as they are. A driver is lowered and raised like anyone
-// (ADR-0517: lowered, their car leaves the road and the clock drives the rest of the leg).
+// yet run far -- anyone held by a director. Far: beyond the demote radius. Between: as they are. A driver is lowered and
+// raised like anyone (ADR-0517: lowered, their car leaves the road and the clock drives the rest of the leg; ADR-0518:
+// raised, it is put that far along its route first, tickMachine).
 brain::Detail CityBrain::Impl::detailWanted(AgentId who) const {
     const Person& p = people[who];
     if (p.heldByDirector) return brain::Detail::Near;
-    if (p.level == brain::Detail::Far && drivingAway(who)) return brain::Detail::Far;
     // (a far walker the crowd draws is where the crowd has them, on their route: judged by the straight line between
     // the leg's ends instead, a walk whose line passes inside the ring and whose route does not raised and lowered its
     // walker over and over)
@@ -1557,6 +1604,12 @@ void CityBrain::Impl::tickMachine() {
         const brain::Detail level = detailWanted(who);
         if (level == p.level) continue;
         if (level == brain::Detail::Near) {
+            // A FAR DRIVER RAISED MID-DRIVE (ADR-0518): their car is put as far along its route as the clock has it first;
+            // with no room there, they stay far, and are tried again at their next turn
+            if (drivingAway(who) && !placeAwayCar(who)) {
+                ++counts.raiseWaited;
+                continue;
+            }
             raiseBody(who);   // (raised: their body where the clock has them, then the skill takes up the leg)
             ++counts.raised;
         } else {

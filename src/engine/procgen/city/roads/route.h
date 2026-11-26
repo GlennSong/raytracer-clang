@@ -302,6 +302,11 @@ struct Remaining {
 };
 Remaining remainingFrom(const Route& route, const engine::RoadModel& model, const PathPoint& at, uint32_t fromLeg = 0);
 
+// THE PLACE `metres` ALONG THE ROUTE from its start (ADR-0518): on the start connector, a leg's own lane (the one the
+// route leaves it by, at the same share of its length as any lane of the leg), a turn's connector, or the end
+// connector. Past the destination: the destination. False: no route, or the lane graph is not the one it was found on.
+bool pointAlong(const Route& route, const engine::LaneGraph& roads, Real metres, PathPoint& out);
+
 // ONE NUMBER OVER EVERYTHING A ROUTE SAYS, folded in a fixed order (for the driving model's state hash).
 uint64_t routeHash(const Route& route);
 

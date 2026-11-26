@@ -13,9 +13,9 @@
 //   LaneRoom      whether a lane is empty where a car leaving its kerb space would be put, looked at back along the
 //                 paths that lead into it (ADR-0442).
 //
-// The city sim's side is city_brain.h (ADR-0441). NOT BUILT: beginning a drive part-way along its route (a person raised from
-// far in mid-drive starts from wherever the car is placed, or from the start), and taking a car off the road when its
-// driver stops being watched.
+// The city sim's side is city_brain.h (ADR-0441). A drive begun part-way along its route (a person raised from far in
+// mid-drive) puts the car that far along first (placeAlong, ADR-0518); taking a car off the road when its driver stops
+// being watched is the host's (city_brain.cpp, ADR-0517).
 
 #include "brain.h"
 
@@ -74,6 +74,14 @@ public:
 
     bool pullOut(CarRef car, PlaceRef space) override;                                                  // placeCar
     bool beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) override;   // beginTrip
+    // PUT PART-WAY ALONG (ADR-0518): `car`, not on the road, is placed as `vehicleClass` `fractionDone` of the way along
+    // the route from the kerb lane beside `fromSpace` to the one beside `toSpace` (routeBetween, pointAlong), standing,
+    // nobody driving it yet. Where there is no room there (another car), a little further on, kPlaceTries times.
+    // False: no route, or no room at any of them. A car on the road already: true, as it is.
+    static constexpr int kPlaceTries = 5;
+    static constexpr Real kPlaceStep = 10.0;   // m on along the route between tries
+    static constexpr Real kPlaceGap = 3.0;     // m clear of any other car, ahead and behind (driving::roomFor)
+    bool placeAlong(CarRef car, uint32_t vehicleClass, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone);
     void endTrip(CarRef car) override;                                                                  // endTrip
     void park(CarRef car, PlaceRef space) override;                                                     // removeCar
     // changeDestination. When the driving has no route there it keeps the old one and reports "no route" itself; that

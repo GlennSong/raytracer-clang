@@ -1231,11 +1231,13 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
     // 11, 0xa9d0a7f101cf1cd2 -> 0xaede09446c72904f; contacts 0 (the hit checks above still fail, #336).
     CHECK(mostNear == 10);
     CHECK(mostNearAt == 7);
-    CHECK(c.intoPhysics == 21u);
-    CHECK(c.intoLane == 11u);
+    CHECK(c.intoPhysics == 29u);
+    CHECK(c.intoLane == 19u);
     CHECK(c.mostOverCap == 0);
     // (ADR-0517, drivers lowered like anyone: the same counts, 0xaede09446c72904f -> 0x12420e766d0aab9e)
-    CHECK(hash == 0x12420e766d0aab9eull);
+    // (ADR-0518, a far driver raised mid-drive drives on near: more cars round the player, into physics 21 -> 29, back
+    // 11 -> 19, 0x12420e766d0aab9e -> 0xec0bc88842764973; the most near 10 at minute 7 the same, contacts 0)
+    CHECK(hash == 0xec0bc88842764973ull);
 }
 
 // THE DRAWN CARS' BOXES FOLLOW THEIR CARS EVERY FIXED STEP (ADR-0454): eight fixed steps a frame, as the viewer runs at

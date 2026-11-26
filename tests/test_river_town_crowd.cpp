@@ -661,10 +661,10 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
                     c.daySetOut, c.dayArrivals, c.dayNowhere, c.dayNoWay, c.dayArrivedShut, c.dayToWork, c.dayToWorkOffShift,
                     b.cost().ms / std::max<uint64_t>(1, b.cost().ticks), b.cost().worstMs);
         std::printf("    [far] %2d min: cars away %d | far drives set off %u, stood in their space %u, given up %u | lowered "
-                    "driving %u (on the road %u) | away and drawn %d, away and not a far driver's %d, a far driver's on the "
-                    "road %d\n",
-                    minute, away, c.drivenByClock, c.farParked, c.awayLeft, c.loweredDriving, c.loweredOnRoad, awayDrawn,
-                    awayNotDriving, farOnRoad);
+                    "driving %u (on the road %u) | raised mid-drive %u (no room yet %u) | away and drawn %d, away and not a far "
+                    "driver's %d, a far driver's on the road %d\n",
+                    minute, away, c.drivenByClock, c.farParked, c.awayLeft, c.loweredDriving, c.loweredOnRoad, c.raisedOnRoute,
+                    c.raiseWaited, awayDrawn, awayNotDriving, farOnRoad);
     }
     const citysim::CityBrainCounts& c = b.counts();
     const uint64_t hash = crowdtest::crowdHash(b, sim, lc.world);
@@ -680,6 +680,7 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     CHECK(awayNotDriving == 0);
     CHECK(farOnRoad == 0);
     CHECK(c.farParked > 0u);
+    CHECK(c.raisedAtStart == 0u);   // (ADR-0518: a driver raised mid-drive has the car put along its route, never at the start)
     std::printf("    [far] the most cars away at once %d\n", mostAway);
     // PINNED from the run of 2026-11-24 (ADR-0493; the whole town, 5115 people): about half far at any minute (the most
     // 2724; the player stands in the town's busiest, densest part: 1453 to 1836 within the 300 m ring, 736 to 809
@@ -715,13 +716,19 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // road. Lowered 3368 -> 3382, raised 800 -> 804, far visits 3183 -> 3214; arrived 2266 -> 2270, at work 1553 ->
     // 1557; far drives 100 -> 123 and stood in their space 100 -> 123 (the 23 lowered among them);
     // 0xc4e98d0fb2c1609d -> 0x25af8cabba676dcc.)
+    // (ADR-0518, a far driver raised mid-drive has the car put that far along its route, instead of staying far to the
+    // end of the drive: 144 raised mid-drive, 1 waited a turn for room; so more drives are lowered again, 23 -> 83 (all
+    // on the road), far drives 123 -> 183, and fewer end far, stood in their space 123 -> 39. Lowered 3382 -> 3442,
+    // raised 804 -> 879, far visits 3214 -> 3089; set out 2701 -> 2699, arrived 2270 -> 2260, at work 1557 -> 1549;
+    // 0x25af8cabba676dcc -> 0xb54199b8eacdfecb.)
     if (kFarMinutes == 15) {
         CHECK(mostFar == 3079);
-        CHECK(c.lowered == 3382u && c.raised == 804u && c.farVisits == 3214u);
-        CHECK(c.daySetOut == 2701u && c.dayArrivals == 2270u && c.dayToWork == 1557u);
-        CHECK(c.drivenByClock == 123u && c.farParked == 123u && c.awayLeft == 0u);
-        CHECK(c.loweredDriving == 23u && c.loweredOnRoad == 23u);
-        CHECK(hash == 0x25af8cabba676dccull);
+        CHECK(c.lowered == 3442u && c.raised == 879u && c.farVisits == 3089u);
+        CHECK(c.daySetOut == 2699u && c.dayArrivals == 2260u && c.dayToWork == 1549u);
+        CHECK(c.drivenByClock == 183u && c.farParked == 39u && c.awayLeft == 0u);
+        CHECK(c.loweredDriving == 83u && c.loweredOnRoad == 83u);
+        CHECK(c.raisedOnRoute == 144u && c.raiseWaited == 1u);
+        CHECK(hash == 0xb54199b8eacdfecbull);
     }
 }
 

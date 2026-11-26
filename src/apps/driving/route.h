@@ -49,6 +49,7 @@ using engine::roads::lastChance;
 using engine::roads::wayAhead;
 using engine::roads::Remaining;
 using engine::roads::remainingFrom;
+using engine::roads::pointAlong;
 using engine::roads::routeHash;
 
 // BINDS A CLASS TO A GRAPH: each of its tag names to the graph's bit for it. A tag the graph does not know is not an

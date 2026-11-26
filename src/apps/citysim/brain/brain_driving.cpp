@@ -1,5 +1,7 @@
 #include "brain_driving.h"
 
+#include "../../driving/trip_places.h"   // driving::roomFor
+
 #include <algorithm>
 
 namespace citysim {
@@ -95,13 +97,38 @@ bool DrivingSkill::pullOut(CarRef car, PlaceRef space) {
     return lanes_.kerbLane(space, at) && driving_.placeCarInSpace(id, vehicleClass_, at, lanes_.kerbOffset(space));
 }
 
-bool DrivingSkill::beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real) {
+bool DrivingSkill::beginTrip(CarRef car, AgentId person, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) {
     const driving::CarId id(car.id);
-    // (part-way along is not built: a car not yet on the road starts from the space it was planned from)
-    if (!driving_.car(id) && !pullOut(car, fromSpace)) return false;
+    // a car not yet on the road starts from the space it was planned from, or, part-way through the drive, that far
+    // along its route
+    if (!driving_.car(id)) {
+        const bool placed = fractionDone > 0 ? placeAlong(car, vehicleClass_, fromSpace, toSpace, fractionDone) : pullOut(car, fromSpace);
+        if (!placed) return false;
+    }
     driving::PathPoint to;
     if (!lanes_.kerbLane(toSpace, to)) return false;
     return driving_.beginTrip(id, static_cast<driving::PersonId>(person), to, lanes_.kerbOffset(toSpace)).valid();
+}
+
+bool DrivingSkill::placeAlong(CarRef car, uint32_t vehicleClass, PlaceRef fromSpace, PlaceRef toSpace, Real fractionDone) {
+    const driving::CarId id(car.id);
+    if (driving_.car(id)) return true;
+    const engine::LaneGraph* roads = driving_.roads();
+    driving::PathPoint from, to;
+    if (!roads || vehicleClass >= driving_.vehicleClasses().size() || !lanes_.kerbLane(fromSpace, from) ||
+        !lanes_.kerbLane(toSpace, to))
+        return false;
+    const driving::Route route = driving_.routeBetween(vehicleClass, from, to);
+    if (!route.found) return false;
+    const Real length = driving_.vehicleClasses().at(vehicleClass).length;
+    const Real first = std::clamp(fractionDone, Real(0), Real(1)) * route.metres;
+    for (int k = 0; k < kPlaceTries; ++k) {
+        driving::PathPoint at;
+        if (!driving::pointAlong(route, *roads, first + kPlaceStep * static_cast<Real>(k), at)) return false;
+        if (driving::roomFor(*roads, driving_.pathLists(), at, length, kPlaceGap) && driving_.placeCar(id, vehicleClass, at))
+            return true;
+    }
+    return false;
 }
 
 void DrivingSkill::endTrip(CarRef car) {
