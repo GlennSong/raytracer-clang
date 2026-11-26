@@ -570,6 +570,9 @@ struct CityBrain::Impl {
     std::vector<double> dayGateOf;
     std::vector<AgentId> changedNow;
     std::deque<AgentId> setOutQueue;
+    // ...and those of them near the player, served first (ADR-0514): the streets round the player fill in seconds at
+    // load, not after the whole island's morning has gone out
+    std::deque<AgentId> nearSetOutQueue;
     uint64_t tickNumber = 0;   // people whose day has a trip to begin, waiting for a turn (first come first served)
     brain::Detail detailWanted(AgentId who) const;
     bool carLegAhead(AgentId who) const;
@@ -1566,7 +1569,7 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
             if (daySetOutsThisTick >= kDaySetOutsPerTick) {
                 if (!p.waitingToSetOut) {
                     p.waitingToSetOut = true;
-                    setOutQueue.push_back(who);
+                    (p.level == brain::Detail::Far ? setOutQueue : nearSetOutQueue).push_back(who);
                 }
                 dayGateOf[who] = std::numeric_limits<double>::infinity();
                 return;
@@ -2208,10 +2211,11 @@ void CityBrain::tick(Real dt) {
     ++im.tickNumber;
     part = Clock::now();
     const double total = im.sim.clockTotalHours_;
-    // THE TRIPS WAITING THEIR TURN go first, as many as a tick begins
-    while (!im.setOutQueue.empty() && im.daySetOutsThisTick < kDaySetOutsPerTick) {
-        const AgentId who = im.setOutQueue.front();
-        im.setOutQueue.pop_front();
+    // THE TRIPS WAITING THEIR TURN go first, as many as a tick begins: the near player's, then the rest
+    while ((!im.nearSetOutQueue.empty() || !im.setOutQueue.empty()) && im.daySetOutsThisTick < kDaySetOutsPerTick) {
+        std::deque<AgentId>& q = !im.nearSetOutQueue.empty() ? im.nearSetOutQueue : im.setOutQueue;
+        const AgentId who = q.front();
+        q.pop_front();
         im.people[who].waitingToSetOut = false;
         im.dayGateOf[who] = 0;
         im.tickRoleDay(who, 0);   // (its time in a rest is not running: it is on its way out)

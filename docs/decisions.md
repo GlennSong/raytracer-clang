@@ -25373,3 +25373,19 @@ The average is no worse. The p95 reads about half a millisecond higher, inside w
 | worst single setting out | 58 ms | 2.6 ms |
 
 The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms a tick).
+
+## ADR-0514 — The people near the player set out first (2026-11-25)
+
+**Why:** Glenn opened the island and saw "no agents". They were there, but at load nearly everyone's day is due out at once, and the brain lets only `kDaySetOutsPerTick` (8) set out a tick, to hold the frame (ADR-0496). The rest wait in one queue, first come first served. On the island that is about 240 a second, so the morning's 43,000 trips go out over minutes, and the people round the player waited their turn with everyone else's. In the viewer a minute or two after load, 85 walkers were drawn near the player at 7:46 in the morning.
+
+**What happens:** those waiting to set out are kept in two queues. The people near the player (not `Detail::Far`) go in their own, served first; the far ones after them. The cap is unchanged, so the frame is held as before. A near person who is due no longer waits behind the island.
+
+**Checked:**
+- The island viewer from the player's start, a minute after load: 863 walkers drawn near the player (85 before), 38 seated, 210 drawn indoors, 4 groups gathering. Island 3 minutes: the brain 11.0 ms a tick (worst 24.5), 0 errors.
+- brain_lab 13 of 13.
+
+**Re-pinned** (the same people set out in another order):
+- `..._crowd_drives_...`: the most on the road 134 → 135; trips by car 170 → 178, parked 158 → 163, arrivals 3053 → 3066; set out 3377 → 3364, arrived 3029 → 3042, at work 1765 → 1764; bus calls 184 → 157; the bus rider 1 → 0; hash `0x30c0a4fc1d5cd66d` → `0x0225f04032f23112`.
+  - The bus check fails again, worse: bus 6 stood 935.8 s giving way to car 385, whose body is on the crossing point it gives way at. Added to #344, the driving's to fix.
+- `..._far_people_...`: the most far 2980 → 2974; lowered 3225 → 3362, raised 667 → 821, far visits 2829 → 2793; set out 2707 → 2698, arrived 2230 → 2241; hash `0x7ee7745aadfd10fa` → `0xed5196eb8d59851e`.
+- `..._without_the_driving_...`: set out 2506 → 2494, arrived 1981 → 1958, at work 1373 → 1374, arrivals 1993 → 1970.

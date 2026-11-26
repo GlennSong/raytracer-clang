@@ -462,27 +462,31 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
     // 137 -> 134; trips by car 173 -> 170, parked 157 -> 158, arrivals 3225 -> 3053; set out 3503 -> 3377, arrived 3199 ->
     // 3029, at work 1759 -> 1765, no way 42 -> 32, plans with no way 238 -> 156; bus calls 181 -> 184. The bus's long
     // stand (#344) is gone with this layout.
+    // RE-PINNED when the people near the player set out first (ADR-0514): the most on the road 134 -> 135; trips by car
+    // 170 -> 178, parked 158 -> 163, arrivals 3053 -> 3066; set out 3377 -> 3364, arrived 3029 -> 3042, at work 1765 ->
+    // 1764; bus calls 184 -> 157 and the bus check fails again: bus 6 stands 935.8 s giving way to car 385, whose body is
+    // on the crossing point (#344, the driving's to fix).
     if (minutes == kRiverMinutes) {
         CHECK(b.residentCount() == 5107);
         CHECK(households == 2716);
         CHECK(b.cars().size() == 851u);
         CHECK(withCar == 1280);
         CHECK(homeMarkers == 280u);
-        CHECK(mostOnRoad == 134);
+        CHECK(mostOnRoad == 135);
         CHECK(mostOnRoadAt == 6);
-        CHECK(b.counts().tripsBegun == 170u);
-        CHECK(b.counts().parkedReports == 158u);
+        CHECK(b.counts().tripsBegun == 178u);
+        CHECK(b.counts().parkedReports == 163u);
         CHECK(b.counts().walksBlocked == 0u);
         CHECK(b.counts().otherPlaces == 0u);
-        CHECK(b.machine()->counts().arrivals == 3053u);
+        CHECK(b.machine()->counts().arrivals == 3066u);
         // THE DAY (ADR-0491): nobody arrives at a place that is shut; every worker reaching their job does so inside their
         // shift; 436 trips begun, 392 arrived, 218 at work. Nowhere to go twice (one person's job has no street beside
         // it: their day tries again each quarter hour), no way 0.
         CHECK(b.counts().dayArrivedShut == 0u);
         CHECK(b.counts().dayToWorkOffShift == 0u);
-        CHECK(b.counts().daySetOut == 3377u);
-        CHECK(b.counts().dayArrivals == 3029u);
-        CHECK(b.counts().dayToWork == 1765u);
+        CHECK(b.counts().daySetOut == 3364u);
+        CHECK(b.counts().dayArrivals == 3042u);
+        CHECK(b.counts().dayToWork == 1764u);
         CHECK(b.counts().dayNowhere == 4u);
         CHECK(b.counts().dayNoWay == 32u);
         CHECK(b.machine()->counts().noPlans == 156u);
@@ -557,13 +561,14 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
         // 0xb25113df86e3d71d -> 0x758473badca5cd6d (ADR-0511: the island's trees and grass): the counts above
         // 0x758473badca5cd6d -> 0x04c8e169c079ad4e (ADR-0512: seats, tracks and groups used): the counts above
         // 0x04c8e169c079ad4e -> 0x30c0a4fc1d5cd66d (ADR-0524: the open lots' prefabs): the counts above
-        CHECK(hash == 0x30c0a4fc1d5cd66dull);
+        // 0x30c0a4fc1d5cd66d -> 0x0225f04032f23112 (ADR-0514: the near player's people set out first): the counts above
+        CHECK(hash == 0x0225f04032f23112ull);
         // THE BUSES (ADR-0483, ADR-0484): 13 on the 3 lines (the service file's headway over each round trip at the
         // measured traffic factor), calling at 154 stops in the 30 minutes
         CHECK(sim.drivingHost().counts().buses == 13u);
         // (165 -> 147, ADR-0490: bus 6 stood behind car 118, #333; 147 -> 160, ADR-0491: bus 4 stood there instead)
         // (160 -> 182, ADR-0493: nobody stands in junction 62's turn now that the old sim walks nobody, #333)
-        CHECK(sim.drivingHost().counts().busCalls == 184u);   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
+        CHECK(sim.drivingHost().counts().busCalls == 157u);   // (184 -> 157, ADR-0514: bus 6 stood, #344)   // (182 -> 180, ADR-0496; 180 -> 184, ADR-0503; 184 -> 181, ADR-0504)
         // ...and no bus stands in the road, away from a stop, for minutes: a red light and a queue are the most it waits
         // (87 s); a bus held by something that never goes was 410 s
         // (FAILING from ADR-0490 to ADR-0491, the sim's own walkers standing in junction 62's turn, #333; passes since
@@ -579,8 +584,9 @@ TEST_CASE(level_river_town_crowd_drives_on_the_new_driving) {
             // kBusBeatsWalk; none of the brain's 218 to work went by bus: #335)
             // (ADR-0512: one resident rode, got off 0 -> 1, rides 0 -> 1 -- with no boarding or wait counted: a ride
             // begun far and ended near counts only its end, #345)
-            CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 1u && rc.leftFull == 0u);
-            CHECK(b.counts().busWaits == 0u && b.counts().busRides == 1u);
+            // (ADR-0514: the rider gone again, got off 1 -> 0, rides 1 -> 0)
+            CHECK(rc.waits == 0u && rc.boardings == 0u && rc.alightings == 0u && rc.leftFull == 0u);
+            CHECK(b.counts().busWaits == 0u && b.counts().busRides == 0u);
             // (the check that some of the sim's own walkers rode too went with them, ADR-0499: every rider is the brain's)
         }
     }
@@ -653,11 +659,13 @@ TEST_CASE(level_river_town_far_people_keep_their_day) {
     // (ADR-0524, the open lots' prefabs: the most far 2967 -> 2980; lowered 3233 -> 3225, raised 691 -> 667, far visits
     // 3038 -> 2829; set out 2819 -> 2707, arrived 2316 -> 2230, at work 1520 -> 1536; 0xee640d430795683d ->
     // 0x7ee7745aadfd10fa)
+    // (ADR-0514, the near player's people set out first: the most far 2980 -> 2974; lowered 3225 -> 3362, raised 667 ->
+    // 821, far visits 2829 -> 2793; set out 2707 -> 2698, arrived 2230 -> 2241; 0x7ee7745aadfd10fa -> 0xed5196eb8d59851e)
     if (kFarMinutes == 15) {
-        CHECK(mostFar == 2980);
-        CHECK(c.lowered == 3225u && c.raised == 667u && c.farVisits == 2829u);
-        CHECK(c.daySetOut == 2707u && c.dayArrivals == 2230u && c.dayToWork == 1536u);
-        CHECK(hash == 0x7ee7745aadfd10faull);
+        CHECK(mostFar == 2974);
+        CHECK(c.lowered == 3362u && c.raised == 821u && c.farVisits == 2793u);
+        CHECK(c.daySetOut == 2698u && c.dayArrivals == 2241u && c.dayToWork == 1536u);
+        CHECK(hash == 0xed5196eb8d59851eull);
     }
 }
 
@@ -736,6 +744,8 @@ TEST_CASE(level_river_town_without_the_driving_the_brain_still_runs_everyone) {
     // arrivals 2053 -> 2051)
     // (ADR-0524, the open lots' prefabs: set out 2581 -> 2506, arrived 2038 -> 1981, at work 1369 -> 1373, arrivals
     // 2051 -> 1993)
-    CHECK(c.daySetOut == 2506u && c.dayArrivals == 1981u && c.dayToWork == 1373u);
-    CHECK(b.machine()->counts().arrivals == 1993u);
+    // (ADR-0514, the near player's people set out first: set out 2506 -> 2494, arrived 1981 -> 1958, at work 1373 ->
+    // 1374, arrivals 1993 -> 1970)
+    CHECK(c.daySetOut == 2494u && c.dayArrivals == 1958u && c.dayToWork == 1374u);
+    CHECK(b.machine()->counts().arrivals == 1970u);
 }
