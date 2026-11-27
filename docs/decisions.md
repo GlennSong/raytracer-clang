@@ -25525,3 +25525,21 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - river_town: every case's pins unchanged (crowd_drives, far_people, without_the_driving and the rest; `..._streets_are_drivable_grades` fails as before, #337). The island with driving on, 4 minutes: the same walkers, waits, relaxation passes (9.92 a step), arrivals 7,813, plans 54,444, cars on the road 135.
 - brain_lab 13 of 13; the unit suite 1,575 of 1,575; `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). `metro_pedestrians_walk_and_keep_apart` cannot build its level (its test road file states no lane rules: the road model has no lane level), as before this change.
 - The island, driving on, 4 minutes (running average, ms a fixed step): the city step 16.9 → 13.5; the solver 5.5 → 2.4, the think 3.6 → 2.2, the tail 2.4 → 1.2. The whole step at minute 4: 16.6 → 15.2 on average, about 21 ms in minute 4 on its own (23.5 before). Not yet under 16 ms: the brain's trip planning is next (ADR-0521).
+
+## ADR-0521 — The road model's look-ups by position are made once a model: frontageAt's road lines and walkJoinOn's walks by street (2026-11-26)
+
+**Words:** `frontageAt` answers which road a point (a door, a person) fronts: the nearest centre line a building may face. `walkJoinOn` answers where that frontage joins the walks: the nearest walk beside that street. Both are asked for every leg on foot the brain prices (`planLeg`, through `walkJoinNear`), twice a leg.
+
+**Why:** on the island the brain's trip planning was 4.5 ms of an 11.2 ms brain tick. Each `frontageAt` built the list of every road line and a bounding box over all of each line's points, then threw them away. Each `walkJoinOn` scanned every walk of the lane level (tens of thousands) to find the few beside one street.
+
+**What happens** (`road_model.h` `RoadModelLookups`, `RoadModelLookupSlot`; `road_model.cpp`):
+- **Made once:** the road lines (`roadLines`, in its order), their boxes, and each street's walks (ascending) are made the first time either question is asked, and only read after.
+- **Safe to share:** they are made under a lock and read without one, so a bake's threads can ask one model at once.
+- **The model's own:** they point into the model, so a copied or moved model starts with none and makes its own.
+- **Kept current:** a model changed after they were made (its counts of streets, junctions, line points or walks, or the buffers those live in) has them made again. The old ones are kept until the model goes, since a reader may still hold them.
+- **The same answers:** the same search over the same lines in the same order, and the same walks in the same order, as before.
+
+**Checked:**
+- river_town's pins unchanged (every case; the grades case fails as before, #337). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- lanes 158 of 158, driving 202 of 202, brain_tests 24 of 24, brain_lab 13 of 13, the unit suite 1,575 of 1,575.
+- The island, driving on, 4 minutes: the brain 11.2 → 8.2 ms a tick, its planning 4.5 → 2.6 ms; the whole step's average at minute 4 15.2 → 13.7 ms, minute 3 on its own about 14.6 ms, minute 4 on its own about 19.9 ms.

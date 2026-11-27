@@ -1307,12 +1307,65 @@ std::vector<RoadLine> RoadModel::roadLines() const {
     return out;
 }
 
+// ---- the look-ups by position, made once a model (ADR-0521) ---------------------------------------------------------
+struct RoadModelLookups {
+    // what they were made from: a model whose counts or buffers differ now is not answered from them
+    std::size_t streetCount = 0, junctionCount = 0, pointCount = 0, walkCount = 0;
+    const Vec2* points = nullptr;
+    const Walk* walkData = nullptr;
+    // frontageAt's search: the road lines (roadLines' order) and each one's box
+    std::vector<RoadLine> lines;
+    std::vector<LineBox> boxes;
+    // walkJoinOn's scan: each street's walks of the lane level, ascending (street s's are walksOf[walkFirst[s] ..
+    // walkFirst[s + 1]])
+    std::vector<uint32_t> walkFirst, walksOf;
+};
+
+void RoadModelLookupSlot::clear() {
+    delete built_.exchange(nullptr);
+    for (const RoadModelLookups* r : retired_) delete r;
+    retired_.clear();
+}
+
+namespace {
+bool lookupsFit(const RoadModel& m, const RoadModelLookups& l) {
+    return l.streetCount == m.streets.size() && l.junctionCount == m.junctions.size() && l.pointCount == m.linePoints.size() &&
+           l.points == m.linePoints.data() && l.walkCount == m.laneLevel.walks.size() && l.walkData == m.laneLevel.walks.data();
+}
+RoadModelLookups* makeLookups(const RoadModel& m) {
+    RoadModelLookups* l = new RoadModelLookups();
+    l->streetCount = m.streets.size();
+    l->junctionCount = m.junctions.size();
+    l->pointCount = m.linePoints.size();
+    l->points = m.linePoints.data();
+    l->walkCount = m.laneLevel.walks.size();
+    l->walkData = m.laneLevel.walks.data();
+    l->lines = m.roadLines();
+    l->boxes.reserve(l->lines.size());
+    for (const RoadLine& r : l->lines) l->boxes.push_back(boxOfLine(m.linePoints.data() + r.line.first, r.line.count));
+    l->walkFirst.assign(m.streets.size() + 1, 0);
+    for (const Walk& k : m.laneLevel.walks)
+        if (k.street < m.streets.size()) ++l->walkFirst[k.street + 1];
+    for (std::size_t i = 0; i < m.streets.size(); ++i) l->walkFirst[i + 1] += l->walkFirst[i];
+    l->walksOf.resize(l->walkFirst.back());
+    std::vector<uint32_t> filled(m.streets.size(), 0);
+    for (uint32_t w = 0; w < m.laneLevel.walks.size(); ++w) {
+        const uint32_t st = m.laneLevel.walks[w].street;
+        if (st < m.streets.size()) l->walksOf[l->walkFirst[st] + filled[st]++] = w;
+    }
+    return l;
+}
+// The model's look-ups: made the first time, and again when the model has changed since.
+const RoadModelLookups& lookupsOf(const RoadModel& m) {
+    return *m.lookups.getOrMake([&] { return makeLookups(m); }, [&](const RoadModelLookups& l) { return lookupsFit(m, l); });
+}
+}  // namespace
+
 RoadFrontage RoadModel::frontageAt(const Vec2& door) const {
     RoadFrontage f;
-    const std::vector<RoadLine> lines = roadLines();
-    std::vector<LineBox> boxes;
-    boxes.reserve(lines.size());
-    for (const RoadLine& l : lines) boxes.push_back(boxOfLine(linePoints.data() + l.line.first, l.line.count));
+    const RoadModelLookups& ix = lookupsOf(*this);
+    const std::vector<RoadLine>& lines = ix.lines;
+    const std::vector<LineBox>& boxes = ix.boxes;
     // (the road model does not state that a street is carried over the ground on a bridge, so none is: as the lot
     // pass's roads all say, lanes/lots_producer.cpp lotRoadInputs)
     const NearestLine n = nearestLine(
@@ -1552,13 +1605,17 @@ WalkJoin RoadModel::walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>
     // a sidewalk's stretch runs beside its model walk's kerb; a footway's (its lane's) is its middle, beside both (0)
     const auto kerbOf = [&](const Walk& k) { return k.modelWalk < walks.size() ? walks[k.modelWalk].dir : 0; };
     bool anyWalk = false;
+    // (the street's walks, ascending: the same walks in the same order as a scan of them all, ADR-0521)
+    const RoadModelLookups& ix = lookupsOf(*this);
+    const uint32_t* first = ix.walksOf.data() + ix.walkFirst[f.street.index];
+    const uint32_t* last = ix.walksOf.data() + ix.walkFirst[f.street.index + 1];
     for (int pass = 0; pass < 2 && !j.valid(); ++pass) {
         const int kerb = pass == 0 ? f.dir : -f.dir;
         uint32_t best = kNoIndex;
         Real bestHeld = std::numeric_limits<Real>::infinity(), bestAt = 0;
-        for (uint32_t w = 0; w < laneLevel.walks.size(); ++w) {
+        for (const uint32_t* wp = first; wp != last; ++wp) {
+            const uint32_t w = *wp;
             const Walk& k = laneLevel.walks[w];
-            if (k.street != f.street.index) continue;
             const int on = kerbOf(k);
             if (on != 0 && on != kerb) continue;
             anyWalk = true;

@@ -67,10 +67,12 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -523,6 +525,42 @@ struct WalkwayProblem {
     std::string why;                 // in words, with the numbers
 };
 
+// THE LOOK-UPS BY POSITION, MADE ONCE A MODEL (ADR-0521): what frontageAt searches (the road lines and their boxes) and
+// walkJoinOn scans (each street's walks), worked out the first time either is asked and only read after. It holds
+// pointers into its model, so it is the model's own: a copy of a model starts with none and makes its own. Built under
+// a lock, read without one (a bake's threads ask the same model at once). A model changed after they were made (its
+// streets, lines or walks: the counts and buffers they were made from) has them made again; the old ones are kept
+// until the model goes, as a reader may still hold them.
+struct RoadModelLookups;
+class RoadModelLookupSlot {
+public:
+    RoadModelLookupSlot() = default;
+    RoadModelLookupSlot(const RoadModelLookupSlot&) {}
+    RoadModelLookupSlot& operator=(const RoadModelLookupSlot&) {
+        clear();
+        return *this;
+    }
+    ~RoadModelLookupSlot() { clear(); }
+    // The look-ups, made by `make` when there are none yet or `fits` says the ones there are no longer the model's (one
+    // caller makes them; the others wait, then read them).
+    template <class Make, class Fits> const RoadModelLookups* getOrMake(Make make, Fits fits) const {
+        if (const RoadModelLookups* b = built_.load(std::memory_order_acquire); b && fits(*b)) return b;
+        std::lock_guard<std::mutex> lock(m_);
+        const RoadModelLookups* b = built_.load(std::memory_order_acquire);
+        if (b && fits(*b)) return b;
+        if (b) retired_.push_back(b);
+        const RoadModelLookups* made = make();
+        built_.store(made, std::memory_order_release);
+        return made;
+    }
+
+private:
+    void clear();
+    mutable std::mutex m_;
+    mutable std::atomic<const RoadModelLookups*> built_{nullptr};
+    mutable std::vector<const RoadModelLookups*> retired_;
+};
+
 struct RoadModel {
     std::string name;
     bool built = false;                   // the built layer is here (assembleRoadModel); false: the planned layer alone
@@ -826,6 +864,9 @@ struct RoadModel {
         std::vector<uint8_t> paths, walks;
     };
     OpenPaths openTo(const std::string& mover, const PathUsers& users = pathUsers()) const;
+
+    // (frontageAt's and walkJoinOn's look-ups, made once: RoadModelLookups above)
+    RoadModelLookupSlot lookups;
 };
 // The kinds of path the lane level names that are not a lane's (assets/data/path_users.json lists who may use each): a
 // connector through a junction, and a crossing over a crosswalk (ADR-0466).
