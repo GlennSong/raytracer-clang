@@ -1,7 +1,8 @@
 // THE BRAIN ON THE ISLAND (ADR-0496; the one-brain plan, step 4): island_8_nature with every household run by the
-// agent brain (citysim.brainPeople -1, set here before the city is built), no driving (the island names no rule set:
-// its people walk and ride, ADR-0494), and the player standing in Saltwood (the level's own start), so the brain's
-// attention (ADR-0493) has most of the island far.
+// agent brain (citysim.brainPeople -1, set here before the city is built), the island's households driving their own
+// cars (ADR-0533: the island names river_town's rule set; before, its people only walked and rode, ADR-0494), and the
+// player standing in Saltwood (the level's own start), so the brain's attention (ADR-0493) has most of the island far:
+// far drives on the clock, their cars away (ADR-0516..0518).
 //
 // What it measures: how many people, how long the brain takes to start, what a tick costs, how many are far, and
 // whether their days go on -- out, to work inside their shift, nobody at a shut place, nothing erring. The island's
@@ -14,6 +15,7 @@
 #include "test_framework.h"
 
 #include "crowd_test_rig.h"
+#include "../src/apps/citysim/city_car.h"
 
 #include <algorithm>
 #include <chrono>
@@ -61,6 +63,9 @@ TEST_CASE(level_island_brain_runs_every_household) {
     const int ticksPerMinute = static_cast<int>(60.0 / kStep + 0.5);
     const int minutes = std::getenv("RT_ISLAND_MINUTES") ? std::atoi(std::getenv("RT_ISLAND_MINUTES")) : 5;
     double stepMs = 0, stepWorst = 0;
+    // THE FAR CAR TIER (ADR-0516..0518), looked at every minute: no car away is drawn, every car away is a far driver's,
+    // and no far person on a leg by car has their car on the road
+    int awayDrawn = 0, awayNotDriving = 0, farOnRoad = 0, mostOnRoad = 0;
     for (int minute = 1; minute <= minutes; ++minute) {
         for (int t = 0; t < ticksPerMinute; ++t) {
             sim.setTierCenter(player);
@@ -70,7 +75,36 @@ TEST_CASE(level_island_brain_runs_every_household) {
             stepMs += ms;
             stepWorst = std::max(stepWorst, ms);
         }
+        int away = 0, onRoad = 0;
+        lc.world.each<citysim::CityCarKept>([&](engine::Entity e, citysim::CityCarKept& k) {
+            const int holder = k.heldBy < static_cast<citysim::brain::AgentId>(b.residentCount()) ? static_cast<int>(k.heldBy) : -1;
+            const bool far = holder >= 0 && b.residentFar(holder);
+            const std::string st = holder >= 0 ? b.stateName(holder) : std::string();
+            const bool carLeg = st == "pulling_out" || st == "driving" || st == "parking";
+            if (k.phase == citysim::CityCarPhase::Away) {
+                ++away;
+                awayDrawn += lc.world.has<citysim::CityCarPose>(e) ? 1 : 0;
+                awayNotDriving += far && st == "driving" ? 0 : 1;
+            }
+            onRoad += lc.world.has<citysim::CityCarOnLane>(e) ? 1 : 0;
+            farOnRoad += far && carLeg && lc.world.has<citysim::CityCarOnLane>(e) ? 1 : 0;
+        });
+        mostOnRoad = std::max(mostOnRoad, onRoad);
         const citysim::CityBrainCounts& c = b.counts();
+        std::printf("    [island] %2d min: cars on the road %d, away %d | trips by car %u, far drives %u (stood in their space %u, "
+                    "given up %u) | lowered driving %u, raised mid-drive %u (no room yet %u, at the start %u) | away and drawn %d, "
+                    "away and not a far driver's %d, a far driver's on the road %d\n",
+                    minute, onRoad, away, c.tripsBegun, c.drivenByClock, c.farParked, c.awayLeft, c.loweredDriving,
+                    c.raisedOnRoute, c.raiseWaited, c.raisedAtStart, awayDrawn, awayNotDriving, farOnRoad);
+        {
+            // WHAT THE DRIVING COSTS a tick (ADR-0533): its model, the measurements watching it, the hand-over after it
+            const citysim::DrivingHost::Cost& dc = sim.drivingHost().cost();
+            const double n = static_cast<double>(std::max<uint64_t>(1, dc.ticks));
+            std::printf("    [island] %2d min: the driving %.3f ms a tick (worst %.3f), watching it %.3f, the hand-over %.3f (worst "
+                        "%.3f), over %llu ticks\n",
+                        minute, dc.modelMs / n, dc.modelWorstMs, dc.watchMs / n, dc.hostMs / n, dc.hostWorstMs,
+                        static_cast<unsigned long long>(dc.ticks));
+        }
         std::printf("    [island] %2d min: %05.2f h | %s | the day: set out %u, arrived %u, nowhere %u, no way %u, at a shut "
                     "place %u, at work %u (%u outside the shift) | brain %.3f ms a tick (worst %.3f), the whole step %.3f ms "
                     "(worst %.3f) | %.0f MB\n",
@@ -103,7 +137,12 @@ TEST_CASE(level_island_brain_runs_every_household) {
                 c.trainRides, static_cast<unsigned long long>(tc.boardings), static_cast<unsigned long long>(tc.alightings),
                 static_cast<unsigned long long>(tc.leftFull));
     CHECK(b.residentCount() > static_cast<int>(sim.agents().size()) * 9 / 10);   // (the brain runs nearly everyone)
-    CHECK(b.cars().empty());                                                     // (no driving on the island)
+    // THE ISLAND DRIVES (ADR-0533): its households have cars in kerb spaces, and the far car tier holds
+    std::printf("    [island] cars: %zu household cars; the most on the road at once %d\n", b.cars().size(), mostOnRoad);
+    CHECK(!b.cars().empty());
+    if (minutes >= 3) CHECK(c.drivenByClock > 0u);   // (the first drives set out in the third minute)
+    CHECK(awayDrawn == 0 && awayNotDriving == 0 && farOnRoad == 0);
+    CHECK(c.raisedAtStart == 0u);
     CHECK(b.farCount() > b.residentCount() / 2);                                 // (most of the island is far)
     CHECK(c.dayArrivals > 0u);
     CHECK(c.dayArrivedShut == 0u && c.dayToWorkOffShift == 0u);

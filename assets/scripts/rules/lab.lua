@@ -301,6 +301,8 @@ rule_set = {
     freeway    = { 65, unit = "mph", source = "California Vehicle Code 22349(a): 65 mph on a highway" },
     ramp       = { 35, unit = "mph", source = "[~] a guess to tune: a typical advisory speed on a freeway ramp; the bends slow cars further" },
     rural      = { 55, unit = "mph", source = "California Vehicle Code 22349(b): 55 mph on a two-lane undivided highway" },
+    -- (a mountain road between towns, island_8_nature's pass and coast roads: ADR-0533)
+    mountain   = { 55, unit = "mph", source = "California Vehicle Code 22349(b): 55 mph on a two-lane undivided highway; the bends slow cars further" },
   },
 
   -- EACH DRIVER'S OWN HABITS: a person's value is worked out from who they are (a hash of their id), the same every

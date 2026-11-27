@@ -9,10 +9,12 @@
   "busRoutes": 4,
   "busStops": 14,
   "buses": 40,
-  "cars": -1,
+  "cars": 0,
   "carsPerLaneKm": 90.0,
   "debugWidgets": false,
   "detailDistance": 300,
+  "drivableSpacesOnly": true,
+  "drivingRules": "rules/lab.lua",
   "districts": {
    "hubs": [
     {
@@ -5253,7 +5255,7 @@
   "pedDemoteRadius": 440.0,
   "pedPromoteRadius": 300.0,
   "pedestrians": -1,
-  "pedsPerKm": 360.0,
+  "pedsPerKm": 240.0,
   "perceptionReliability": 1.0,
   "plinth": 0.45,
   "seed": 7,

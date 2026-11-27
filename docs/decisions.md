@@ -25559,3 +25559,28 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - The island, driving on, 4 minutes: the group sync's walkers 5.2 → 3.4 ms a step, the whole sync 6.8 → 5.0 ms; the whole step's average at minute 4 13.7 → 13.3 ms (minute 3 on its own about 14.2, minute 4 about 18.7). The same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - river_town's pins unchanged (every case; the grades case fails as before, #337). brain_lab 13 of 13; the unit suite 1,575 of 1,575; physics `near_tier`: the crowd case's counts and hash unchanged (its hit checks fail as before, #336; `..._no_way_past_...` is the known older failure).
+
+## ADR-0533 — The island drives: its households have cars in kerb spaces, and far drivers drive on the clock (step 4e, part 4; 2026-11-26)
+
+**Words:** a *rule set* is the driving library's rules of the road (`citysim.drivingRules`); a level that names none has no driving, and its people only walk and ride (ADR-0494). The *far car tier* is ADR-0516..0518: a far person's car is away while the clock drives it, a driver lowered mid-drive has the car taken off the road, and one raised mid-drive has it put that far along the route.
+
+**Why:** the agent brain runs every household of island_8_nature (ADR-0496), but nobody there had a car: the island named no rule set. With the far car tier built, a car need not be near to move, so the island can drive without every driver near the player.
+
+**What happens:**
+- **island_8_nature's citysim block:**
+  - `drivingRules` "rules/lab.lua" and `drivableSpacesOnly` true, as river_town has.
+  - `cars` -1 → 0. With a rule set named, -1 put down the density count of cars that drive round for ever: 86,938 on the island.
+  - `pedsPerKm` 360 → 240. Without the change, `cars` 0 would have raised the island's people from about 113,000 to 170,000 (the housing fit gave the old car share to walkers). Glenn kept the population as it was: 113,570 brain people (113,398 before).
+- **`lab.lua`:** a default limit for the `mountain` class, 55 mph (CVC 22349(b)). The rule set had refused the island's pass and coast roads. river_town has no mountain road.
+- **`test_island_brain.cpp`:** the island now has cars. New checks: household cars, far drives in a run of three minutes or more, no car away is drawn, every car away is a far driver's, no far driver's car on the road, none raised back at their start. It prints each minute's far-tier counts and what the driving costs.
+
+**Kerb parking (for Glenn, later):** the island's road file states no parking of its own; its local streets park by the class table (`local`, 2.5 m). 6,706 household cars got a space; 33,323 found no space a car can drive from (`drivableSpacesOnly`: only 50.3% of the lane paths are reachable for a car). That is a road-file question, not done here.
+
+**Measured (island_8_nature, the player at the level's start in Saltwood, 4 minutes):**
+- Load 133 s → 169 s (the driving's set-up). Memory 8,514 MB → 8,515 MB.
+- Brain 9.5 → 8.2 ms a tick (with ADR-0519, 0530..0532, made for this).
+- The whole step, running average by minute, against the island today without the driving (7.7 at minute 3 and 10.4 at minute 4 in its stats run): 9.2, 10.1, 11.5, 13.3 ms.
+- On its own, minute 3 is about 14.2 ms and **minute 4 about 18.7 ms, over the 16 ms frame**. That is the morning rush: 135 cars on the road at once, the driving about 4 ms that minute. Glenn accepted it to commit now and keep cutting: the driving's own cost next, then the brain's days.
+- The far car tier, 4 minutes: 193 trips begun in the driving (near drivers and raised ones), 375 far drives (49 stood in their space far), 48 drivers lowered at the wheel, 176 raised mid-drive (0 waited for room, 0 put back at their start), at most 150 cars away at once. Away and drawn 0, away and not a far driver's 0, a far driver's car on the road 0. Errors 0, refused 0. Arrivals 7,813, plans 54,444.
+
+**Also run:** river_town's cases (pins unchanged; the grades case fails as before, #337), brain_lab 13 of 13, the unit suite 1,575 of 1,575. The island case passes.
