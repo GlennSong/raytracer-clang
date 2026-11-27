@@ -25600,3 +25600,4 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - river_town's pins unchanged (every case; the grades case fails as before, #337). driving_tests 202 of 202. The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - The island, driving on, 4 minutes: the driving 1.81 → 1.34 ms a tick averaged over the run (worst 7.6 → 3.6), about 4.4 → 2.6 ms in minute 4 on its own. The whole step's average at minute 4 13.3 → 12.9 ms; minute 4 on its own about 18.7 → 17.6 ms. In samples of minutes 3–5 the driving is now 12 of 120, `findThingAhead` 4 of them.
+- (Follow-up: the box test's slack is named, `kBeyondSlack`, as the tolerance-literals case asks; it failed on the bare `1e-9` at 51d0b877.)

@@ -210,14 +210,17 @@ void ThingGrid::build(const std::vector<RoadThing>& things, const engine::LaneGr
     }
 }
 
+// A HAIR OF SLACK in ThingGrid::beyond (ADR-0534): a point the centre line itself would measure exactly at the reach is
+// never passed over by the box's test (relative, and absolute for a reach of 0)
+constexpr Real kBeyondSlack = 1e-9;
+
 bool ThingGrid::beyond(engine::PathId path, engine::Vec2 p, Real reach) const {
     if (path.index >= pathBoxes_.size()) return false;
     const PathBox& b = pathBoxes_[path.index];
     if (b.lo.x > b.hi.x) return false;
     const Real dx = std::max(Real(0), std::max(b.lo.x - p.x, p.x - b.hi.x));
     const Real dy = std::max(Real(0), std::max(b.lo.y - p.y, p.y - b.hi.y));
-    // (a hair of slack, so a point the line itself would measure exactly at `reach` is never passed over)
-    const Real r = reach * (Real(1) + Real(1e-9)) + Real(1e-9);
+    const Real r = reach * (Real(1) + kBeyondSlack) + kBeyondSlack;
     return dx * dx + dy * dy > r * r;
 }
 
