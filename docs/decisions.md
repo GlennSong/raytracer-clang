@@ -25543,3 +25543,19 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - river_town's pins unchanged (every case; the grades case fails as before, #337). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - lanes 158 of 158, driving 202 of 202, brain_tests 24 of 24, brain_lab 13 of 13, the unit suite 1,575 of 1,575.
 - The island, driving on, 4 minutes: the brain 11.2 → 8.2 ms a tick, its planning 4.5 → 2.6 ms; the whole step's average at minute 4 15.2 → 13.7 ms, minute 3 on its own about 14.6 ms, minute 4 on its own about 19.9 ms.
+
+## ADR-0532 — A walker standing still keeps their pose: the drawing does not ask the ground under them every step (2026-11-26)
+
+**Words:** a walker's *standing pose* is where their body is drawn and their box stands this step: on the ground or their deck under them, turned the way they face, on their board if they ride one, scaled to their height (`CityPoses::walkerStandingPose`). The *group sync* is the drawing's bake of every walker and car into its instanced groups each fixed step (`CityRenderSystem::syncGroups`).
+
+**Why:** on the island with its driving on, the group sync's walkers took 5.2 ms a step (4.3 ms without the driving), most of it asking the road deck and the ground the height under each one (`RoadDeckField::surfacesAt`). About a third of the people out on the street stand still in any step (at a crosswalk for the lights, at a stop, talking), and each was asked again every step.
+
+**What happens** (`city_poses.cpp` `walkerStandingPose`; `CityPoses::StillWalker`):
+- A walker is still when where they were as the tick began is where they are, facing the same way. The blend across the tick then puts them at the same place whatever the time within it.
+- A still walker whose place, heading, deck, elevation, height, board, size and blending are the same as when their pose was last made gets that pose again, and their feet.
+- They are asked of the ground again once a second (every 60 fixed steps), each on their own step by their number, as parked cars are (ADR-0519), so ground that streams in under them is found.
+- A moving walker is posed as before, every step.
+
+**Checked:**
+- The island, driving on, 4 minutes: the group sync's walkers 5.2 → 3.4 ms a step, the whole sync 6.8 → 5.0 ms; the whole step's average at minute 4 13.7 → 13.3 ms (minute 3 on its own about 14.2, minute 4 about 18.7). The same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- river_town's pins unchanged (every case; the grades case fails as before, #337). brain_lab 13 of 13; the unit suite 1,575 of 1,575; physics `near_tier`: the crowd case's counts and hash unchanged (its hit checks fail as before, #336; `..._no_way_past_...` is the known older failure).

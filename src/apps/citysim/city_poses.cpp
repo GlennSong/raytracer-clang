@@ -266,15 +266,56 @@ Mat4 CityPoses::walkerPose(const CitySim& sim, const Agent& a, Real height) cons
     return Mat4::trs(Vec3(x, y, z), rot, Vec3(1, 1, 1));
 }
 
+namespace {
+// (a walker standing still is asked of the ground again after this many fixed steps: a second at 60 Hz, ADR-0532)
+constexpr uint64_t kStillReposeSteps = 60;
+bool samePoint(Vec2 a, Vec2 b) { return a.x == b.x && a.y == b.y; }
+}  // namespace
+
 Mat4 CityPoses::walkerStandingPose(const CitySim& sim, int ai, Real height, Real* feet) const {
     const Agent& a = sim.agents()[static_cast<std::size_t>(ai)];
-    Mat4 pose = walkerPose(sim, a, height);
-    if (feet) *feet = pose.m[1][3] - height * 0.5;
-    pose.m[1][3] += rideDeck(sim.rideOf(ai));
+    const std::size_t i = static_cast<std::size_t>(ai);
+    const Ride ride = sim.rideOf(ai);
     const Real s = sim.bodyScale(ai);
+    // STANDING STILL (ADR-0532): where they were as the tick began is where they are, facing the same way, so the blend
+    // across the tick puts them at the same place whatever the time in it; and nothing else their pose is made from
+    // has changed since it was made. Then it is the pose they had.
+    const bool blended = sim.tickPeriod() > 0.0 && !a.released;
+    const bool still = samePoint(a.pos, a.tickFromPos) && samePoint(a.heading, a.tickFromHeading);
+    if (still && i < standingWalkers_.size()) {
+        const StillWalker& w = standingWalkers_[i];
+        if (w.valid && samePoint(w.pos, a.pos) && samePoint(w.heading, a.heading) && w.deckY == a.deckY &&
+            w.elevation == a.elevation && w.height == height && w.scale == s && w.ride == static_cast<uint8_t>(ride) &&
+            w.blended == blended && (steps_ + i) % kStillReposeSteps != 0) {
+            if (feet) *feet = w.feet;
+            return w.pose;
+        }
+    }
+    Mat4 pose = walkerPose(sim, a, height);
+    const Real feetY = pose.m[1][3] - height * 0.5;
+    if (feet) *feet = feetY;
+    pose.m[1][3] += rideDeck(ride);
     if (s != 1.0) {
         pose.m[1][3] -= height * 0.5 * (1.0 - s);   // (walkerPose stands the body half its height up)
         pose = pose * Mat4::scale(s, s, s);
+    }
+    if (still) {
+        if (standingWalkers_.size() <= i) standingWalkers_.resize(sim.agents().size());
+        StillWalker& w = standingWalkers_[i];
+        w.pos = a.pos;
+        w.heading = a.heading;
+        w.deckY = a.deckY;
+        w.elevation = a.elevation;
+        w.height = height;
+        w.scale = s;
+        w.ride = static_cast<uint8_t>(ride);
+        w.blended = blended;
+        w.step = steps_;
+        w.pose = pose;
+        w.feet = feetY;
+        w.valid = true;
+    } else if (i < standingWalkers_.size()) {
+        standingWalkers_[i].valid = false;
     }
     return pose;
 }

@@ -86,7 +86,10 @@ public:
     CityCarModels models;
 
     // A NEW CITY: the fit memories go (their cars are the old city's).
-    void reset() { carMemory_.clear(); }
+    void reset() {
+        carMemory_.clear();
+        standingWalkers_.clear();
+    }
 
     // THE TILT LOW-PASS: `su`, the last smoothed up-vector, blended toward this step's `up`, with a gain from the step
     // (tau ~0.7 s), so the filter behaves the same at the viewer's 60 Hz and the tests' 10 Hz.
@@ -133,6 +136,19 @@ private:
     // EACH CAR ENTITY'S FIT MEMORY, by its number, kept while the car is posed: a car that loses its pose (a Jolt car,
     // the player's, nowhere, gone) loses its memory with it and starts afresh when it is posed again
     std::unordered_map<uint32_t, FitMemory> carMemory_;
+    // A WALKER STANDING STILL (ADR-0532), by agent index: their standing pose and what it was worked out from (place,
+    // heading, deck, elevation, height, board, size, whether it is blended across the tick). While none of it changes the
+    // pose is theirs again, the ground under them asked once every kStillReposeSteps (each on their own step).
+    struct StillWalker {
+        Vec2 pos, heading;
+        Real deckY = 0, elevation = 0, height = 0, scale = 0;
+        uint8_t ride = 0;
+        bool blended = false, valid = false;
+        uint64_t step = 0;
+        Mat4 pose;
+        Real feet = 0;
+    };
+    mutable std::vector<StillWalker> standingWalkers_;
     uint64_t steps_ = 0;                                 // fixed steps posed (FitMemory::step)
     Real lastDt_ = engine::kDefaultFixedStep;            // the last step's (poseCarNow between steps)
 };
