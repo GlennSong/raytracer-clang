@@ -1700,8 +1700,9 @@ void CityBrain::Impl::tickRoleDay(AgentId who, Real dtHours) {
             cost.worstSetOutMs = std::max(cost.worstSetOutMs, setOutMs);
             return;
         }
-        const PlaceRef wanted = markerPlace(p.dayMarker, who);
-        if (!b.travelling() && b.state == table.intents[b.intentKind].arrive && b.intentTarget == wanted.id) {
+        // (their place at the marker is asked only once they stand arrived somewhere: asked of everyone on their way it
+        // was a search of the spots given out, 1,400 a tick on the island, ADR-0535)
+        if (!b.travelling() && b.state == table.intents[b.intentKind].arrive && b.intentTarget == markerPlace(p.dayMarker, who).id) {
             ++counts.dayArrivals;
             if (p.dayVenue >= 0 && p.dayVenue < static_cast<int>(sim.venues_.size()) &&
                 !sim.venues_[static_cast<std::size_t>(p.dayVenue)].openAt(sim.clockHours_))
@@ -2338,9 +2339,10 @@ void CityBrain::tick(Real dt) {
         im.tickRoleDay(who, 0);   // (its time in a rest is not running: it is on its way out)
     }
     for (AgentId who = 0; who < im.people.size(); ++who) {
-        if (im.people[who].setOutTick == im.tickNumber) continue;   // (set out by the queue this tick)
-        // (not to be read before its gate: asleep in a rest, or far on their way, ADR-0496 -- the island's 100k)
+        // (not to be read before its gate: asleep in a rest, or far on their way, ADR-0496 -- the island's 100k. Asked
+        // first, of the compact gates: asking each person's record first read 113,000 records a tick, ADR-0535)
         if (total < im.dayGateOf[who]) continue;
+        if (im.people[who].setOutTick == im.tickNumber) continue;   // (set out by the queue this tick)
         ++im.cost.dayReads;
         im.tickChoice(who);
         im.tickDay(who);

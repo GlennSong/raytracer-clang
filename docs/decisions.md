@@ -25601,3 +25601,19 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - river_town's pins unchanged (every case; the grades case fails as before, #337). driving_tests 202 of 202. The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - The island, driving on, 4 minutes: the driving 1.81 → 1.34 ms a tick averaged over the run (worst 7.6 → 3.6), about 4.4 → 2.6 ms in minute 4 on its own. The whole step's average at minute 4 13.3 → 12.9 ms; minute 4 on its own about 18.7 → 17.6 ms. In samples of minutes 3–5 the driving is now 12 of 120, `findThingAhead` 4 of them.
 - (Follow-up: the box test's slack is named, `kBeyondSlack`, as the tolerance-literals case asks; it failed on the bare `1e-9` at 51d0b877.)
+
+## ADR-0535 — The brain's days read only who is due, and ask a person's place at their marker only on arrival (2026-11-27)
+
+**Words:** a person's *day* is their role's table run on the sim's clock (ADR-0491): each tick the brain reads the days that may have something to do (`tickRoleDay`, with `tickChoice` and `tickDay`). A *gate* is the sim hour before which a person's day need not be read (asleep, or far on their way: ADR-0496), kept in a compact array beside the people.
+
+**Why:** on the island with its driving on, the days were 2.1 ms of the brain's 8.2 ms tick. Two things in them were costly and gave nothing:
+- The scan over all 113,570 people asked each person's own record (whether the queue had set them out this tick) before the compact gate, so it read every record every tick, though only about 1,500 were due.
+- For each of the 1,415 people on their way a tick, it worked out their place at their marker (`markerPlace`, a search of the spots handed out), only to compare it with where they stand once they had arrived.
+
+**What happens** (`city_brain.cpp` `CityBrain::tick`, `tickRoleDay`):
+- The gate is asked first and the person's record only after: the same people read, in the same order.
+- Their place at the marker is asked only when they stand arrived (not travelling, in their intent's arriving state); the same comparison, made only when it can be true.
+
+**Checked:**
+- river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575 (with the follow-up above naming ADR-0534's slack). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- The island, driving on, 4 minutes: the days 2.09 → 0.76 ms a tick, the brain 8.2 → 6.9 ms. The whole step's average at minute 4 12.9 → 12.3 ms; minute 3 on its own about 13.3 ms, minute 4 about 17.6 → 16.7 ms (still a little over 16).
