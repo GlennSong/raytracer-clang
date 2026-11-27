@@ -25646,3 +25646,35 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575; `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - The island, driving on, 4 minutes: the rehash 2.1 → 1.35 ms in a slow step; the whole step's average by minute 7.4, 8.4, 9.6, 11.1 ms (8.3, 9.2, 10.4, 11.8 before: the other scans over every agent read the same head). **Minute 4 on its own about 15.6 ms, under 16** (16.0 before; 23.5 when the island's driving was first measured). Minute 3 on its own about 12.1 ms.
+
+## ADR-0538 — A walker entity is for the people near the player only: the brain's near ring (2026-11-27)
+
+**Words:** a *walker entity* is a person drawn and moved in the viewer as an entity of the engine's world (`CityWalkerSystem`, ADR-0062): a posed body, a mesh, a place asked of the ground each step, and, nearer still (`bodyRadius_`, 140 m, and a budget), a physics capsule. *Out on the street* is moving, or not indoors and not in a car (`CitySim::pedVisible`). The *near ring* is the brain's attention (ADR-0493): a person within `pedPromoteRadius` of the player (300 m on the island) is stepped near, and goes far beyond `pedDemoteRadius` (440 m).
+
+**Why:** Glenn opened island_8_nature and it ran at 5 fps, even with the player alone in the mountains: about 25–40 fps at load, falling to 4–5 fps as the sim got going. The headless tests never saw it: the walker system runs only in the viewer.
+- The walker system was written for the K tier, the bubble round the player (8 km plan P6: "a physical walker body exists ONLY for K-tier pedestrians"). ADR-0499 deleted the tiers, and the list it took its people from became `streetAgents`: everyone out on the street, island-wide.
+- Since ADR-0512 and ADR-0514 many far people stand outside (at a park, on a spot), so thousands of far people had a full walker entity, each moved and asked of the ground every step: 9,430 entities 15 minutes after load in Saltwood, 7,567 with the player in the mountains (a sample of the running viewer: 63% of its main thread in `driveWalkers`, 37% in `RoadDeckField::heightAt` per walker).
+- Measured headless on river_town with the walker system stepped: 799 walker entities for 799 people out on the street, the farthest 772 m from the player in the busiest part of town; from the town's south-west edge 47 of 47, the farthest 1,838 m.
+
+**What happens** (`city_walkers.cpp` `spawnWalkers`, `floorOf`):
+- **The near ring:** a person out on the street gets a walker entity once within `pedPromoteRadius` of the player, and loses it beyond `pedDemoteRadius` (the brain's own ring and its hysteresis, so a person is a walker while the brain steps them near). Far people are the GPU crowd's to draw (ADR-0495), or, standing at a place far off, not drawn. With no player fed (a headless host), everyone out on the street, as before. The physics capsules keep their own nearer ring (140 m and the budget).
+- **The floor under a still walker:** a walker posed from its plan or resting (no capsule) asks the ground under it only when it has moved, and once a second while it stands (each on its own step), as ADR-0532 did for poses.
+- `walkers?` now says how many walker entities stand within 140 m, 300 m, 440 m and beyond.
+- **A headless measurement:** new physics case `near_tier_walkers_are_a_near_lod` steps the walker system on river_town as the viewer does (CityWalkerSystem now builds into physics_tests) and counts the walker entities by distance: none past the leaving radius, fewer than the people out on the street.
+
+**Measured (the viewer, island_8_nature, RT_DUMP_STATS; the player at the level's start in Saltwood, then teleported to the mountain pass at (-1051, 3516)):**
+
+| | before | after |
+|---|---|---|
+| at load | 36–40 fps | 36–37 fps |
+| 2 min after load | 21 fps | 23–24 fps |
+| 5 min | 7.8 fps | 17.6 fps |
+| 10 min | 5.0 fps | 17.5 fps |
+| 15 min, Saltwood | 4.2 fps (fixed step 28.8 ms × 8 a frame); 9,430 walker entities | 16–17 fps (fixed step 13.4 ms × 3.5 a frame); 876 walker entities (191 within 140 m, 431 to 300 m, 254 to 440 m, 0 beyond); the most at any minute 1,456 |
+| 2 min later, the mountains | 5.6 fps (fixed step 21 ms × 8); 7,567 walker entities | 61–63 fps (fixed step 8.7 ms × 1); 0 walker entities |
+
+Glenn, watching the "before" viewer: about 25 fps at load, falling to about 5 fps as the sim got going.
+
+**Not yet:** Saltwood itself is at 16–18 fps 15 minutes in. Its streets hold about 1,000–1,450 people out within the near ring; each beyond the 140 m body radius is still a posed entity, and the fixed step (13 ms) runs about 3.5 times a frame. A nearer ring for walker entities (the 300–440 m band to the GPU crowd) is Glenn's call.
+
+**Checked:** river_town's pins unchanged (no headless case steps the walker system; the grades case fails as before, #337). `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). brain_lab 13 of 13; the unit suite 1,575 of 1,575.

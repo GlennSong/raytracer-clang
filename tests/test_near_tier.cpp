@@ -21,6 +21,7 @@
 #include "../src/apps/citysim/city_near.h"
 #include "../src/apps/citysim/city_physics.h"
 #include "../src/apps/citysim/city_render.h"
+#include "../src/apps/citysim/city_walkers.h"
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/control/control_commands.h"
@@ -1246,6 +1247,57 @@ TEST_CASE(near_tier_in_the_crowd_follows_the_player) {
 // carries it there, so the box's move this step is the car's move the step before). Before ADR-0454 the boxes were
 // read from the drawing's bake, which ran only on a frame's last two steps: they stood still for six steps and then
 // jumped six steps' worth.
+// THE WALKERS ARE A NEAR LOD (ADR-0538): on river_town, with CityWalkerSystem stepped as the viewer steps it, the people
+// with a walker entity are the ones out on the street within the brain's near ring of the player, never one past its
+// leaving radius. The island's viewer ran at 5 fps when every person out on the street island-wide had one (8,652).
+// Counted with the player in the busiest part of town, then at its south-west edge.
+TEST_CASE(near_tier_walkers_are_a_near_lod) {
+    Rig rig("river_town", false);
+    CHECK(rig.ok);
+    if (!rig.ok) return;
+    citysim::CityWalkerSystem walkers(rig.city, rig.physics);
+    FrameContext c = rig.ctx();
+    walkers.onStart(c);
+    const Entity player = standInPlayer(rig, kRiverTownBusy);
+    const citysim::CitySim& sim = rig.city.sim();
+    const auto count = [&](const char* where, Vec2 at) {
+        int out = 0, total = 0;
+        Real farthest = 0;
+        for (const int id : walkers.walkerAgents()) {
+            if (id < 0 || id >= static_cast<int>(sim.agents().size())) continue;
+            ++total;
+            const Real d = (sim.agents()[static_cast<std::size_t>(id)].pos - at).length();
+            farthest = std::max(farthest, d);
+            out += d > sim.pedDemoteRadius ? 1 : 0;
+        }
+        int street = 0;
+        for (const int i : sim.streetAgents()) street += sim.pedVisible(i) ? 1 : 0;
+        std::printf("    [walkers] %s: %d walker entities of %d people out on the street (the near ring %.0f m, leaving at %.0f m); "
+                    "the farthest %.0f m, past the leaving radius %d\n",
+                    where, total, street, sim.pedPromoteRadius, sim.pedDemoteRadius, farthest, out);
+        CHECK(out == 0);
+        CHECK(total < street);
+        return total;
+    };
+    const auto run = [&](Vec2 at, int seconds) {
+        rig.world.get<Transform>(player)->position = Vec3(at.x, 1.0, at.y);
+        for (int t = 0; t < static_cast<int>(seconds / kStep); ++t) {
+            rig.frame();
+            FrameContext f = rig.ctx();
+            walkers.fixedUpdate(f);
+        }
+    };
+    run(kRiverTownBusy, 120);
+    const int inTown = count("the busiest part of town", kRiverTownBusy);
+    const Vec2 edge(-900, -300);
+    run(edge, 30);
+    const int atEdge = count("the town's south-west edge", edge);
+    CHECK(inTown > 0);
+    CHECK(atEdge < inTown);
+    FrameContext f = rig.ctx();
+    walkers.onStop(f);
+}
+
 TEST_CASE(near_tier_boxes_follow_their_cars_every_fixed_step) {
     Rig rig("traffic_lab", false);
     CHECK(rig.ok);

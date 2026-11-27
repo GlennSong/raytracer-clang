@@ -74,6 +74,17 @@ void CityWalkerSystem::watchDrawn(Walker& w, Vec2 p, int path, Real dt, const Ci
     w.drawnPath = path;
 }
 
+Real CityWalkerSystem::floorOf(Walker& w, Vec2 p) {
+    constexpr uint64_t kFloorReposeSteps = 60;   // (a second at 60 Hz)
+    if (w.floorValid && w.floorAt.x == p.x && w.floorAt.y == p.y &&
+        (steps_ + static_cast<uint64_t>(std::max(0, w.agentId))) % kFloorReposeSteps != 0)
+        return w.floorY;
+    w.floorAt = p;
+    w.floorY = city_.floorAt(w.agentId, p.x, p.y);
+    w.floorValid = true;
+    return w.floorY;
+}
+
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
                                               int outfit, int pose, Real bodyScale) {
     // A CHILD'S HEAD (Glenn, 2026-11-05: "Children tend to have slightly bigger heads and smaller bodies. Maybe their
@@ -108,20 +119,31 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
     PhysicsWorld& pw = physics_.physicsWorld();
 
     const auto& agents = sim.agents();
+    // THE NEAR RING (ADR-0538): a walker entity is for the people near the player only -- the brain's own near ring
+    // (CitySim::pedPromoteRadius to come in, pedDemoteRadius to go: ADR-0493's attention), so a person is a walker while
+    // the brain steps them near. The K tier this system was written for went with ADR-0499, and its list became everyone
+    // out on the street island-wide: 8,652 entities, each moved and asked of the ground every step (the island viewer at
+    // 5 fps). Far people are the GPU crowd's to draw (ADR-0495). No player fed (a headless host): everyone, as before.
+    const bool ringed = sim.hasTierCenter();
+    const Vec2 ringCentre = ringed ? sim.tierCenter() : Vec2(0, 0);
+    const Real comeIn2 = sim.pedPromoteRadius * sim.pedPromoteRadius;
+    const Real goOut2 = sim.pedDemoteRadius * sim.pedDemoteRadius;
+    const auto ringD2 = [&](Vec2 p) { return (p - ringCentre).lengthSquared(); };
     // Drop walkers whose agents left the K tier (explicit character removal —
     // physics has no entity-destroy hook; see the onStop note).
     for (std::size_t wi = 0; wi < walkers_.size();) {
         Walker& w = walkers_[wi];
-        // Gone INDOORS (home, work, a cafe), into a car, or out of the bubble:
+        // Gone INDOORS (home, work, a cafe), into a car, or out of the near ring:
         // no body on the pavement (CitySim::pedVisible). It gets a fresh one
         // when it steps out again.
-        const bool stale =
-            w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
-            !sim.pedVisible(w.agentId);
+        const bool known = w.agentId >= 0 && w.agentId < static_cast<int>(agents.size());
+        const bool outOfRing = known && ringed && ringD2(agents[static_cast<std::size_t>(w.agentId)].pos) > goOut2;
+        const bool stale = !known || !sim.pedVisible(w.agentId) || outOfRing;
         if (!stale) { ++wi; continue; }
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) {
             const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
-            const char* why = ga.inCar >= 0 ? "got in a car"
+            const char* why = outOfRing ? "left the near ring"
+                              : ga.inCar >= 0 ? "got in a car"
                               : ga.indoors                        ? "went indoors"
                                                                   : "stopped (not moving, not indoors?)";
             gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
@@ -156,6 +178,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
         if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;
+        if (ringed && ringD2(a.pos) > comeIn2) continue;   // (far: not a walker, ADR-0538)
         if (auto g = gone_.find(i); g != gone_.end()) {
             const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             if (now - g->second.at < 1.5) {
@@ -280,6 +303,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     PhysicsWorld& pw = physics_.physicsWorld();
     Real dt = ctx.clock.fixedStep();
     clockSec_ += dt;
+    ++steps_;
 
     // Vehicle poses + speeds once for all walkers (the knockdown trigger): the
     // REAL vehicles (player's / promoted), plus the ambient planner cars — with
@@ -397,7 +421,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         if (restNow) {
             city_.simMutable().clearAgentTether(w.agentId);
-            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.floorAt(w.agentId, rp.pos.x, rp.pos.y);
+            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : floorOf(w, rp.pos);
             if (cc && cc->characterId != engine::INVALID_CHARACTER)
                 pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
             const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
@@ -468,7 +492,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             // zero, where it was made -- and a walker posed from the plan was drawn somewhere on the line from there,
             // under the pavement (the trip lab's followed person, walking away from the player, was never seen).
             if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
-            t->position = Vec3(dp.x, city_.floorAt(w.agentId, dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
+            t->position = Vec3(dp.x, floorOf(w, dp) + kCapsuleHalf + kCapsuleRadius, dp.y);
             if (g.speed > 0.05) w.facing = hd;
             t->orientation = Quat::fromAxisAngle(
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
@@ -864,9 +888,18 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
         }
         int jogBooked = 0;   // runners on their way: jog spots held
         for (const CitySim::ActivitySpot& sp : sm.spots()) jogBooked += sp.kind == SpotKind::Jog && sp.occupant >= 0 ? 1 : 0;
-        char b[480];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d) | games %d (playing %d) gathering %d (%d coming)",
-                      walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
+        // (by distance from the player: within the body radius, the near ring, its leaving radius, and beyond -- ADR-0538)
+        int byRing[4] = {0, 0, 0, 0};
+        if (sm.hasTierCenter())
+            for (const Walker& w : walkers_) {
+                if (w.agentId < 0 || w.agentId >= static_cast<int>(sm.agents().size())) continue;
+                const Real d = (sm.agents()[static_cast<std::size_t>(w.agentId)].pos - sm.tierCenter()).length();
+                ++byRing[d <= bodyRadius_ ? 0 : d <= sm.pedPromoteRadius ? 1 : d <= sm.pedDemoteRadius ? 2 : 3];
+            }
+        char b[600];
+        std::snprintf(b, sizeof b, "walkers %zu (%d within %.0f m, %d to %.0f m, %d to %.0f m, %d beyond) max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d) | games %d (playing %d) gathering %d (%d coming)",
+                      walkers_.size(), byRing[0], bodyRadius_, byRing[1], sm.pedPromoteRadius, byRing[2], sm.pedDemoteRadius,
+                      byRing[3], tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
                       onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
         answers_.set("walkers?", b);

@@ -41,6 +41,12 @@ public:
         : city_(city), physics_(physics) {}
 
     void onStart(engine::FrameContext& ctx) override;   // hears KnockRequest, answers walkers?/knock?/who?/...
+    // The agents that have a walker entity now, in no order (a test's count of the near ring, ADR-0538).
+    std::vector<int> walkerAgents() const {
+        std::vector<int> out;
+        for (const Walker& w : walkers_) out.push_back(w.agentId);
+        return out;
+    }
     void fixedUpdate(engine::FrameContext& ctx) override;
     void onStop(engine::FrameContext& ctx) override;
 
@@ -107,7 +113,16 @@ private:
         bool drawnValid = false;
         int drawnPath = -1;                // how: 0 resting (seat/grass), 1 bodyless (posed from the plan), 2 body
         engine::Vec2 handoff{0, 0};        // a body given up: where it was against its plan, eased away (bodyless)
+        // WHAT IT STANDS ON where it stood last asked (ADR-0538): its floor's height at `floorAt`, kept while it stands
+        // there (floorOf)
+        engine::Vec2 floorAt{0, 0};
+        engine::Real floorY = 0;
+        bool floorValid = false;
     };
+    // THE FLOOR UNDER A WALKER at `p` (CityRenderSystem::floorAt): asked again only when it has moved, and once every
+    // kFloorReposeSteps while it stands (staggered by its agent), so ground that streams in under it is found (ADR-0538)
+    engine::Real floorOf(Walker& w, engine::Vec2 p);
+    uint64_t steps_ = 0;
     // THE SPEED WATCHDOG (`speeders?`; Glenn: "npcs going superspeed across the street ... some way to debug what
     // some agents are doing when they're flickering around the world"): every drawn person, whichever way it is
     // drawn, against how fast a person can go. A step past that is recorded with the agent's whole state.

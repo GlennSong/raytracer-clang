@@ -1327,6 +1327,8 @@ if(RT_ENABLE_PHYSICS)
         src/engine/riding.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_near.cpp           # the near tier's test bed (ADR-0447)
+        src/apps/citysim/city_walkers.cpp        # the walkers, a near LOD (ADR-0538)
+        src/apps/citysim/walker_ragdolls.cpp     # ...which a walker knocked flying becomes
         src/apps/citysim/city_bus_ride.cpp       # the player aboard a bus (ADR-0486)
         src/engine/systems/vehicle_system.cpp    # ...which drives its cars through the real VehicleSystem
         src/apps/citysim/city_map_tool.cpp
