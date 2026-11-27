@@ -25617,3 +25617,20 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575 (with the follow-up above naming ADR-0534's slack). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - The island, driving on, 4 minutes: the days 2.09 → 0.76 ms a tick, the brain 8.2 → 6.9 ms. The whole step's average at minute 4 12.9 → 12.3 ms; minute 3 on its own about 13.3 ms, minute 4 about 17.6 → 16.7 ms (still a little over 16).
+
+## ADR-0536 — The router's searches keep their records from one search to the next, and a walk end's point is worked out once (2026-11-27)
+
+**Words:** the *router* is the engine's one route-finder (`route.cpp`, ADR-0467): one A* search, over the lane level's paths for a car (`findRoute`) and over its walks for a person on foot (`findWalkRoute`). The trip planner prices every leg of every way it weighs with it: on the island about 55,000 plans in four minutes, each pricing several legs.
+
+**Why:** on the island with its driving on, the brain's trip planning was 2.7 ms of a 6.9 ms tick, most of it in `findWalkRoute`.
+- Each search began by filling a record (best cost, the node before, how it was reached) for every node of the graph: on the island's walks about 100,000 nodes, for a walk of a few hundred metres that reaches a few hundred of them.
+- The search asked a walk end's point (`LaneGraph::pointAt`) afresh each time it used it: for its lower bound at every step it took, and at every join.
+
+**What happens** (`route.cpp` `SearchStore`, `Search`, `findWalkRoute`):
+- **Records kept, stamped:** each thread keeps one store of records for each search (the cars' and the walkers'), and each record is stamped with the search it belongs to. A record of an earlier search reads as never reached, as a freshly filled one did, so a search begins without filling anything. The stamps are cleared once when they come round (every four billion searches).
+- **Walk ends' points once:** every walk end's point is worked out once per graph and kept by each thread (the same `pointAt`, read back).
+- The same search: the same nodes reached in the same order at the same costs, so the same routes.
+
+**Checked:**
+- river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575; lanes 158 of 158; driving_tests 202 of 202 (its route cases among them). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- The island, driving on, 4 minutes: the brain's planning 2.69 → 2.07 ms a tick, the brain 6.9 → 5.9 ms. The whole step's average at minute 4 12.3 → 11.8 ms; minute 3 on its own about 12.8 ms, minute 4 about 16.7 → 16.0 ms.

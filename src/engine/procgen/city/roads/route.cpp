@@ -162,35 +162,58 @@ bool heapAfter(const HeapItem& a, const HeapItem& b) {
 // is the mover's lower bound on the cost from a node to the goal (it must never over-estimate). Per node it keeps the
 // best cost, the node it was reached from and a byte saying how (the mover's own meaning). Nodes may be added while
 // it runs (addNode).
+//
+// ITS RECORDS ARE KEPT FROM ONE SEARCH TO THE NEXT (ADR-0536): a search's per-node records live in a store each thread
+// keeps, stamped with the search they belong to, so a search begins without filling a record for every node of the
+// graph (the island's walks: about 100,000 nodes, filled for every walk a plan priced). A node whose stamp is not this
+// search's reads as never reached, exactly as a freshly filled record did.
+struct SearchStore {
+    std::vector<Real> best;
+    std::vector<uint32_t> pred;
+    std::vector<uint8_t> how;
+    std::vector<uint32_t> stamp;
+    uint32_t search = 0;
+    std::vector<HeapItem> heap;
+};
 template <typename Bound> class Search {
 public:
-    Search(uint32_t nodes, Bound bound) : best(nodes, kForever), pred(nodes, kNoNode), how(nodes, 0), bound_(bound) {}
-    uint32_t addNode() {
-        best.push_back(kForever);
-        pred.push_back(kNoNode);
-        how.push_back(0);
-        return static_cast<uint32_t>(best.size() - 1);
+    Search(uint32_t nodes, Bound bound, SearchStore& store) : s_(store), count_(nodes), bound_(bound) {
+        if (++s_.search == 0) {   // (the stamps came round: every record is cleared once)
+            std::fill(s_.stamp.begin(), s_.stamp.end(), 0u);
+            s_.search = 1;
+        }
+        grow(nodes);
+        s_.heap.clear();
     }
+    uint32_t addNode() {
+        grow(count_ + 1);
+        return count_++;
+    }
+    Real bestOf(uint32_t v) const { return s_.stamp[v] == s_.search ? s_.best[v] : kForever; }
+    uint32_t predOf(uint32_t v) const { return s_.stamp[v] == s_.search ? s_.pred[v] : kNoNode; }
+    uint8_t howOf(uint32_t v) const { return s_.stamp[v] == s_.search ? s_.how[v] : uint8_t(0); }
     // A step reaching node `v` from node `from` at `cost` in all: kept when cheaper than any before.
     void reach(uint32_t v, uint32_t from, Real cost, uint8_t by) {
-        if (!(cost < best[v])) return;
-        best[v] = cost;
-        pred[v] = from;
-        how[v] = by;
+        if (!(cost < bestOf(v))) return;
+        s_.stamp[v] = s_.search;
+        s_.best[v] = cost;
+        s_.pred[v] = from;
+        s_.how[v] = by;
         HeapItem item;
         item.cost = cost;
         item.estimate = cost + bound_(v);
         item.node = v;
-        heap_.push_back(item);
-        std::push_heap(heap_.begin(), heap_.end(), heapAfter);
+        s_.heap.push_back(item);
+        std::push_heap(s_.heap.begin(), s_.heap.end(), heapAfter);
     }
     // Runs until `goal` is popped (true) or nothing is left (false); `expand(u, cost)` for each node popped.
     template <typename Expand> bool run(uint32_t goal, Expand expand) {
-        while (!heap_.empty()) {
-            std::pop_heap(heap_.begin(), heap_.end(), heapAfter);
-            const HeapItem item = heap_.back();
-            heap_.pop_back();
-            if (item.cost > best[item.node]) continue;   // a stale entry: the node was reached cheaper since
+        std::vector<HeapItem>& heap = s_.heap;
+        while (!heap.empty()) {
+            std::pop_heap(heap.begin(), heap.end(), heapAfter);
+            const HeapItem item = heap.back();
+            heap.pop_back();
+            if (item.cost > bestOf(item.node)) continue;   // a stale entry: the node was reached cheaper since
             if (item.node == goal) return true;
             expand(item.node, item.cost);
         }
@@ -199,17 +222,21 @@ public:
     // The nodes taken from the first one reached to the goal, not counting the goal.
     std::vector<uint32_t> takenTo(uint32_t goal) const {
         std::vector<uint32_t> taken;
-        for (uint32_t u = pred[goal]; u != kNoNode; u = pred[u]) taken.push_back(u);
+        for (uint32_t u = predOf(goal); u != kNoNode; u = predOf(u)) taken.push_back(u);
         std::reverse(taken.begin(), taken.end());
         return taken;
     }
 
-    std::vector<Real> best;
-    std::vector<uint32_t> pred;
-    std::vector<uint8_t> how;
-
 private:
-    std::vector<HeapItem> heap_;
+    void grow(uint32_t nodes) {
+        if (s_.stamp.size() >= nodes) return;
+        s_.best.resize(nodes, kForever);
+        s_.pred.resize(nodes, kNoNode);
+        s_.how.resize(nodes, 0);
+        s_.stamp.resize(nodes, 0u);
+    }
+    SearchStore& s_;
+    uint32_t count_;
     Bound bound_;
 };
 
@@ -459,7 +486,8 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
 
     // THE ONE SEARCH over the car's steps: along a path it may use (on to the paths its end leads to), or sideways into
     // the lane beside (a lane change). How a node was reached: 1 by a lane change, 0 otherwise.
-    Search<decltype(bound)> search(nodeCount, bound);
+    thread_local SearchStore store;   // (one a thread: a bake's threads route at once)
+    Search<decltype(bound)> search(nodeCount, bound, store);
     // The node for path `p` from its start in chain state `state` (0: the plain node).
     auto nodeFor = [&](PathId p, uint32_t state) -> uint32_t {
         if (state == 0) return p.index;
@@ -484,7 +512,7 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
             // The destination, when it lies ahead on this path -- and, on a lane come to by a lane change, far enough
             // ahead for the move across to be made before it (a destination 7 m into the lane beside a car's next one
             // was "reached" by a move no car can make so short, and the car stood at its lane's end for good)
-            const bool bySidestep = search.how[u] == 1;
+            const bool bySidestep = search.howOf(u) == 1;
             if (p == to.path && to.along + kAlongTolerance >= entry &&
                 (!bySidestep || to.along - entry >= cls.laneChangeLeast))
                 search.reach(destNode, u, cost + perMetre * std::max(Real(0), to.along - entry), 0);
@@ -518,11 +546,10 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
     if (!arrived)
         return noRoute(r, NoRouteWhy::NothingLeadsThere,
                        "nothing this vehicle may use leads from " + pointWords(from) + " to " + pointWords(to));
-    r.cost = search.best[destNode];
+    r.cost = search.bestOf(destNode);
 
     // THE NODES TAKEN, start to destination (not counting the destination node itself).
     const std::vector<uint32_t> taken = search.takenTo(destNode);
-    const std::vector<uint8_t>& bySidestep = search.how;
 
     // INTO LEGS AND TURNS: lanes of one section joined by lane changes are one leg; a connector (or a lane leading
     // straight into the next section's lane) is the turn between two legs; a connector first or last is the start or
@@ -538,7 +565,7 @@ Route findRoute(const engine::RoadModel& model, const RouteBounds& bounds, const
             else if (i > 0) pendingConnector = p;
             continue;
         }
-        if (i > 0 && bySidestep[u]) {
+        if (i > 0 && search.howOf(u) != 0) {
             r.legs.back().lane = p;
             continue;
         }
@@ -1004,11 +1031,22 @@ WalkRoute findWalkRoute(const engine::RoadModel& model, const RouteWalker& walke
     const auto walkOf = [](uint32_t u) { return u >> 1; };
     const auto endOf = [](uint32_t u) { return static_cast<uint8_t>(u & 1u); };
     const auto alongAt = [&](uint32_t u) { return endOf(u) == 0 ? Real(0) : g.walks[walkOf(u)].length; };
-    const auto pointOf = [&](uint32_t u) {
-        return u == startNode ? g.pointAt(from.walk, from.along)
-             : u == destNode  ? g.pointAt(to.walk, to.along)
-                              : g.pointAt(engine::WalkId(walkOf(u)), alongAt(u));
-    };
+    // EVERY WALK END'S POINT, worked out once a graph and kept by each thread (ADR-0536): the search asks a node's point
+    // for its bound and for every join, and a walk end's is the same each time (g.pointAt, as before)
+    thread_local const LaneGraph* endsOf = nullptr;
+    thread_local std::size_t endsWalks = 0;
+    thread_local const engine::Vec2* endsPoints = nullptr;
+    thread_local std::vector<engine::Vec2> ends;
+    if (endsOf != &g || endsWalks != g.walks.size() || endsPoints != g.points.data()) {
+        ends.resize(2 * static_cast<std::size_t>(W));
+        for (uint32_t u = 0; u < 2 * W; ++u) ends[u] = g.pointAt(engine::WalkId(walkOf(u)), alongAt(u));
+        endsOf = &g;
+        endsWalks = g.walks.size();
+        endsPoints = g.points.data();
+    }
+    const engine::Vec2 startPoint = g.pointAt(from.walk, from.along);
+    const engine::Vec2 destPointOf = g.pointAt(to.walk, to.along);
+    const auto pointOf = [&](uint32_t u) { return u == startNode ? startPoint : u == destNode ? destPointOf : ends[u]; };
     const auto waitOn = [&](uint32_t w) { return w < walker.waits.size() ? walker.waits[w] : Real(0); };
     const Real perMetre = 1 / walker.pace;
     // THE LOWER BOUND: the straight distance to the destination at the walker's pace (every metre is walked at it).
@@ -1019,7 +1057,8 @@ WalkRoute findWalkRoute(const engine::RoadModel& model, const RouteWalker& walke
 
     // THE ONE SEARCH over the walker's steps: from the start either way along their walk; along a walk they may use to
     // its other end (and the wait for stepping onto it); from a walk end to each walk end that meets it, across the gap.
-    Search<decltype(bound)> search(destNode + 1, bound);
+    thread_local SearchStore store;   // (one a thread: a bake's threads route at once)
+    Search<decltype(bound)> search(destNode + 1, bound, store);
     search.reach(startNode, kNoNode, 0, kWalkStart);
     const bool arrived = search.run(destNode, [&](uint32_t u, Real cost) {
         if (u == startNode) {
@@ -1054,7 +1093,7 @@ WalkRoute findWalkRoute(const engine::RoadModel& model, const RouteWalker& walke
     taken.push_back(destNode);
     for (std::size_t i = 1; i < taken.size(); ++i) {
         const uint32_t u = taken[i - 1], v = taken[i];
-        const uint8_t by = search.how[v];
+        const uint8_t by = search.howOf(v);
         if (by == kWalkJoin) {
             r.metres += engine::distance(pointOf(u), pointOf(v));
             continue;
@@ -1078,7 +1117,7 @@ WalkRoute findWalkRoute(const engine::RoadModel& model, const RouteWalker& walke
                                                static_cast<uint32_t>(r.steps.size())});
         r.steps.push_back(s);
     }
-    r.seconds = search.best[destNode];
+    r.seconds = search.bestOf(destNode);
     r.found = true;
     return r;
 }
