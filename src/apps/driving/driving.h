@@ -808,6 +808,7 @@ private:
     std::vector<std::size_t> crashBodyRecord_, crashSweep_;
     std::vector<BodyContact> crashContacts_;
     std::vector<RoadThing> seenThings_;              // the host's things and the undriven cars standing on the roads
+    ThingGrid seenThingGrid_;                        // ...by where they are (ADR-0534)
     // the cars moving across into the lane beside, or out of or into a kerb space, and each one's move
     std::map<CarId, LaneMove> laneMoves_;
     std::set<CarId> inSpace_;   // the undriven cars whose last trip ended in a kerb space (they drive out of it first)

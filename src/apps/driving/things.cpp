@@ -184,10 +184,64 @@ OnLine nearestOn(const engine::LaneGraph& roads, engine::PathId path, const engi
     return best;
 }
 
+void ThingGrid::build(const std::vector<RoadThing>& things, const engine::LaneGraph& roads) {
+    if (roads_ != &roads || pathCount_ != roads.paths.size()) {
+        roads_ = &roads;
+        pathCount_ = roads.paths.size();
+        pathBoxes_.resize(pathCount_);
+        for (std::size_t i = 0; i < pathCount_; ++i) {
+            const engine::Path& P = roads.paths[i];
+            PathBox b;
+            for (uint32_t k = P.curve.first; k < P.curve.end(); ++k) {
+                const engine::Vec2 q = roads.points[k];
+                b.lo = engine::Vec2(std::min(b.lo.x, q.x), std::min(b.lo.y, q.y));
+                b.hi = engine::Vec2(std::max(b.hi.x, q.x), std::max(b.hi.y, q.y));
+            }
+            pathBoxes_[i] = b;
+        }
+    }
+    for (std::pair<const uint64_t, std::vector<uint32_t>>& c : cells_) c.second.clear();
+    count_ = things.size();
+    widest_ = 0;
+    for (uint32_t i = 0; i < things.size(); ++i) {
+        const RoadThing& th = things[i];
+        widest_ = std::max(widest_, th.halfAcross);
+        cells_[key(static_cast<int64_t>(std::floor(th.at.x / kCell)), static_cast<int64_t>(std::floor(th.at.y / kCell)))].push_back(i);
+    }
+}
+
+bool ThingGrid::beyond(engine::PathId path, engine::Vec2 p, Real reach) const {
+    if (path.index >= pathBoxes_.size()) return false;
+    const PathBox& b = pathBoxes_[path.index];
+    if (b.lo.x > b.hi.x) return false;
+    const Real dx = std::max(Real(0), std::max(b.lo.x - p.x, p.x - b.hi.x));
+    const Real dy = std::max(Real(0), std::max(b.lo.y - p.y, p.y - b.hi.y));
+    // (a hair of slack, so a point the line itself would measure exactly at `reach` is never passed over)
+    const Real r = reach * (Real(1) + Real(1e-9)) + Real(1e-9);
+    return dx * dx + dy * dy > r * r;
+}
+
+bool ThingGrid::near(engine::Vec2 centre, Real radius, std::vector<uint32_t>& out) const {
+    const int64_t x0 = static_cast<int64_t>(std::floor((centre.x - radius) / kCell));
+    const int64_t x1 = static_cast<int64_t>(std::floor((centre.x + radius) / kCell));
+    const int64_t z0 = static_cast<int64_t>(std::floor((centre.y - radius) / kCell));
+    const int64_t z1 = static_cast<int64_t>(std::floor((centre.y + radius) / kCell));
+    if (static_cast<double>(x1 - x0 + 1) * static_cast<double>(z1 - z0 + 1) > static_cast<double>(count_)) return false;
+    out.clear();
+    for (int64_t x = x0; x <= x1; ++x)
+        for (int64_t z = z0; z <= z1; ++z) {
+            const std::unordered_map<uint64_t, std::vector<uint32_t>>::const_iterator c = cells_.find(key(x, z));
+            if (c != cells_.end()) out.insert(out.end(), c->second.begin(), c->second.end());
+        }
+    std::sort(out.begin(), out.end());
+    return true;
+}
+
 ThingAhead findThingAhead(const engine::LaneGraph& roads, engine::PathId path, Real along,
                           const std::vector<engine::PathId>& pathsAfter, Real reach, Real myHalfWidth, Real myOffset,
-                          Real clearance, const std::vector<RoadThing>& things, Real mySpeed) {
+                          Real clearance, const std::vector<RoadThing>& things, Real mySpeed, const ThingGrid* grid) {
     ThingAhead best;
+    std::vector<uint32_t> nearby;
     if (things.empty() || !path.valid() || path.index >= roads.paths.size()) return best;
     Real start = -along;   // my front to the start of the path looked along
     for (std::size_t k = 0; k <= pathsAfter.size(); ++k) {
@@ -200,10 +254,16 @@ ThingAhead findThingAhead(const engine::LaneGraph& roads, engine::PathId path, R
             continue;
         }
         const engine::Vec2 first = roads.points[P.curve.first];
-        for (const RoadThing& th : things) {
+        // (every point of the path lies within its length of its start: a thing farther from it than that and its reach
+        // across is beside no part of the path, so only the things near its start need be looked at, ADR-0534)
+        const bool someOnly = grid && grid->near(first, P.length + myHalfWidth + clearance + grid->widest(), nearby);
+        const std::size_t looked = someOnly ? nearby.size() : things.size();
+        for (std::size_t n = 0; n < looked; ++n) {
+            const RoadThing& th = things[someOnly ? nearby[n] : n];
             const Real across = myHalfWidth + th.halfAcross + clearance;
-            // (every point of the path lies within its length of its start)
             if ((th.at - first).length() > P.length + across) continue;
+            // (farther from the path's box than across and the coming widening: nearestOn would put it beyond them too)
+            if (grid && grid->beyond(pid, th.at, across + kComingWiden)) continue;
             const OnLine on = nearestOn(roads, pid, th.at);
             if (on.away < 0 || on.away > across + kComingWiden) continue;
             // beside the path's stretch, not off one of its ends

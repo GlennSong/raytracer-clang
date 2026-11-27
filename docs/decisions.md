@@ -25584,3 +25584,19 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - The far car tier, 4 minutes: 193 trips begun in the driving (near drivers and raised ones), 375 far drives (49 stood in their space far), 48 drivers lowered at the wheel, 176 raised mid-drive (0 waited for room, 0 put back at their start), at most 150 cars away at once. Away and drawn 0, away and not a far driver's 0, a far driver's car on the road 0. Errors 0, refused 0. Arrivals 7,813, plans 54,444.
 
 **Also run:** river_town's cases (pins unchanged; the grades case fails as before, #337), brain_lab 13 of 13, the unit suite 1,575 of 1,575. The island case passes.
+
+## ADR-0534 — A driver looks for things in their way only among the things near the road ahead (2026-11-26)
+
+**Words:** a *thing on the road* is anything a lane car must not drive into that is not a car it follows: a person on the road or about to step onto it, a car nobody drives standing in a lane (ADR-0451). Each tick every driven car looks along the paths ahead of it, within its look-ahead, for the nearest such thing in its way (`findThingAhead`).
+
+**Why:** on the island with its driving on, the morning rush (135 cars on the road) put the driving at about 4.4 ms of minute 4 on its own. In stack samples of minutes 3–5, 14 of the 19 in the driving were `findThingAhead`. Every car, for every path ahead of it, measured every thing on the road (the island's thousands of people out on the street) against the path's start, and every one near enough against the whole path's centre line (`nearestOn`).
+
+**What happens** (`things.h` `ThingGrid`; `things.cpp`; `driving.cpp` `plan`):
+- **The things by where they are:** each tick, as the list drivers look along is made (the host's things and the undriven cars), each thing's index goes into the 32 m square it stands in.
+- **Only the near ones, in the list's order:** for each path, only the things in the squares round its start, within its length and the widest reach across, are looked at, in ascending index, so the first found of two as near is the same one. A path so long that its squares outnumber the things looks at them all, as before.
+- **The path's box:** each lane path's bounding box is made once for the road. A thing farther from the box than the car's reach across and the coming widening (`kComingWiden`) cannot be nearer the path itself, and is not measured against it.
+- What a car finds in its way is what it found before.
+
+**Checked:**
+- river_town's pins unchanged (every case; the grades case fails as before, #337). driving_tests 202 of 202. The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- The island, driving on, 4 minutes: the driving 1.81 → 1.34 ms a tick averaged over the run (worst 7.6 → 3.6), about 4.4 → 2.6 ms in minute 4 on its own. The whole step's average at minute 4 13.3 → 12.9 ms; minute 4 on its own about 18.7 → 17.6 ms. In samples of minutes 3–5 the driving is now 12 of 120, `findThingAhead` 4 of them.

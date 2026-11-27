@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace driving {
@@ -115,12 +116,43 @@ OnLine nearestOn(const engine::LaneGraph& roads, engine::PathId path, const engi
 // my lane (the path's width), a sideways offset that leaves `clearance` either side of it and of the lane's edges.
 // A thing NOT YET in my way is in it all the same when it is COMING INTO IT: within kComingWiden more to the side, moving
 // toward my line, and reaching my side of it before I reach it (at `mySpeed`), or within kComingMargin after.
+// THE THINGS BY WHERE THEY ARE (ADR-0534): each thing's index in its list, by the square cell its middle lies in, made
+// once a tick from the list the drivers look along. `near` names, ascending, the things in the cells a circle's box
+// touches: every thing within the circle, and some beyond it. False (and `out` left as it is): the box covers so many
+// cells that looking at every thing is cheaper. With it, each lane path's box (made once for the road): a thing farther
+// from a path's box than it could be from the path and still matter is not measured against the path.
+class ThingGrid {
+public:
+    static constexpr Real kCell = 32.0;   // m
+    void build(const std::vector<RoadThing>& things, const engine::LaneGraph& roads);
+    bool near(engine::Vec2 centre, Real radius, std::vector<uint32_t>& out) const;
+    Real widest() const { return widest_; }   // the most any thing reaches either side of its middle (m)
+    // Is `p` farther than `reach` from every point of path `path`'s centre line (measured to the line's box)? False when
+    // it may be within reach, or the path has no box.
+    bool beyond(engine::PathId path, engine::Vec2 p, Real reach) const;
+
+private:
+    const engine::LaneGraph* roads_ = nullptr;
+    std::size_t pathCount_ = 0;
+    struct PathBox {
+        engine::Vec2 lo = engine::Vec2(Real(1e30), Real(1e30)), hi = engine::Vec2(Real(-1e30), Real(-1e30));
+    };
+    std::vector<PathBox> pathBoxes_;
+    static uint64_t key(int64_t x, int64_t z) { return (static_cast<uint64_t>(x) << 32) ^ static_cast<uint64_t>(z & 0xffffffff); }
+    std::unordered_map<uint64_t, std::vector<uint32_t>> cells_;
+    std::size_t count_ = 0;
+    Real widest_ = 0;
+};
+
 constexpr Real kComingWiden = 5.0;      // m: what a person walking covers in the few seconds a car takes to stop
 constexpr Real kComingMargin = 1.0;     // s
 constexpr Real kComingSlowest = 0.5;    // m/s (a car standing reaches nothing)
 ThingAhead findThingAhead(const engine::LaneGraph& roads, engine::PathId path, Real along,
                           const std::vector<engine::PathId>& pathsAfter, Real reach, Real myHalfWidth, Real myOffset,
-                          Real clearance, const std::vector<RoadThing>& things, Real mySpeed = 0);
+                          Real clearance, const std::vector<RoadThing>& things, Real mySpeed = 0,
+                          const ThingGrid* grid = nullptr);
+// (`grid`: the things by where they are, made from `things`; each path is looked along for the things near it only, in
+// the list's order, so the same thing is found.)
 
 // ---- The facts -------------------------------------------------------------------------------------------------------
 

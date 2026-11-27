@@ -725,6 +725,7 @@ void Driving::plan() {
             th.halfAcross = vehicleClasses_.at(c.vehicleClass).width * Real(0.5);
             seenThings_.push_back(th);
         }
+        seenThingGrid_.build(seenThings_, *roads_);
     }
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         const Car& c = cars_[i];
@@ -837,7 +838,7 @@ void Driving::plan() {
                 const std::vector<engine::PathId> after(p.way.paths.size() > 1 ? p.way.paths.begin() + 1 : p.way.paths.end(),
                                                         p.way.paths.end());
                 things.thing = findThingAhead(*roads_, c.path, c.along, after, lookAhead, cls.width * Real(0.5), c.offset,
-                                              passClearance_, seenThings_, c.speed);
+                                              passClearance_, seenThings_, c.speed, &seenThingGrid_);
             }
             ThingWatch& w = watch_[c.id];
             if (!things.thing.found || things.thing.id != w.id) {
