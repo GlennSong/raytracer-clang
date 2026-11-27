@@ -188,6 +188,12 @@ void CityPoses::poseCarNow(World& world, Entity car, const CitySim& sim) {
     poseCar(world, car, sim, halfExtents(sim), lastDt_);
 }
 
+namespace {
+// (a standing car is asked of the ground again after this many fixed steps: a second at 60 Hz, ADR-0519)
+constexpr uint64_t kParkedReposeSteps = 60;
+bool samePlace(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+}  // namespace
+
 void CityPoses::poseCar(World& world, Entity e, const CitySim& sim, const std::vector<Vec3>& he, Real dt) {
     const CityCarBody* body = world.get<CityCarBody>(e);
     const CityCarLink* link = world.get<CityCarLink>(e);
@@ -197,12 +203,34 @@ void CityPoses::poseCar(World& world, Entity e, const CitySim& sim, const std::v
         world.remove<CityCarPose>(e);
         return;
     }
-    CityCarPose pose;
     FitMemory& memory = carMemory_[body->id];
     memory.step = steps_;
-    pose.body = carEntityPose(sim, world.get<CityCarOnLane>(e), *t, prev->value, models.variantOf(body->slot, body->type),
-                              he, &memory, dt, &pose.road);
+    const CityCarOnLane* lane = world.get<CityCarOnLane>(e);
+    const int variant = models.variantOf(body->slot, body->type);
+    // A CAR STANDING OFF THE ROAD keeps its pose while it stands where it was posed (ADR-0519: the island's 6,700 parked
+    // household cars, each asked of the road deck every step, were 12 ms of a 22 ms step). Asked again once every
+    // kParkedReposeSteps, each car on its own step (its number), so ground that streams in under it is found within a
+    // second and the cars are not all asked at once.
+    FitMemory::Parked& parked = memory.parked;
+    const engine::Transform& now = *t;
+    const bool standing = !lane && samePlace(now.position, prev->value.position) && now.orientation.x == prev->value.orientation.x &&
+                          now.orientation.y == prev->value.orientation.y && now.orientation.z == prev->value.orientation.z &&
+                          now.orientation.w == prev->value.orientation.w;
+    if (standing && parked.valid && parked.variant == variant && samePlace(parked.at, now.position) && parked.qx == now.orientation.x &&
+        parked.qy == now.orientation.y && parked.qz == now.orientation.z && parked.qw == now.orientation.w &&
+        (steps_ + body->id) % kParkedReposeSteps != 0 && world.has<CityCarPose>(e))
+        return;
+    CityCarPose pose;
+    pose.body = carEntityPose(sim, lane, now, prev->value, variant, he, &memory, dt, &pose.road);
     world.add<CityCarPose>(e, pose);
+    parked.valid = standing;
+    parked.at = now.position;
+    parked.qx = now.orientation.x;
+    parked.qy = now.orientation.y;
+    parked.qz = now.orientation.z;
+    parked.qw = now.orientation.w;
+    parked.variant = variant;
+    parked.step = steps_;
 }
 
 // ---- The walkers -----------------------------------------------------------------------------------------------------

@@ -25490,3 +25490,20 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Filed, not fixed:** #346 a far drive redirected and then raised is placed along the route from the original start to the new end; #347 a car raised mid-drive is put down standing still (the driving has no call to place a moving car).
 
 **Next:** part 4, the island drives (households given cars and kerb spaces, the frame measured with cars on), after Glenn's review.
+
+## ADR-0519 — A car standing off the road keeps its pose: parked cars are not fitted to the ground every step (2026-11-26)
+
+**Words:** a car's *pose* is where its body is drawn this fixed step, on its wheels on the ground or road deck under it (`CityCarPose`, set by `CityPoses::stepCarPoses`, ADR-0454). A *parked* car here is any car off the road: in a kerb space, or left standing.
+
+**Why:** with the island's households given cars (step 4e, part 4, not yet committed), 6,706 cars stand in kerb spaces. Every fixed step each was posed again from nothing: the ground and road deck under it asked (`parkedCarPose` → `RoadDeckField::heightAt`). A stack sample of the island step put it at about 12 ms of a 22 ms step, with no car even moving yet.
+
+**What happens** (`city_poses.cpp` `poseCar`, `FitMemory::Parked`):
+- A car with no lane (off the road) whose Transform is the same as at the tick's start, and the same as when it was last posed (place, turn, body), keeps the pose it has.
+- Any change to it, or the car going on the road, poses it again at once. A car put down somewhere (`standAt`, which sets both its Transform and PrevTransform) is posed there the same step.
+- Each standing car is still asked of the ground once a second (every 60 fixed steps), each on its own step, staggered by its number: ground that streams in under it is found, and the cars are never all asked at once.
+- The pose kept is the pose it would have been given: a car that does not move is posed from the same Transform at either end of the tick, so its pose does not depend on the time within the tick.
+
+**Checked:**
+- island_8_nature with the island's cars on (the uncommitted part-4 level), 3 minutes: the whole step's first minute 20.8 → 11.0 ms; the car poses in the stack samples about 25 of 50 → 5 of 80.
+- river_town unchanged: `..._far_people_...` and `..._crowd_drives_...` pass with their pins as they were (same hashes).
+- brain_lab 13 of 13; the unit suite 1,575 of 1,575; physics `near_tier`: the crowd case's counts and hash unchanged (its hit checks fail as before, #336). `near_tier_a_near_car_with_no_way_past_finds_another_way` fails (`run.arrived`) with this change taken out too, at 0c6bfed4: not this change's.

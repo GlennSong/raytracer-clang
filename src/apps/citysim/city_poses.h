@@ -75,6 +75,9 @@ struct FitMemory {
     struct Pose { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; Mat4 m; } pose;
     Vec3 smoothUp{0, 0, 0};
     uint64_t step = 0;   // the step it was last posed at (a car entity's: kept only while it is posed)
+    // A CAR STANDING OFF THE ROAD (ADR-0519): the pose it was given, and the place, turn and body it was given it for,
+    // and the step; while none of them changes it keeps it (asked of the ground again once every kParkedReposeSteps)
+    struct Parked { Vec3 at; Real qx = 0, qy = 0, qz = 0, qw = 0; int variant = -1; uint64_t step = 0; bool valid = false; } parked;
 };
 
 class CityPoses {
