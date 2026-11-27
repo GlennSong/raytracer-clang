@@ -1307,7 +1307,7 @@ std::vector<RoadLine> RoadModel::roadLines() const {
     return out;
 }
 
-// ---- the look-ups by position, made once a model (ADR-0521) ---------------------------------------------------------
+// ---- the look-ups by position, made once a model (ADR-0531) ---------------------------------------------------------
 struct RoadModelLookups {
     // what they were made from: a model whose counts or buffers differ now is not answered from them
     std::size_t streetCount = 0, junctionCount = 0, pointCount = 0, walkCount = 0;
@@ -1605,7 +1605,7 @@ WalkJoin RoadModel::walkJoinOn(const RoadFrontage& f, const std::vector<uint8_t>
     // a sidewalk's stretch runs beside its model walk's kerb; a footway's (its lane's) is its middle, beside both (0)
     const auto kerbOf = [&](const Walk& k) { return k.modelWalk < walks.size() ? walks[k.modelWalk].dir : 0; };
     bool anyWalk = false;
-    // (the street's walks, ascending: the same walks in the same order as a scan of them all, ADR-0521)
+    // (the street's walks, ascending: the same walks in the same order as a scan of them all, ADR-0531)
     const RoadModelLookups& ix = lookupsOf(*this);
     const uint32_t* first = ix.walksOf.data() + ix.walkFirst[f.street.index];
     const uint32_t* last = ix.walksOf.data() + ix.walkFirst[f.street.index + 1];

@@ -509,7 +509,7 @@ public:
     }
     std::vector<uint8_t> holdWhy_;
     std::vector<int> solverFrom_, solverNbr_;   // the overlap solver's neighbours, gathered once a tick (advance), by slot
-    // ...and the slots (ADR-0520): the agent of each, each agent's (-1: none this tick), and their points in the passes
+    // ...and the slots (ADR-0530): the agent of each, each agent's (-1: none this tick), and their points in the passes
     std::vector<int> relaxIds_, relaxSlotOf_;
     std::vector<Vec2> relaxPos_;
     std::vector<uint32_t> relaxMoved_, relaxLooked_;   // each slot's last move, each pair's last look (the move count)
@@ -1228,7 +1228,7 @@ private:
     AgentGrid grid_;
     AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
     std::vector<int> pedGridIds_;
-    std::vector<uint8_t> pedGridMark_;   // (out on the street this tick: the grid's update, ADR-0520)
+    std::vector<uint8_t> pedGridMark_;   // (out on the street this tick: the grid's update, ADR-0530)
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
     RailSim rail_;

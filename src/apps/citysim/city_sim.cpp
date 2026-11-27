@@ -3586,7 +3586,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // host-injected externals — the order the full sensed_ scan used.
             // Slack past the cone range covers a tethered ghost at its anchor.
             // Skip myself, anyone with no sensable body, and player-agent ghosts: the host already injects the live
-            // player as an external point -- seeing both would double it. (Kept before the sort, ADR-0520.)
+            // player as an external point -- seeing both would double it. (Kept before the sort, ADR-0530.)
             grid_.queryKept(a.pos, cone.range + 12.0, queryScratch_, [&](int gi) {
                 return gi != static_cast<int>(i) && sensedIndex_[gi] >= 0 && !agents_[gi].playerControlled;
             });
@@ -3675,7 +3675,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // ...from the walkers OUT ON THE STREET only (the K tier's, moving or standing in view): the indoor residents at a
     // door were most of what every gather waded through (10 ms of a 21 ms step). (Where they stand now: the query
     // radius carries 4 m of slack, a tick of walking is 2 cm.)
-    // (moved, not rebuilt, ADR-0520: a walker still in its cell stays put, one no longer out on the street is taken
+    // (moved, not rebuilt, ADR-0530: a walker still in its cell stays put, one no longer out on the street is taken
     // out. Taking every one out and putting it back scanned a cell's whole list for each, hundreds where a crowd stands.)
     if (pedGridMark_.size() < agents_.size()) pedGridMark_.resize(agents_.size(), 0);
     if (!requery)
@@ -3691,7 +3691,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             pedGridMark_[static_cast<std::size_t>(ki)] = 0;
             pedGridIds_.push_back(ki);
         }
-    // EACH BODY THE RELAXATION MOVES OR READS HAS A SLOT (ADR-0520): its place is copied into relaxPos_ for the passes and
+    // EACH BODY THE RELAXATION MOVES OR READS HAS A SLOT (ADR-0530): its place is copied into relaxPos_ for the passes and
     // back after them, so the passes read a short list of points, not a walker's whole record per neighbour (a crowd
     // waiting at a kerb gives each walker fifty neighbours). Neighbours are listed by slot.
     if (relaxSlotOf_.size() < agents_.size()) relaxSlotOf_.resize(agents_.size(), -1);
@@ -3712,7 +3712,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         slotOf(ai);
         const Agent& a = agents_[i];
         if (!a.moving || !advanced[i]) continue;
-        // (kept before the sort, ADR-0520: the walker itself, anyone farther than the radius -- no push can bring them
+        // (kept before the sort, ADR-0530: the walker itself, anyone farther than the radius -- no push can bring them
         // together this tick, as the radius's slack is for (above) -- and anyone neither standing in view nor a moving
         // walker after it)
         constexpr Real kGatherReach = kPedBodyMin + 4.0;
@@ -3741,11 +3741,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // THE RELAXATION, a pass at a time: run here, and once more after the pushes off poles, the player and cars below
     // (a walker squeezed out of a car's footprint was set down on the walker beside it, up to 1.5 m in a tick, and
     // nothing parted them: metro_pedestrians_walk_and_keep_apart's overlaps)
-    // A PASS THAT PARTED NOBODY ENDS THE RELAXATION (ADR-0520): nothing moved in it, so every pass after it would see
+    // A PASS THAT PARTED NOBODY ENDS THE RELAXATION (ADR-0530): nothing moved in it, so every pass after it would see
     // the same pairs at the same distances and part nobody either. (A crowd waiting at a kerb for the lights is mostly
     // apart already: the passes after the first were most of the solver's time on the driving island.)
     auto relaxWalkers = [&](int passes) {
-    // A PAIR NEITHER OF WHOSE BODIES HAS MOVED SINCE IT WAS LAST LOOKED AT is not looked at again (ADR-0520): it was
+    // A PAIR NEITHER OF WHOSE BODIES HAS MOVED SINCE IT WAS LAST LOOKED AT is not looked at again (ADR-0530): it was
     // apart then (a pair that is pushed moves), and is exactly as far apart now. Each body's stamp is the count of moves
     // when it last moved; each pair's, the count when it was last looked at. (In a crowd standing at a kerb most pairs
     // are apart from the first pass on; the passes after it looked at every one of them again.)

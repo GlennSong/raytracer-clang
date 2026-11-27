@@ -101,7 +101,7 @@ public:
         std::sort(out.begin(), out.end());
     }
     // ...only the ids `keep` says yes to, sorted ascending: the same list a caller filtering query()'s gets, with the
-    // sort over what is kept (ADR-0520: round a tower's door the cells hold its hundreds of residents indoors, sorted
+    // sort over what is kept (ADR-0530: round a tower's door the cells hold its hundreds of residents indoors, sorted
     // on every query and then all passed over).
     template <class Keep>
     void queryKept(engine::Vec2 pos, engine::Real radius, std::vector<int>& out, Keep keep) const {

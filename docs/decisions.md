@@ -25508,7 +25508,7 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - river_town unchanged: `..._far_people_...` and `..._crowd_drives_...` pass with their pins as they were (same hashes).
 - brain_lab 13 of 13; the unit suite 1,575 of 1,575; physics `near_tier`: the crowd case's counts and hash unchanged (its hit checks fail as before, #336). `near_tier_a_near_car_with_no_way_past_finds_another_way` fails (`run.arrived`) with this change taken out too, at 0c6bfed4: not this change's.
 
-## ADR-0520 — Walkers keep apart for less where crowds stand: the overlap solver gathers only who is within reach, and moves only what moved (2026-11-26)
+## ADR-0530 — Walkers keep apart for less where crowds stand: the overlap solver gathers only who is within reach, and moves only what moved (2026-11-26)
 
 **Words:** the *relaxation* is the city sim's last word on walkers' bodies each tick (`CitySim::stepTick`, the solver phase): up to six passes in which any two people closer than `kPedBodyMin` are pushed apart. Its *neighbours* are the people gathered once a tick for each walker, those it could touch (ADR-0499's gather). The *think* is a walker's look round its vision cone, a few times a second.
 
@@ -25524,9 +25524,9 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - river_town: every case's pins unchanged (crowd_drives, far_people, without_the_driving and the rest; `..._streets_are_drivable_grades` fails as before, #337). The island with driving on, 4 minutes: the same walkers, waits, relaxation passes (9.92 a step), arrivals 7,813, plans 54,444, cars on the road 135.
 - brain_lab 13 of 13; the unit suite 1,575 of 1,575; `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). `metro_pedestrians_walk_and_keep_apart` cannot build its level (its test road file states no lane rules: the road model has no lane level), as before this change.
-- The island, driving on, 4 minutes (running average, ms a fixed step): the city step 16.9 → 13.5; the solver 5.5 → 2.4, the think 3.6 → 2.2, the tail 2.4 → 1.2. The whole step at minute 4: 16.6 → 15.2 on average, about 21 ms in minute 4 on its own (23.5 before). Not yet under 16 ms: the brain's trip planning is next (ADR-0521).
+- The island, driving on, 4 minutes (running average, ms a fixed step): the city step 16.9 → 13.5; the solver 5.5 → 2.4, the think 3.6 → 2.2, the tail 2.4 → 1.2. The whole step at minute 4: 16.6 → 15.2 on average, about 21 ms in minute 4 on its own (23.5 before). Not yet under 16 ms: the brain's trip planning is next (ADR-0531).
 
-## ADR-0521 — The road model's look-ups by position are made once a model: frontageAt's road lines and walkJoinOn's walks by street (2026-11-26)
+## ADR-0531 — The road model's look-ups by position are made once a model: frontageAt's road lines and walkJoinOn's walks by street (2026-11-26)
 
 **Words:** `frontageAt` answers which road a point (a door, a person) fronts: the nearest centre line a building may face. `walkJoinOn` answers where that frontage joins the walks: the nearest walk beside that street. Both are asked for every leg on foot the brain prices (`planLeg`, through `walkJoinNear`), twice a leg.
 

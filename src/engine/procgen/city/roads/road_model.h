@@ -525,7 +525,7 @@ struct WalkwayProblem {
     std::string why;                 // in words, with the numbers
 };
 
-// THE LOOK-UPS BY POSITION, MADE ONCE A MODEL (ADR-0521): what frontageAt searches (the road lines and their boxes) and
+// THE LOOK-UPS BY POSITION, MADE ONCE A MODEL (ADR-0531): what frontageAt searches (the road lines and their boxes) and
 // walkJoinOn scans (each street's walks), worked out the first time either is asked and only read after. It holds
 // pointers into its model, so it is the model's own: a copy of a model starts with none and makes its own. Built under
 // a lock, read without one (a bake's threads ask the same model at once). A model changed after they were made (its
