@@ -25507,3 +25507,21 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 - island_8_nature with the island's cars on (the uncommitted part-4 level), 3 minutes: the whole step's first minute 20.8 → 11.0 ms; the car poses in the stack samples about 25 of 50 → 5 of 80.
 - river_town unchanged: `..._far_people_...` and `..._crowd_drives_...` pass with their pins as they were (same hashes).
 - brain_lab 13 of 13; the unit suite 1,575 of 1,575; physics `near_tier`: the crowd case's counts and hash unchanged (its hit checks fail as before, #336). `near_tier_a_near_car_with_no_way_past_finds_another_way` fails (`run.arrived`) with this change taken out too, at 0c6bfed4: not this change's.
+
+## ADR-0520 — Walkers keep apart for less where crowds stand: the overlap solver gathers only who is within reach, and moves only what moved (2026-11-26)
+
+**Words:** the *relaxation* is the city sim's last word on walkers' bodies each tick (`CitySim::stepTick`, the solver phase): up to six passes in which any two people closer than `kPedBodyMin` are pushed apart. Its *neighbours* are the people gathered once a tick for each walker, those it could touch (ADR-0499's gather). The *think* is a walker's look round its vision cone, a few times a second.
+
+**Why:** with the island's driving on (step 4e, part 4, not yet committed), the city step went 7.7 → 16.9 ms. The cars were not it. With a rule set named, walkers wait at crosswalks for WALK or a gap, as they should: about 213 a step on the island, against none without the driving. Counted (new `RT_DUMP_STATS` line): the gather found 70,422 neighbours a step with the driving, 34,950 without, for about 1,300 walkers. The neighbour lists were everyone in the 64 m grid cells round a walker, not everyone within reach. And the think's look-up sorted every resident indoors in its cells before throwing them out. The solver took 2.1 → 5.5 ms, the think 1.4 → 3.6 ms, and the tail 1.4 → 2.6 ms.
+
+**What happens** (`city_sim.cpp` `stepTick`; `agent_grid.h` `queryKept`):
+- **Gathered within reach:** a neighbour farther than the gather's own radius (`kPedBodyMin` + 4 m, the slack for six passes' drift) is not listed: no push can bring them together this tick, which is what the radius was set by. 70,422 → 10,367 neighbours a step.
+- **Kept before the sort:** the grid's `queryKept` takes the caller's filter and sorts only what is kept. It gives the same list, in the same order, as `query` followed by the same filter. It is used by the gather and by the think, which drops residents indoors before sorting, not after.
+- **The street grid moves, not rebuilds:** a walker still in its cell stays put, and one no longer out on the street is taken out. Every walker was taken out and put back each tick, a scan of its cell's list each.
+- **The passes:** each body's point is copied into a short list for the passes and back after (the same arithmetic on the same values). A pair neither of whose bodies has moved since it was last looked at is not looked at again: it was apart then, and is as far apart now. A pass that parted nobody ends the relaxation, since every later pass would part nobody either.
+- People still wait at the lights and for gaps exactly as before.
+
+**Checked:**
+- river_town: every case's pins unchanged (crowd_drives, far_people, without_the_driving and the rest; `..._streets_are_drivable_grades` fails as before, #337). The island with driving on, 4 minutes: the same walkers, waits, relaxation passes (9.92 a step), arrivals 7,813, plans 54,444, cars on the road 135.
+- brain_lab 13 of 13; the unit suite 1,575 of 1,575; `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). `metro_pedestrians_walk_and_keep_apart` cannot build its level (its test road file states no lane rules: the road model has no lane level), as before this change.
+- The island, driving on, 4 minutes (running average, ms a fixed step): the city step 16.9 → 13.5; the solver 5.5 → 2.4, the think 3.6 → 2.2, the tail 2.4 → 1.2. The whole step at minute 4: 16.6 → 15.2 on average, about 21 ms in minute 4 on its own (23.5 before). Not yet under 16 ms: the brain's trip planning is next (ADR-0521).

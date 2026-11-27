@@ -2870,6 +2870,11 @@ void CityRenderSystem::step(World& world, Real dt) {
                 if (a.speed > 0.5) ++rolling;
             }
         }
+        const CitySim::PhaseTimes& pt = sim_.phaseTimes();
+        const double solverSteps = static_cast<double>(std::max(1, pt.steps));
+        LOG_INFO << "[stats] walkers' relaxation per step: " << pt.solverWalkers / solverSteps << " walkers, "
+                 << pt.solverWaiting / solverSteps << " of them waiting, " << pt.solverNeighbours / solverSteps
+                 << " neighbours, " << pt.solverPasses / solverSteps << " passes (since the start)";
         LOG_INFO << "[stats] citysim step " << (simMs / calls)
                  << " ms, group sync " << (syncMs / calls)
                  << " ms (per fixed step) | hour " << sim_.clockHours()

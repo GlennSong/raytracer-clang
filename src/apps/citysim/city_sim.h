@@ -469,6 +469,9 @@ public:
         // and the tail.
         double advMove = 0, advPairs = 0, advPop = 0, advSolver = 0;
         int steps = 0;
+        // ...and what the relaxation had to do, summed over the steps: the walkers it ran over, of them held waiting
+        // (at a kerb for a signal, or for a gap), and the neighbours gathered for them (RT_DUMP_STATS)
+        uint64_t solverWalkers = 0, solverWaiting = 0, solverNeighbours = 0, solverPasses = 0;
     };
     const PhaseTimes& phaseTimes() const { return phase_; }
     void resetPhaseTimes() { phase_ = PhaseTimes{}; }
@@ -505,7 +508,11 @@ public:
         if (i < holdWhy_.size()) holdWhy_[i] = why;
     }
     std::vector<uint8_t> holdWhy_;
-    std::vector<int> solverFrom_, solverNbr_;   // the overlap solver's neighbours, gathered once a tick (advance)
+    std::vector<int> solverFrom_, solverNbr_;   // the overlap solver's neighbours, gathered once a tick (advance), by slot
+    // ...and the slots (ADR-0520): the agent of each, each agent's (-1: none this tick), and their points in the passes
+    std::vector<int> relaxIds_, relaxSlotOf_;
+    std::vector<Vec2> relaxPos_;
+    std::vector<uint32_t> relaxMoved_, relaxLooked_;   // each slot's last move, each pair's last look (the move count)
 
     // THE BRAIN'S NEAR RING (ADR-0493): its people are near inside pedPromoteRadius of the player, far beyond
     // pedDemoteRadius (the level's own numbers; they were the old K tier's ring)
@@ -1221,6 +1228,7 @@ private:
     AgentGrid grid_;
     AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
     std::vector<int> pedGridIds_;
+    std::vector<uint8_t> pedGridMark_;   // (out on the street this tick: the grid's update, ADR-0520)
     mutable std::vector<int> queryScratch_;   // shared candidate buffer (queries
     std::vector<int> pairScratch_;   // walker-vs-walker pair query (stepTick's overlap solver)
     RailSim rail_;

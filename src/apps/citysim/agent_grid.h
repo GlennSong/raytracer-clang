@@ -100,6 +100,23 @@ public:
             }
         std::sort(out.begin(), out.end());
     }
+    // ...only the ids `keep` says yes to, sorted ascending: the same list a caller filtering query()'s gets, with the
+    // sort over what is kept (ADR-0520: round a tower's door the cells hold its hundreds of residents indoors, sorted
+    // on every query and then all passed over).
+    template <class Keep>
+    void queryKept(engine::Vec2 pos, engine::Real radius, std::vector<int>& out, Keep keep) const {
+        out.clear();
+        if (buckets_.empty()) return;
+        const int cx0 = clampX(gridX(pos.x - radius));
+        const int cx1 = clampX(gridX(pos.x + radius));
+        const int cy0 = clampY(gridY(pos.y - radius));
+        const int cy1 = clampY(gridY(pos.y + radius));
+        for (int cy = cy0; cy <= cy1; ++cy)
+            for (int cx = cx0; cx <= cx1; ++cx)
+                for (const int id : buckets_[static_cast<std::size_t>(cy) * nx_ + cx])
+                    if (keep(id)) out.push_back(id);
+        std::sort(out.begin(), out.end());
+    }
 
 private:
     int gridX(engine::Real x) const {

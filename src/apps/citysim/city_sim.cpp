@@ -3585,13 +3585,12 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // Agent-backed ghosts from the grid (P4.1), ascending, then the
             // host-injected externals — the order the full sensed_ scan used.
             // Slack past the cone range covers a tethered ghost at its anchor.
-            grid_.query(a.pos, cone.range + 12.0, queryScratch_);
+            // Skip myself, anyone with no sensable body, and player-agent ghosts: the host already injects the live
+            // player as an external point -- seeing both would double it. (Kept before the sort, ADR-0520.)
+            grid_.queryKept(a.pos, cone.range + 12.0, queryScratch_, [&](int gi) {
+                return gi != static_cast<int>(i) && sensedIndex_[gi] >= 0 && !agents_[gi].playerControlled;
+            });
             for (int gi : queryScratch_) {
-                if (gi == static_cast<int>(i)) continue;   // not myself
-                if (sensedIndex_[gi] < 0) continue;        // no sensable body
-                // Skip player-agent ghosts: the host already injects the live
-                // player as an external point — seeing both would double it.
-                if (agents_[gi].playerControlled) continue;
                 const SensedGhost& g = sensed_[sensedIndex_[gi]];
                 if (engine::sees(sensor, g.pos, g.elevation - a.elevation))
                     a.memory.observe(g.id, g.pos, simSeconds_);
@@ -3676,36 +3675,89 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // ...from the walkers OUT ON THE STREET only (the K tier's, moving or standing in view): the indoor residents at a
     // door were most of what every gather waded through (10 ms of a 21 ms step). (Where they stand now: the query
     // radius carries 4 m of slack, a tick of walking is 2 cm.)
-    for (int id : pedGridIds_) pedGrid_.remove(id);
+    // (moved, not rebuilt, ADR-0520: a walker still in its cell stays put, one no longer out on the street is taken
+    // out. Taking every one out and putting it back scanned a cell's whole list for each, hundreds where a crowd stands.)
+    if (pedGridMark_.size() < agents_.size()) pedGridMark_.resize(agents_.size(), 0);
+    if (!requery)
+        for (int ki : street_) {
+            pedGridMark_[static_cast<std::size_t>(ki)] = 1;
+            pedGrid_.place(ki, agents_[static_cast<std::size_t>(ki)].pos);
+        }
+    for (int id : pedGridIds_)
+        if (!pedGridMark_[static_cast<std::size_t>(id)]) pedGrid_.remove(id);
     pedGridIds_.clear();
     if (!requery)
         for (int ki : street_) {
-            const Agent& b = agents_[static_cast<std::size_t>(ki)];
-            pedGrid_.place(ki, b.pos);
+            pedGridMark_[static_cast<std::size_t>(ki)] = 0;
             pedGridIds_.push_back(ki);
         }
+    // EACH BODY THE RELAXATION MOVES OR READS HAS A SLOT (ADR-0520): its place is copied into relaxPos_ for the passes and
+    // back after them, so the passes read a short list of points, not a walker's whole record per neighbour (a crowd
+    // waiting at a kerb gives each walker fifty neighbours). Neighbours are listed by slot.
+    if (relaxSlotOf_.size() < agents_.size()) relaxSlotOf_.resize(agents_.size(), -1);
+    for (int id : relaxIds_) relaxSlotOf_[static_cast<std::size_t>(id)] = -1;
+    relaxIds_.clear();
+    const auto slotOf = [&](int agent) {
+        int& slot = relaxSlotOf_[static_cast<std::size_t>(agent)];
+        if (slot < 0) {
+            slot = static_cast<int>(relaxIds_.size());
+            relaxIds_.push_back(agent);
+        }
+        return slot;
+    };
     for (int ai : active_) {
         const std::size_t i = static_cast<std::size_t>(ai);
         solverFrom_.push_back(static_cast<int>(solverNbr_.size()));
         if (requery) continue;
+        slotOf(ai);
         const Agent& a = agents_[i];
         if (!a.moving || !advanced[i]) continue;
-        pedGrid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
+        // (kept before the sort, ADR-0520: the walker itself, anyone farther than the radius -- no push can bring them
+        // together this tick, as the radius's slack is for (above) -- and anyone neither standing in view nor a moving
+        // walker after it)
+        constexpr Real kGatherReach = kPedBodyMin + 4.0;
+        const auto touches = [&](int gj) {
+            const std::size_t j = static_cast<std::size_t>(gj);
+            if (j == i) return false;
+            const Agent& b = agents_[j];
+            const Real gx = b.pos.x - a.pos.x, gy = b.pos.y - a.pos.y;
+            if (gx * gx + gy * gy > kGatherReach * kGatherReach) return false;
+            const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
+            return still || (b.moving && j > i);
+        };
+        pedGrid_.queryKept(a.pos, kGatherReach, pairScratch_, touches);
         for (int gj : pairScratch_) {
             const std::size_t j = static_cast<std::size_t>(gj);
-            if (j == i) continue;
             const Agent& b = agents_[j];
             const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
-            if (!still && (!b.moving || j <= i)) continue;
-            solverNbr_.push_back(still ? -1 - gj : gj);   // (still: its own ground, encoded negative)
+            const int slot = slotOf(gj);
+            solverNbr_.push_back(still ? -1 - slot : slot);   // (still: its own ground, encoded negative)
         }
     }
     solverFrom_.push_back(static_cast<int>(solverNbr_.size()));
+    phase_.solverWalkers += active_.size();
+    phase_.solverNeighbours += solverNbr_.size();
+    for (int ai : active_) phase_.solverWaiting += agents_[static_cast<std::size_t>(ai)].state == Agent::State::Waiting ? 1 : 0;
     // THE RELAXATION, a pass at a time: run here, and once more after the pushes off poles, the player and cars below
     // (a walker squeezed out of a car's footprint was set down on the walker beside it, up to 1.5 m in a tick, and
     // nothing parted them: metro_pedestrians_walk_and_keep_apart's overlaps)
+    // A PASS THAT PARTED NOBODY ENDS THE RELAXATION (ADR-0520): nothing moved in it, so every pass after it would see
+    // the same pairs at the same distances and part nobody either. (A crowd waiting at a kerb for the lights is mostly
+    // apart already: the passes after the first were most of the solver's time on the driving island.)
     auto relaxWalkers = [&](int passes) {
-    for (int iter = 0; iter < passes; ++iter)
+    // A PAIR NEITHER OF WHOSE BODIES HAS MOVED SINCE IT WAS LAST LOOKED AT is not looked at again (ADR-0520): it was
+    // apart then (a pair that is pushed moves), and is exactly as far apart now. Each body's stamp is the count of moves
+    // when it last moved; each pair's, the count when it was last looked at. (In a crowd standing at a kerb most pairs
+    // are apart from the first pass on; the passes after it looked at every one of them again.)
+    uint32_t moves = 0;
+    if (!requery) {
+        relaxPos_.resize(relaxIds_.size());
+        for (std::size_t s = 0; s < relaxIds_.size(); ++s) relaxPos_[s] = agents_[static_cast<std::size_t>(relaxIds_[s])].pos;
+        relaxMoved_.assign(relaxIds_.size(), 0);
+        relaxLooked_.assign(solverNbr_.size(), 0);
+    }
+    for (int iter = 0; iter < passes; ++iter) {
+        bool parted = false;
         for (std::size_t k = 0; k < active_.size(); ++k) {
             const int ai = active_[k];
             Agent& a = agents_[ai];
@@ -3736,6 +3788,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
                 if (d > 1e-4 && d < kPedBodyMin) {
+                    parted = true;
                     if (still) {
                         const Real push = kPedBodyMin - d;
                         a.pos.x += dx / d * push; a.pos.y += dy / d * push;
@@ -3745,6 +3798,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                         b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
                     }
                 } else if (d <= 1e-4) {
+                    parted = true;
                     if (still) {
                         a.pos.x += kPedBodyMin;
                     } else {
@@ -3754,9 +3808,43 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 }
             };
             if (!requery) {
+                // (the same arithmetic as touch, on the slots' points)
+                const std::size_t as = static_cast<std::size_t>(relaxSlotOf_[i]);
+                Vec2& ap = relaxPos_[as];
                 for (int n = solverFrom_[k]; n < solverFrom_[k + 1]; ++n) {
                     const int e = solverNbr_[static_cast<std::size_t>(n)];
-                    touch(e < 0 ? -1 - e : e, e < 0);
+                    const bool still = e < 0;
+                    const std::size_t bs = static_cast<std::size_t>(still ? -1 - e : e);
+                    uint32_t& looked = relaxLooked_[static_cast<std::size_t>(n)];
+                    if (iter > 0 && relaxMoved_[as] <= looked && relaxMoved_[bs] <= looked) continue;
+                    looked = moves;
+                    Vec2& bp = relaxPos_[bs];
+                    Real dx = ap.x - bp.x, dy = ap.y - bp.y;
+                    Real d = std::sqrt(dx * dx + dy * dy);
+                    if (d <= 1e-4 || d < kPedBodyMin) {   // (pushed below: both, or the walker alone off someone standing)
+                        ++moves;
+                        relaxMoved_[as] = moves;
+                        if (!still) relaxMoved_[bs] = moves;
+                    }
+                    if (d > 1e-4 && d < kPedBodyMin) {
+                        parted = true;
+                        if (still) {
+                            const Real push = kPedBodyMin - d;
+                            ap.x += dx / d * push; ap.y += dy / d * push;
+                        } else {
+                            Real push = (kPedBodyMin - d) * 0.5;
+                            ap.x += dx / d * push; ap.y += dy / d * push;
+                            bp.x -= dx / d * push; bp.y -= dy / d * push;
+                        }
+                    } else if (d <= 1e-4) {
+                        parted = true;
+                        if (still) {
+                            ap.x += kPedBodyMin;
+                        } else {
+                            ap.x += kPedBodyMin * 0.5;
+                            bp.x -= kPedBodyMin * 0.5;
+                        }
+                    }
                 }
                 continue;
             }
@@ -3774,6 +3862,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 touch(gj, still);
             }
         }
+        ++phase_.solverPasses;
+        if (!parted) break;
+    }
+    if (!requery)
+        for (std::size_t s = 0; s < relaxIds_.size(); ++s) agents_[static_cast<std::size_t>(relaxIds_[s])].pos = relaxPos_[s];
     };
     relaxWalkers(6);
 
