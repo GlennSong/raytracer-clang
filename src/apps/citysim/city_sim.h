@@ -75,6 +75,22 @@ struct Agent {
     // Distinct from the array index by design (indices churn on rebuild/recycle).
     AgentId uid = kNoAgent;
 
+    // WHETHER THEY ARE OUT ON THE STREET is read of every agent every tick (CitySim::stepTick, pedVisible): these three
+    // stand together at the record's head, so the scan reads one stretch of each record (ADR-0537).
+    // MOVING: on a route the sim steps them along.
+    bool moving = false;
+    // INDOORS (Glenn, 2026-09-19: "agents who are at work or home should ...
+    // go inside the building"). Resting at a door -- home, work, a shop, a
+    // cafe -- means inside: not drawn, not a body on the pavement. Cleared the
+    // moment a trip starts. Resting OUTSIDE (a bus stop, a park, a pause on a
+    // walk) keeps this false and the walker stands where it is.
+    bool indoors = false;
+    // IN A HOUSEHOLD'S CAR (ADR-0444; city_car.h): the number of the brain's car this person sits in (-1: none). Such a
+    // car is an entity, so this person stays a walker who is not drawn on foot (pedVisible). The car is the authority on
+    // where they are: `pos` and `heading` follow its pose every tick, one way (CityBrain, ADR-0445), so a reader of `pos`
+    // need not know about `inCar`.
+    int inCar = -1;
+
     // What KIND of life this agent leads (Living City, ADR-0066 Phase 4). A role
     // is not new machinery — it just flavours the existing home↔work schedule:
     // a Commuter keeps office hours; a Shopkeeper opens their shop before it opens
@@ -123,11 +139,6 @@ struct Agent {
     // leaves them as they are. It goes with `directed` (the goal layer leaves their plan alone), which by itself still
     // lets a city with a day schedule place the person again.
     bool brainOwned = false;
-    // IN A HOUSEHOLD'S CAR (ADR-0444; city_car.h): the number of the brain's car this person sits in (-1: none). Such a
-    // car is an entity, so this person stays a walker who is not drawn on foot (pedVisible). The car is the authority on
-    // where they are: `pos` and `heading` follow its pose every tick, one way (CityBrain, ADR-0445), so a reader of `pos`
-    // need not know about `inCar`.
-    int inCar = -1;
     bool released = false;           // released (ADR-0062): the sim stops stepping this agent
 
     // Where this agent lives and works (Living City, ADR-0066 Phase 3): the
@@ -164,12 +175,6 @@ struct Agent {
     int goal = 0;
     Real goalHours = 0;
     int restNode = -1;     // the node this agent last arrived at (wander departs from it)
-    // INDOORS (Glenn, 2026-09-19: "agents who are at work or home should ...
-    // go inside the building"). Resting at a door -- home, work, a shop, a
-    // cafe -- means inside: not drawn, not a body on the pavement. Cleared the
-    // moment a trip starts. Resting OUTSIDE (a bus stop, a park, a pause on a
-    // walk) keeps this false and the walker stands where it is.
-    bool indoors = false;
     // This rest's own length in in-world hours, when the stop sets it (a
     // coffee outlasts a look in a shop window); 0 = the goal state's dwell.
     float restDwell = 0;
@@ -277,7 +282,6 @@ struct Agent {
     // Cached world pose (XZ + a height for bridges); what a renderer reads.
     engine::Vec2 pos;
     engine::Vec2 heading{1, 0};
-    bool moving = false;
 };
 
 // The kind of body a vehicle wears (ADR-0061 Phase 4: one composable vehicle,

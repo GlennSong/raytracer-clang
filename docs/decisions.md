@@ -25634,3 +25634,15 @@ The worst tick is now planning (6.3 ms the dearest plan) and the machine (7.2 ms
 **Checked:**
 - river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575; lanes 158 of 158; driving_tests 202 of 202 (its route cases among them). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
 - The island, driving on, 4 minutes: the brain's planning 2.69 → 2.07 ms a tick, the brain 6.9 → 5.9 ms. The whole step's average at minute 4 12.3 → 11.8 ms; minute 3 on its own about 12.8 ms, minute 4 about 16.7 → 16.0 ms.
+
+## ADR-0537 — Whether an agent is out on the street is read from the head of their record (2026-11-27)
+
+**Words:** each sim agent is one record (`Agent`, `city_sim.h`), a few hundred bytes: their place, day, route, memory and more. *Out on the street* is moving, or not indoors and not in a car (`CitySim::pedVisible`); the city step lists who is, every tick, by reading every agent (the "rehash" phase), and walks only them after that (ADR-0499).
+
+**Why:** on the island (113,581 agents) that scan was 2.1 ms of a city step. The three fields it reads lay far apart in the record (`moving` at its end, `indoors` and `inCar` in its middle), so each agent cost two or three memory reads from three places for three bytes.
+
+**What happens:** `moving`, `indoors` and `inCar` are declared together at the head of `Agent`, beside its id. Nothing else changes: no code reads the record as bytes, and each field keeps its name, type and default.
+
+**Checked:**
+- river_town's pins unchanged (every case; the grades case fails as before, #337); brain_lab 13 of 13; the unit suite 1,575 of 1,575; `near_tier_in_the_crowd_follows_the_player`'s counts and hash unchanged (its hit checks fail as before, #336). The island, driving on, 4 minutes: the same arrivals (7,813), plans (54,444) and cars (135 on the road at once).
+- The island, driving on, 4 minutes: the rehash 2.1 → 1.35 ms in a slow step; the whole step's average by minute 7.4, 8.4, 9.6, 11.1 ms (8.3, 9.2, 10.4, 11.8 before: the other scans over every agent read the same head). **Minute 4 on its own about 15.6 ms, under 16** (16.0 before; 23.5 when the island's driving was first measured). Minute 3 on its own about 12.1 ms.
